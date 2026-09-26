@@ -18,6 +18,7 @@ def _row_to_agent(row, watches: list[str], subscriptions: list[dict]) -> dict:
     data["subscriptions"] = subscriptions
     data["always_on"] = bool(data.get("always_on"))
     data["unattended"] = bool(data.get("unattended"))
+    data["inbox_only"] = bool(data.get("inbox_only"))
     return data
 
 
@@ -72,6 +73,7 @@ class AgentRepo(Repo):
         description: str,
         always_on: bool = False,
         unattended: bool,
+        inbox_only: bool = False,
     ) -> None:
         """Replace an agent's fields; the caller must choose unattended explicitly."""
         async with self._tx() as conn:
@@ -80,9 +82,9 @@ class AgentRepo(Repo):
                 text(
                     """INSERT INTO agents
                        (name, dir, runtime, model, repo, tags, env, description,
-                        always_on, unattended, created_at, updated_at)
+                        always_on, unattended, inbox_only, created_at, updated_at)
                        VALUES (:name, :dir, :runtime, :model, :repo, :tags, :env,
-                               :description, :always_on, :unattended, :now, :now)
+                               :description, :always_on, :unattended, :inbox_only, :now, :now)
                        ON CONFLICT(name) DO UPDATE SET
                          dir = excluded.dir,
                          runtime = excluded.runtime,
@@ -93,6 +95,7 @@ class AgentRepo(Repo):
                          description = excluded.description,
                          always_on = excluded.always_on,
                          unattended = excluded.unattended,
+                         inbox_only = excluded.inbox_only,
                          updated_at = excluded.updated_at"""
                 ),
                 {
@@ -106,6 +109,7 @@ class AgentRepo(Repo):
                     "description": description,
                     "always_on": 1 if always_on else 0,
                     "unattended": 1 if unattended else 0,
+                    "inbox_only": 1 if inbox_only else 0,
                     "now": now,
                 },
             )
@@ -122,6 +126,7 @@ class AgentRepo(Repo):
             "description",
             "always_on",
             "unattended",
+            "inbox_only",
         }
         if changes.keys() - allowed:
             raise ValueError("unknown agent fields")
@@ -129,7 +134,7 @@ class AgentRepo(Repo):
         for key in ("tags", "env"):
             if key in values:
                 values[key] = json.dumps(values[key])
-        for key in ("always_on", "unattended"):
+        for key in ("always_on", "unattended", "inbox_only"):
             if key in values:
                 values[key] = int(values[key])
         assignments = [f"{key} = :{key}" for key in changes]

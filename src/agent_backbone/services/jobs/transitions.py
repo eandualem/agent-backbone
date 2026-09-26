@@ -66,8 +66,13 @@ async def run_transitions(
 
 async def _advance(config: BackboneConfig, store: AgentStore, db: BackboneDB, row: dict) -> str:
     name = row["agent_name"]
-    if config.agents.get(name) is None:
+    spec = config.agents.get(name)
+    if spec is None:
         await db.transitions.finish(row["id"], "failed", {"reason": "agent is no longer known"})
+        return "failed"
+    if spec.inbox_only:
+        # Made inbox-only after the request: a session with its name is not its own.
+        await db.transitions.finish(row["id"], "failed", {"reason": "agent is inbox-only"})
         return "failed"
     if row["stopped_at"] is None:
         async with lifecycle_lock(name):

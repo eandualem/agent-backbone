@@ -31,7 +31,8 @@ class StartRequest:
 
     ``directory`` discovers (or re-registers) the agent for that directory;
     the name defaults to the directory name. Without it the agent must
-    already be known by ``name``.
+    already be known by ``name``. ``inbox_only`` registers the agent as
+    inbox-only instead of launching it.
     """
 
     name: str | None = None
@@ -41,6 +42,7 @@ class StartRequest:
     resume: bool = False
     watch: tuple[str, ...] = ()
     wait: bool = True
+    inbox_only: bool = False
     operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
@@ -96,6 +98,10 @@ async def _record_start_failure(
 
 async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
     refuse_case_twin(store.agents, req.name)
+    if req.inbox_only and req.watch:
+        raise ValueError("an inbox-only agent takes no part in GitHub routing: drop the watches")
+    if req.inbox_only and req.resume:
+        raise ValueError("an inbox-only agent is never launched: there is nothing to resume")
     if req.directory:
         return await store.register_directory(
             req.directory,
@@ -103,6 +109,7 @@ async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
             runtime=req.runtime,
             model=req.model,
             watches=req.watch,
+            inbox_only=req.inbox_only,
         )
 
     if not req.name:
@@ -117,6 +124,8 @@ async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
         changes["runtime"] = req.runtime
     if req.model is not None and (req.model != spec.model or "runtime" in changes):
         changes["model"] = req.model
+    if req.inbox_only and not spec.inbox_only:
+        changes["inbox_only"] = True
     if changes:
         spec = await store.update(spec.name, **changes)
     return spec
@@ -127,6 +136,10 @@ async def stop_agent_session(config: BackboneConfig, name: str) -> bool:
     (``ValueError``) on every surface — API, CLI, Telegram — from here."""
     if name == config.backbone.session_name:
         raise ValueError("refusing to stop the backbone's own session")
+    spec = config.agents.get(name)
+    if spec is not None and spec.inbox_only:
+        # A session with its name is not the agent's: never stop it on its behalf.
+        raise ValueError(f"'{name}' is inbox-only: it has no session to stop")
     async with lifecycle_lock(name):
         return await launch.stop_agent(name)
 
@@ -151,17 +164,27 @@ async def start_resolved(
     *,
     db: BackboneDB | None,
 ) -> StartResult:
-    """Start a resolved agent. Raises ValueError for a runtime or directory that cannot work."""
+    """Start a resolved agent. Raises ValueError for a runtime or directory that cannot work.
+
+    An inbox-only agent is never launched: asked for as such it is only
+    registered (``ready`` is ``inbox_only``); any other start is refused."""
     started = time.monotonic()
     runtime = req.runtime or spec.runtime
     try:
+        if spec.inbox_only and not req.inbox_only:
+            raise ValueError(
+                f"'{spec.name}' is inbox-only: it is never launched "
+                f"(backbone agent set {spec.name} inbox_only=false to launch it)"
+            )
         validate_agent_spec(spec)
-        if runtime not in RUNTIMES:
-            raise ValueError(f"Unknown runtime: {runtime}")
-        if not RUNTIMES[runtime].available():
-            raise ValueError(f"Runtime '{runtime}' binary not found: {install_hint()}")
-        if not spec.path.is_dir():
-            raise ValueError(f"Directory does not exist: {spec.path}")
+        # Nothing is launched for an inbox-only agent: runtime and directory do not matter.
+        if not spec.inbox_only:
+            if runtime not in RUNTIMES:
+                raise ValueError(f"Unknown runtime: {runtime}")
+            if not RUNTIMES[runtime].available():
+                raise ValueError(f"Runtime '{runtime}' binary not found: {install_hint()}")
+            if not spec.path.is_dir():
+                raise ValueError(f"Directory does not exist: {spec.path}")
     except ValueError as exc:
         await _record_start_failure(db, req, "preflight", exc, started, spec)
         raise
@@ -176,6 +199,14 @@ async def start_resolved(
         except ValueError as exc:
             await _record_start_failure(db, req, "preflight", exc, started, spec)
             raise
+        if spec.inbox_only:
+            return StartResult(
+                ok=True,
+                ready="inbox_only",
+                evidence=(
+                    f"never launched: it reads messages with backbone inbox --agent {spec.name}",
+                ),
+            )
         result = await launch.start_agent(
             spec,
             config,

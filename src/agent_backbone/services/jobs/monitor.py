@@ -46,10 +46,11 @@ AgentStates = dict[str, StateSnapshot]
 async def read_states(config: BackboneConfig, active_sessions: set[str]) -> AgentStates:
     """One reconciled snapshot per configured agent whose session is up."""
     states: AgentStates = {}
-    for name in config.agents.names:
-        if name in active_sessions:
-            pane = await capture_pane(name)
-            states[name] = await agent_state(config, name, pane_content=pane)
+    for spec in config.agents:
+        # An inbox-only agent has no session: one with its name is not its own.
+        if spec.name in active_sessions and not spec.inbox_only:
+            pane = await capture_pane(spec.name)
+            states[spec.name] = await agent_state(config, spec.name, pane_content=pane)
     return states
 
 

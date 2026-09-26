@@ -220,6 +220,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="return immediately instead of waiting for the prompt",
     )
     ps.add_argument("--attach", action="store_true", help="attach to this agent after starting")
+    ps.add_argument(
+        "--inbox-only",
+        action="store_true",
+        help="register a client without a terminal instead of launching: never typed into; "
+        "it reads its messages with `backbone inbox --agent NAME`",
+    )
     pr = asub.add_parser("resume", help="resume a known agent's previous conversation")
     pr.add_argument("names", nargs="+", metavar="NAME")
     pr.add_argument("--attach", action="store_true", help="attach after resuming")

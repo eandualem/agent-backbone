@@ -40,6 +40,8 @@ class AgentStartRequest(BaseModel):
     watch: list[str] = Field(default_factory=list)
     wait: bool = True
     """Block until the agent is at its prompt (or the start timeout passes)."""
+    inbox_only: bool = False
+    """Register the agent as inbox-only instead of launching it."""
 
 
 class AgentStartResponse(BaseModel):
@@ -58,7 +60,8 @@ class AgentStartResponse(BaseModel):
     repo: str = ""
     already_existed: bool = False
     ready: str = "unknown"
-    """``ready`` | ``waiting_for_human`` | ``timeout`` | ``exited`` | ``not_waited``."""
+    """``ready`` | ``waiting_for_human`` | ``timeout`` | ``exited`` | ``not_waited`` |
+    ``inbox_only`` (registered, not launched)."""
     evidence: list[str] = Field(default_factory=list)
 
 
@@ -153,6 +156,7 @@ class AgentUpdateRequest(BaseModel):
     description: str | None = None
     always_on: bool | None = None
     unattended: bool | None = None
+    inbox_only: bool | None = None
 
 
 class WatchRequest(BaseModel):

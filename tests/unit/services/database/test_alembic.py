@@ -660,3 +660,27 @@ async def test_current_stamp_repairs_drifted_queue_index(tmp_path, drift):
         assert not any(
             s.startswith(("DROP INDEX", "CREATE INDEX", "CREATE UNIQUE INDEX")) for s in statements
         )
+
+
+@pytest.mark.skipif(
+    sqlite3.sqlite_version_info < (3, 35, 0),
+    reason="constructing the old schema uses SQLite 3.35+ DROP COLUMN",
+)
+async def test_an_agent_registered_before_inbox_only_reads_as_not_inbox_only(tmp_path):
+    """An installed database from before ``agents.inbox_only`` gains the
+    column at its next start, and its agents keep behaving as before."""
+    from sqlalchemy import text
+
+    from agent_backbone.config import agents_from_rows
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'before-inbox-only.db'}"
+    async with BackboneDB.connect(url) as db:
+        common = dict(runtime="claude", model=None, repo="", tags=[], env={}, description="")
+        await db.agents.upsert("app", dir="/app", unattended=False, **common)
+        async with db.engine.begin() as conn:
+            await conn.execute(text("ALTER TABLE agents DROP COLUMN inbox_only"))
+            await conn.execute(text("UPDATE alembic_version SET version_num='2cd523ea0eb1'"))
+    async with BackboneDB.connect(url) as db:
+        assert not agents_from_rows(await db.agents.list()).get("app").inbox_only
+        await db.agents.update_fields("app", {"inbox_only": True})
+        assert agents_from_rows(await db.agents.list()).get("app").inbox_only

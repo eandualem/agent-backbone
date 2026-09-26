@@ -174,6 +174,7 @@ async def drain_message_queue(
         expired = await db.queue.expire_pending(
             max_age_minutes=config.timing.queue_expiry_minutes,
             protected_sessions=protected,
+            inbox_sessions=tuple(spec.name for spec in config.agents if spec.inbox_only),
             notices=partial(expiry_notices, config),
         )
         if expired:
@@ -199,6 +200,9 @@ async def drain_message_queue(
     for session_name in sorted(set(active_sessions) | queued_sessions):
         if session_name in _draining:
             continue
+        spec = config.agents.get(session_name)
+        if spec is not None and spec.inbox_only:
+            continue  # never typed into: its messages wait for backbone inbox
         _draining.add(session_name)
         try:
             completed = await _drain_session(config, db, gh, session_name, summary)

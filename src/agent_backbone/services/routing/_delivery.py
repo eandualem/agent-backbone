@@ -124,7 +124,9 @@ def _serialized(fn: Callable[..., Awaitable[_Result]]):
     return locked
 
 
-def queue_detail(report: DeliveryReport, session_name: str, expiry_minutes: int) -> str:
+def queue_detail(
+    report: DeliveryReport, session_name: str, expiry_minutes: int, *, inbox_only: bool = False
+) -> str:
     """One plain sentence about what happened, for people and agents alike."""
     if report.unconfirmed and report.queue_id is None:
         return "Submission is uncertain and was not retained; inspect the terminal before retrying."
@@ -136,6 +138,11 @@ def queue_detail(report: DeliveryReport, session_name: str, expiry_minutes: int)
     if report.outcome == DeliveryOutcome.DELIVERED:
         return f"Delivered to {session_name}."
     why = report.outcome.value.replace("_", " ")
+    if report.queue == "stored" and inbox_only:
+        return (
+            f"Held for {session_name}'s inbox: it is inbox-only and reads its messages with "
+            "backbone inbox; direct messages wait there without expiring."
+        )
     if report.queue == "stored":
         return (
             f"Queued: {session_name} is {why}; the message is stored and will be delivered "

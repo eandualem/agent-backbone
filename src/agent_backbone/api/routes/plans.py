@@ -58,6 +58,10 @@ async def _require_plan_waiting(config: BackboneConfig, session: str) -> None:
 async def _run_plan_control(config: BackboneConfig, session: str, action: str) -> list[str]:
     """Send the runtime's plan keys; translate every refusal into an HTTP status."""
     spec = config.agents.get(session)
+    if spec is not None and spec.inbox_only:
+        raise HTTPException(
+            status_code=409, detail=f"'{session}' is inbox-only: it has no terminal"
+        )
     outcome, evidence = await plan_control(session, action, runtime=spec.runtime if spec else None)
     if outcome == "unsupported":
         raise HTTPException(
