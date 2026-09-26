@@ -279,7 +279,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok("tests/unit/hooks/test_context.py"),
         codex=_ok("tests/unit/hooks/test_context.py"),
         gemini=_gap(276),
-        opencode=_gap(276),
+        opencode=_ok(
+            "tests/unit/hooks/test_context.py",
+            note="as a user message in the running turn, after the next tool call",
+        ),
         deepcode=_gap(276),
         aider=_gap(276),
         shell=_na(_NO_MODEL),
