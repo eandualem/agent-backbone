@@ -46,8 +46,8 @@ class SessionFeed:
         self._lock = asyncio.Lock()
         self._emit_lock = asyncio.Lock()
         self._last_signature: str | None = None
-        self._hinted: dict[str, int] = {}
-        """The newest inbox row each session was hinted about."""
+        self._hinted: dict[str, frozenset] = {}
+        """The inbox rows each session was last hinted about."""
 
     @property
     def sio(self) -> socketio.AsyncServer | None:
@@ -98,19 +98,23 @@ class SessionFeed:
             self._last_signature = signature
             return True
 
-    async def hint_inbox(self, summary: Mapping[str, tuple[int, int]]) -> None:
-        """Tell ``/sessions`` subscribers whose inbox has something new:
-        ``inbox:pending {session, pending}``, with no message text, once per
-        new row (``summary`` is ``QueueRepo.inbox_summary``: the count and
-        the newest row id). A hint can be missed (a disconnect, a restart):
+    async def hint_inbox(
+        self, readable: Mapping[str, frozenset], *, complete: bool = False
+    ) -> None:
+        """Tell ``/sessions`` subscribers whose inbox holds a row they were not
+        told about: ``inbox:pending {session, pending}``, with no message
+        text. ``readable`` is ``QueueRepo.inbox_rows``; ``complete`` says it
+        covers every session. A hint can be missed (a disconnect, a restart):
         readers also read their inbox on connect and on a slow poll."""
         fresh = {
-            name: pending
-            for name, (pending, newest) in summary.items()
-            if newest > self._hinted.get(name, 0)
+            name: len(rows)
+            for name, rows in readable.items()
+            if rows - self._hinted.get(name, frozenset())
         }
-        for name, (_, newest) in summary.items():
-            self._hinted[name] = max(newest, self._hinted.get(name, 0))
+        if complete:
+            self._hinted = dict(readable)
+        else:
+            self._hinted.update(readable)
         if self._sio is None:
             return
         for name, pending in fresh.items():

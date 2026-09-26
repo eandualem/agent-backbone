@@ -169,10 +169,10 @@ class TestInboxHint:
         feed = _feed(sio)
         await db.queue.enqueue(session_name="app", message="secret", delivery_kind="direct_message")
         await db.queue.enqueue(session_name="app", message="issue", issue_number=7)
-        await feed.hint_inbox(await db.queue.inbox_summary("app"))
-        await feed.hint_inbox(await db.queue.inbox_summary())  # a tick: nothing new
+        await feed.hint_inbox(await db.queue.inbox_rows("app"))
+        await feed.hint_inbox(await db.queue.inbox_rows(), complete=True)  # a tick: nothing new
         await db.queue.checkpoint("app")  # read, not acknowledged: nothing new
-        await feed.hint_inbox(await db.queue.inbox_summary())
+        await feed.hint_inbox(await db.queue.inbox_rows(), complete=True)
         sio.emit.assert_awaited_once_with(
             INBOX_PENDING_EVENT, {"session": "app", "pending": 1}, namespace=SESSIONS_NAMESPACE
         )
@@ -182,10 +182,19 @@ class TestInboxHint:
         sio.emit = AsyncMock()
         feed = _feed(sio)
         await db.queue.enqueue(session_name="app", message="one", delivery_kind="direct_message")
-        await feed.hint_inbox(await db.queue.inbox_summary("app"))
+        await feed.hint_inbox(await db.queue.inbox_rows("app"))
         (row,) = await db.queue.checkpoint("app")
         await db.queue.acknowledge_checkpoint("app", [row["ack_token"]])
         await db.queue.enqueue(session_name="app", message="two", delivery_kind="direct_message")
-        await feed.hint_inbox(await db.queue.inbox_summary("app"))
+        await feed.hint_inbox(await db.queue.inbox_rows("app"))
         assert sio.emit.await_count == 2
         assert sio.emit.await_args.args[1] == {"session": "app", "pending": 1}
+
+    async def test_a_reused_id_or_an_older_row_now_readable_is_hinted(self):
+        sio = MagicMock()
+        sio.emit = AsyncMock()
+        feed = _feed(sio)
+        await feed.hint_inbox({"app": frozenset({(2, "b")})})
+        await feed.hint_inbox({"app": frozenset({(1, "a"), (2, "b")})})  # held as uncertain
+        await feed.hint_inbox({"app": frozenset({(2, "c")})})  # id 2 pruned and reused
+        assert sio.emit.await_count == 3

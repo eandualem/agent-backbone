@@ -310,5 +310,6 @@ async def test_a_queued_message_hints_the_recipients_inbox(api_client, auth_head
             json={"target_session": "ike", "from_entity": "bell", "message": "hello"},
         )
     assert response.json()["queue"] == "stored"
-    ((summary,), _) = hint.await_args
-    assert summary["ike"] == (1, response.json()["queue_id"])
+    ((readable,), _) = hint.await_args
+    receipt = response.json()
+    assert readable == {"ike": frozenset({(receipt["queue_id"], receipt["operation_id"])})}
