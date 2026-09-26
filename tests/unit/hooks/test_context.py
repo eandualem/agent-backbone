@@ -71,7 +71,8 @@ const client = { session: {
     return reply === "error" ? { error: { name: "BadRequest" } } : { data: {} };
   },
   // "child" is a subagent resumed from an earlier run: no session.created for it.
-  get: async ({ path }) => ({
+  // "old" is the agent's own session resumed from an earlier run, whose lookup never answers.
+  get: ({ path }) => path.id === "old" ? new Promise(() => {}) : Promise.resolve({
     data: { id: path.id, parentID: path.id === "child" ? "s" : undefined },
   }),
 } };
@@ -79,7 +80,7 @@ const hook = await AgentBackbone({ client, directory: process.cwd() });
 const status = (sessionID, type) => hook.event({ event: { type: "session.status",
   properties: { sessionID, status: { type } } } });
 const state = `${process.env.BACKBONE_STATE_DIR}/desk.json`;
-const outputs = [], marks = [];
+const outputs = [], marks = [], states = [];
 for (const step of JSON.parse(steps)) {
   if (step === "busy" || step === "request") {
     await status("s", "busy");
@@ -96,6 +97,8 @@ for (const step of JSON.parse(steps)) {
     const output = { content: [{ type: "text", text: "mcp text" }] };
     await hook["tool.execute.after"]({ tool: "srv_q", sessionID: "s", callID: "c" }, output);
     outputs.push(output.content.map((block) => block.text).join("\\n\\n"));
+  } else if (step === "old-busy" || step === "old-idle") {
+    await status("old", step === "old-busy" ? "busy" : "idle");
   } else if (step === "pause") {
     await new Promise((resolve) => setTimeout(resolve, 20));
   } else if (step === "failed-subtask") {
@@ -105,10 +108,13 @@ for (const step of JSON.parse(steps)) {
     await status(sessionID, "idle");
     await hook.event({ event: { type: "session.idle", properties: { sessionID } } });
   }
-  try { marks.push(JSON.parse(fs.readFileSync(state, "utf8")).prompted_at ?? null); }
-  catch { marks.push(null); }
+  try {
+    const record = JSON.parse(fs.readFileSync(state, "utf8"));
+    marks.push(record.prompted_at ?? null);
+    states.push(record.state);
+  } catch { marks.push(null); states.push(null); }
 }
-console.log(JSON.stringify({ prompts, outputs, marks }));
+console.log(JSON.stringify({ prompts, outputs, marks, states }));
 """
 
 
@@ -117,8 +123,9 @@ def _opencode(tmp_path, steps: list[str], *, reply: str = "ok") -> dict:
     ``busy`` (the agent's session works), ``request`` (and a model request of
     its turn), ``tool`` / ``mcp-tool`` (a tool call ends), ``failed-subtask`` (a
     call ends without a result), ``idle`` (the turn ends), or ``child-tool`` /
-    ``child-idle`` for a resumed subagent. ``marks`` is the state record's
-    ``prompted_at`` after each step."""
+    ``child-idle`` for a resumed subagent, ``old-busy`` / ``old-idle`` for the
+    agent's own session resumed while its parent lookup is pending. ``marks``
+    and ``states`` are the state record's ``prompted_at`` and state after each step."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is needed to exercise the JavaScript plugin")
@@ -316,6 +323,31 @@ def test_opencode_takes_nothing_once_the_turn_has_ended(tmp_path, monkeypatch):
     assert (result["prompts"], result["outputs"]) == ([], ["file text"])
     assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(3, "missed")]
     assert bb.claim_context(tmp_path, "desk", "7") == "claimed"
+
+
+def test_opencode_ends_a_turn_when_nothing_works_any_more(tmp_path, monkeypatch):
+    """The agent's session resumed from an earlier run, its parent not known
+    yet: its turn's end still retires the steer. A subagent finishing while
+    the turn goes on ends nothing."""
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(3), "for the old task")
+    result = _opencode(tmp_path, ["old-busy", "old-idle"])
+    assert result["states"] == ["busy", "idle"]
+    assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(3, "missed")]
+    bb.clear_steer(tmp_path, "desk", "launch-x", 3)
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(4), "[via:backbone from:peer] go")
+    result = _opencode(tmp_path, ["busy", "old-busy", "old-idle"])
+    assert result["states"] == ["busy", "busy", "busy"]
+    assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(4, "offered")]
+
+
+def test_opencode_never_carries_a_turns_settings_into_the_next(tmp_path, monkeypatch):
+    """A turn whose first tool call comes before its first request (a subtask)
+    does not reuse the previous turn's agent and model: the tool's result
+    carries the offer."""
+    bb.offer_context(tmp_path, "desk", "7", "[via:gmail] mail")
+    result = _opencode(tmp_path, ["request", "idle", "busy", "tool"])
+    assert (result["prompts"], result["outputs"]) == ([], ["file text\n\n[via:gmail] mail"])
 
 
 def test_opencode_marks_when_each_turn_starts(tmp_path):

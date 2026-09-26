@@ -231,10 +231,15 @@ export const AgentBackbone = async ({ client, directory } = {}) => {
     else output.output = output.output ? `${output.output}\n\n${text}` : text;
   };
 
+  // The turn ends when nothing works any more, whether or not the session's
+  // parent is known yet; a subagent that finishes while it goes on ends nothing.
   const endTurn = (event, sessionID) => {
     working.delete(sessionID);
+    if (roots.has(sessionID)) working.clear(); // its subagents are done too
+    if (working.size > 0) return;
+    turns.clear(); // the next turn's requests say what drives it
     record(t, event, STATE_IDLE, null, { session_id: sessionID });
-    if (roots.has(sessionID)) retireSteers(t);
+    retireSteers(t);
   };
 
   return {
