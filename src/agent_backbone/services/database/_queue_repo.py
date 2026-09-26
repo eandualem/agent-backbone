@@ -260,21 +260,30 @@ class QueueRepo(Repo):
             # holds, delivered ones included.
             held = await conn.execute(
                 text(
-                    "SELECT id, operation_id, message FROM message_queue "
+                    "SELECT id, operation_id, message, priority, status FROM message_queue "
                     "WHERE session_name = :session AND delivery_kind = :kind ORDER BY id DESC"
                 ),
                 {"session": session_name, "kind": SUBSCRIPTION_KIND},
             )
-            known: set[str] = set()
-            latest = None
+            known: dict[str, dict] = {}  # line -> the newest batch holding it
             for held_row in held.mappings():
-                latest = latest or held_row
-                known.update(held_row["message"].split("\n")[1:])
+                for line in held_row["message"].split("\n")[1:]:
+                    known.setdefault(line, dict(held_row))
             fresh = [line for line in lines if line not in known]
-            if lines and not fresh and latest is not None:
-                return EnqueueResult("already_queued", latest["id"], latest["operation_id"])
+            holders = {known[line]["id"]: known[line] for line in lines if line in known}
+            # The process may have stopped before a waiting high batch was
+            # offered: offer it again under its own id (a taken one never is).
+            offers: list[tuple[int, str]] = [
+                (row["id"], row["message"])
+                for row in holders.values()
+                if row["priority"] and row["status"] == "pending"
+            ]
+            if lines and not fresh:
+                holder = holders[max(holders)]
+                return EnqueueResult(
+                    "already_queued", holder["id"], holder["operation_id"], tuple(offers)
+                )
             rest = list(fresh)
-            offers: list[tuple[int, str]] = []
             grown: EnqueueResult | None = None
             if not priority:
                 existing = await conn.execute(
@@ -297,7 +306,9 @@ class QueueRepo(Repo):
                             {"id": row["id"], "message": message},
                         )
                         if result.rowcount:
-                            grown = EnqueueResult("appended", row["id"], row["operation_id"])
+                            grown = EnqueueResult(
+                                "appended", row["id"], row["operation_id"], tuple(offers)
+                            )
                         else:
                             rest = list(fresh)  # leased meanwhile: open a new batch
             if grown is not None and not rest:

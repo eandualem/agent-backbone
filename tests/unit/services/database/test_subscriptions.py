@@ -113,6 +113,26 @@ class TestSubscriptionBatches:
         assert (await queue_row(db, high.id))["message"] == "h\n- c"
         assert (await queue_row(db, first.id))["message"] == "h\n- a\n- b"
 
+    async def test_a_replay_names_its_own_batch_and_offers_a_waiting_high_one_again(self, db):
+        """The process may stop before a high batch is offered; the replay offers it, once."""
+        high = await db.queue.enqueue_subscription(
+            session_name="desk", header="h", lines=["- a"], priority=1
+        )
+        await db.queue.enqueue_subscription(
+            session_name="desk", header="h", lines=["- b"], priority=1
+        )
+        again = await db.queue.enqueue_subscription(
+            session_name="desk", header="h", lines=["- a"], priority=1
+        )
+        assert again.status == "already_queued"
+        assert (again.id, again.operation_id) == (high.id, high.operation_id)
+        assert again.context_offers == ((high.id, "h\n- a"),)
+        await db.queue.dequeue("desk")  # the drain has it now
+        leased = await db.queue.enqueue_subscription(
+            session_name="desk", header="h", lines=["- a"], priority=1
+        )
+        assert leased.status == "already_queued" and leased.context_offers == ()
+
     async def test_a_full_batch_opens_the_next_one(self, db):
         lines = [f"- {n}" for n in range(SUBSCRIPTION_BATCH_LIMIT + 3)]
         result = await db.queue.enqueue_subscription(

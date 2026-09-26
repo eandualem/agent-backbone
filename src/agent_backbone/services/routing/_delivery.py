@@ -304,7 +304,9 @@ async def _enqueue(
             "stored", queue_id, stored_operation, context_offers=result.context_offers
         )
     log.info("Same %s for %s already queued (from %s)", kind, session_name, sender or "?")
-    return _QueueReceipt("already_queued", queue_id, stored_operation)
+    return _QueueReceipt(
+        "already_queued", queue_id, stored_operation, context_offers=result.context_offers
+    )
 
 
 @_serialized
