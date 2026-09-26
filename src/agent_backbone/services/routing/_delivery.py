@@ -537,7 +537,13 @@ async def safe_deliver(
         try:
             return await send_message(session_name, message, runtime_hint=profile.runtime)
         except SubmissionUnconfirmed as exc:
-            if await prompt_hook_after(config.state_dir, session_name, pasted_at, message):
+            # Only a runtime whose hook sees UserPromptSubmit can send a receipt.
+            receipts = any(
+                event == "UserPromptSubmit" for event, _ in get_runtime(profile.runtime).hook_events
+            )
+            if receipts and await prompt_hook_after(
+                config.state_dir, session_name, pasted_at, message
+            ):
                 return True
             uncertain = True
             await record_exception("submission_unconfirmed", "submission", exc)
@@ -650,9 +656,11 @@ async def safe_deliver(
 
 
 PROMPT_HOOK_WAIT_SECONDS = 10.0
-"""How long a submission the screen could not confirm waits for the runtime's hook.
-Codex took its prompt up to 6.5 s after a paste the screen had confirmed
-(live, 2026-09-26, 18 deliveries); Claude Code within 0.2 s."""
+"""How long a submission the screen could not confirm waits for the runtime's
+hook, from when the screen check gives up (about 1.5 s after the paste).
+Measured on pastes the screen did confirm (live, 2026-09-26, 18 deliveries
+each): Codex recorded the prompt up to 6.5 s after Backbone recorded the
+delivery, Claude Code within 0.2 s."""
 
 
 async def prompt_hook_after(state_dir, session_name: str, since: float, message: str) -> bool:

@@ -3,7 +3,7 @@
 import asyncio
 import time
 from dataclasses import replace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from sqlalchemy import text
@@ -79,7 +79,9 @@ async def test_an_unconfirmed_paste_the_prompt_hook_reports_is_delivered(db, con
     with (
         patch(
             "agent_backbone.services.routing._delivery.get_session_intelligence",
-            AsyncMock(return_value=SessionProfile("ike", SessionIntelligence.READY)),
+            AsyncMock(
+                return_value=SessionProfile("ike", SessionIntelligence.READY, runtime="codex")
+            ),
         ),
         patch(
             "agent_backbone.services.routing._delivery.send_message",
@@ -123,7 +125,9 @@ async def test_a_prompt_hook_receipt_after_the_first_poll_is_delivered(db, confi
     with (
         patch(
             "agent_backbone.services.routing._delivery.get_session_intelligence",
-            AsyncMock(return_value=SessionProfile("ike", SessionIntelligence.READY)),
+            AsyncMock(
+                return_value=SessionProfile("ike", SessionIntelligence.READY, runtime="codex")
+            ),
         ),
         patch(
             "agent_backbone.services.routing._delivery.send_message",
@@ -175,7 +179,9 @@ async def test_what_is_not_a_receipt(db, config, record):
     with (
         patch(
             "agent_backbone.services.routing._delivery.get_session_intelligence",
-            AsyncMock(return_value=SessionProfile("ike", SessionIntelligence.READY)),
+            AsyncMock(
+                return_value=SessionProfile("ike", SessionIntelligence.READY, runtime="codex")
+            ),
         ),
         patch(
             "agent_backbone.services.routing._delivery.send_message",
@@ -186,6 +192,29 @@ async def test_what_is_not_a_receipt(db, config, record):
             "ike", "correction", config, db=db, delivery_kind="direct_message", sender="lead"
         )
     assert report.unconfirmed
+
+
+async def test_a_runtime_without_a_prompt_hook_does_not_wait_for_one(db, config):
+    """Only Claude Code and Codex hooks see UserPromptSubmit: elsewhere nothing is polled."""
+    reads = Mock()
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(
+                return_value=SessionProfile("ike", SessionIntelligence.READY, runtime="gemini")
+            ),
+        ),
+        patch(
+            "agent_backbone.services.routing._delivery.send_message",
+            AsyncMock(side_effect=SubmissionUnconfirmed("no receipt")),
+        ),
+        patch("agent_backbone.services.routing._delivery.read_state_file", reads),
+    ):
+        report = await safe_deliver(
+            "ike", "correction", config, db=db, delivery_kind="direct_message", sender="lead"
+        )
+    assert report.unconfirmed
+    reads.assert_not_called()
 
 
 async def test_checkpoint_survives_read_response_loss_and_retains_sender(db):
