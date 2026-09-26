@@ -41,7 +41,12 @@ from agent_backbone.models import (
 from agent_backbone.services.agents import note_submission, read_state_file
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
-from agent_backbone.services.runtimes import SubmissionUnconfirmed, get_runtime, send_message
+from agent_backbone.services.runtimes import (
+    UNKNOWN,
+    SubmissionUnconfirmed,
+    get_runtime,
+    send_message,
+)
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -537,9 +542,11 @@ async def safe_deliver(
         try:
             return await send_message(session_name, message, runtime_hint=profile.runtime)
         except SubmissionUnconfirmed as exc:
-            # Only a runtime whose hook sees UserPromptSubmit can send a receipt.
-            receipts = any(
-                event == "UserPromptSubmit" for event, _ in get_runtime(profile.runtime).hook_events
+            # Only a runtime whose hook sees UserPromptSubmit can send a receipt. One
+            # not identified before the paste may be (send_message looks again): it waits.
+            runtime = get_runtime(profile.runtime)
+            receipts = runtime is UNKNOWN or any(
+                event == "UserPromptSubmit" for event, _ in runtime.hook_events
             )
             if receipts and await prompt_hook_after(
                 config.state_dir, session_name, pasted_at, message

@@ -95,7 +95,10 @@ async def test_an_unconfirmed_paste_the_prompt_hook_reports_is_delivered(db, con
     assert await db.queue.checkpoint("ike") == []  # nothing held
 
 
-async def test_a_prompt_hook_receipt_after_the_first_poll_is_delivered(db, config, monkeypatch):
+@pytest.mark.parametrize("runtime", ["codex", "unknown"])  # unknown: identified only at the paste
+async def test_a_prompt_hook_receipt_after_the_first_poll_is_delivered(
+    db, config, monkeypatch, runtime
+):
     """The hook can report a moment after the screen check gives up: delivery keeps polling."""
     import json
 
@@ -126,7 +129,7 @@ async def test_a_prompt_hook_receipt_after_the_first_poll_is_delivered(db, confi
         patch(
             "agent_backbone.services.routing._delivery.get_session_intelligence",
             AsyncMock(
-                return_value=SessionProfile("ike", SessionIntelligence.READY, runtime="codex")
+                return_value=SessionProfile("ike", SessionIntelligence.READY, runtime=runtime)
             ),
         ),
         patch(
