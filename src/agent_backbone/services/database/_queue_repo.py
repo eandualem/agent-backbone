@@ -362,6 +362,28 @@ class QueueRepo(Repo):
             )
             return int(result.scalar_one())
 
+    async def inbox_rows(
+        self, session_name: str | None = None
+    ) -> dict[str, frozenset[tuple[int, str | None]]]:
+        """Per session with any, the rows waiting for its inbox (held
+        ``checkpoint``/``uncertain`` rows and pending direct messages;
+        ``checkpoint`` hands them out ten at a time), each as
+        ``(id, operation_id)``: an identity a reused id cannot repeat."""
+        only = "AND session_name = :session " if session_name is not None else ""
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(
+                    "SELECT session_name, id, operation_id FROM message_queue "
+                    "WHERE (status IN ('checkpoint', 'uncertain') "
+                    "OR (status = 'pending' AND delivery_kind = 'direct_message')) " + only
+                ),
+                {"session": session_name},
+            )
+            rows: dict[str, set[tuple[int, str | None]]] = {}
+            for row in result.mappings():
+                rows.setdefault(row["session_name"], set()).add((row["id"], row["operation_id"]))
+            return {name: frozenset(ids) for name, ids in rows.items()}
+
     async def sessions_with_pending(self) -> list[str]:
         async with self._tx() as conn:
             result = await conn.execute(

@@ -469,7 +469,8 @@ emission consume those projections, as does offline CLI status.
   `/api/messages`, `/api/issues`, `/api/deliveries`, `/api/events`,
   `/api/plans`, `/api/status`, `/api/config`).
 - Socket.IO `/sessions`: a full snapshot of all agents (`sessions:update`)
-  after API changes and when monitoring finds a changed snapshot.
+  after API changes and when monitoring finds a changed snapshot, and an
+  `inbox:pending` hint when an agent's inbox has more to read.
 - Socket.IO `/terminal`: a **read-only** live stream of any session's
   terminal output. Nothing typed in a browser reaches an agent.
 
