@@ -76,9 +76,10 @@ class OpenCode(Runtime):
 
         config = Path(value("XDG_CONFIG_HOME") or Path.home() / ".config").expanduser()
         candidates = [config / "opencode" / "AGENTS.md"]
-        # Claude Code's user memory stands in unless disabled (1.18: either flag).
+        # Claude Code's user memory stands in unless disabled (1.18: either flag,
+        # true as its boolean config reads it, case-sensitive).
         flags = ("OPENCODE_DISABLE_CLAUDE_CODE", "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT")
-        if not any(value(f).strip().lower() in ("true", "yes", "on", "1") for f in flags):
+        if not any(value(f) in ("true", "yes", "on", "1", "y") for f in flags):
             candidates.append(Path.home() / ".claude" / "CLAUDE.md")
         # The first file that exists is the one read, even an empty one.
         first = next((path for path in candidates if path.exists()), None)

@@ -17,6 +17,20 @@ _JSON_COMMENT = re.compile(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/', re.S)
 """A JSON string (kept) or a comment (dropped), as Gemini CLI strips them."""
 
 
+def _context_file_names(settings: Path) -> list[str] | None:
+    """``context.fileName`` in one Gemini settings file, None where it sets none."""
+    try:
+        text = _JSON_COMMENT.sub(lambda m: m[1] or "", settings.read_text())
+        configured = json.loads(text)["context"]["fileName"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if isinstance(configured, str):
+        return [configured]
+    if isinstance(configured, list):
+        return [name for name in configured if isinstance(name, str)]
+    return None
+
+
 class Gemini(Runtime):
     supports_exact_resume = True
     id = "gemini"
@@ -104,17 +118,12 @@ class Gemini(Runtime):
         ).expanduser()
         gemini = home / ".gemini"
         # Every context file name (`context.fileName`, GEMINI.md by default) is
-        # read from ~/.gemini (0.46). Its settings file may carry comments.
-        try:
-            text = _JSON_COMMENT.sub(lambda m: m[1] or "", (gemini / "settings.json").read_text())
-            configured = json.loads(text)["context"]["fileName"]
-        except (OSError, ValueError, KeyError, TypeError):
-            configured = None
-        names = ["GEMINI.md"]
-        if isinstance(configured, str):
-            names = [configured]
-        elif isinstance(configured, list):
-            names = [name for name in configured if isinstance(name, str)]
+        # read from ~/.gemini (0.46); the project's settings override the user's.
+        names = (
+            (project is not None and _context_file_names(Path(project) / ".gemini/settings.json"))
+            or _context_file_names(gemini / "settings.json")
+            or ["GEMINI.md"]
+        )
         return [gemini / name for name in names if name and has_text(gemini / name)]
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):

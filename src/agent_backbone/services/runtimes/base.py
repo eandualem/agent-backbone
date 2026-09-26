@@ -123,14 +123,18 @@ def read_brief(brief_file: Path | str) -> str | None:
 
 
 def has_text(path: Path) -> bool:
-    """Whether ``path`` is a file with more than whitespace in its first 64 KiB."""
+    """Whether ``path`` is a file with more than whitespace in it, read in chunks
+    up to the first that has some."""
     try:
         if not path.is_file():
             return False
         with path.open("rb") as handle:
-            return bool(handle.read(64 * 1024).strip())
+            while chunk := handle.read(64 * 1024):
+                if chunk.strip():
+                    return True
     except OSError:
-        return False
+        pass
+    return False
 
 
 def split_model_effort(spec: str | None) -> tuple[str | None, str | None]:

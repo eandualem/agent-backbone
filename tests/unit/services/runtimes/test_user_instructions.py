@@ -38,6 +38,8 @@ def test_a_file_with_content_is_reported_and_an_empty_one_is_not(home, runtime, 
     assert RUNTIMES[runtime].user_instructions({}) == []
     _write(path)
     assert RUNTIMES[runtime].user_instructions({}) == [path]
+    _write(path, " " * 100_000 + "Always answer in French.\n")  # past the first chunk
+    assert RUNTIMES[runtime].user_instructions({}) == [path]
 
 
 def test_the_agents_own_environment_moves_the_codex_home(home):
@@ -59,6 +61,14 @@ def test_gemini_reads_its_configured_context_file_names(home):
     settings = '{\n  // AGENTS.md, as the project uses\n  "context": {"fileName": ["AGENTS.md"]}\n}'
     _write(home / ".gemini/settings.json", settings)
     assert RUNTIMES["gemini"].user_instructions({}) == [agents]
+
+
+def test_gemini_takes_the_projects_context_file_names_over_the_users(home, tmp_path):
+    default = _write(home / ".gemini/GEMINI.md")
+    agents = _write(home / ".gemini/AGENTS.md")
+    _write(tmp_path / ".gemini/settings.json", '{"context": {"fileName": "AGENTS.md"}}')
+    assert RUNTIMES["gemini"].user_instructions({}) == [default]
+    assert RUNTIMES["gemini"].user_instructions({}, tmp_path) == [agents]
 
 
 def test_opencode_reads_the_first_file_that_exists_even_when_empty(home, monkeypatch):
