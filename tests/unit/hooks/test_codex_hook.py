@@ -353,37 +353,41 @@ class TestAutomaticReviewerRefusals:
         record, _ = hook.derive(_payload("PreToolUse"), {"state": "busy"})
         assert "refusal_watch" not in record and self._watch(tmp_path)["watching"]
 
-    def test_a_hook_does_not_wait_long_for_anothers_look(self, tmp_path, monkeypatch):
+    def test_a_hook_does_not_wait_long_for_anothers_read(self, tmp_path, monkeypatch):
         import fcntl
 
         self._turn(tmp_path, REVIEWING, events=("PermissionRequest",))
         before = self._watch(tmp_path)
-        monkeypatch.setattr(hook, "LOCK_WAIT_SECONDS", 0.1)
-        with (tmp_path / hook.WATCH_DIR / "cx.lock").open("a") as held:
-            fcntl.flock(held, fcntl.LOCK_EX)  # another hook is looking
+        monkeypatch.setattr(hook, "LOOK_WAIT_SECONDS", 0.1)
+        with (tmp_path / hook.WATCH_DIR / "cx.look").open("a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)  # another hook is reading the screen
             _, look = self._turn(tmp_path, DENIED, events=("PreToolUse",))
         assert look.call_count == 0 and self._watch(tmp_path) == before
-        assert len(self._turn(tmp_path, DENIED, events=("Stop",))[0]) == 1  # the next look
+        assert len(self._turn(tmp_path, DENIED, events=("Stop",))[0]) == 1  # the next read
 
-    def test_a_hook_reading_the_screen_blocks_no_other_hook(self, tmp_path):
-        """A request arriving during another hook's screen read is recorded at once;
-        the older reading, applied after a newer one, adds nothing."""
+    def test_a_request_is_recorded_while_another_hook_reads(self, tmp_path, monkeypatch):
+        import fcntl
+
+        self._turn(tmp_path, REVIEWING, events=("SessionStart",))
+        monkeypatch.setattr(hook, "LOOK_WAIT_SECONDS", 0.1)
+        with (tmp_path / hook.WATCH_DIR / "cx.look").open("a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            self._turn(tmp_path, events=("PermissionRequest",))
+        assert self._watch(tmp_path)["watching"]  # the event, without its read
+        assert len(self._turn(tmp_path, DENIED, events=("Stop",))[0]) == 1
+
+    def test_an_older_turn_end_does_not_end_a_newer_watch(self, tmp_path, monkeypatch):
         self._turn(tmp_path, REVIEWING, events=("PermissionRequest",))
-        command = "cd /home/someone/projects/checkout && git push origin main"
+        monkeypatch.setattr(hook, "LOOK_WAIT_SECONDS", 0.1)  # the new request's read waits
 
-        def slow_read():  # while this hook reads, a parallel call's hooks run
-            request = _payload("PermissionRequest", tool_name="Bash")
-            request["tool_input"] = {"command": command}
-            refused = REVIEWING + f"✗ Request denied for codex to run {command}\n"
-            with patch.object(hook, "own_screen", return_value=refused):
-                hook.watch_refusals(request, tmp_path, "cx")
-            return REVIEWING  # read before the refusal was drawn
+        def read_across_a_new_request():  # the turn ended; the next turn requested again
+            self._turn(tmp_path, None, events=("PermissionRequest",))  # its read failed
+            return REVIEWING
 
-        with patch.object(hook, "own_screen", side_effect=slow_read):
-            hook.watch_refusals(_payload("PreToolUse"), tmp_path, "cx")
-        logged = (tmp_path / "actions.jsonl").read_text().splitlines()
-        assert [json.loads(line)["summary"] for line in logged] == ["cd; git push"]
+        with patch.object(hook, "own_screen", side_effect=read_across_a_new_request):
+            hook.watch_refusals(_payload("Interrupt"), tmp_path, "cx")
         assert self._watch(tmp_path)["watching"]
+        assert len(self._turn(tmp_path, DENIED, events=("Stop",))[0]) == 1
 
     def test_outside_tmux_nothing_is_watched(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TMUX_PANE")
