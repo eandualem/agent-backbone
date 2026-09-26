@@ -395,6 +395,28 @@ class TestMaterialize:
         assert (new / ".claude" / "skills" / "a").is_symlink()
         assert (new / ".claude" / "skills" / "b").is_symlink()
 
+    def test_a_moved_store_relinks_the_links_the_backbone_recorded(self, tmp_path):
+        """`skills.store` moved: links into the recorded store are still the backbone's."""
+        old_store = tmp_path / "old-store"
+        make_skill(old_store, "a", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        skills_dir = repo / ".claude" / "skills"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "b").symlink_to(tmp_path / "elsewhere" / "b")  # the repository's own
+        manifest = manifest_path(tmp_path / "data", "app")
+        materialize(old_store, repo, (".claude/skills",), read_store(old_store), manifest)
+        new_store = tmp_path / "new-store"
+        old_store.rename(new_store)
+        make_skill(new_store, "b", tags="all")
+        result = materialize(new_store, repo, (".claude/skills",), read_store(new_store), manifest)
+        assert os.readlink(skills_dir / "a") == str(new_store / "a")
+        assert result.linked == [".claude/skills/a"]
+        assert result.conflicts == [".claude/skills/b is a link the repository owns"]
+        assert os.readlink(skills_dir / "b") == str(tmp_path / "elsewhere" / "b")
+        assert "/.claude/skills/a" in (repo / ".git" / "info" / "exclude").read_text()
+        later = materialize(new_store, repo, (".claude/skills",), [], manifest)
+        assert later.removed == [".claude/skills/a"]
+
     def test_removes_only_its_own_stale_links_and_keeps_repo_skills(self, tmp_path):
         store = tmp_path / "store"
         make_skill(store, "a", tags="all")

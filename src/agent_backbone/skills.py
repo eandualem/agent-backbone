@@ -418,23 +418,24 @@ def _read_manifest(path: Path) -> list[str]:
     return [str(item) for item in links] if isinstance(links, list) else []
 
 
-def _manifest_repo(path: Path) -> Path | None:
-    """The checkout a manifest records its links in, or None."""
+def _manifest_path(path: Path, key: str) -> Path | None:
+    """A path a manifest records (``repo``: the checkout its links are in,
+    ``store``: the store they point into), or None."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    repo = data.get("repo") if isinstance(data, dict) else None
-    return Path(repo) if isinstance(repo, str) else None
+    value = data.get(key) if isinstance(data, dict) else None
+    return Path(value) if isinstance(value, str) else None
 
 
-def _write_manifest(path: Path, repo_dir: Path, links: list[str]) -> None:
+def _write_manifest(path: Path, repo_dir: Path, links: list[str], store: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not links:
         path.unlink(missing_ok=True)
         return
     tmp = path.with_suffix(".json.tmp")
-    body = {"repo": str(repo_dir), "links": sorted(links)}
+    body = {"repo": str(repo_dir), "store": str(store), "links": sorted(links)}
     tmp.write_text(json.dumps(body, indent=1) + "\n", encoding="utf-8")
     os.replace(tmp, path)
 
@@ -522,17 +523,26 @@ def materialize(
     the store), and nothing else in those directories is touched. When the
     manifest records another checkout (the agent's directory changed), its
     links there are released first, except those another agent there has.
+    A link into the store the manifest records is the backbone's too, so
+    moving the store relinks what it made.
     """
     store = Path(store).expanduser()
     repo_dir = Path(repo_dir)
     result = Materialization()
     previous = set(_read_manifest(manifest))
-    old_repo = _manifest_repo(manifest)
+    old_store = _manifest_path(manifest, "store")
+
+    def ours(link: Path) -> bool:
+        return _points_into(link, store) or (
+            old_store is not None and _points_into(link, old_store)
+        )
+
+    old_repo = _manifest_path(manifest, "repo")
     old_git: Path | None = None
     if previous and old_repo is not None and not _same_file(old_repo, repo_dir):
         for rel in sorted(previous - _links_of_others(manifest, old_repo)):
             link = old_repo / rel
-            if _points_into(link, store):
+            if ours(link):
                 link.unlink()
         old_git = _common_git_dir(old_repo)
         previous = set()
@@ -541,7 +551,7 @@ def materialize(
     shared = _links_of_others(manifest, repo_dir)
     for rel in sorted(previous - set(wanted) - shared):
         link = repo_dir / rel
-        if _points_into(link, store):
+        if ours(link):
             link.unlink()
             result.removed.append(rel)
     kept: list[str] = []
@@ -549,7 +559,7 @@ def materialize(
         link = repo_dir / rel
         target = store / skill.name
         if link.is_symlink():
-            if _points_into(link, store):
+            if _points_into(link, store) or (rel in previous and ours(link)):
                 if os.readlink(link) != str(target):
                     link.unlink()
                     link.symlink_to(target, target_is_directory=True)
@@ -568,7 +578,7 @@ def materialize(
         else:
             result.broken.append(f"{rel} -> {target} has no SKILL.md")
             kept.append(rel)
-    _write_manifest(manifest, repo_dir, kept)
+    _write_manifest(manifest, repo_dir, kept, store)
     git_dir = _common_git_dir(repo_dir)
     if git_dir is not None:
         _update_exclude(git_dir, _links_sharing_git_dir(manifest.parent, git_dir))

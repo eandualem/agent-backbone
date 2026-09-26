@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from agent_backbone.models import (
     BLOCKED_OUTCOMES,
+    BRIEF_SOURCE,
     RETIREMENT_REASONS,
     DeliveryOutcome,
     EventType,
@@ -218,8 +219,23 @@ async def drain_message_queue(
     return summary
 
 
-async def _drain_session(config, db, gh, session_name, summary) -> bool:
-    queued = await db.queue.dequeue(session_name, limit=5)
+async def drain_agent(config, db, session_name: str) -> None:
+    """Deliver one agent's queued startup brief from outside the running
+    service (an ``agent start`` while it is down), through the same delivery.
+    Only the brief: everything else waits for the service's own drain, which
+    expires what is too old first."""
+    await _drain_session(config, db, None, session_name, {}, limit=1, brief_only=True)
+
+
+async def _drain_session(
+    config, db, gh, session_name, summary, *, limit: int = 5, brief_only: bool = False
+) -> bool:
+    queued = await db.queue.dequeue(session_name, limit=limit)
+    if brief_only:
+        for record in queued:
+            if record.get("source") != BRIEF_SOURCE:
+                await db.queue.release(record["id"])
+        queued = [record for record in queued if record.get("source") == BRIEF_SOURCE]
     completed = True
     try:
         for record in queued:
