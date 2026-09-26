@@ -293,3 +293,24 @@ class TestSteer:
             headers=auth_headers,
         )
         assert resp.status_code == 422
+
+
+async def test_a_queued_message_hints_the_recipients_inbox(api_client, auth_headers, api_app):
+    offline = SessionProfile(session_name="ike", intelligence=SessionIntelligence.OFFLINE)
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            return_value=offline,
+        ),
+        patch.object(api_app.state.feed, "hint_inbox", AsyncMock()) as hint,
+    ):
+        response = await api_client.post(
+            "/api/messages",
+            headers=auth_headers,
+            json={"target_session": "ike", "from_entity": "bell", "message": "hello"},
+        )
+    assert response.json()["queue"] == "stored"
+    ((read,), _) = hint.await_args
+    readable = await read()
+    receipt = response.json()
+    assert readable == {"ike": frozenset({(receipt["queue_id"], receipt["operation_id"])})}

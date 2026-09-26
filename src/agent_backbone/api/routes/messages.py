@@ -12,7 +12,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from agent_backbone.api.deps import get_config, get_db, registered_agent_or_404
+from agent_backbone.api.deps import get_config, get_db, get_feed, registered_agent_or_404
 from agent_backbone.api.models import (
     MessageRequest,
     MessageResponse,
@@ -38,6 +38,7 @@ async def send_message(
     body: MessageRequest,
     config=Depends(get_config),
     db=Depends(get_db),
+    feed=Depends(get_feed),
 ):
     """Send a message to an agent session using the state-aware delivery pipeline."""
     envelope = f"[via:backbone from:{body.from_entity}] {body.message}"
@@ -66,6 +67,11 @@ async def send_message(
     log.info(
         "Message from %s → %s: %s (%s)", body.from_entity, target, report.outcome, report.queue
     )
+    if report.queue == "stored":
+        try:
+            await feed.hint_inbox(lambda: db.queue.inbox_rows(target))
+        except Exception:
+            log.exception("Inbox hint for %s failed (non-fatal)", target)
     return MessageResponse(
         ok=report.outcome == DeliveryOutcome.DELIVERED,
         session=target,
