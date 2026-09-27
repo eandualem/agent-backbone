@@ -103,3 +103,29 @@ async def test_owner_is_set_once_then_changed_only_by_the_current_owner(db):
     assert not await db.signing.approve_owner_change(by_user_id=222, new_user_id=222)
     assert await db.signing.approve_owner_change(by_user_id=111, new_user_id=222)
     assert (await db.signing.owner()) == {"telegram_user_id": 222, "pending_user_id": None}
+
+
+async def test_a_name_enrolled_again_after_a_clear_takes_a_new_epoch(db):
+    await db.signing.apply_transition(
+        await _start(db, "set", 0, PUB_A, request_id="r1"), now=NOW, by="x"
+    )
+    await db.signing.apply_transition(
+        await _start(db, "clear", 1, None, request_id="r2"), now=NOW, by="x"
+    )
+    again = await _start(db, "set", 0, PUB_B, request_id="r3")
+    assert (await db.signing.apply_transition(again, now=NOW, by="x"))[0] == "applied"
+    assert (await db.signing.enrollment("assistant"))["epoch"] == 2  # epoch 1 stays retired
+
+
+async def test_a_rotation_that_lands_first_makes_the_transition_stale(db):
+    await db.signing.apply_transition(
+        await _start(db, "set", 0, PUB_A, request_id="r1"), now=NOW, by="x"
+    )
+    clear = await _start(db, "clear", 1, None, request_id="r2")
+    fp = signing.fingerprint(b"b" * 32)
+    await db.signing.rotate(
+        sender_key="assistant", old_epoch=1, new_public_key=PUB_B, new_fingerprint=fp
+    )
+    assert (await db.signing.apply_transition(clear, now=NOW, by="x"))[0] == "epoch_changed"
+    kept = await db.signing.enrollment("assistant")
+    assert kept["epoch"] == 2 and kept["public_key"] == PUB_B

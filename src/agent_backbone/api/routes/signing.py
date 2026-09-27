@@ -61,6 +61,7 @@ def _view(transition: dict) -> dict:
         "sender": transition["sender"],
         "audience": transition["audience"],
         "expected_epoch": transition["expected_epoch"],
+        "new_epoch": transition["new_epoch"],
         "new_fingerprint": transition["new_fingerprint"],
         "request_id": transition["request_id"],
         "expires_at": transition["expires_at"],

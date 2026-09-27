@@ -179,13 +179,13 @@ def _sender(route: SenderRoute, path_match, headers: Headers, body: bytes, any_w
         return unquote(path_match.group(route.field))
     if route.where == "header":
         return headers.get("x-backbone-sender")
-    try:
-        parsed = signing.strict_json(body) if body else None
-    except signing.DuplicateKey as exc:
-        if any_watched:
-            raise Refusal(422, "malformed_request", str(exc)) from exc
+    if not body:
         return None
-    except ValueError:
+    try:
+        parsed = signing.strict_json(body)
+    except ValueError as exc:  # a duplicate key, or a body the check can't read
+        if any_watched:
+            raise Refusal(422, "malformed_request", f"the body can't be checked: {exc}") from exc
         return None
     value = parsed.get(route.field) if isinstance(parsed, dict) else None
     return value if isinstance(value, str) else None
@@ -207,29 +207,31 @@ async def check(db, scope, headers: Headers, body: bytes, route: SenderRoute, pa
     path = raw_path.decode("latin-1") if raw_path else scope["path"]
     audit = {"sender_key": key, "sender": sender, "method": method, "path": scope["path"]}
 
+    pending = entry["pending"] if entry else None
+    if pending is not None and pending["new_public_key"] is not None:
+        # Checked against the key waiting for approval, whatever is admitted.
+        outcome = "unsigned"
+        if all(h in headers for h in HEADERS):
+            try:
+                await _verify(
+                    db,
+                    scope,
+                    headers,
+                    body,
+                    route,
+                    path,
+                    key,
+                    t,
+                    public_key=pending["new_public_key"],
+                    epoch=pending["new_epoch"],
+                    use_nonce=False,
+                )
+                outcome = "verified"
+            except Refusal as refusal:
+                outcome = refusal.reason
+        await db.signing.audit(kind="observation", outcome=outcome, **audit)
+
     if entry is None or entry["enrollment"] is None:
-        pending = entry["pending"] if entry else None
-        if pending is not None:
-            outcome = "unsigned"
-            if all(h in headers for h in HEADERS):
-                try:
-                    await _verify(
-                        db,
-                        scope,
-                        headers,
-                        body,
-                        route,
-                        path,
-                        key,
-                        t,
-                        public_key=pending["new_public_key"],
-                        epoch=pending["expected_epoch"] + 1,
-                        use_nonce=False,
-                    )
-                    outcome = "verified"
-                except Refusal as refusal:
-                    outcome = refusal.reason
-            await db.signing.audit(kind="observation", outcome=outcome, **audit)
         if route.where == "header":
             raise Refusal(403, "not_enrolled", f"'{sender}' has no enrolled key")
         return None

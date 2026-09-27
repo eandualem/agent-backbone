@@ -324,3 +324,44 @@ async def test_owner_is_set_once(api_client, auth_headers):
         "/api/signing/owner", headers=auth_headers, json={"telegram_user_id": 22}
     )
     assert first.json() == {"outcome": "set"} and second.json() == {"outcome": "pending"}
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-32", "utf-8-sig"])
+async def test_a_body_the_check_cant_read_is_refused(
+    api_client, auth_headers, api_app, deliver, encoding
+):
+    """The API itself decodes these; the check must not let them through unsigned."""
+    await _enroll(api_client, auth_headers, api_app.state.db, Ed25519PrivateKey.generate())
+    resp = await api_client.post(
+        "/api/messages",
+        headers={**auth_headers, "Content-Type": "application/json"},
+        content=json.dumps(MESSAGE).encode(encoding),
+    )
+    assert resp.status_code in (403, 422), resp.text
+    deliver.assert_not_awaited()
+
+
+async def test_a_pending_replace_is_observed_while_the_active_key_admits(
+    api_client, auth_headers, api_app, deliver
+):
+    db = api_app.state.db
+    old, new = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    await _enroll(api_client, auth_headers, db, old)
+    resp = await _transition(api_client, auth_headers, db, new, action="replace", expected=1)
+    assert resp.status_code == 200 and resp.json()["new_epoch"] == 2
+
+    raw, signed = await _signed(db, new, "POST", "/api/messages", MESSAGE, epoch=2)
+    refused = await api_client.post(
+        "/api/messages", headers={**auth_headers, **signed}, content=raw
+    )
+    assert refused.json()["detail"]["reason"] == "key_epoch_unknown"  # not admitted yet
+    raw, signed = await _signed(db, old, "POST", "/api/messages", MESSAGE, epoch=1)
+    admitted = await api_client.post(
+        "/api/messages", headers={**auth_headers, **signed}, content=raw
+    )
+    assert admitted.status_code == 200
+    seen = await api_client.get(f"/api/signing/observations?sender={SENDER}", headers=auth_headers)
+    assert [o["outcome"] for o in seen.json()["observations"]] == [
+        "verified",
+        "key_epoch_unknown",
+    ]

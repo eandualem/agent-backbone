@@ -18,6 +18,10 @@ from agent_backbone.services.database._time import now_iso
 NONCE_RETENTION_SECONDS = 3600
 
 
+class _EpochChanged(Exception):
+    """The enrollment moved under a transition; its transaction rolls back."""
+
+
 def _one(row) -> dict | None:
     return dict(row._mapping) if row is not None else None
 
@@ -96,7 +100,10 @@ class SigningRepo(Repo):
         digest: str,
         expires_at: int,
     ) -> dict:
-        """Store a pending transition; a newer one supersedes the name's older one."""
+        """Store a pending transition; a newer one supersedes the name's older one.
+
+        A set or replace takes an epoch above any the name ever had
+        (``new_epoch``), so a key enrolled after a clear never reuses one."""
         at = now_iso()
         async with self._tx() as conn:
             await conn.execute(
@@ -106,16 +113,23 @@ class SigningRepo(Repo):
                 ),
                 {"k": sender_key, "at": at},
             )
+            highest = (
+                await conn.execute(
+                    text("SELECT MAX(epoch) FROM signing_keys WHERE sender_key = :k"),
+                    {"k": sender_key},
+                )
+            ).scalar()
+            new_epoch = None if action == "clear" else max(highest or 0, expected_epoch) + 1
             row = (
                 await conn.execute(
                     text(
                         """INSERT INTO signing_transitions
                            (request_id, sender, sender_key, action, audience, expected_epoch,
-                            new_public_key, new_fingerprint, digest, created_at, expires_at,
-                            status)
+                            new_epoch, new_public_key, new_fingerprint, digest, created_at,
+                            expires_at, status)
                            VALUES (:request_id, :sender, :sender_key, :action, :audience,
-                                   :expected_epoch, :new_public_key, :new_fingerprint, :digest,
-                                   :at, :expires_at, 'pending')
+                                   :expected_epoch, :new_epoch, :new_public_key,
+                                   :new_fingerprint, :digest, :at, :expires_at, 'pending')
                            RETURNING *"""
                     ),
                     {
@@ -125,6 +139,7 @@ class SigningRepo(Repo):
                         "action": action,
                         "audience": audience,
                         "expected_epoch": expected_epoch,
+                        "new_epoch": new_epoch,
                         "new_public_key": new_public_key,
                         "new_fingerprint": new_fingerprint,
                         "digest": digest,
@@ -140,92 +155,111 @@ class SigningRepo(Repo):
 
         Returns ``(outcome, transition)``: ``applied``, or ``unknown``,
         ``not_pending``, ``expired`` or ``epoch_changed`` with nothing changed.
-        Applying a replace or clear retires the old key; a clear also releases
-        the name."""
+        Every change to the enrollment is conditional on the expected epoch,
+        so a rotation that commits first makes this ``epoch_changed``. A
+        replace or clear retires the old key; a clear also releases the name."""
         at = now_iso()
-        async with self._tx() as conn:
-            row = (
-                await conn.execute(
-                    text("SELECT * FROM signing_transitions WHERE digest = :d"), {"d": digest}
-                )
-            ).fetchone()
-            if row is None:
-                return "unknown", None
-            transition = dict(row._mapping)
-            if transition["status"] != "pending":
-                return "not_pending", transition
-            if transition["expires_at"] <= now:
-                await conn.execute(
+        try:
+            async with self._tx() as conn:
+                row = (
+                    await conn.execute(
+                        text("SELECT * FROM signing_transitions WHERE digest = :d"),
+                        {"d": digest},
+                    )
+                ).fetchone()
+                if row is None:
+                    return "unknown", None
+                transition = dict(row._mapping)
+                if transition["status"] != "pending":
+                    return "not_pending", transition
+                if transition["expires_at"] <= now:
+                    await conn.execute(
+                        text(
+                            "UPDATE signing_transitions SET status = 'expired', resolved_at = :at"
+                            " WHERE id = :id AND status = 'pending'"
+                        ),
+                        {"id": transition["id"], "at": at},
+                    )
+                    return "expired", transition
+                claimed = await conn.execute(
                     text(
-                        "UPDATE signing_transitions SET status = 'expired', resolved_at = :at"
-                        " WHERE id = :id AND status = 'pending'"
+                        "UPDATE signing_transitions SET status = 'applied', resolved_at = :at,"
+                        " resolved_by = :by WHERE id = :id AND status = 'pending'"
                     ),
-                    {"id": transition["id"], "at": at},
+                    {"id": transition["id"], "at": at, "by": by},
                 )
-                return "expired", transition
-            current = (
-                await conn.execute(
-                    text("SELECT epoch FROM signing_enrollments WHERE sender_key = :k"),
-                    {"k": transition["sender_key"]},
+                if claimed.rowcount != 1:
+                    return "not_pending", transition
+                await self._change_enrollment(conn, transition, at)
+                await self._audit(
+                    conn,
+                    kind="transition",
+                    outcome="applied",
+                    sender_key=transition["sender_key"],
+                    sender=transition["sender"],
+                    detail=f"{transition['action']} by {by}",
                 )
-            ).fetchone()
-            if (current[0] if current else 0) != transition["expected_epoch"]:
-                return "epoch_changed", transition
-            claimed = await conn.execute(
-                text(
-                    "UPDATE signing_transitions SET status = 'applied', resolved_at = :at,"
-                    " resolved_by = :by WHERE id = :id AND status = 'pending'"
-                ),
-                {"id": transition["id"], "at": at, "by": by},
-            )
-            if claimed.rowcount != 1:
-                return "not_pending", transition
-            key = transition["sender_key"]
-            await conn.execute(
-                text(
-                    "UPDATE signing_keys SET retired_at = :at, retired_by = :why"
-                    " WHERE sender_key = :k AND retired_at IS NULL"
-                ),
-                {"k": key, "at": at, "why": transition["action"]},
-            )
-            await conn.execute(
-                text("DELETE FROM signing_enrollments WHERE sender_key = :k"), {"k": key}
-            )
-            if transition["action"] != "clear":
-                epoch = transition["expected_epoch"] + 1
-                values = {
-                    "k": key,
-                    "sender": transition["sender"],
-                    "pub": transition["new_public_key"],
-                    "fp": transition["new_fingerprint"],
-                    "epoch": epoch,
-                    "at": at,
-                }
-                await conn.execute(
-                    text(
-                        "INSERT INTO signing_enrollments"
-                        " (sender_key, sender, public_key, fingerprint, epoch, enrolled_at)"
-                        " VALUES (:k, :sender, :pub, :fp, :epoch, :at)"
-                    ),
-                    values,
-                )
-                await conn.execute(
-                    text(
-                        "INSERT INTO signing_keys"
-                        " (sender_key, epoch, sender, public_key, fingerprint, created_at)"
-                        " VALUES (:k, :epoch, :sender, :pub, :fp, :at)"
-                    ),
-                    values,
-                )
-            await self._audit(
-                conn,
-                kind="transition",
-                outcome="applied",
-                sender_key=key,
-                sender=transition["sender"],
-                detail=f"{transition['action']} by {by}",
-            )
+        except _EpochChanged:
+            return "epoch_changed", transition
         return "applied", transition
+
+    @staticmethod
+    async def _change_enrollment(conn, transition: dict, at: str) -> None:
+        """The conditional write; raises _EpochChanged (rolling back) when the
+        enrollment is no longer at the expected epoch."""
+        key = transition["sender_key"]
+        expected = transition["expected_epoch"]
+        values = {
+            "k": key,
+            "expected": expected,
+            "sender": transition["sender"],
+            "pub": transition["new_public_key"],
+            "fp": transition["new_fingerprint"],
+            "epoch": transition["new_epoch"],
+            "at": at,
+        }
+        if transition["action"] == "set":
+            changed = await conn.execute(
+                text(
+                    "INSERT INTO signing_enrollments"
+                    " (sender_key, sender, public_key, fingerprint, epoch, enrolled_at)"
+                    " VALUES (:k, :sender, :pub, :fp, :epoch, :at)"
+                    " ON CONFLICT(sender_key) DO NOTHING"
+                ),
+                values,
+            )
+        elif transition["action"] == "replace":
+            changed = await conn.execute(
+                text(
+                    "UPDATE signing_enrollments SET sender = :sender, public_key = :pub,"
+                    " fingerprint = :fp, epoch = :epoch, enrolled_at = :at"
+                    " WHERE sender_key = :k AND epoch = :expected"
+                ),
+                values,
+            )
+        else:
+            changed = await conn.execute(
+                text("DELETE FROM signing_enrollments WHERE sender_key = :k AND epoch = :expected"),
+                values,
+            )
+        if changed.rowcount != 1:
+            raise _EpochChanged
+        await conn.execute(
+            text(
+                "UPDATE signing_keys SET retired_at = :at, retired_by = :why"
+                " WHERE sender_key = :k AND retired_at IS NULL"
+            ),
+            {"k": key, "at": at, "why": transition["action"]},
+        )
+        if transition["action"] != "clear":
+            await conn.execute(
+                text(
+                    "INSERT INTO signing_keys"
+                    " (sender_key, epoch, sender, public_key, fingerprint, created_at)"
+                    " VALUES (:k, :epoch, :sender, :pub, :fp, :at)"
+                ),
+                values,
+            )
 
     async def rotate(
         self, *, sender_key: str, old_epoch: int, new_public_key: str, new_fingerprint: str

@@ -207,7 +207,9 @@ class DuplicateKey(ValueError):
 
 
 def strict_json(body: bytes) -> object:
-    """Parse JSON, refusing a duplicate key anywhere (ValueError)."""
+    """Parse JSON the way the API itself does (``json.loads`` on the bytes, so
+    UTF-16, UTF-32 and a byte-order mark decode the same), refusing a
+    duplicate key anywhere (ValueError)."""
 
     def pairs(items: list[tuple[str, object]]) -> dict[str, object]:
         seen: dict[str, object] = {}
@@ -217,4 +219,4 @@ def strict_json(body: bytes) -> object:
             seen[key] = value
         return seen
 
-    return json.loads(body.decode("utf-8"), object_pairs_hook=pairs)
+    return json.loads(body, object_pairs_hook=pairs)

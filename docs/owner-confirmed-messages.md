@@ -160,7 +160,10 @@ result instead of acting twice.
 
 ### Strict parsing
 
-A signed JSON body is parsed strictly: a duplicate key anywhere is refused,
+A body is read as the API reads it (JSON in UTF-8, UTF-16 or UTF-32, with or
+without a byte-order mark). Once any name is enrolled or pending, a body on a
+sender-field route that isn't readable JSON is refused, and so is a duplicate
+key anywhere. A signed JSON body is parsed strictly: a duplicate key anywhere is refused,
 and on the shapes listed under [Owner confirmation](#owner-confirmation) so is
 an unknown field or a field of the wrong type. `owner_confirmation` must
 agree with the route (`message` for `POST /api/messages`, `steer` for
@@ -210,14 +213,18 @@ The response returns the stored transition, without a digest:
   "sender": "assistant",
   "audience": "<this install's audience id>",
   "expected_epoch": 0,
+  "new_epoch": 1,
   "new_fingerprint": "<hex SHA-256 of the new key, or \"none\">",
   "request_id": "<UUID4>",
   "expires_at": 1790500000
 }
 ```
 
-`expires_at` is Unix time in whole seconds, 15 minutes after creation. A newer
-transition for the same name replaces a pending one.
+`new_epoch` is the epoch the new key will take: one above any epoch the name
+ever had, so a key enrolled after a clear never reuses an old one (`null` for a
+clear). `expires_at` is Unix time in whole seconds, 15 minutes after creation. A
+newer transition for the same name replaces a pending one. `new_epoch` is not
+part of the digest.
 
 ### Framing for proofs and digests
 
@@ -287,10 +294,11 @@ to learn its epoch and check that the enrolled fingerprint is its own key.
 
 ### Observations
 
-While a set or replace is pending, requests made as the name are verified
-against the pending key, with `X-Backbone-Key-Epoch` set to the epoch the key
-will take (`expected_epoch + 1`). The outcome is recorded; admission doesn't
-change, so the request is still handled as an unsigned one.
+While a set or replace is pending, requests made as the name are also verified
+against the pending key, with `X-Backbone-Key-Epoch` set to the transition's
+`new_epoch`. The outcome is recorded; admission doesn't change: before the
+first enrollment the request is handled as an unsigned one, and a name that is
+already enrolled keeps being checked against its active key.
 
 `GET /api/signing/observations?sender=<name>&after=<seq>` (API key; no
 signature needed) returns these records, oldest first: sequence number, time,

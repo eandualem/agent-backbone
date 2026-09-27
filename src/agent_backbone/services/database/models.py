@@ -544,6 +544,8 @@ class SigningTransitionORM(Base):
     action: Mapped[str] = mapped_column(Text, nullable=False)
     audience: Mapped[str] = mapped_column(Text, nullable=False)
     expected_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    new_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """The epoch a set or replace takes: above any the name ever had."""
     new_public_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     new_fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
     digest: Mapped[str] = mapped_column(Text, nullable=False, unique=True)

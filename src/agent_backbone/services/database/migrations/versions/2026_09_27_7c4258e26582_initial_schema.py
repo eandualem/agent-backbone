@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: df350e67984d
+Revision ID: 7c4258e26582
 Revises:
-Create Date: 2026-09-27 18:09:28.485459
+Create Date: 2026-09-27 18:27:29.831169
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "df350e67984d"
+revision: str = "7c4258e26582"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -420,6 +420,7 @@ def upgrade() -> None:
         sa.Column("action", sa.Text(), nullable=False),
         sa.Column("audience", sa.Text(), nullable=False),
         sa.Column("expected_epoch", sa.Integer(), nullable=False),
+        sa.Column("new_epoch", sa.Integer(), nullable=True),
         sa.Column("new_public_key", sa.Text(), nullable=True),
         sa.Column("new_fingerprint", sa.Text(), nullable=False),
         sa.Column("digest", sa.Text(), nullable=False),
