@@ -201,8 +201,8 @@ eight characters.
 
 A name that signs travels in the `X-Backbone-Sender` header, so it must be
 printable ASCII (1–64 characters, no whitespace or `[ ]`); other names are
-refused, and so are `unknown` and `backbone`, which Backbone fills in when a
-request gives no sender. A request that names it with a case or width variant
+refused, and so are `api`, `unknown` and `backbone`, which Backbone fills in
+when a request gives no sender. A request that names it with a case or width variant
 in its body is still made as it.
 
 `expected_epoch` is the current epoch the transition replaces (`0` when the

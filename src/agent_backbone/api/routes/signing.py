@@ -21,9 +21,11 @@ from agent_backbone.services.integrations import notify_humans
 router = APIRouter(prefix="/api/signing", tags=["signing"])
 
 TRANSITION_SECONDS = 900
-DEFAULT_SENDERS = frozenset({"unknown", "backbone"})
-"""Names the API fills in when a request gives none (a skill change's actor, a
-restart's continuation); enrolling one would leave an unsigned path to it."""
+DEFAULT_SENDERS = frozenset({"api", "unknown", "backbone"})
+"""Names the API fills in when a request gives none (who approved or denied a
+prompt, a skill change's actor, a restart's continuation); enrolling one would
+leave an unsigned path to it. A swarm's missing initiator is recorded as
+'(human operator)', which no signing name can be."""
 
 
 class TransitionRequest(BaseModel):

@@ -384,7 +384,7 @@ async def test_a_signing_name_is_printable_ascii(api_client, auth_headers):
     assert resp.status_code == 422
 
 
-@pytest.mark.parametrize("sender", ["unknown", "Backbone"])
+@pytest.mark.parametrize("sender", ["api", "unknown", "Backbone"])
 async def test_a_name_the_api_fills_in_can_not_sign(api_client, auth_headers, sender):
     resp = await api_client.post(
         "/api/signing/transitions",
