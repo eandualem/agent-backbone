@@ -184,19 +184,24 @@ async def _read(receive) -> tuple[bytes, bool]:
 
 
 def _sender(route: SenderRoute, path_match, headers: Headers, body: bytes, any_watched: bool):
-    """The name a request is made as, or None (the route validates the rest)."""
+    """The name a request is made as, or None (the route validates the rest).
+
+    Once any name is watched, the body is checked strictly on every sender
+    route, wherever the sender comes from: a duplicate key or a body this
+    check can't read is refused before a signature or nonce is looked at."""
+    parsed = None
+    if body:
+        try:
+            parsed = signing.strict_json(body)
+        except ValueError as exc:  # a duplicate key, or a body the check can't read
+            if any_watched:
+                raise Refusal(
+                    422, "malformed_request", f"the body can't be checked: {exc}"
+                ) from exc
     if route.where == "path":
         return unquote(path_match.group(route.field))
     if route.where == "header":
         return headers.get("x-backbone-sender")
-    if not body:
-        return None
-    try:
-        parsed = signing.strict_json(body)
-    except ValueError as exc:  # a duplicate key, or a body the check can't read
-        if any_watched:
-            raise Refusal(422, "malformed_request", f"the body can't be checked: {exc}") from exc
-        return None
     value = parsed.get(route.field) if isinstance(parsed, dict) else None
     return value if isinstance(value, str) else None
 

@@ -410,3 +410,17 @@ async def test_enforced_when_the_app_is_mounted_under_a_prefix(api_app, auth_hea
         resp = await client.post("/bb/api/messages", headers=auth_headers, json=MESSAGE)
     assert resp.status_code == 403
     deliver.assert_not_awaited()
+
+
+async def test_a_signed_rotation_with_a_duplicate_key_is_refused(api_client, auth_headers, api_app):
+    db = api_app.state.db
+    old = Ed25519PrivateKey.generate()
+    await _enroll(api_client, auth_headers, db, old)
+    key = signing.b64url_encode(b"k" * 32)
+    body = f'{{"new_public_key":"{key}","new_public_key":"{key}","proof":"x"}}'.encode()
+    _, signed = await _signed(db, old, "POST", "/api/signing/rotation", None, purpose="rotate")
+    resp = await api_client.post(
+        "/api/signing/rotation", headers={**auth_headers, **signed}, content=body
+    )
+    assert resp.status_code == 422 and resp.json()["detail"]["reason"] == "malformed_request"
+    assert (await db.signing.enrollment(SENDER))["epoch"] == 1
