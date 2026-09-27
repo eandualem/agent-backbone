@@ -102,6 +102,17 @@ async def test_preview_names_directories_and_link_state(api_client, auth_headers
     assert missing.status_code == 404
 
 
+async def test_preview_names_the_deep_code_directory(api_client, auth_headers, store, api_app):
+    web = api_app.state.config.agents.specs["web"]
+    api_app.state.config = replace(
+        api_app.state.config,
+        agents=AgentsConfig(specs={"docs": replace(web, name="docs", runtime="deepcode")}),
+    )
+    view = (await api_client.get("/api/skills/preview/docs", headers=auth_headers)).json()
+    assert [s["name"] for s in view["skills"]] == ["shared"]
+    assert view["directories"] == [".agents/skills"]
+
+
 async def test_disabled_store_refuses_writes(api_client, auth_headers, api_app):
     from agent_backbone.config import SkillsConfig
 

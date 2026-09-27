@@ -101,8 +101,9 @@ conversation, and are retired only when delivered.
    that invariant stands. Instead the batch is queued *and* offered to the
    agent through its runtime's hook: Claude Code and Codex run the backbone's
    hook on every tool call, and the hook returns the batch as
-   `additionalContext`, so the event reaches the model on its next tool call
-   (seconds, mid-task) without touching the terminal. The next queue drain
+   `additionalContext`; OpenCode's plugin adds it to the running turn as a user
+   message after each tool call. Either way the event reaches the model on its
+   next tool call (seconds, mid-task) without touching the terminal. The next queue drain
    sees that the hook took it, records the delivery with source
    `hook-context`, and pastes nothing. If the agent reaches its prompt first,
    the drain withdraws the offer and pastes normally. Whoever renames the
@@ -112,7 +113,7 @@ conversation, and are retired only when delivered.
    queue row is pasted at the new prompt instead. A poll with more
    than 25 matches gets one offer and receipt per queued batch, preserving every
    item without repeating earlier batches at the prompt.
-3. A runtime whose hook cannot add context (Gemini CLI, OpenCode, Aider,
+3. A runtime whose hook cannot add context (Gemini CLI, Deep Code, Aider,
    `shell`) gets the batch first thing when it is ready, ahead of everything
    else in its queue.
 
