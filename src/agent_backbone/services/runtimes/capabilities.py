@@ -142,6 +142,10 @@ _API_BOUNDARY = "checked at the API, the same for every runtime"
 _CONFIRMED = "tests/unit/api/routes/test_api_confirmations.py"
 _VALIDATE = "tests/unit/services/terminal/test_callers.py"
 _UNMEASURED = "commands it runs are not yet measured under its pane"
+_INBOX_ONLY = "tests/unit/services/test_inbox_only_agents.py"
+_NO_CLI = "runs no CLI; the recorded runtime makes no difference"
+_HINT = "tests/unit/api/routes/test_api_messages.py"
+_QUEUE_ONLY = "read from the queue, the same for every runtime"
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
@@ -587,6 +591,51 @@ CAPABILITIES: tuple[Capability, ...] = (
         deepcode=_unverified(302, _UNMEASURED),
         aider=_unverified(302, _UNMEASURED),
         shell=_ok(_VALIDATE, "live-checked"),
+    ),
+    _row(
+        "inbox-only",
+        "Inbox-only agent: registered, never launched or typed into",
+        "src/agent_backbone/services/agents/operations.py",
+        fallback=(
+            "Keep the agent stopped; read its messages with `backbone inbox --agent NAME`"
+            " before they expire."
+        ),
+        implemented=lambda rt: True,
+        claude=_ok(_INBOX_ONLY, _NO_CLI),
+        codex=_ok(_INBOX_ONLY, _NO_CLI),
+        gemini=_ok(_INBOX_ONLY, _NO_CLI),
+        opencode=_ok(_INBOX_ONLY, _NO_CLI),
+        deepcode=_ok(_INBOX_ONLY, _NO_CLI),
+        aider=_ok(_INBOX_ONLY, _NO_CLI),
+        shell=_ok(_INBOX_ONLY, _NO_CLI),
+    ),
+    _row(
+        "inbox-hint",
+        "New inbox messages hinted on Socket.IO (`inbox:pending`)",
+        "src/agent_backbone/api/session_updates.py",
+        fallback="Read the inbox (`POST /api/messages/inbox`) on a timer.",
+        implemented=lambda rt: True,
+        claude=_ok(_HINT, _QUEUE_ONLY),
+        codex=_ok(_HINT, _QUEUE_ONLY),
+        gemini=_ok(_HINT, _QUEUE_ONLY),
+        opencode=_ok(_HINT, _QUEUE_ONLY),
+        deepcode=_ok(_HINT, _QUEUE_ONLY),
+        aider=_ok(_HINT, _QUEUE_ONLY),
+        shell=_ok(_HINT, _QUEUE_ONLY),
+    ),
+    _row(
+        "inbox-escalations",
+        "Escalations reach an inbox-only target's inbox",
+        "src/agent_backbone/services/jobs/escalation.py",
+        fallback="Set `escalation.target` to an agent with a terminal session.",
+        implemented=lambda rt: True,
+        claude=_ok(_INBOX_ONLY, _NO_CLI),
+        codex=_ok(_INBOX_ONLY, _NO_CLI),
+        gemini=_ok(_INBOX_ONLY, _NO_CLI),
+        opencode=_ok(_INBOX_ONLY, _NO_CLI),
+        deepcode=_ok(_INBOX_ONLY, _NO_CLI),
+        aider=_ok(_INBOX_ONLY, _NO_CLI),
+        shell=_ok(_INBOX_ONLY, _NO_CLI),
     ),
     _row(
         "deep-review",
