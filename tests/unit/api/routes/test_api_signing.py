@@ -438,3 +438,18 @@ async def test_a_refused_body_is_never_echoed(api_client, auth_headers, api_app,
         "reason": "malformed_request",
         "message": "the body repeats a key",
     }
+
+
+async def test_a_path_the_router_accepts_is_checked(api_client, auth_headers, api_app, deliver):
+    """The router's pattern also takes a trailing newline; so must the check."""
+    await _enroll(api_client, auth_headers, api_app.state.db, Ed25519PrivateKey.generate())
+    resp = await api_client.post("/api/messages%0A", headers=auth_headers, json=MESSAGE)
+    assert resp.status_code == 403 and resp.json()["detail"]["reason"] == "signature_required"
+    deliver.assert_not_awaited()
+
+
+def test_every_sender_route_is_a_real_route(api_app):
+    from agent_backbone.api.signed import SENDER_ROUTES
+
+    routes = {(m, r.path) for r in api_app.router.routes for m in getattr(r, "methods", None) or ()}
+    assert {(r.method, r.template) for r in SENDER_ROUTES} <= routes

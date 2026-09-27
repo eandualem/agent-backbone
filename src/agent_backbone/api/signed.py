@@ -16,13 +16,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import re
 import time
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, unquote
+from urllib.parse import parse_qsl
 
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
+from starlette.routing import Match
 
 from agent_backbone import signing
 from agent_backbone.api.auth import api_key_valid
@@ -43,30 +43,28 @@ HEADERS = (
 @dataclass(frozen=True)
 class SenderRoute:
     method: str
-    path: re.Pattern[str]
+    template: str  # the router's own path template
     where: str  # "body", "path" or "header"
     field: str
     purpose: str = "request"
 
 
-def _route(method: str, path: str, where: str, field: str, purpose: str = "request"):
-    return SenderRoute(method, re.compile(path), where, field, purpose)
-
-
 SENDER_ROUTES: tuple[SenderRoute, ...] = (
-    _route("POST", r"/api/messages", "body", "from_entity"),
-    _route("POST", r"/api/steer", "body", "from_entity"),
-    _route("POST", r"/api/messages/inbox", "body", "session"),
-    _route("POST", r"/api/agents/[^/]+/(?:approve|deny)", "body", "from_entity"),
-    _route("POST", r"/api/agents/[^/]+/restart", "body", "from_entity"),
-    _route("POST", r"/api/integrations/reply", "body", "session"),
-    _route("POST", r"/api/reports", "body", "agent"),
-    _route("POST", r"/api/swarms", "body", "initiator"),
-    _route("POST", r"/api/agents/(?P<name>[^/]+)/state", "path", "name"),
-    _route("POST", r"/api/skills", "body", "actor"),
-    _route("PUT", r"/api/skills/[^/]+/tags", "body", "actor"),
-    _route("POST", r"/api/signing/rotation", "header", "", "rotate"),
+    SenderRoute("POST", "/api/messages", "body", "from_entity"),
+    SenderRoute("POST", "/api/steer", "body", "from_entity"),
+    SenderRoute("POST", "/api/messages/inbox", "body", "session"),
+    SenderRoute("POST", "/api/agents/{name}/approve", "body", "from_entity"),
+    SenderRoute("POST", "/api/agents/{name}/deny", "body", "from_entity"),
+    SenderRoute("POST", "/api/agents/{session}/restart", "body", "from_entity"),
+    SenderRoute("POST", "/api/integrations/reply", "body", "session"),
+    SenderRoute("POST", "/api/reports", "body", "agent"),
+    SenderRoute("POST", "/api/swarms", "body", "initiator"),
+    SenderRoute("POST", "/api/agents/{session}/state", "path", "session"),
+    SenderRoute("POST", "/api/skills", "body", "actor"),
+    SenderRoute("PUT", "/api/skills/{name}/tags", "body", "actor"),
+    SenderRoute("POST", "/api/signing/rotation", "header", "", "rotate"),
 )
+_BY_ROUTE = {(r.method, r.template): r for r in SENDER_ROUTES}
 
 
 @dataclass(frozen=True)
@@ -103,22 +101,16 @@ def now() -> int:
     return int(time.time())
 
 
-def route_path(scope) -> str:
-    """The path the router matches: without ``root_path`` when the app is
-    mounted under a prefix (as Starlette's own routing does)."""
-    path: str = scope["path"]
-    root = scope.get("root_path", "")
-    if root and path.startswith(root) and path[len(root) : len(root) + 1] == "/":
-        return path[len(root) :]
-    return path
-
-
-def match(method: str, path: str) -> tuple[SenderRoute, re.Match[str]] | None:
-    for route in SENDER_ROUTES:
-        if route.method == method:
-            found = route.path.fullmatch(path)
-            if found is not None:
-                return route, found
+def match(scope) -> tuple[SenderRoute, dict] | None:
+    """The sender route a request reaches, asked of the router itself, so
+    whatever path the router accepts (a mounted prefix, a trailing newline
+    its pattern allows) is the path checked here. Returns the route and its
+    path parameters."""
+    for route in scope["app"].router.routes:
+        found, child = route.matches(scope)
+        if found == Match.FULL:
+            sender_route = _BY_ROUTE.get((scope["method"], getattr(route, "path", None)))
+            return (sender_route, child.get("path_params", {})) if sender_route else None
     return None
 
 
@@ -131,7 +123,7 @@ class SignedSenderMiddleware:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
-        found = match(scope["method"], route_path(scope))
+        found = match(scope) if scope.get("app") is not None else None
         state = scope["app"].state
         config = getattr(state, "config", None)
         db = getattr(state, "db", None)
@@ -153,9 +145,9 @@ class SignedSenderMiddleware:
             return await Refusal(
                 413, "malformed_request", f"body exceeds {MAX_BODY_BYTES} bytes"
             ).response()(scope, replay, send)
-        route, path_match = found
+        route, path_params = found
         try:
-            signed = await check(db, scope, headers, body, route, path_match)
+            signed = await check(db, scope, headers, body, route, path_params)
         except Refusal as refusal:
             return await refusal.response()(scope, replay, send)
         if signed is not None:
@@ -183,7 +175,7 @@ async def _read(receive) -> tuple[bytes, bool]:
             return bytes(data), True
 
 
-def _sender(route: SenderRoute, path_match, headers: Headers, body: bytes, any_watched: bool):
+def _sender(route: SenderRoute, path_params, headers: Headers, body: bytes, any_watched: bool):
     """The name a request is made as, or None (the route validates the rest).
 
     Once any name is watched, the body is checked strictly on every sender
@@ -200,18 +192,19 @@ def _sender(route: SenderRoute, path_match, headers: Headers, body: bytes, any_w
                 message = "the body repeats a key" if duplicate else "the body isn't readable JSON"
                 raise Refusal(422, "malformed_request", message) from exc
     if route.where == "path":
-        return unquote(path_match.group(route.field))
+        value = path_params.get(route.field)
+        return value if isinstance(value, str) else None
     if route.where == "header":
         return headers.get("x-backbone-sender")
     value = parsed.get(route.field) if isinstance(parsed, dict) else None
     return value if isinstance(value, str) else None
 
 
-async def check(db, scope, headers: Headers, body: bytes, route: SenderRoute, path_match):
+async def check(db, scope, headers: Headers, body: bytes, route: SenderRoute, path_params):
     """The verified sender, None for an ordinary request, or Refusal."""
     t = now()
     watched = await db.signing.watched(t)
-    sender = _sender(route, path_match, headers, body, bool(watched))
+    sender = _sender(route, path_params, headers, body, bool(watched))
     if sender is None:
         if route.where == "header":
             raise Refusal(403, "signature_required", "a signed request is required")
