@@ -21,6 +21,7 @@ from agent_backbone.services.database._outbox_repo import OutboxRepo
 from agent_backbone.services.database._queue_repo import QueueRepo
 from agent_backbone.services.database._reports_repo import ReportRepo
 from agent_backbone.services.database._settings_repo import SettingRepo
+from agent_backbone.services.database._signing_repo import SigningRepo
 from agent_backbone.services.database._state_repo import StateRepo
 from agent_backbone.services.database._swarms_repo import SwarmRepo
 from agent_backbone.services.database._transitions_repo import TransitionRepo
@@ -229,6 +230,7 @@ class BackboneDB:
         self.states = StateRepo(engine)
         self.transitions = TransitionRepo(engine)
         self.usage = UsageRepo(engine)
+        self.signing = SigningRepo(engine)
 
     @property
     def url(self) -> str:

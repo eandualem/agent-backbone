@@ -384,6 +384,22 @@ access, but the supplied sender name is not authenticated identity.
 
 This is the endpoint agents use to talk to each other.
 
+## Signed senders
+
+An app can enroll an Ed25519 key for its sender name; every request made as
+that name must then be signed. The wire format, the refusal reasons and the
+enrollment flow are in [Signed senders and owner-confirmed
+messages](owner-confirmed-messages.md).
+
+| Route | What it does |
+|---|---|
+| `GET /api/signing/audience` | This install's audience id, which signed requests are bound to |
+| `GET /api/signing/enrollment?sender=` | A name's epoch, key fingerprint and pending transition |
+| `POST /api/signing/transitions` | Start a set, replace or clear; it takes effect when the owner sends `/approve_key` in Telegram |
+| `POST /api/signing/rotation` | Replace the key, signed by the current one |
+| `GET /api/signing/observations?sender=&after=` | How requests made as the name fared while a transition was pending |
+| `POST /api/signing/owner` `{"telegram_user_id": 42}` | Set the Telegram user who approves key changes (once; a change waits for the current owner) |
+
 ## Config
 
 | Route | Purpose |

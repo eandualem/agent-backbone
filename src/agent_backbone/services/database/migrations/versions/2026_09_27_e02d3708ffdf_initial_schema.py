@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 03f5a82a8f1a
+Revision ID: e02d3708ffdf
 Revises:
-Create Date: 2026-09-26 16:33:32.931306
+Create Date: 2026-09-27 20:11:23.773940
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "03f5a82a8f1a"
+revision: str = "e02d3708ffdf"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -341,6 +341,112 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("key", name=op.f("pk_settings")),
     )
     op.create_table(
+        "signing_audit",
+        sa.Column("seq", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("at", sa.Text(), nullable=False),
+        sa.Column("kind", sa.Text(), nullable=False),
+        sa.Column("sender_key", sa.Text(), server_default="", nullable=False),
+        sa.Column("sender", sa.Text(), server_default="", nullable=False),
+        sa.Column("method", sa.Text(), server_default="", nullable=False),
+        sa.Column("path", sa.Text(), server_default="", nullable=False),
+        sa.Column("target", sa.Text(), server_default="", nullable=False),
+        sa.Column("outcome", sa.Text(), nullable=False),
+        sa.Column("detail", sa.Text(), server_default="", nullable=False),
+        sa.Column("operation_id", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("seq", name=op.f("pk_signing_audit")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("signing_audit", schema=None) as batch_op:
+        batch_op.create_index(
+            "idx_signing_audit_sender", ["sender_key", "kind", "seq"], unique=False
+        )
+
+    op.create_table(
+        "signing_enrollments",
+        sa.Column("sender_key", sa.Text(), nullable=False),
+        sa.Column("sender", sa.Text(), nullable=False),
+        sa.Column("public_key", sa.Text(), nullable=False),
+        sa.Column("fingerprint", sa.Text(), nullable=False),
+        sa.Column("epoch", sa.Integer(), nullable=False),
+        sa.Column("enrolled_at", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("sender_key", name=op.f("pk_signing_enrollments")),
+    )
+    op.create_table(
+        "signing_install",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("audience", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_signing_install")),
+    )
+    op.create_table(
+        "signing_keys",
+        sa.Column("sender_key", sa.Text(), nullable=False),
+        sa.Column("epoch", sa.Integer(), nullable=False),
+        sa.Column("sender", sa.Text(), nullable=False),
+        sa.Column("public_key", sa.Text(), nullable=False),
+        sa.Column("fingerprint", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("retired_at", sa.Text(), nullable=True),
+        sa.Column("retired_by", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("sender_key", "epoch", name=op.f("pk_signing_keys")),
+    )
+    op.create_table(
+        "signing_nonces",
+        sa.Column("sender_key", sa.Text(), nullable=False),
+        sa.Column("epoch", sa.Integer(), nullable=False),
+        sa.Column("nonce", sa.Text(), nullable=False),
+        sa.Column("request_hash", sa.Text(), nullable=False),
+        sa.Column("seen_at", sa.BigInteger(), nullable=False),
+        sa.Column("response", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("sender_key", "epoch", "nonce", name=op.f("pk_signing_nonces")),
+    )
+    with op.batch_alter_table("signing_nonces", schema=None) as batch_op:
+        batch_op.create_index("idx_signing_nonces_seen", ["seen_at"], unique=False)
+
+    op.create_table(
+        "signing_owner",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("telegram_user_id", sa.BigInteger(), nullable=True),
+        sa.Column("set_at", sa.Text(), nullable=True),
+        sa.Column("pending_user_id", sa.BigInteger(), nullable=True),
+        sa.Column("pending_at", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_signing_owner")),
+    )
+    op.create_table(
+        "signing_transitions",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("request_id", sa.Text(), nullable=False),
+        sa.Column("sender", sa.Text(), nullable=False),
+        sa.Column("sender_key", sa.Text(), nullable=False),
+        sa.Column("action", sa.Text(), nullable=False),
+        sa.Column("audience", sa.Text(), nullable=False),
+        sa.Column("expected_epoch", sa.Integer(), nullable=False),
+        sa.Column("new_epoch", sa.Integer(), nullable=True),
+        sa.Column("new_public_key", sa.Text(), nullable=True),
+        sa.Column("new_fingerprint", sa.Text(), nullable=False),
+        sa.Column("digest", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("expires_at", sa.BigInteger(), nullable=False),
+        sa.Column("status", sa.Text(), server_default="pending", nullable=False),
+        sa.Column("resolved_at", sa.Text(), nullable=True),
+        sa.Column("resolved_by", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_signing_transitions")),
+        sa.UniqueConstraint("digest", name=op.f("uq_signing_transitions_digest")),
+        sa.UniqueConstraint("request_id", name=op.f("uq_signing_transitions_request_id")),
+    )
+    with op.batch_alter_table("signing_transitions", schema=None) as batch_op:
+        batch_op.create_index(
+            "idx_signing_transitions_sender", ["sender_key", "status"], unique=False
+        )
+        batch_op.create_index(
+            "uq_signing_transitions_pending",
+            ["sender_key"],
+            unique=True,
+            postgresql_where=sa.text("status = 'pending'"),
+            sqlite_where=sa.text("status = 'pending'"),
+        )
+
+    op.create_table(
         "swarms",
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("repo", sa.Text(), nullable=False),
@@ -417,6 +523,27 @@ def downgrade() -> None:
         )
 
     op.drop_table("swarms")
+    with op.batch_alter_table("signing_transitions", schema=None) as batch_op:
+        batch_op.drop_index(
+            "uq_signing_transitions_pending",
+            postgresql_where=sa.text("status = 'pending'"),
+            sqlite_where=sa.text("status = 'pending'"),
+        )
+        batch_op.drop_index("idx_signing_transitions_sender")
+
+    op.drop_table("signing_transitions")
+    op.drop_table("signing_owner")
+    with op.batch_alter_table("signing_nonces", schema=None) as batch_op:
+        batch_op.drop_index("idx_signing_nonces_seen")
+
+    op.drop_table("signing_nonces")
+    op.drop_table("signing_keys")
+    op.drop_table("signing_install")
+    op.drop_table("signing_enrollments")
+    with op.batch_alter_table("signing_audit", schema=None) as batch_op:
+        batch_op.drop_index("idx_signing_audit_sender")
+
+    op.drop_table("signing_audit")
     op.drop_table("settings")
     op.drop_table("review_lifecycle")
     with op.batch_alter_table("reports", schema=None) as batch_op:

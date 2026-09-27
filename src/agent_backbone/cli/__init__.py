@@ -48,6 +48,7 @@ from agent_backbone.cli.reports import add_report_parsers
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_up
 from agent_backbone.cli.service import cmd_service
 from agent_backbone.cli.setup import cmd_doctor, cmd_init, cmd_runtimes, cmd_secrets
+from agent_backbone.cli.signing import cmd_signing
 from agent_backbone.cli.skills import add_skill_commands, expand_shorthand
 from agent_backbone.cli.status import add_status_options, cmd_status
 from agent_backbone.cli.swarms import cmd_docs, cmd_help, cmd_swarm
@@ -457,6 +458,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("topic", nargs="?", default=None)
     p.add_argument("path", nargs="*", help="optional subcommands, e.g. help agent start")
     p.set_defaults(func=cmd_help)
+
+    signing_parser = sub.add_parser(
+        "signing", help="signed senders: who approves their key changes in Telegram"
+    )
+    signing_sub = signing_parser.add_subparsers(dest="signing_command", required=True)
+    owner = signing_sub.add_parser(
+        "owner", help="set the Telegram user who approves key changes (once; later changes wait)"
+    )
+    owner.add_argument("user_id", type=int, help="the numeric Telegram user id")
+    owner.add_argument("--json", action="store_true")
+    owner.set_defaults(func=cmd_signing)
 
     usage = sub.add_parser(
         "usage", help="token usage by agent and CLI session; optional cost estimates"

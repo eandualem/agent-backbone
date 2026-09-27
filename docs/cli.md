@@ -587,6 +587,14 @@ agent. Inside an agent session `--agent` defaults to `$BACKBONE_AGENT`.
 Exit 1 with the reason when no integration is configured or none has a
 surface for the agent yet. See [Integrations](integrations.md).
 
+## `backbone signing owner USER_ID [--json]`
+
+Sets the Telegram user who approves key changes for [signed
+senders](owner-confirmed-messages.md) with `/approve_key`. `USER_ID` is the
+numeric Telegram user id; `/approve_key` tells you yours when no owner is set.
+It can be set once; running it again records a change that the current owner
+approves in Telegram with `/approve_owner USER_ID`. Both are alerted.
+
 ## `backbone hooks install|uninstall claude|codex|gemini [--dir PROJECT]`
 
 Sessions started by `agent start` need no install: the backbone wires its
