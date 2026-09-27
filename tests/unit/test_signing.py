@@ -17,7 +17,8 @@ KEYS = {name: signing.public_key(k["public_key"]) for name, k in VECTORS["keys"]
 
 
 def _signer(name: str) -> Ed25519PrivateKey:
-    return Ed25519PrivateKey.from_private_bytes(signing.b64url_decode(VECTORS["keys"][name]["seed"]))
+    seed = signing.b64url_decode(VECTORS["keys"][name]["seed"])
+    return Ed25519PrivateKey.from_private_bytes(seed)
 
 
 def _framed(inp: dict) -> bytes:
@@ -39,9 +40,10 @@ def _framed(inp: dict) -> bytes:
 def test_request_vectors(vector):
     inp = vector["input"]
     assert inp["body"].encode("utf-8").hex() == inp["body_hex"]
-    assert signing.canonical_query([tuple(p) for p in inp["query_params"]]) == vector[
-        "canonical_query"
-    ]
+    assert (
+        signing.canonical_query([tuple(p) for p in inp["query_params"]])
+        == vector["canonical_query"]
+    )
     framed = _framed(inp)
     assert framed.hex() == vector["signed_bytes_hex"]
     signature = signing.b64url_decode(vector["signature"])

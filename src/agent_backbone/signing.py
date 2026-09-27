@@ -47,7 +47,10 @@ def frame(first_line: str, fields: Sequence[str]) -> bytes:
 def canonical_query(params: Sequence[tuple[str, str]]) -> str:
     """Percent-encode each name and value (RFC 3986 unreserved characters kept,
     upper-case hex), sort by encoded name then encoded value, join with ``&``."""
-    encoded = sorted((quote(name, safe="-._~"), quote(value, safe="-._~")) for name, value in params)
+    unreserved = "-._~"
+    encoded = sorted(
+        (quote(name, safe=unreserved), quote(value, safe=unreserved)) for name, value in params
+    )
     return "&".join(f"{name}={value}" for name, value in encoded)
 
 
