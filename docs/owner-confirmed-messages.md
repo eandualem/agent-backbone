@@ -392,7 +392,7 @@ as an enrolled name leave a metadata-only audit row.
 | 403 | `timestamp_out_of_window` | the timestamp is more than 300 seconds off |
 | 403 | `key_epoch_unknown` | no key with that epoch admits requests |
 | 403 | `not_enrolled` | `owner_confirmation` under a name with no enrolled key |
-| 409 | `nonce_reused` | the nonce was used for a different request |
+| 409 | `nonce_reused` | the nonce was already used; sign a retry with a fresh one |
 | 409 | `confirmation_conflict` | the confirmation id was used for a different confirmation |
 | 422 | `malformed_request` | a missing, unknown, duplicate or wrongly typed field |
 | 503 | `verifier_unavailable` | Backbone cannot verify signatures; only signed senders are affected |
