@@ -555,7 +555,17 @@ class SigningTransitionORM(Base):
     """``pending``, ``applied``, ``expired``, ``superseded`` or ``cancelled``."""
     resolved_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     resolved_by: Mapped[str | None] = mapped_column(Text, nullable=True)
-    __table_args__ = (Index("idx_signing_transitions_sender", "sender_key", "status"),)
+    __table_args__ = (
+        Index("idx_signing_transitions_sender", "sender_key", "status"),
+        # One pending transition per name, enforced where two requests race.
+        Index(
+            "uq_signing_transitions_pending",
+            "sender_key",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+    )
 
 
 class SigningNonceORM(Base):

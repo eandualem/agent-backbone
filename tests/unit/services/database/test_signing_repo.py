@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+
 from agent_backbone import signing
 
 NOW = 1_790_496_000
@@ -129,3 +133,17 @@ async def test_a_rotation_that_lands_first_makes_the_transition_stale(db):
     assert (await db.signing.apply_transition(clear, now=NOW, by="x"))[0] == "epoch_changed"
     kept = await db.signing.enrollment("assistant")
     assert kept["epoch"] == 2 and kept["public_key"] == PUB_B
+
+
+async def test_at_most_one_transition_per_name_is_pending(db):
+    await _start(db, "set", 0, PUB_A, request_id="r1")
+    with pytest.raises(IntegrityError):  # what a racing second start would hit
+        async with db.engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO signing_transitions (request_id, sender, sender_key, action,"
+                    " audience, expected_epoch, new_fingerprint, digest, created_at, expires_at,"
+                    " status) VALUES ('r2', 'assistant', 'assistant', 'set', 'a', 0, 'f',"
+                    " 'd2', 'now', 1, 'pending')"
+                )
+            )

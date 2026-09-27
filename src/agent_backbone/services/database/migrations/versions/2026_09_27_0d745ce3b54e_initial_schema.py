@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 7c4258e26582
+Revision ID: 0d745ce3b54e
 Revises:
-Create Date: 2026-09-27 18:27:29.831169
+Create Date: 2026-09-27 18:35:34.232922
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "7c4258e26582"
+revision: str = "0d745ce3b54e"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -437,6 +437,13 @@ def upgrade() -> None:
         batch_op.create_index(
             "idx_signing_transitions_sender", ["sender_key", "status"], unique=False
         )
+        batch_op.create_index(
+            "uq_signing_transitions_pending",
+            ["sender_key"],
+            unique=True,
+            postgresql_where=sa.text("status = 'pending'"),
+            sqlite_where=sa.text("status = 'pending'"),
+        )
 
     op.create_table(
         "swarms",
@@ -516,6 +523,11 @@ def downgrade() -> None:
 
     op.drop_table("swarms")
     with op.batch_alter_table("signing_transitions", schema=None) as batch_op:
+        batch_op.drop_index(
+            "uq_signing_transitions_pending",
+            postgresql_where=sa.text("status = 'pending'"),
+            sqlite_where=sa.text("status = 'pending'"),
+        )
         batch_op.drop_index("idx_signing_transitions_sender")
 
     op.drop_table("signing_transitions")

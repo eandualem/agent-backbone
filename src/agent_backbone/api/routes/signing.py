@@ -35,7 +35,14 @@ class TransitionRequest(BaseModel):
     )
     proof: str | None
 
-    _sender = field_validator("sender")(lambda cls, v: envelope_sender(v))
+    @field_validator("sender")
+    @classmethod
+    def _header_safe(cls, value: str) -> str:
+        """A signing name travels in a header, so it is printable ASCII."""
+        envelope_sender(value)
+        if not value.isascii() or not value.isprintable():
+            raise ValueError("a signing sender name is printable ASCII")
+        return value
 
 
 class RotationRequest(BaseModel):

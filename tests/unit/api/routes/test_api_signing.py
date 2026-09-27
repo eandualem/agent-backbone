@@ -365,3 +365,20 @@ async def test_a_pending_replace_is_observed_while_the_active_key_admits(
         "verified",
         "key_epoch_unknown",
     ]
+
+
+async def test_a_signing_name_is_printable_ascii(api_client, auth_headers):
+    """It travels in a header; a name that can't would lock itself out."""
+    resp = await api_client.post(
+        "/api/signing/transitions",
+        headers=auth_headers,
+        json={
+            "sender": "助手",
+            "action": "set",
+            "expected_epoch": 0,
+            "new_public_key": signing.b64url_encode(b"k" * 32),
+            "request_id": str(uuid.uuid4()),
+            "proof": "x",
+        },
+    )
+    assert resp.status_code == 422

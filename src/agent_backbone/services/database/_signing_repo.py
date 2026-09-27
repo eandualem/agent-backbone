@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import now_iso
@@ -103,7 +104,50 @@ class SigningRepo(Repo):
         """Store a pending transition; a newer one supersedes the name's older one.
 
         A set or replace takes an epoch above any the name ever had
-        (``new_epoch``), so a key enrolled after a clear never reuses one."""
+        (``new_epoch``), so a key enrolled after a clear never reuses one. At
+        most one transition per name is pending (a unique index); when two
+        starts race, the loser supersedes the winner on its one retry. A
+        reused request id still raises IntegrityError."""
+        try:
+            return await self._start_transition(
+                sender,
+                sender_key,
+                action,
+                audience,
+                expected_epoch,
+                new_public_key,
+                new_fingerprint,
+                request_id,
+                digest,
+                expires_at,
+            )
+        except IntegrityError:
+            return await self._start_transition(
+                sender,
+                sender_key,
+                action,
+                audience,
+                expected_epoch,
+                new_public_key,
+                new_fingerprint,
+                request_id,
+                digest,
+                expires_at,
+            )
+
+    async def _start_transition(
+        self,
+        sender,
+        sender_key,
+        action,
+        audience,
+        expected_epoch,
+        new_public_key,
+        new_fingerprint,
+        request_id,
+        digest,
+        expires_at,
+    ) -> dict:
         at = now_iso()
         async with self._tx() as conn:
             await conn.execute(

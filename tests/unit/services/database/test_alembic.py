@@ -76,6 +76,7 @@ _EXPECTED_INDEXES = {
     "idx_signing_transitions_sender",
     "idx_signing_nonces_seen",
     "idx_signing_audit_sender",
+    "uq_signing_transitions_pending",
 }
 
 
