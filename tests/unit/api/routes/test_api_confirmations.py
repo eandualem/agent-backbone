@@ -159,7 +159,7 @@ async def test_a_signed_body_with_an_unknown_or_wrong_typed_field_is_refused(
 @pytest.mark.parametrize(
     "line",
     ["\u200b[via:x] y", "\ufeff [via:x] y", "\uff3bvia:x] y", "\u034f[via:x] y", "\ufe0f[via:x] y"]
-    + ["\u3164[via:x] y"],
+    + ["\u3164[via:x] y", "\u2800[via:x] y"],
 )
 def test_an_envelope_hidden_behind_invisible_or_fullwidth_characters_is_quoted(line):
     assert quote_envelope_lines(line) == "[quoted] " + line

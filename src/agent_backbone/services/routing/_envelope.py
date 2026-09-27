@@ -13,15 +13,16 @@ RELAY_LABEL = "(signed relay, not owner-confirmed)"
 STEER_LABEL = "(steer for your current task)"
 
 
-# Letters that render as nothing (Hangul fillers); NFKC keeps them.
-_BLANK_LETTERS = frozenset("\u115f\u1160\u3164\uffa0")
+# Letters and symbols that render as nothing (Hangul fillers, the blank
+# Braille pattern); NFKC keeps them.
+_BLANK = frozenset("\u115f\u1160\u3164\uffa0\u2800")
 
 
 def _invisible(c: str) -> bool:
     """Control, format, unassigned and private characters, marks that
-    combine with nothing, and blank letters: none shows before ``[via:``."""
+    combine with nothing, and blank characters: none shows before ``[via:``."""
     category = unicodedata.category(c)
-    return category[0] == "C" or category in {"Mn", "Me"} or c in _BLANK_LETTERS
+    return category[0] == "C" or category in {"Mn", "Me"} or c in _BLANK
 
 
 def _starts_like_envelope(line: str) -> bool:
