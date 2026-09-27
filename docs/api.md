@@ -312,9 +312,10 @@ offset to continue from. `400` when `since` and `before` are both given or
 Guidance for the agent's **current task**, handed over through its runtime's
 hook as a transient offer — never a queue row, never a paste. Accepted only
 when the registered agent is `agent_working` on a runtime whose hook can add
-context (Claude Code, Codex) in a session the backbone started; the offer is
+context (Claude Code, Codex, OpenCode) in a session the backbone started; the offer is
 written for that session only (`<state_dir>/context/<agent>/<launch_id>/`)
-and the hook returns it as `additionalContext` on the next tool call, with the
+and the hook returns it as `additionalContext` on the next tool call (OpenCode's
+plugin adds it to the running turn as a user message after that call), with the
 envelope `[via:backbone from:<from_entity>] (steer for your current task) …`.
 
 ```json

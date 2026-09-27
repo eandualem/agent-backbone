@@ -39,7 +39,7 @@ belongs to two unrelated groups just carries both tags.
 ## What happens at launch
 
 For runtimes with a measured skills directory — Claude Code (`.claude/skills`),
-Codex, Gemini and OpenCode (`.agents/skills`) — the start path:
+Codex, Gemini, OpenCode and Deep Code (`.agents/skills`) — the start path:
 
 1. reads the store and selects the skills tagged for the agent;
 2. creates `<repo>/<dir>/<name>` → `<store>/<name>` symlinks for them, records
@@ -62,7 +62,7 @@ without the backbone; with the backbone absent, a project simply has fewer
 skills. Store links remain and need their original shared store to resolve.
 
 Cursor is not materialised: it is not a backbone runtime and was not measured.
-Plain shells, `aider` and `deepcode` receive nothing.
+Plain shells and `aider` receive nothing.
 
 ## Commands
 
@@ -110,9 +110,10 @@ skills` is the agent-facing version of this page.
 | Codex 0.153.4 | `.agents/skills`, `.codex/skills` | followed | **silently ignored** |
 | OpenCode 1.18.29 | `.claude/skills`, `.agents/skills`, `.opencode/skills` | followed | followed |
 | Gemini 0.46.0 | `.agents/skills` (needs folder trust) | followed | not measured |
+| Deep Code 0.3.1 (2026-09-27) | `.agents/skills`, `.deepcode/skills` | followed | not measured |
 
-Gemini was checked with `gemini skills list`; the other three were checked
-by asking the running CLI to name its skills.
+Gemini was checked with `gemini skills list` and Deep Code with its `/skills`
+list; the other three were checked by asking the running CLI to name its skills.
 The backbone therefore links whole skill directories, never single files. The
 Codex sandbox also refuses writes through such a link (measured the same day);
 reads are fine.

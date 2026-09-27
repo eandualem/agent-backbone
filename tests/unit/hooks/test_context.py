@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +14,7 @@ import pytest
 
 from agent_backbone.hooks import backbone_state as bb
 from agent_backbone.hooks import claude_hook, codex_hook
+from agent_backbone.hooks.install import hook_source
 
 
 def test_offer_take_claim_and_clear(tmp_path):
@@ -56,32 +60,131 @@ def _run(hook, tmp_path, payload: dict) -> str:
     return out.getvalue()
 
 
-def test_claude_and_codex_hooks_hand_offers_over_on_post_tool_use(tmp_path, monkeypatch):
+_OPENCODE_DRIVER = """
+import fs from "node:fs";
+const [plugin, steps, reply] = process.argv.slice(1);
+const { AgentBackbone } = await import(plugin);
+const prompts = [];
+const client = { session: {
+  prompt: async (request) => {
+    prompts.push(request);
+    return reply === "error" ? { error: { name: "BadRequest" } } : { data: {} };
+  },
+  // "child" is a subagent resumed from an earlier run: no session.created for it.
+  // "old" is the agent's own session resumed from an earlier run, whose lookup never answers.
+  get: ({ path }) => path.id === "old" ? new Promise(() => {}) : Promise.resolve({
+    data: { id: path.id, parentID: path.id === "child" ? "s" : undefined },
+  }),
+} };
+const hook = await AgentBackbone({ client, directory: process.cwd() });
+const status = (sessionID, type) => hook.event({ event: { type: "session.status",
+  properties: { sessionID, status: { type } } } });
+const state = `${process.env.BACKBONE_STATE_DIR}/desk.json`;
+const outputs = [], marks = [], states = [];
+for (const step of JSON.parse(steps)) {
+  if (step === "busy" || step === "request") {
+    await status("s", "busy");
+    if (step === "request") await hook["chat.params"]({ sessionID: "s", agent: "plan", message: {
+      agent: "plan", system: "house style",
+      model: { providerID: "zen", modelID: "free", variant: "high" } } }, {});
+  } else if (step === "tool" || step === "child-tool") {
+    const sessionID = step === "tool" ? "s" : "child";
+    if (sessionID === "child") await status("child", "busy");
+    const output = { title: "read", output: "file text", metadata: {} };
+    await hook["tool.execute.after"]({ tool: "read", sessionID, callID: "c" }, output);
+    outputs.push(output.output);
+  } else if (step === "mcp-tool") {
+    const output = { content: [{ type: "text", text: "mcp text" }] };
+    await hook["tool.execute.after"]({ tool: "srv_q", sessionID: "s", callID: "c" }, output);
+    outputs.push(output.content.map((block) => block.text).join("\\n\\n"));
+  } else if (step === "old-busy" || step === "old-idle") {
+    await status("old", step === "old-busy" ? "busy" : "idle");
+  } else if (step === "pause") {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  } else if (step === "failed-subtask") {
+    await hook["tool.execute.after"]({ tool: "task", sessionID: "s", callID: "c" }, undefined);
+  } else {
+    const sessionID = step === "idle" ? "s" : "child";
+    await status(sessionID, "idle");
+    await hook.event({ event: { type: "session.idle", properties: { sessionID } } });
+  }
+  try {
+    const record = JSON.parse(fs.readFileSync(state, "utf8"));
+    marks.push(record.prompted_at ?? null);
+    states.push(record.state);
+  } catch { marks.push(null); states.push(null); }
+}
+console.log(JSON.stringify({ prompts, outputs, marks, states }));
+"""
+
+
+def _opencode(tmp_path, steps: list[str], *, reply: str = "ok") -> dict:
+    """Drive the shipped OpenCode plugin with Node and a stand-in OpenCode client:
+    ``busy`` (the agent's session works), ``request`` (and a model request of
+    its turn), ``tool`` / ``mcp-tool`` (a tool call ends), ``failed-subtask`` (a
+    call ends without a result), ``idle`` (the turn ends), or ``child-tool`` /
+    ``child-idle`` for a resumed subagent, ``old-busy`` / ``old-idle`` for the
+    agent's own session resumed while its parent lookup is pending. ``marks``
+    and ``states`` are the state record's ``prompted_at`` and state after each step."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to exercise the JavaScript plugin")
+    hooks = tmp_path / "hooks"
+    hooks.mkdir(exist_ok=True)
+    (hooks / "opencode_hook.mjs").write_text(hook_source("opencode_hook.js").read_text())
+    done = subprocess.run(
+        [node, "--input-type=module", "-e", _OPENCODE_DRIVER]
+        + [(hooks / "opencode_hook.mjs").as_uri(), json.dumps(steps), reply],
+        env={**os.environ, "BACKBONE_AGENT": "desk", "BACKBONE_STATE_DIR": str(tmp_path)},
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return json.loads(done.stdout)
+
+
+RUNTIMES = ("claude", "codex", "opencode")
+
+
+def _tool_call(runtime: str, tmp_path) -> str:
+    """One tool call on ``runtime``: what its hook handed the model, or ``""``."""
+    if runtime == "opencode":
+        prompts = _opencode(tmp_path, ["request", "tool"])["prompts"]
+        return "\n\n".join(part["text"] for p in prompts for part in p["body"]["parts"])
+    hook = {"claude": claude_hook, "codex": codex_hook}[runtime]
+    payload = {
+        "hook_event_name": "PostToolUse",
+        "session_id": "s",
+        "tool_name": "Read",
+        "tool_response": {"ok": True},
+    }
+    out = _run(hook, tmp_path, payload)
+    if not out:
+        return ""
+    data = json.loads(out)["hookSpecificOutput"]
+    assert data["hookEventName"] == "PostToolUse"
+    return data["additionalContext"]
+
+
+def _turn_end(runtime: str, tmp_path, event: str = "Stop") -> None:
+    """The turn ends on ``runtime``; nothing can be handed over then."""
+    if runtime == "opencode":
+        assert _opencode(tmp_path, ["request", "idle"])["prompts"] == []
+        return
+    hook = {"claude": claude_hook, "codex": codex_hook}[runtime]
+    assert _run(hook, tmp_path, {"hook_event_name": event, "session_id": "s"}) == ""
+
+
+@pytest.mark.parametrize("runtime", RUNTIMES)
+def test_hooks_hand_offers_over_after_a_tool_call(tmp_path, monkeypatch, runtime):
     monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
-    for hook in (claude_hook, codex_hook):
-        bb.offer_context(tmp_path, "desk", "1", "[via:gmail] mail\n- a1")
-        bb.offer_context(tmp_path, "desk", "2", "[via:gmail] mail\n- a2")
-        silent = _run(hook, tmp_path, {"hook_event_name": "Stop", "session_id": "s"})
-        assert silent == ""  # Stop cannot carry context; the offers wait
-        out = _run(
-            hook,
-            tmp_path,
-            {
-                "hook_event_name": "PostToolUse",
-                "session_id": "s",
-                "tool_name": "Read",
-                "tool_response": {"ok": True},
-            },
-        )
-        data = json.loads(out)
-        assert data["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
-        assert data["hookSpecificOutput"]["additionalContext"] == (
-            "[via:gmail] mail\n- a1\n\n[via:gmail] mail\n- a2"
-        )
-        assert bb.claim_context(tmp_path, "desk", "1") == "taken"
-        assert _run(hook, tmp_path, {"hook_event_name": "PostToolUse", "session_id": "s"}) == ""
-        for key in ("1", "2"):
-            bb.clear_context(tmp_path, "desk", key)
+    bb.offer_context(tmp_path, "desk", "1", "[via:gmail] mail\n- a1")
+    bb.offer_context(tmp_path, "desk", "2", "[via:gmail] mail\n- a2")
+    _turn_end(runtime, tmp_path)  # the turn's end cannot carry context; the offers wait
+    assert _tool_call(runtime, tmp_path) == "[via:gmail] mail\n- a1\n\n[via:gmail] mail\n- a2"
+    assert bb.claim_context(tmp_path, "desk", "1") == "taken"
+    assert _tool_call(runtime, tmp_path) == ""
 
 
 def test_clear_agent_context_drops_every_offer_left_for_a_previous_session(tmp_path):
@@ -133,30 +236,129 @@ def test_steer_offers_are_scoped_to_the_session_that_they_were_written_for(tmp_p
     assert bb.steer_offers(tmp_path, "desk") == []
 
 
-def test_hooks_hand_launch_scoped_steers_over_on_post_tool_use(tmp_path, monkeypatch):
+@pytest.mark.parametrize("runtime", RUNTIMES)
+def test_hooks_hand_launch_scoped_steers_over_after_a_tool_call(tmp_path, monkeypatch, runtime):
     monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
     monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
-    for hook in (claude_hook, codex_hook):
-        bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(3), "[via:backbone from:leo] go")
-        bb.offer_steer(tmp_path, "desk", "launch-y", bb.steer_key(4), "not for this session")
-        out = _run(hook, tmp_path, {"hook_event_name": "PostToolUse", "session_id": "s"})
-        data = json.loads(out)
-        assert data["hookSpecificOutput"]["additionalContext"] == "[via:backbone from:leo] go"
-        assert [i for _, _, i, state, _ in bb.steer_offers(tmp_path) if state == "taken"] == [3]
-        bb.clear_steer(tmp_path, "desk", "launch-x", 3)
-        bb.clear_steer(tmp_path, "desk", "launch-y", 4)
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(3), "[via:backbone from:peer] go")
+    bb.offer_steer(tmp_path, "desk", "launch-y", bb.steer_key(4), "not for this session")
+    assert _tool_call(runtime, tmp_path) == "[via:backbone from:peer] go"
+    assert [i for _, _, i, state, _ in bb.steer_offers(tmp_path) if state == "taken"] == [3]
 
 
-def test_a_steer_left_when_the_turn_ends_never_reaches_the_next_task(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("runtime", "end"),
+    [("claude", "Stop"), ("codex", "Stop"), ("codex", "Interrupt"), ("opencode", "idle")],
+)
+def test_a_steer_left_when_the_turn_ends_never_reaches_the_next_task(
+    tmp_path, monkeypatch, runtime, end
+):
     monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
     monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
-    for hook, end in ((claude_hook, "Stop"), (codex_hook, "Stop"), (codex_hook, "Interrupt")):
-        bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(5), "for the old task")
-        assert _run(hook, tmp_path, {"hook_event_name": end, "session_id": "s"}) == ""
-        assert _run(hook, tmp_path, {"hook_event_name": "PostToolUse", "session_id": "s"}) == ""
-        assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(5, "missed")]
-        bb.clear_steer(tmp_path, "desk", "launch-x", 5)
-        assert bb.steer_offers(tmp_path) == []
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(5), "for the old task")
+    _turn_end(runtime, tmp_path, end)
+    assert _tool_call(runtime, tmp_path) == ""
+    assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(5, "missed")]
+
+
+def test_opencode_hands_offers_over_as_a_message_in_the_running_turn(tmp_path, monkeypatch):
+    """#276: OpenCode's own path for input typed while it works, keeping what
+    drives the turn (agent, model, a request's own system prompt); the tool's
+    output is left as it was."""
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(3), "[via:backbone from:peer] go")
+    result = _opencode(tmp_path, ["request", "tool"])
+    assert result["prompts"] == [
+        {
+            "path": {"id": "s"},
+            "body": {
+                "noReply": True,
+                "agent": "plan",
+                "model": {"providerID": "zen", "modelID": "free"},
+                "variant": "high",
+                "system": "house style",
+                "parts": [{"type": "text", "text": "[via:backbone from:peer] go"}],
+            },
+        }
+    ]
+    assert result["outputs"] == ["file text"]
+
+
+@pytest.mark.parametrize(
+    ("steps", "reply", "outputs"),
+    [
+        (["request", "tool"], "error", ["file text\n\n[via:backbone from:peer] go"]),
+        (["busy", "tool"], "ok", ["file text\n\n[via:backbone from:peer] go"]),
+        (["request", "mcp-tool"], "error", ["mcp text\n\n[via:backbone from:peer] go"]),
+    ],
+)
+def test_opencode_never_drops_a_taken_offer(tmp_path, monkeypatch, steps, reply, outputs):
+    """Refused by OpenCode, or no request seen yet to say which agent and model
+    run the turn: the taken text rides on the tool's result instead."""
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(3), "[via:backbone from:peer] go")
+    assert _opencode(tmp_path, steps, reply=reply)["outputs"] == outputs
+    assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(3, "taken")]
+
+
+def test_opencode_offers_wait_for_the_agents_own_session(tmp_path, monkeypatch):
+    """A resumed subagent's calls and turn end, or a call without a result,
+    neither take nor retire the offers: the root session's next call takes them."""
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(3), "[via:backbone from:peer] go")
+    steps = ["request", "child-tool", "child-idle", "failed-subtask"]
+    result = _opencode(tmp_path, steps)
+    assert (result["prompts"], result["outputs"]) == ([], ["file text"])
+    assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(3, "offered")]
+    assert _tool_call("opencode", tmp_path) == "[via:backbone from:peer] go"
+
+
+def test_opencode_takes_nothing_once_the_turn_has_ended(tmp_path, monkeypatch):
+    """A tool call that ends after its turn did (an interrupt) takes nothing:
+    the turn's end retired the steer, and the batch waits for the prompt."""
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    bb.offer_context(tmp_path, "desk", "7", "[via:gmail] mail")
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(3), "[via:backbone from:peer] go")
+    result = _opencode(tmp_path, ["request", "idle", "tool"])
+    assert (result["prompts"], result["outputs"]) == ([], ["file text"])
+    assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(3, "missed")]
+    assert bb.claim_context(tmp_path, "desk", "7") == "claimed"
+
+
+def test_opencode_ends_a_turn_when_nothing_works_any_more(tmp_path, monkeypatch):
+    """The agent's session resumed from an earlier run, its parent not known
+    yet: its turn's end still retires the steer. A subagent finishing while
+    the turn goes on ends nothing."""
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(3), "for the old task")
+    result = _opencode(tmp_path, ["old-busy", "old-idle"])
+    assert result["states"] == ["busy", "idle"]
+    assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(3, "missed")]
+    bb.clear_steer(tmp_path, "desk", "launch-x", 3)
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(4), "[via:backbone from:peer] go")
+    result = _opencode(tmp_path, ["busy", "old-busy", "old-idle"])
+    assert result["states"] == ["busy", "busy", "busy"]
+    assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(4, "offered")]
+
+
+def test_opencode_never_carries_a_turns_settings_into_the_next(tmp_path, monkeypatch):
+    """A turn whose first tool call comes before its first request (a subtask)
+    does not reuse the previous turn's agent and model: the tool's result
+    carries the offer."""
+    bb.offer_context(tmp_path, "desk", "7", "[via:gmail] mail")
+    result = _opencode(tmp_path, ["request", "idle", "busy", "tool"])
+    assert (result["prompts"], result["outputs"]) == ([], ["file text\n\n[via:gmail] mail"])
+
+
+def test_opencode_marks_when_each_turn_starts(tmp_path):
+    """The steer check's receipt that another turn began (``prompted_at``, as
+    Claude Code and Codex record at ``UserPromptSubmit``): stamped when the
+    agent's session starts working, kept through the turn and a subagent's work."""
+    steps = ["request", "tool", "request", "child-tool", "child-idle", "idle", "pause", "busy"]
+    marks = _opencode(tmp_path, steps)["marks"]
+    assert marks[0] is not None
+    assert marks[:6] == [marks[0]] * 6
+    assert marks[7] > marks[0]
 
 
 @pytest.mark.parametrize("hook", [claude_hook, codex_hook])
