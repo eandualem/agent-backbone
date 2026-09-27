@@ -382,12 +382,19 @@ The same rule applies to `POST /api/steer`. A restart's continuation sender
 follows it when given; an empty sender means `backbone`. The API key grants
 access, but the supplied sender name is not authenticated identity.
 
+A line of the message that starts like an envelope (`[via:`) is delivered as
+`[quoted] [via:…`. An [enrolled signed sender](owner-confirmed-messages.md)
+may add `owner_confirmation`; the response then carries `confirmation_id` and
+the `receipt`.
+
 This is the endpoint agents use to talk to each other.
 
 ## Signed senders
 
 An app can enroll an Ed25519 key for its sender name; every request made as
-that name must then be signed. The wire format, the refusal reasons and the
+that name must then be signed, and a signed `POST /api/messages` or
+`POST /api/steer` may carry `owner_confirmation`, the owner's confirmation of
+exactly that text, which Backbone records and marks in the envelope. The wire format, the refusal reasons and the
 enrollment flow are in [Signed senders and owner-confirmed
 messages](owner-confirmed-messages.md).
 
@@ -398,6 +405,7 @@ messages](owner-confirmed-messages.md).
 | `POST /api/signing/transitions` | Start a set, replace or clear; it takes effect when the owner sends `/approve_key` in Telegram |
 | `POST /api/signing/rotation` | Replace the key, signed by the current one |
 | `GET /api/signing/observations?sender=&after=` | How requests made as the name fared while a transition was pending |
+| `GET /api/signing/receipts?after=&limit=` | The signed sender's owner-confirmation receipts, for reconciliation (a signed request) |
 | `POST /api/signing/owner` `{"telegram_user_id": 42}` | Set the Telegram user who approves key changes (once; a change waits for the current owner) |
 
 ## Config

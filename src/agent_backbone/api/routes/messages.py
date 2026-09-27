@@ -229,7 +229,7 @@ async def steer(
         outcome=report.outcome,
         reason=report.reason,
         delivery_id=report.delivery_id,
-        operation_id=report.operation_id,
+        operation_id=row["operation_id"] if row else report.operation_id,
         launch_id=report.launch_id,
         evidence=report.evidence,
         detail=detail,

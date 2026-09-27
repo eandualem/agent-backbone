@@ -3,7 +3,7 @@
 | Part | Status |
 |---|---|
 | Enrollment, signed requests, the reservation of an enrolled name, rotation, observations | available |
-| Owner confirmation, receipts and the reconciliation feed | in progress |
+| Owner confirmation, receipts and the reconciliation feed | available |
 | `backbone message validate` | in progress |
 
 The wire format below is what the implementation follows; changes are made
@@ -26,13 +26,14 @@ one app or one name.
 |---|---|
 | Owner-confirmed (signed, and confirmed by the owner in the app) | `[via:backbone from:assistant owner-confirmed:<confirmation_id>] <text>` |
 | Signed relay (signed, not confirmed) | `[via:backbone from:assistant] (signed relay, not owner-confirmed) <text>` |
+| A steer, confirmed or signed | the same, with `(steer for your current task)` after the envelope and before a relay label |
 | Unsigned request under an enrolled name | refused, never delivered; a metadata-only audit row is kept |
 | Any sender before its name is enrolled | the ordinary envelope, unchanged |
 
 Backbone writes the marker and the label from the verified record only. In
-every message body, a line that starts with `[via:` (after optional spaces) is
-shown as `[quoted] [via:…`, including the body's first line, which follows the
-envelope on the same line. That is presentation only: the signed text is kept
+every message, steer and restart continuation, a line that starts with `[via:`
+(after optional spaces, in any case) is shown as `[quoted] [via:…`, including
+the body's first line, which follows the envelope on the same line. That is presentation only: the signed text is kept
 unchanged in the receipt, and its hash covers the text as sent.
 
 ## Enrollment
@@ -72,13 +73,13 @@ counts.
 
 **Reset.** A replace or clear that is not signed by the current key starts a new
 epoch: the old key admits nothing more, and a pending transition is replaced.
-Until owner confirmation ships, a signed message carries no marker or label, so
-a message queued while the old key was active is delivered like any other
-message from that name.
-With owner confirmation, a reset also revokes the old epoch's unclaimed
-confirmations and their queued deliveries, and open grants lose their
-authority; their receipts are kept. After an ordinary rotation, work already admitted keeps its bounded
-lifetime; the old epoch admits no new requests.
+In the same transaction, every confirmation of the old epoch that wasn't
+delivered yet is revoked (its receipt says `revoked`), and its queued delivery
+is expired, including one the delivery job is holding right now, so it is
+never delivered. A steer already offered to an agent's running turn can still
+be taken within its five minutes. With validate, open grants of the old epoch
+lose their authority too. After an ordinary rotation, work already admitted
+keeps its bounded lifetime; the old epoch admits no new requests.
 
 ## Signed requests
 
@@ -369,11 +370,41 @@ Each confirmation keeps an immutable receipt: sequence number, confirmation id,
 sender, recipient, kind, the exact signed text, its hash, source,
 `confirmed_at`, `delivered_at` and key epoch. Receipts are kept for 90 days.
 
-`GET /api/signing/receipts?after=<seq>&limit=<n>` (a signed request made as the
-sender) returns the sender's receipts after a sequence number, oldest first,
-with `next_after`, `oldest_seq` and `retention_days`. When `after` is below
-`oldest_seq - 1`, the response sets `"gap": true`: receipts were removed by
-retention, which is a coverage gap, not "nothing new".
+`GET /api/signing/receipts?after=<seq>&limit=<n>` is a signed request made as
+the sender in `X-Backbone-Sender`; `after` (default 0) and `limit` (default 100,
+at most 500) are part of the signed query. It returns the sender's receipts
+after a sequence number, oldest first, across every key epoch:
+
+```json
+{
+  "receipts": [
+    {"seq": 12, "confirmation_id": "…", "sender": "assistant", "recipient": "ike",
+     "kind": "message", "text": "…", "text_sha256": "…", "source": "button",
+     "confirmed_at": "2026-09-27T11:00:00.123456+03:00", "delivered_at": null,
+     "key_epoch": 1}
+  ],
+  "next_after": 12,
+  "oldest_seq": 3,
+  "pruned_through": 0,
+  "retention_days": 90,
+  "gap": false
+}
+```
+
+- `recipient` is `target_session` exactly as sent. If Backbone redirects the
+  message (a swarm's name to its coordinator), `recipient` is unchanged.
+- `delivered_at` is `null` until the message is delivered (for a steer, until
+  the agent's hook takes it) and set once. It stays `null` for a message that
+  expired or was revoked, and for a steer that wasn't taken. Every other field
+  never changes.
+- Sequence numbers are shared by all senders, so one sender's are increasing
+  but not consecutive. `pruned_through` is the highest sequence number that
+  retention removed for this sender (0 when none). `gap` is true when
+  `after` is below it: receipts after the cursor were removed, which is a
+  coverage gap, not "nothing new". `next_after` is then at least
+  `pruned_through`, so each gap is reported once. With nothing new,
+  `next_after` equals `after`.
+- `oldest_seq` is the oldest receipt still kept for the sender, or `null`.
 
 ## Refusals
 
