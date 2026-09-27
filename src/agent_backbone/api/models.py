@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import time
+import unicodedata
 from typing import Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -84,6 +85,13 @@ class AgentRestartRequest(BaseModel):
     message: str | None = None
     """Continuation message delivered to the replacement once it is up."""
     from_entity: str = ""
+
+    @field_validator("from_entity")
+    @classmethod
+    def _sender_must_fit_the_envelope(cls, value: str) -> str:
+        """The continuation is delivered as ``[via:backbone from:<sender>]``;
+        empty means ``backbone``."""
+        return envelope_sender(value) if value else value
 
 
 class AgentTransitionView(BaseModel):
@@ -441,6 +449,25 @@ class PlanRespondRequest(BaseModel):
 # --- Messages ---
 
 
+def envelope_sender(value: str) -> str:
+    """Check a sender name that is interpolated into ``[via:backbone from:<sender>]``.
+
+    It must not contain the envelope's delimiters, whitespace (which would let
+    a name carry a second word into the envelope), or anything that reads as
+    the ``owner-confirmed:<id>`` marker Backbone writes for confirmed messages.
+    This bounds what a name can make an envelope say. It does not authenticate
+    the sender: the API key authenticates caller access, never the
+    ``from_entity`` identity."""
+    if len(value) > 64:
+        raise ValueError("from_entity must be at most 64 characters")
+    if any(c in "[]" or c.isspace() for c in value):
+        raise ValueError("from_entity must not contain whitespace or [ ]")
+    folded = unicodedata.normalize("NFKC", value).casefold()
+    if "ownerconfirmed" in "".join(c for c in folded if c.isalnum()):
+        raise ValueError("from_entity must not contain 'owner-confirmed'")
+    return value
+
+
 class MessageRequest(BaseModel):
     """Request body for message delivery to an agent."""
 
@@ -452,18 +479,9 @@ class MessageRequest(BaseModel):
     @field_validator("from_entity")
     @classmethod
     def _sender_must_fit_the_envelope(cls, value: str) -> str:
-        """The sender is interpolated into ``[via:backbone from:<sender>]``,
-        so it must not contain the envelope's delimiters or a newline that
-        would forge a second envelope. This bounds parsing ambiguity — it
-        does not authenticate the sender: the API key authenticates caller
-        access, never the ``from_entity`` identity."""
         if not value.strip():
             raise ValueError("from_entity must not be empty")
-        if len(value) > 64:
-            raise ValueError("from_entity must be at most 64 characters")
-        if any(c in value for c in "[]\n\r"):
-            raise ValueError("from_entity must not contain newlines or [ ]")
-        return value
+        return envelope_sender(value)
 
 
 class SteerRequest(BaseModel):
