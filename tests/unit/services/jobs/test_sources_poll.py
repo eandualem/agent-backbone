@@ -41,14 +41,14 @@ def _config(tmp_path):
             name="desk",
             dir=str(tmp_path / "desk"),
             subscriptions=(
-                Subscription(1, "gmail", "from:alerts@example.com", "high"),
+                Subscription(1, "gmail", "from:status@example.com", "high"),
                 Subscription(2, "gmail", "from:example.com", "normal"),
             ),
         ),
         "other": AgentSpec(
             name="other",
             dir=str(tmp_path / "other"),
-            subscriptions=(Subscription(3, "gmail", "from:alerts@example.com", "normal"),),
+            subscriptions=(Subscription(3, "gmail", "from:status@example.com", "normal"),),
         ),
     }
     return make_config(tmp_path, agents=AgentsConfig(specs=specs))
@@ -56,14 +56,14 @@ def _config(tmp_path):
 
 def test_filters_are_distinct_per_source(tmp_path):
     config = _config(tmp_path)
-    assert subscription_filters(config, "gmail") == ["from:alerts@example.com", "from:example.com"]
+    assert subscription_filters(config, "gmail") == ["from:example.com", "from:status@example.com"]
     assert subscription_filters(config, "other") == []
 
 
 async def test_first_run_starts_now_and_the_cursor_advances(tmp_path, db):
     config = _config(tmp_path)
     event = SourceEvent(
-        "gmail", "a1", "x", "y", datetime.now(UTC), "link", frozenset({"from:alerts@example.com"})
+        "gmail", "a1", "x", "y", datetime.now(UTC), "link", frozenset({"from:status@example.com"})
     )
     source = _Recorder(config, events=[event])
     poller = SourcesPoller(config, db, Sources([source]))
@@ -75,7 +75,7 @@ async def test_first_run_starts_now_and_the_cursor_advances(tmp_path, db):
     ) as dispatch:
         assert await poller.run() == {"events": 1, "delivered": 2}
     filters, since = source.calls[0]
-    assert filters == ["from:alerts@example.com", "from:example.com"]
+    assert filters == ["from:example.com", "from:status@example.com"]
     # No mailbox history: the window opens at the poll (minus the overlap).
     assert (started - since).total_seconds() < 150
     dispatch.assert_awaited_once()
@@ -104,7 +104,7 @@ async def test_a_failed_handoff_keeps_the_cursor(tmp_path, db):
     config = _config(tmp_path)
     await db.events.save_poll_cursor("source:gmail", "2026-09-17T10:00:00Z")
     event = SourceEvent(
-        "gmail", "a1", "x", "y", datetime.now(UTC), "link", frozenset({"from:alerts@example.com"})
+        "gmail", "a1", "x", "y", datetime.now(UTC), "link", frozenset({"from:status@example.com"})
     )
     poller = SourcesPoller(config, db, Sources([_Recorder(config, events=[event])]))
     with patch(
@@ -134,7 +134,7 @@ async def test_partial_search_failure_keeps_complete_recipient_matching_replayab
     fail = True
 
     def search(client, filter_text, since):
-        if fail and filter_text == "from:alerts@example.com":
+        if fail and filter_text == "from:status@example.com":
             raise TimeoutError("transient second-filter error")
         return [("shared", datetime.now(UTC), "sender", "subject")]
 
