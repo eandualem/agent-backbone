@@ -7,14 +7,24 @@ like an envelope is shown as quoted, so no text can pass for one.
 
 from __future__ import annotations
 
+import unicodedata
+
 RELAY_LABEL = "(signed relay, not owner-confirmed)"
 STEER_LABEL = "(steer for your current task)"
+
+
+def _starts_like_envelope(line: str) -> bool:
+    """Compared after NFKC, without invisible format characters (Cf), so
+    ``\u200b[via:`` or a fullwidth ``［via:`` counts too."""
+    folded = unicodedata.normalize("NFKC", line)
+    visible = "".join(c for c in folded if unicodedata.category(c) != "Cf")
+    return visible.lstrip().casefold().startswith("[via:")
 
 
 def quote_envelope_lines(text: str) -> str:
     """Prefix ``[quoted] `` to every line that starts like an envelope."""
     return "".join(
-        "[quoted] " + line if line.lstrip().lower().startswith("[via:") else line
+        "[quoted] " + line if _starts_like_envelope(line) else line
         for line in text.splitlines(keepends=True)
     )
 

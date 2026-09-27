@@ -32,7 +32,9 @@ one app or one name.
 
 Backbone writes the marker and the label from the verified record only. In
 every message, steer and restart continuation, a line that starts with `[via:`
-(after optional spaces, in any case) is shown as `[quoted] [via:…`, including
+(after optional spaces or invisible format characters, in any case, compared
+after NFKC normalization, so a fullwidth `［via:` counts) is shown as
+`[quoted] [via:…`, including
 the body's first line, which follows the envelope on the same line. That is presentation only: the signed text is kept
 unchanged in the receipt, and its hash covers the text as sent.
 

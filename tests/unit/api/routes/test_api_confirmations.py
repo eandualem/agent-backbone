@@ -14,7 +14,7 @@ from sqlalchemy import text
 
 from agent_backbone import signing
 from agent_backbone.models import DeliveryOutcome
-from agent_backbone.services.routing import DeliveryReport, SteerReport
+from agent_backbone.services.routing import DeliveryReport, SteerReport, quote_envelope_lines
 from tests.unit.api.routes.test_api_signing import (
     MESSAGE,
     NOW,
@@ -153,6 +153,11 @@ async def test_a_signed_body_with_an_unknown_field_is_refused(
         api_client, auth_headers, api_app.state.db, key, {**_body(_confirmation()), "extra": 1}
     )
     assert resp.status_code == 422 and resp.json()["detail"]["reason"] == "malformed_request"
+
+
+@pytest.mark.parametrize("line", ["\u200b[via:x] y", "\ufeff [via:x] y", "\uff3bvia:x] y"])
+def test_an_envelope_hidden_behind_format_or_fullwidth_characters_is_quoted(line):
+    assert quote_envelope_lines(line) == "[quoted] " + line
 
 
 async def test_signed_and_unconfirmed_is_labelled_and_bodies_are_quoted(
