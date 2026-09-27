@@ -244,9 +244,9 @@ async def receipts(
 ):
     """The signed sender's confirmation receipts after ``after``, oldest first.
 
-    ``gap`` is true when retention removed a receipt after ``after``; it is
-    reported on the page that returns the last kept receipt, whose
-    ``next_after`` moves past the removed range, so each gap is reported once."""
+    ``gap`` is true on the one page whose cursor crosses the highest receipt
+    retention removed (``after < pruned_through <= next_after``), so each gap
+    is reported once and no kept receipt is skipped."""
     signed = getattr(request.state, "signed_sender", None)
     if signed is None:  # the middleware refuses first; this is a second lock
         raise Refusal(403, "signature_required", "a signed request is required").as_http()
@@ -255,10 +255,10 @@ async def receipts(
     pruned = data["pruned_through"]
     last = rows[-1]["seq"] if rows else after
     # Receipts still kept can sit below the watermark (their delivery was live
-    # when retention ran): move past it only once this page returned them all.
-    complete = len(rows) < limit
-    gap = after < pruned and complete
-    next_after = max(after, last, pruned if gap else 0)
+    # when retention ran): jump to it only once a page returned them all. The
+    # gap is reported on the one page whose cursor crosses the watermark.
+    next_after = last if len(rows) == limit else max(after, last, pruned)
+    gap = after < pruned <= next_after
     return {
         "receipts": [confirmations.public(row) for row in rows],
         "next_after": next_after,

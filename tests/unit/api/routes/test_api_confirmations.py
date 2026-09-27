@@ -768,3 +768,90 @@ async def test_a_steer_taken_after_its_key_was_reset_still_records_the_handoff(
     )
     receipt = await db.signing.receipt(confirmation["confirmation_id"])
     assert receipt["status"] == "revoked" and receipt["delivered_at"] is not None
+
+
+async def test_a_confirmation_already_delivered_is_never_pasted_again(
+    api_client, auth_headers, api_app, key, drain, config
+):
+    """Its paste was recorded but its queue row wasn't completed (a crash)."""
+    from agent_backbone.services.routing import safe_deliver
+    from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+    db = api_app.state.db
+    resp, _ = await _send(api_client, auth_headers, db, key, _body(_confirmation()))
+    await db.deliveries.record(
+        issue_number=None,
+        target_entity="ike",
+        session_name="ike",
+        outcome="delivered",
+        source="delivery-retry-queue",
+        kind="direct_message",
+        preview="x",
+        operation_id=resp.json()["operation_id"],
+    )
+    (leased,) = await db.queue.dequeue("ike")
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(return_value=SessionProfile("ike", SessionIntelligence.READY)),
+        ),
+        patch("agent_backbone.services.routing._delivery.send_message", AsyncMock()) as send,
+    ):
+        report = await safe_deliver(
+            "ike",
+            leased["message"],
+            config,
+            db=db,
+            delivery_kind="direct_message",
+            sender=SENDER,
+            requeue=False,
+            operation_id=resp.json()["operation_id"],
+            queue_id=resp.json()["queue_id"],
+        )
+    send.assert_not_awaited()
+    assert report.outcome == DeliveryOutcome.ALREADY_DELIVERED
+
+
+async def test_a_reset_keeps_an_uncertain_paste_on_hold(
+    api_client, auth_headers, api_app, key, drain
+):
+    """The paste may still sit in the input: the hold stays, the authority goes."""
+    db = api_app.state.db
+    confirmation = _confirmation()
+    await _send(api_client, auth_headers, db, key, _body(confirmation))
+    async with db.engine.begin() as conn:
+        await conn.execute(text("UPDATE message_queue SET status = 'uncertain'"))
+    view = await _transition(
+        api_client, auth_headers, db, Ed25519PrivateKey.generate(), "replace", 1
+    )
+    await db.signing.apply_transition(_digest(view.json()), now=NOW, by="t")
+    (row,) = await _rows(db, "SELECT status FROM message_queue")
+    assert row.status == "uncertain" and await db.queue.has_uncertain("ike")
+    assert (await db.signing.receipt(confirmation["confirmation_id"]))["status"] == "revoked"
+
+
+async def test_a_gap_below_kept_receipts_is_reported_once(
+    api_client, auth_headers, api_app, key, drain
+):
+    db = api_app.state.db
+    for _ in range(3):
+        await _send(api_client, auth_headers, db, key, _body(_confirmation()))
+    first, *kept = [r.seq for r in await _rows(db, "SELECT seq FROM signing_receipts ORDER BY seq")]
+    async with db.engine.begin() as conn:  # retention removed the first
+        await conn.execute(text("DELETE FROM signing_receipts WHERE seq = :s"), {"s": first})
+        await conn.execute(
+            text("INSERT INTO signing_receipt_watermarks VALUES (:k, :s)"),
+            {"k": SENDER, "s": first},
+        )
+    seen, after, gaps = [], 0, 0
+    for _ in range(4):
+        headers = await _signed_query(db, key, [("after", str(after)), ("limit", "1")])
+        page = (
+            await api_client.get(
+                f"/api/signing/receipts?after={after}&limit=1", headers={**auth_headers, **headers}
+            )
+        ).json()
+        seen += [r["seq"] for r in page["receipts"]]
+        gaps += page["gap"]
+        after = page["next_after"]
+    assert seen == kept and gaps == 1

@@ -76,10 +76,13 @@ async def _revoke_epoch(conn, sender_key: str, epoch: int, at: str) -> None:
         ),
         params,
     )
+    # An uncertain row keeps its status: the paste may still sit in the input,
+    # and that hold is what stops the next paste; the receipt already says revoked.
     await conn.execute(
         text(
             "UPDATE message_queue SET status = 'expired', delivered_at = :at"
-            f" WHERE status IN {_LIVE} AND operation_id IN (SELECT operation_id"
+            " WHERE status IN ('pending', 'in_progress', 'checkpoint')"
+            " AND operation_id IN (SELECT operation_id"
             f" FROM signing_receipts WHERE status = 'revoked' {scope})"
         ),
         params,
@@ -666,6 +669,22 @@ class SigningRepo(Repo):
             row = (
                 await conn.execute(
                     text("SELECT 1 FROM signing_receipts WHERE operation_id = :op"),
+                    {"op": operation_id},
+                )
+            ).fetchone()
+        return row is not None
+
+    async def was_delivered(self, operation_id: str | None) -> bool:
+        """Whether a successful delivery of this confirmation was recorded."""
+        if not operation_id:
+            return False
+        async with self._tx() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT 1 FROM deliveries WHERE operation_id = :op"
+                        " AND outcome IN ('delivered', 'handed_off')"
+                    ),
                     {"op": operation_id},
                 )
             ).fetchone()

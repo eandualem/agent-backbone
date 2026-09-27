@@ -133,7 +133,11 @@ def _serialized(fn: Callable[..., Awaitable[_Result]]):
                 # A queued owner confirmation: its whole delivery, from this
                 # check to the success record, runs under the reset's guard.
                 async with revocation_guard():
-                    if not await db.queue.still_leased(queue_id):
+                    if not await db.queue.still_leased(queue_id) or await db.signing.was_delivered(
+                        kwargs.get("operation_id")
+                    ):
+                        # Revoked, or already delivered (its row just wasn't
+                        # completed): never paste a confirmation twice.
                         return DeliveryReport(
                             DeliveryOutcome.ALREADY_DELIVERED,
                             operation_id=kwargs.get("operation_id"),
