@@ -72,14 +72,31 @@ lifetime; the old epoch admits no new requests.
 
 ## Signed requests
 
-A request is *made as* a name when any identity field in it names that
-sender: the JSON body fields `from_entity`, `session`, `agent` and
-`initiator`, a `{session}` path parameter, or an `agent` or `session` query
-parameter. Names are compared after Unicode NFKC normalization, case folding
-and trimming, so a case or width variant counts as the same name. Once a name
-is enrolled, every request made as it must be signed, including inbox reads
-and acknowledgements. Requests that carry no identity (status, inspect,
-reports listing, usage) need no signature.
+A request is *made as* a name when its sender field names that sender. Only
+these fields count:
+
+| Route | Sender field |
+|---|---|
+| `POST /api/messages` | `from_entity` |
+| `POST /api/steer` | `from_entity` |
+| `POST /api/messages/inbox` (read and acknowledge) | `session` |
+| `POST /api/agents/{name}/approve`, `/deny` | `from_entity` |
+| `POST /api/agents/{name}/restart` | `from_entity`, when given |
+| `POST /api/integrations/reply` | `session` |
+| `POST /api/reports` | `agent` |
+| `POST /api/swarms` | `initiator` |
+| `POST /api/agents/{name}/state` | the `{name}` path parameter (a hook writing its own state) |
+
+Names are compared after Unicode NFKC normalization, case folding and trimming,
+so a case or width variant counts as the same name. A name that is only the
+*subject* of a request doesn't count: reading an agent's output
+(`GET /api/sessions/{agent}/output`), filtering reports by `agent`, or acting on
+`/api/agents/{name}/…` as a target. Lifecycle requests that carry no sender
+(start, stop, a restart without `from_entity`) are not made as anyone.
+
+Once a name is enrolled, every request made as it must be signed. Signature
+headers on a request under a name that has no key and no pending transition are
+ignored: the request is handled as an ordinary unsigned one.
 
 ### Headers
 
@@ -241,12 +258,36 @@ The `rotate proof` fields use the request's own `X-Backbone-Nonce` and
 `X-Backbone-Timestamp`, and `old_epoch` is the current epoch. The response
 returns the new epoch and fingerprint.
 
+### Enrollment state
+
+`GET /api/signing/enrollment?sender=<name>` (API key; no signature needed)
+returns:
+
+```json
+{
+  "sender": "assistant",
+  "audience": "<this install's audience id>",
+  "epoch": 1,
+  "fingerprint": "<hex SHA-256 of the active key, or null>",
+  "pending": { "…the transition fields…" }
+}
+```
+
+`epoch` is `0` and `fingerprint` is `null` when the name has no key; `pending`
+is `null` when no transition waits. An app reads it after the owner approves,
+to learn its epoch and check that the enrolled fingerprint is its own key.
+
 ### Observations
 
-`GET /api/signing/observations?sender=<name>&after=<seq>` returns, oldest
-first, the requests made as the name while a set or replace is pending:
-sequence number, time, method, path and outcome (`verified`, `unsigned`,
-`signature_invalid`, …). Bodies are never recorded.
+While a set or replace is pending, requests made as the name are verified
+against the pending key, with `X-Backbone-Key-Epoch` set to the epoch the key
+will take (`expected_epoch + 1`). The outcome is recorded; admission doesn't
+change, so the request is still handled as an unsigned one.
+
+`GET /api/signing/observations?sender=<name>&after=<seq>` (API key; no
+signature needed) returns these records, oldest first: sequence number, time,
+method, path and outcome (`verified`, `unsigned`, `signature_invalid`, …).
+Bodies are never recorded.
 
 ## Owner confirmation
 
@@ -266,15 +307,30 @@ no more than 300 seconds after it. If Backbone could not be reached for longer
 than that, the app asks the owner to confirm again rather than sending an old
 confirmation.
 
+Backbone never strips or normalizes `message`: the hash is checked against the
+exact bytes sent, and the receipt keeps exactly that text, including a trailing
+newline. The delivered envelope adds the marker and applies the `[quoted]`
+rule to lines that start with `[via:`; a terminal may render whitespace its own
+way. The text `backbone message validate` returns is the authoritative one.
+
 When the request is admitted, Backbone commits the nonce, the confirmation id,
 the receipt and the queued delivery in one transaction, then delivers. A steer
 that is refused (the agent is not working) commits nothing, and the same
 confirmation may be sent again.
 
 The same `confirmation_id` sent again with a fresh nonce returns the existing
-result only when every confirmed field (recipient, kind, text, hash, source,
-`confirmed_at`, epoch) is identical; anything else is refused and never
-becomes a second delivery.
+receipt only when every confirmed field (recipient, kind, text, hash, source,
+`confirmed_at`, epoch) is identical; anything else is refused with
+`confirmation_conflict` and never becomes a second delivery. `confirmed_at` is
+compared as the exact string sent; the age check parses it as an instant. The
+age check applies to a new confirmation: `confirmation_expired` commits
+nothing, and recovering an already-committed identical confirmation returns its
+receipt.
+
+A signed body is exactly one of these shapes: messages and steer
+`{target_session, from_entity, message, priority?, owner_confirmation?}`
+(`priority` on messages only), inbox `{session, acknowledge?}`, approve and
+deny `{from_entity}`; other routes keep their documented bodies.
 
 The response adds `confirmation_id` and `receipt` to the usual message or steer
 response.
@@ -360,5 +416,7 @@ count. An outage blocks only the step that depends on the confirmation.
 ## Test vectors
 
 `tests/fixtures/signing_vectors.json` holds disposable keys, inputs, the exact
-signed bytes and signatures, and negative cases. An app that signs requests
+signed bytes and signatures, and negative cases. It includes a body with
+non-ASCII text, a query with reserved characters and a repeated name, and the
+digest of a clear transition (`new_fingerprint` `none`). An app that signs requests
 should run them in its own test suite and pin the file by its SHA-256.
