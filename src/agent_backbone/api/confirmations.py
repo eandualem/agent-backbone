@@ -114,6 +114,21 @@ async def admit(
     return outcome, row
 
 
+async def audit_refusal(db, exc: HTTPException, *, sender: str, path: str, target: str) -> None:
+    """Record a confirmation refusal the route raised, like the middleware's:
+    metadata only, never the text."""
+    detail = exc.detail if isinstance(exc.detail, dict) else {}
+    await db.signing.audit(
+        kind="refusal",
+        outcome=str(detail.get("reason", exc.status_code)),
+        sender_key=signing.same_name(sender),
+        sender=sender,
+        method="POST",
+        path=path,
+        target=target,
+    )
+
+
 def public(row: dict) -> dict:
     """The receipt as the API returns it."""
     return {field: row[field] for field in PUBLIC_FIELDS}

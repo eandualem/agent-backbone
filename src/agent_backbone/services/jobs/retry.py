@@ -148,6 +148,19 @@ def expiry_notices(config: BackboneConfig, expired: list[dict]) -> list[tuple]:
     ]
 
 
+async def _expire(config, db) -> list:
+    """Expire queued messages past ``timing.queue_expiry_minutes`` (swarm and
+    inbox rules apply); each leaves a delivery row and a notice."""
+    active_swarms = {row["name"] for row in await db.swarms.list(active_only=True)}
+    protected = tuple(spec.name for spec in config.agents if spec.swarm in active_swarms)
+    return await db.queue.expire_pending(
+        max_age_minutes=config.timing.queue_expiry_minutes,
+        protected_sessions=protected,
+        inbox_sessions=tuple(spec.name for spec in config.agents if spec.inbox_only),
+        notices=partial(expiry_notices, config),
+    )
+
+
 async def drain_message_queue(
     config: BackboneConfig,
     db: BackboneDB,
@@ -169,14 +182,7 @@ async def drain_message_queue(
         await observe_job(db, source=SOURCE, stage="lease_recovery")
 
     try:
-        active_swarms = {row["name"] for row in await db.swarms.list(active_only=True)}
-        protected = tuple(spec.name for spec in config.agents if spec.swarm in active_swarms)
-        expired = await db.queue.expire_pending(
-            max_age_minutes=config.timing.queue_expiry_minutes,
-            protected_sessions=protected,
-            inbox_sessions=tuple(spec.name for spec in config.agents if spec.inbox_only),
-            notices=partial(expiry_notices, config),
-        )
+        expired = await _expire(config, db)
         if expired:
             log.info(
                 "Expired %d queued messages (> %d min)",
@@ -232,6 +238,7 @@ async def deliver_now(config, db, gh, session_name: str) -> None:
         return
     _draining.add(session_name)
     try:
+        await _expire(config, db)  # nothing overdue rides along on this drain
         await _drain_session(config, db, gh, session_name, {})
     except Exception:
         log.exception("Immediate drain failed for %s; the retry job tries again", session_name)

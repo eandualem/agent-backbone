@@ -645,8 +645,9 @@ class SigningReceiptORM(Base):
     delivered_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     revoked_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     offer_state: Mapped[str | None] = mapped_column(Text, nullable=True)
-    """A steer's offer: None, ``claiming`` (one request is offering it) or
-    ``offered`` (permanent: it is never offered again)."""
+    """A steer's offer: None, ``claiming`` (one request is offering it),
+    ``offered`` (permanent: it is never offered again) or ``failed`` (an
+    interrupted attempt that never reached the agent: confirm it again)."""
     offer_claimed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     __table_args__ = (
         Index("idx_signing_receipts_sender", "sender_key", "seq"),

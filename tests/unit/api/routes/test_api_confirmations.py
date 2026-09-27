@@ -584,3 +584,74 @@ async def test_a_reset_during_a_confirmed_paste_finds_it_delivered(
     assert report.outcome == DeliveryOutcome.DELIVERED
     receipt = await db.signing.receipt(confirmation["confirmation_id"])
     assert receipt["status"] == "admitted" and receipt["delivered_at"] is not None
+
+
+async def test_the_immediate_drain_expires_what_is_overdue_first(api_app, config):
+    from agent_backbone.services.jobs import deliver_now
+
+    db = api_app.state.db
+    old = await db.queue.enqueue(
+        session_name="ike", message="stale", delivery_kind="direct_message", sender="peer"
+    )
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE message_queue SET enqueued_at = '2020-01-01T00:00:00.000000Z'")
+        )
+    with patch("agent_backbone.services.jobs.retry._drain_session", AsyncMock()) as drain:
+        await deliver_now(config, db, None, "ike")
+    drain.assert_awaited_once()
+    (row,) = await _rows(db, f"SELECT status FROM message_queue WHERE id = {old.id}")
+    assert row.status == "expired"
+
+
+async def test_an_interrupted_offer_that_never_reached_the_agent_is_failed(
+    api_client, auth_headers, api_app, key, monkeypatch
+):
+    import time as real_time
+    from types import SimpleNamespace
+
+    db = api_app.state.db
+    confirmation = _confirmation()
+    crash = AsyncMock(side_effect=RuntimeError("stopped before the offer file"))
+    with (
+        patch("agent_backbone.api.routes.messages.steer_agent", crash),
+        pytest.raises(RuntimeError),
+    ):
+        await _send(api_client, auth_headers, db, key, _body(confirmation), path="/api/steer")
+    row = await db.signing.receipt(confirmation["confirmation_id"])
+    await db.deliveries.record(  # the attempt was recorded, then settled as cancelled
+        issue_number=None,
+        target_entity="ike",
+        session_name="ike",
+        outcome="cancelled",
+        source="api-steer",
+        kind="steer",
+        preview="x",
+        operation_id=row["operation_id"],
+    )
+    later = SimpleNamespace(time=lambda: real_time.time() + 61)
+    monkeypatch.setattr("agent_backbone.api.routes.messages.time", later)
+    offered = AsyncMock(return_value=SteerReport("offered", "ike", delivery_id=1))
+    with patch("agent_backbone.api.routes.messages.steer_agent", offered):
+        resp, _ = await _send(
+            api_client, auth_headers, db, key, _body(confirmation), path="/api/steer"
+        )
+    assert resp.json()["outcome"] == "failed" and resp.json()["ok"] is False
+    offered.assert_not_awaited()
+
+
+async def test_a_refused_confirmation_is_audited_without_its_text(
+    api_client, auth_headers, api_app, key, drain
+):
+    db = api_app.state.db
+    first, signed = await _send(api_client, auth_headers, db, key, _body(_confirmation()))
+    other = _body(_confirmation("Another thing\n"), "Another thing\n")
+    reuse, _ = await _send(
+        api_client, auth_headers, db, key, other, nonce=signed["X-Backbone-Nonce"]
+    )
+    assert reuse.json()["detail"]["reason"] == "nonce_reused"
+    rows = await _rows(db, "SELECT * FROM signing_audit WHERE kind = 'refusal'")
+    assert [(r.outcome, r.path, r.target) for r in rows] == [
+        ("nonce_reused", "/api/messages", "ike")
+    ]
+    assert "Another thing" not in " ".join(str(v) for v in rows[0])

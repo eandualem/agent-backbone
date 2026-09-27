@@ -58,7 +58,13 @@ async def send_message(
     spec = registered_agent_or_404(config, target)
     signed = getattr(request.state, "signed_sender", None)
     if body.owner_confirmation is not None:
-        return await _confirmed_message(body, target, signed, request, config, db)
+        try:
+            return await _confirmed_message(body, target, signed, request, config, db)
+        except HTTPException as exc:
+            await confirmations.audit_refusal(
+                db, exc, sender=body.from_entity, path="/api/messages", target=target
+            )
+            raise
 
     report = await safe_deliver(
         session_name=target,
@@ -188,35 +194,49 @@ async def steer(
             relay=signed is not None,
         )
     else:
-        confirmations.check(confirmation, body.message, signed)
-        receipt = confirmations.receipt_fields(
-            confirmation,
-            signed=signed,
-            sender=body.from_entity,
-            recipient=body.target_session,
-            delivered_to=body.target_session,
-            kind="steer",
-            text=body.message,
-        )
-        _, row = await confirmations.admit(
-            db, signed, receipt, None, is_fresh=confirmations.fresh(confirmation, signed)
-        )
+        try:
+            confirmations.check(confirmation, body.message, signed)
+            receipt = confirmations.receipt_fields(
+                confirmation,
+                signed=signed,
+                sender=body.from_entity,
+                recipient=body.target_session,
+                delivered_to=body.target_session,
+                kind="steer",
+                text=body.message,
+            )
+            _, row = await confirmations.admit(
+                db, signed, receipt, None, is_fresh=confirmations.fresh(confirmation, signed)
+            )
+        except HTTPException as exc:
+            await confirmations.audit_refusal(
+                db, exc, sender=body.from_entity, path="/api/steer", target=body.target_session
+            )
+            raise
         if not await db.signing.claim_offer(confirmation.confirmation_id, int(time.time())):
             # Offered once already, or an earlier request is offering it now:
             # a confirmed steer is never offered twice.
             row = await db.signing.receipt(confirmation.confirmation_id) or row
-            offered = row.get("offer_state") == "offered"
+            state = row.get("offer_state")
             taken = row["delivered_at"] is not None
+            if state == "offered":
+                outcome, detail = (
+                    "handed_off" if taken else "offered",
+                    f"Already admitted as {confirmation.confirmation_id}.",
+                )
+            elif state == "failed":
+                outcome, detail = (
+                    "failed",
+                    "An earlier attempt never reached the agent; confirm it again.",
+                )
+            else:
+                outcome, detail = "offering", "An earlier request is offering it now."
             return SteerResponse(
-                ok=offered,
+                ok=state == "offered",
                 session=body.target_session,
-                outcome=("handed_off" if taken else "offered") if offered else "offering",
+                outcome=outcome,
                 operation_id=row["operation_id"],
-                detail=(
-                    f"Already admitted as {confirmation.confirmation_id}."
-                    if offered
-                    else "An earlier request is offering it now; retry shortly."
-                ),
+                detail=detail,
                 confirmation_id=confirmation.confirmation_id,
                 receipt=confirmations.public(row),
             )

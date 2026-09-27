@@ -672,24 +672,28 @@ class SigningRepo(Repo):
                     {"c": confirmation_id},
                 )
             ).fetchone()
-            if row is None or row.offer_state == "offered":
+            if row is None or row.offer_state in ("offered", "failed"):
                 return False
             if row.offer_state == "claiming":
                 if row.offer_claimed_at > now - 60:
                     return False
                 recorded = (
                     await conn.execute(
-                        text("SELECT 1 FROM deliveries WHERE operation_id = :op"),
+                        text(
+                            "SELECT outcome FROM deliveries WHERE operation_id = :op"
+                            " ORDER BY id DESC LIMIT 1"
+                        ),
                         {"op": row.operation_id},
                     )
-                ).fetchone()
-                if recorded is not None:  # the stale claim did offer it
+                ).scalar()
+                if recorded is not None:  # the stale claim got as far as an attempt
+                    reached = recorded in ("offered", "handed_off", "not_taken")
                     await conn.execute(
                         text(
-                            "UPDATE signing_receipts SET offer_state = 'offered'"
+                            "UPDATE signing_receipts SET offer_state = :state"
                             " WHERE confirmation_id = :c"
                         ),
-                        {"c": confirmation_id},
+                        {"c": confirmation_id, "state": "offered" if reached else "failed"},
                     )
                     return False
             claimed = await conn.execute(
