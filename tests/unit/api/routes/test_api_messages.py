@@ -328,7 +328,24 @@ class TestSteer:
         assert resp.status_code == 422
 
 
-async def test_a_queued_message_hints_the_recipients_inbox(api_client, auth_headers, api_app):
+# Every shipped adapter by name, for the capability contract (kept equal to the
+# shipped list by test_api_signing.test_the_runtime_list_is_every_shipped_adapter).
+RUNTIME_IDS = ("claude", "codex", "gemini", "opencode", "deepcode", "aider", "shell")
+
+
+@pytest.mark.parametrize("runtime", RUNTIME_IDS)
+async def test_a_queued_message_hints_the_recipients_inbox(
+    api_client, auth_headers, api_app, runtime
+):
+    """The hint reads the queue, not the session: the recipient's runtime makes
+    no difference to it."""
+    from dataclasses import replace
+
+    from agent_backbone.config import AgentsConfig
+
+    config = api_app.state.config
+    specs = {**config.agents.specs, "ike": replace(config.agents.get("ike"), runtime=runtime)}
+    api_app.state.config = replace(config, agents=AgentsConfig(specs=specs))
     offline = SessionProfile(session_name="ike", intelligence=SessionIntelligence.OFFLINE)
     with (
         patch(

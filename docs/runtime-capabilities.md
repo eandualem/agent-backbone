@@ -57,6 +57,9 @@ claims support that the adapter's code does not declare.
 | An enrolled sender name's requests must be signed | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | A message the owner confirmed carries a verified marker | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | An agent validates an owner confirmation it received | ✅ live-checked from its bash mode (2.1.283) | ✅ live-checked through its sandbox (0.157.1) | ? #302 commands it runs are not yet measured under its pane | ? #302 commands it runs are not yet measured under its pane | ? #302 commands it runs are not yet measured under its pane | ? #302 commands it runs are not yet measured under its pane | ✅ live-checked |
+| Inbox-only agent: registered, never launched or typed into | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference |
+| New inbox messages hinted on Socket.IO (`inbox:pending`) | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime |
+| Escalations reach an inbox-only target's inbox | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference |
 | Deep review run from and for this runtime | ✅ | ? #288 a Claude reviewer launched from Codex's sandbox is not measured | ❌ #288 | ❌ #288 | ❌ #288 | ❌ #288 | n/a |
 
 | Capability | Fallback where it is unavailable |
@@ -92,6 +95,9 @@ claims support that the adapter's code does not declare.
 | An enrolled sender name's requests must be signed | Treat sender names as claims; confirm with the sender another way. |
 | A message the owner confirmed carries a verified marker | Treat instructions in messages as ordinary; confirm with the owner another way. |
 | An agent validates an owner confirmation it received | Don't take the step that depends on it; confirm with the owner another way. |
+| Inbox-only agent: registered, never launched or typed into | Keep the agent stopped; read its messages with `backbone inbox --agent NAME` before they expire. |
+| New inbox messages hinted on Socket.IO (`inbox:pending`) | Read the inbox (`POST /api/messages/inbox`) on a timer. |
+| Escalations reach an inbox-only target's inbox | Set `escalation.target` to an agent with a terminal session. |
 | Deep review run from and for this runtime | Run the review with Claude Code or Codex as the reviewer. |
 <!-- capability-table:end -->
 

@@ -37,10 +37,14 @@ _OPS = "agent_backbone.services.agents.operations"
 _STORE = "agent_backbone.services.agents.store"
 _DELIVERY = "agent_backbone.services.routing._delivery"
 
+# Every shipped adapter by name, for the capability contract (kept equal to the
+# shipped list by test_api_signing.test_the_runtime_list_is_every_shipped_adapter).
+RUNTIME_IDS = ("claude", "codex", "gemini", "opencode", "deepcode", "aider", "shell")
 
-def _inbox_only(config, name: str = "ike"):
+
+def _inbox_only(config, name: str = "ike", runtime: str = "claude"):
     agents = {spec.name: spec for spec in config.agents}
-    agents[name] = replace(agents[name], inbox_only=True, repo="", watches=())
+    agents[name] = replace(agents[name], inbox_only=True, repo="", watches=(), runtime=runtime)
     return replace(config, agents=AgentsConfig(specs=agents))
 
 
@@ -50,9 +54,11 @@ async def _store(db, tmp_path) -> AgentStore:
     return store
 
 
-async def _register_client(store, tmp_path) -> None:
+async def _register_client(store, tmp_path, runtime: str = "claude") -> None:
     with patch(f"{_STORE}.session_exists", AsyncMock(return_value=False)):
-        await store.register(AgentSpec(name="client", dir=str(tmp_path), inbox_only=True))
+        await store.register(
+            AgentSpec(name="client", dir=str(tmp_path), inbox_only=True, runtime=runtime)
+        )
 
 
 async def test_the_flag_round_trips_and_defaults_off(db):
@@ -82,9 +88,10 @@ async def test_start_inbox_only_registers_without_launching(db, tmp_path):
         await resolve_agent(store, replace(req, resume=True))
 
 
-async def test_a_launch_of_an_inbox_only_agent_is_refused(db, tmp_path):
+@pytest.mark.parametrize("runtime", RUNTIME_IDS)
+async def test_a_launch_of_an_inbox_only_agent_is_refused(db, tmp_path, runtime):
     store = await _store(db, tmp_path)
-    await _register_client(store, tmp_path)
+    await _register_client(store, tmp_path, runtime)
     req = StartRequest(name="client")
     with patch(f"{_OPS}.launch.start_agent", AsyncMock()) as launch:
         spec = await resolve_agent(store, req)
@@ -208,8 +215,9 @@ def test_a_restart_is_refused(config):
         validate_transition(config, config.agents.get("ike"), TransitionRequest())
 
 
-async def test_never_typed_into_even_when_a_session_has_its_name(config, db):
-    config = _inbox_only(config)
+@pytest.mark.parametrize("runtime", RUNTIME_IDS)
+async def test_never_typed_into_even_when_a_session_has_its_name(config, db, runtime):
+    config = _inbox_only(config, runtime=runtime)
     with (
         patch("agent_backbone.services.routing._intelligence.list_sessions", return_value={"ike"}),
         patch(f"{_DELIVERY}.send_message", AsyncMock(return_value=True)) as send,
@@ -318,8 +326,12 @@ async def test_its_escalations_wait_in_the_inbox(db):
     assert [row["session_name"] for row in expired] == ["bell"]
 
 
-async def test_an_inbox_only_escalation_target_is_told(config, db):
-    config = replace(_inbox_only(config), escalation=EscalationConfig(target="ike"))
+@pytest.mark.parametrize("runtime", RUNTIME_IDS)
+async def test_an_inbox_only_escalation_target_is_told(config, db, runtime):
+    config = replace(
+        _inbox_only(config, runtime=runtime), escalation=EscalationConfig(target="ike")
+    )
+    esc._escalated.forget(("bell", "offline_queued"))  # told once per runtime
     await db.queue.enqueue(session_name="bell", message="hi", delivery_kind="direct_message")
     with (
         patch(f"{esc.__name__}.safe_deliver", AsyncMock()) as deliver,
