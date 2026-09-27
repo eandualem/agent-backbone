@@ -29,6 +29,8 @@ class DeepCode(Runtime):
     aliases = ("deep-code", "deep code", "deepseek")
     binary = "deepcode"
     brief_mode = "initial_prompt"
+    # ./.deepcode/AGENTS.md, else ./AGENTS.md, as a system message (0.3.1).
+    declared_capabilities = frozenset({"project-instructions"})
     # Project-level interoperable skills; a symlinked skill directory is
     # listed by /skills and in the model's skill catalog (0.3.1).
     skill_dirs = (".agents/skills",)
