@@ -266,7 +266,7 @@ returns 409. External GitHub labels and scripts are not changed. See the
 
 Watch / stop watching a repository; forget a stopped agent (409 if running).
 
-### `POST /api/agents/{name}/subscribe` `{"source": "gmail", "filter": "from:upwork.com", "priority": "high"}` · `/unsubscribe` `{"id": 3}`
+### `POST /api/agents/{name}/subscribe` `{"source": "gmail", "filter": "from:alerts@example.com", "priority": "high"}` · `/unsubscribe` `{"id": 3}`
 
 Subscribe to inbound events from a [source](sources.md), matched by a filter in
 the source's own query language, at `normal` (default) or `high` priority; the

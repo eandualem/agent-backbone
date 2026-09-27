@@ -356,14 +356,18 @@ class TestStartAgent:
         assert "acme/web" not in resp.json()["watches"]
         resp = await api_client.post(
             "/api/agents/ike/subscribe",
-            json={"source": "gmail", "filter": "from:upwork.com  subject:job", "priority": "high"},
+            json={
+                "source": "gmail",
+                "filter": "from:alerts@example.com  subject:outage",
+                "priority": "high",
+            },
             headers=auth_headers,
         )
         assert resp.status_code == 200, resp.text
         (sub,) = resp.json()["subscriptions"]
         assert (sub["source"], sub["filter"], sub["priority"]) == (
             "gmail",
-            "from:upwork.com subject:job",
+            "from:alerts@example.com subject:outage",
             "high",
         )
         bad = await api_client.post(

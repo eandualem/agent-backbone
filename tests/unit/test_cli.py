@@ -597,12 +597,22 @@ class TestAgentCommands:
             assert _run(["agent", "start", "--dir", str(project), "--no-wait"]) == 0
         capsys.readouterr()
         assert (
-            _run(["agent", "subscribe", "desk", "gmail", "from:upwork.com", "--priority", "high"])
+            _run(
+                [
+                    "agent",
+                    "subscribe",
+                    "desk",
+                    "gmail",
+                    "from:alerts@example.com",
+                    "--priority",
+                    "high",
+                ]
+            )
             == 0
         )
         out = capsys.readouterr().out
-        assert "desk: subscribed to gmail (high): from:upwork.com" in out
-        assert "#1 gmail high: from:upwork.com" in out
+        assert "desk: subscribed to gmail (high): from:alerts@example.com" in out
+        assert "#1 gmail high: from:alerts@example.com" in out
         assert _run(["agent", "subscribe", "desk", "pigeon", "x"]) == 1
         assert "unknown source" in capsys.readouterr().out
         assert _run(["agent", "subscribe", "desk", "gmail"]) == 1
@@ -626,12 +636,12 @@ class TestAgentCommands:
         ):
             assert _run(["agent", "inspect", "desk", "--json"]) == 0
         assert json.loads(capsys.readouterr().out)["subscriptions"] == [
-            {"id": 1, "source": "gmail", "filter": "from:upwork.com", "priority": "high"}
+            {"id": 1, "source": "gmail", "filter": "from:alerts@example.com", "priority": "high"}
         ]
 
         monkeypatch.setenv("BACKBONE_AGENT", "desk")
-        assert _run(["agent", "subscribe", "gmail", "from:linkedin.com"]) == 0
-        assert "#2 gmail normal: from:linkedin.com" in capsys.readouterr().out
+        assert _run(["agent", "subscribe", "gmail", "from:example.com"]) == 0
+        assert "#2 gmail normal: from:example.com" in capsys.readouterr().out
         assert _run(["agent", "unsubscribe", "1"]) == 0
         out = capsys.readouterr().out
         assert "subscription 1 removed" in out and "#1 " not in out

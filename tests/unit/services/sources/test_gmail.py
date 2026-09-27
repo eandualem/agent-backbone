@@ -21,8 +21,8 @@ _FETCH = [
     (
         b'1 (X-GM-MSGID 1990000000000000001 INTERNALDATE "17-Sep-2026 14:02:33 +0000" '
         b"BODY[HEADER.FIELDS (FROM SUBJECT DATE)] {120}",
-        b"From: Upwork <donotreply@upwork.com>\r\n"
-        b"Subject: =?UTF-8?Q?New_job:_Python_scraper?=\r\nDate: x\r\n\r\n",
+        b"From: Alerts <alerts@example.com>\r\n"
+        b"Subject: =?UTF-8?Q?Outage:_build_queue_stalled?=\r\nDate: x\r\n\r\n",
     ),
     b")",
     (
@@ -36,8 +36,8 @@ _FETCH = [
 
 def test_search_query_is_gmail_syntax_bounded_to_the_window():
     since = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
-    assert search_query("from:upwork.com subject:job", since) == (
-        f"(from:upwork.com subject:job) after:{int(since.timestamp())}"
+    assert search_query("from:alerts@example.com subject:outage", since) == (
+        f"(from:alerts@example.com subject:outage) after:{int(since.timestamp())}"
     )
 
 
@@ -54,8 +54,8 @@ def test_parse_fetch_decodes_headers_and_ids():
         format(1990000000000000002, "x"),
     ]
     assert items[0][1] == datetime(2026, 9, 17, 14, 2, 33, tzinfo=UTC)
-    assert items[0][2] == "Upwork <donotreply@upwork.com>"
-    assert items[0][3] == "New job: Python scraper"
+    assert items[0][2] == "Alerts <alerts@example.com>"
+    assert items[0][3] == "Outage: build queue stalled"
 
 
 class _FakeImap:
@@ -86,7 +86,7 @@ class _FakeImap:
         if command == "SEARCH":
             if "broken" in args[-1]:
                 return "BAD", [b"Could not parse command"]
-            return "OK", [b"1 2" if "upwork" in args[-1] else b""]
+            return "OK", [b"1 2" if "alerts" in args[-1] else b""]
         return "OK", _FETCH
 
     def logout(self):
@@ -100,22 +100,27 @@ async def test_poll_runs_one_search_per_filter_and_keeps_the_window(tmp_path):
     assert source.enabled
     since = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
     with patch("agent_backbone.services.sources.gmail.imaplib.IMAP4_SSL", _FakeImap):
-        events = await source.poll(["from:upwork.com", "subject:(broken", "from:nobody"], since)
+        events = await source.poll(
+            ["from:alerts@example.com", "subject:(broken", "from:nobody"], since
+        )
     client = _FakeImap.instances[0]
     assert client.timeout == 30
     assert ("login", "me@gmail.com") in client.calls
     assert ("select", '"[Gmail]/Tous les messages"', True) in client.calls
     searches = [c for c in client.calls if len(c) > 1 and c[1] == "SEARCH"]
     assert len(searches) == 3  # the rejected filter is skipped, not fatal
-    assert searches[0][2:] == ("X-GM-RAW", f'"(from:upwork.com) after:{int(since.timestamp())}"')
+    assert searches[0][2:] == (
+        "X-GM-RAW",
+        f'"(from:alerts@example.com) after:{int(since.timestamp())}"',
+    )
     assert client.calls[-1] == ("logout",)
     # The older message is inside the reply but outside the window.
     assert [event.id for event in events] == [format(1990000000000000001, "x")]
     event = events[0]
     assert event.source == "gmail"
-    assert event.filters == frozenset({"from:upwork.com"})
+    assert event.filters == frozenset({"from:alerts@example.com"})
     assert event.link.endswith(event.id)
-    assert event.subject == "New job: Python scraper"
+    assert event.subject == "Outage: build queue stalled"
 
 
 async def test_every_search_failing_is_an_error(tmp_path):
@@ -151,7 +156,7 @@ async def test_transient_failure_after_a_good_filter_fails_the_whole_poll(tmp_pa
         pytest.raises((TimeoutError, imaplib.IMAP4.error, RuntimeError)),
     ):
         await GmailSource(config).poll(
-            ["from:upwork.com", "second"], datetime(2026, 9, 17, 12, tzinfo=UTC)
+            ["from:alerts@example.com", "second"], datetime(2026, 9, 17, 12, tzinfo=UTC)
         )
 
 
@@ -165,7 +170,7 @@ async def test_imaplib_bad_search_response_only_rejects_that_filter(tmp_path):
     config = make_config(tmp_path, gmail_address="me@gmail.com", gmail_app_password="pw")
     with patch("agent_backbone.services.sources.gmail.imaplib.IMAP4_SSL", RejectingImap):
         events = await GmailSource(config).poll(
-            ["subject:(broken", "from:upwork.com"], datetime(2026, 9, 17, 12, tzinfo=UTC)
+            ["subject:(broken", "from:alerts@example.com"], datetime(2026, 9, 17, 12, tzinfo=UTC)
         )
     assert len(events) == 1
 
