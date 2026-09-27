@@ -99,6 +99,7 @@ claims support that the adapter's code does not declare.
 - **Folder trust.** OpenCode and Deep Code show no folder-trust dialog, so
   that row is n/a for them. Every other n/a is the plain shell's.
 - **Deep Code** is `@vegamo/deepcode-cli`, the community CLI DeepSeek's docs
-  point to. Its permission dialog has not been captured, so `agent approve`
-  refuses it until then.
+  point to. Its permission dialog is detected, so the session reads as
+  `waiting_for_human` while it shows, but `agent approve` and `agent deny`
+  do not answer it yet (#277, #299).
 - `backbone runtimes` shows which of these CLIs are installed locally.
