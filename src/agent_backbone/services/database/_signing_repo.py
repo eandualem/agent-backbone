@@ -30,6 +30,20 @@ _IMMUTABLE = (
     "confirmed_at",
     "key_epoch",
 )
+_SETTLE_STEER = """UPDATE signing_receipts SET outcome = (
+        SELECT d.outcome FROM deliveries d WHERE d.operation_id = signing_receipts.operation_id
+        ORDER BY d.id DESC LIMIT 1)
+    WHERE kind = 'steer' AND delivered_at IS NULL AND outcome IS NULL {where} AND (
+        SELECT d.outcome FROM deliveries d WHERE d.operation_id = signing_receipts.operation_id
+        ORDER BY d.id DESC LIMIT 1) IN ('not_taken', 'cancelled')"""
+_SETTLE_MESSAGE = """UPDATE signing_receipts SET outcome = 'expired'
+    WHERE kind = 'message' AND status = 'admitted' AND delivered_at IS NULL
+      AND outcome IS NULL {where} AND EXISTS (
+        SELECT 1 FROM message_queue q WHERE q.operation_id = signing_receipts.operation_id
+          AND q.status = 'expired')"""
+_NOT_LIVE = f"""NOT EXISTS (SELECT 1 FROM message_queue q
+    WHERE q.operation_id = signing_receipts.operation_id AND q.status IN {_LIVE})"""
+"""A receipt whose queued work still waits keeps its revocation link."""
 _SYNC_DELIVERED = """UPDATE signing_receipts SET delivered_at = (
         SELECT MIN(d.created_at) FROM deliveries d
         WHERE d.operation_id = signing_receipts.operation_id
@@ -39,13 +53,20 @@ _SYNC_DELIVERED = """UPDATE signing_receipts SET delivered_at = (
           AND d.outcome IN ('delivered', 'handed_off'))"""
 
 
+async def _settle(conn, where: str = "", params: dict | None = None) -> None:
+    """Copy onto receipts what their queue and delivery records say (delivered,
+    expired, not taken), so it outlives those records' shorter retention."""
+    for sql in (_SYNC_DELIVERED, _SETTLE_STEER, _SETTLE_MESSAGE):
+        await conn.execute(text(sql.format(where=where)), params or {})
+
+
 async def _revoke_epoch(conn, sender_key: str, epoch: int, at: str) -> None:
     """A reset: the old epoch's confirmations that weren't delivered lose their
     authority, and their queued deliveries (leased ones too) are expired with
     a completion time, so ordinary retention removes their bodies."""
     params = {"k": sender_key, "epoch": epoch, "at": at}
     scope = "AND sender_key = :k AND key_epoch = :epoch"
-    await conn.execute(text(_SYNC_DELIVERED.format(where=scope)), params)
+    await _settle(conn, scope, params)
     await conn.execute(
         text(
             "UPDATE signing_receipts SET status = 'revoked', revoked_at = :at"
@@ -729,10 +750,7 @@ class SigningRepo(Repo):
 
     async def receipt(self, confirmation_id: str) -> dict | None:
         async with self._tx() as conn:
-            await conn.execute(
-                text(_SYNC_DELIVERED.format(where="AND confirmation_id = :c")),
-                {"c": confirmation_id},
-            )
+            await _settle(conn, "AND confirmation_id = :c", {"c": confirmation_id})
             row = (
                 await conn.execute(
                     text("SELECT * FROM signing_receipts WHERE confirmation_id = :c"),
@@ -744,9 +762,7 @@ class SigningRepo(Repo):
     async def receipts(self, sender_key: str, after: int, limit: int) -> dict:
         """A sender's receipts after ``after``, and what retention removed."""
         async with self._tx() as conn:
-            await conn.execute(
-                text(_SYNC_DELIVERED.format(where="AND sender_key = :k")), {"k": sender_key}
-            )
+            await _settle(conn, "AND sender_key = :k", {"k": sender_key})
             rows = (
                 await conn.execute(
                     text(
@@ -783,12 +799,12 @@ class SigningRepo(Repo):
         Delivery times are settled first, from the deliveries still kept."""
         cutoff = cutoff_iso(days=RECEIPT_RETENTION_DAYS)
         async with self._tx() as conn:
-            await conn.execute(text(_SYNC_DELIVERED.format(where="")))
+            await _settle(conn)
             await conn.execute(
                 text(
-                    """INSERT INTO signing_receipt_watermarks (sender_key, pruned_through)
+                    f"""INSERT INTO signing_receipt_watermarks (sender_key, pruned_through)
                        SELECT sender_key, MAX(seq) FROM signing_receipts
-                       WHERE created_at < :cutoff GROUP BY sender_key
+                       WHERE created_at < :cutoff AND {_NOT_LIVE} GROUP BY sender_key
                        ON CONFLICT(sender_key) DO UPDATE SET pruned_through = CASE
                          WHEN excluded.pruned_through > signing_receipt_watermarks.pruned_through
                          THEN excluded.pruned_through
@@ -797,7 +813,7 @@ class SigningRepo(Repo):
                 {"cutoff": cutoff},
             )
             gone = await conn.execute(
-                text("DELETE FROM signing_receipts WHERE created_at < :cutoff"),
+                text(f"DELETE FROM signing_receipts WHERE created_at < :cutoff AND {_NOT_LIVE}"),
                 {"cutoff": cutoff},
             )
         return gone.rowcount

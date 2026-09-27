@@ -140,11 +140,14 @@ async def _confirmed_message(body, target, signed, request, config, db) -> Messa
             f"Pasted into {target}, but the paste wasn't confirmed; it is held until "
             "the agent acknowledges it (backbone inbox)."
         )
-    elif status == "expired":
+    elif status == "expired" or row.get("outcome") == "expired":
         result, detail = "expired", "It expired before it could be delivered."
-    else:
+    elif status in ("pending", "in_progress", "checkpoint"):
         result = "queued"
         detail = f"Kept for {target}; delivered when the agent is ready."
+    else:  # its queued delivery is no longer kept, and nothing says it was delivered
+        result = "unknown"
+        detail = "Its queued delivery is no longer kept; the receipt shows no delivery."
     if outcome != "admitted":
         detail = f"Already admitted as {confirmation.confirmation_id}. " + detail
     return MessageResponse(
@@ -219,7 +222,12 @@ async def steer(
             row = await db.signing.receipt(confirmation.confirmation_id) or row
             state = row.get("offer_state")
             taken = row["delivered_at"] is not None
-            if state == "offered":
+            if state == "offered" and row.get("outcome") in ("not_taken", "cancelled"):
+                outcome, detail = (
+                    row["outcome"],
+                    "It was offered but never reached the agent; confirm it again.",
+                )
+            elif state == "offered":
                 outcome, detail = (
                     "handed_off" if taken else "offered",
                     f"Already admitted as {confirmation.confirmation_id}.",
@@ -232,7 +240,7 @@ async def steer(
             else:
                 outcome, detail = "offering", "An earlier request is offering it now."
             return SteerResponse(
-                ok=state == "offered",
+                ok=outcome in ("offered", "handed_off"),
                 session=body.target_session,
                 outcome=outcome,
                 operation_id=row["operation_id"],

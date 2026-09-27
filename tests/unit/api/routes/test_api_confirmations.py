@@ -655,3 +655,61 @@ async def test_a_refused_confirmation_is_audited_without_its_text(
         ("nonce_reused", "/api/messages", "ike")
     ]
     assert "Another thing" not in " ".join(str(v) for v in rows[0])
+
+
+async def test_retention_keeps_a_receipt_whose_delivery_still_waits(
+    api_client, auth_headers, api_app, key, drain
+):
+    """Its link is what lets a later key reset revoke the waiting message."""
+    db = api_app.state.db
+    confirmation = _confirmation()
+    await _send(api_client, auth_headers, db, key, _body(confirmation))
+    async with db.engine.begin() as conn:  # older than the 90 days, still queued
+        await conn.execute(
+            text("UPDATE signing_receipts SET created_at = '2020-01-01T00:00:00.000000Z'")
+        )
+    assert await db.signing.prune_receipts() == 0
+    assert await db.signing.receipt(confirmation["confirmation_id"]) is not None
+    assert await _rows(db, "SELECT * FROM signing_receipt_watermarks") == []
+
+
+async def test_a_settled_steer_reports_that_it_was_not_taken(
+    api_client, auth_headers, api_app, key
+):
+    db = api_app.state.db
+    confirmation = _confirmation()
+    offered = AsyncMock(return_value=SteerReport("offered", "ike", delivery_id=1))
+    with patch("agent_backbone.api.routes.messages.steer_agent", offered):
+        first, _ = await _send(
+            api_client, auth_headers, db, key, _body(confirmation), path="/api/steer"
+        )
+        await db.deliveries.record(  # the turn ended before a tool call took it
+            issue_number=None,
+            target_entity="ike",
+            session_name="ike",
+            outcome="not_taken",
+            source="api-steer",
+            kind="steer",
+            preview="x",
+            operation_id=first.json()["operation_id"],
+        )
+        again, _ = await _send(
+            api_client, auth_headers, db, key, _body(confirmation), path="/api/steer"
+        )
+    assert again.json()["outcome"] == "not_taken" and again.json()["ok"] is False
+    assert offered.await_count == 1
+
+
+async def test_an_expired_message_stays_expired_after_its_queue_row_is_gone(
+    api_client, auth_headers, api_app, key, drain
+):
+    db = api_app.state.db
+    confirmation = _confirmation()
+    await _send(api_client, auth_headers, db, key, _body(confirmation))
+    async with db.engine.begin() as conn:
+        await conn.execute(text("UPDATE message_queue SET status = 'expired'"))
+    assert (await db.signing.receipt(confirmation["confirmation_id"]))["outcome"] == "expired"
+    async with db.engine.begin() as conn:  # queue retention removed the row
+        await conn.execute(text("DELETE FROM message_queue"))
+    again, _ = await _send(api_client, auth_headers, db, key, _body(confirmation))
+    assert again.json()["outcome"] == "expired" and again.json()["queue"] is None

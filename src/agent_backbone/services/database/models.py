@@ -644,6 +644,9 @@ class SigningReceiptORM(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     delivered_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     revoked_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Why it was never delivered, kept past the queue and delivery records:
+    ``expired`` (a message) or ``not_taken`` / ``cancelled`` (a steer)."""
     offer_state: Mapped[str | None] = mapped_column(Text, nullable=True)
     """A steer's offer: None, ``claiming`` (one request is offering it),
     ``offered`` (permanent: it is never offered again) or ``failed`` (an
