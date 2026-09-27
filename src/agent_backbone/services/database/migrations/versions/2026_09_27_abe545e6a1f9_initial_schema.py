@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: e02d3708ffdf
+Revision ID: abe545e6a1f9
 Revises:
-Create Date: 2026-09-27 20:11:23.773940
+Create Date: 2026-09-27 21:11:15.752454
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "e02d3708ffdf"
+revision: str = "abe545e6a1f9"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -413,6 +413,39 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_signing_owner")),
     )
     op.create_table(
+        "signing_receipt_watermarks",
+        sa.Column("sender_key", sa.Text(), nullable=False),
+        sa.Column("pruned_through", sa.Integer(), nullable=False),
+        sa.PrimaryKeyConstraint("sender_key", name=op.f("pk_signing_receipt_watermarks")),
+    )
+    op.create_table(
+        "signing_receipts",
+        sa.Column("seq", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("confirmation_id", sa.Text(), nullable=False),
+        sa.Column("sender", sa.Text(), nullable=False),
+        sa.Column("sender_key", sa.Text(), nullable=False),
+        sa.Column("recipient", sa.Text(), nullable=False),
+        sa.Column("delivered_to", sa.Text(), nullable=False),
+        sa.Column("kind", sa.Text(), nullable=False),
+        sa.Column("text", sa.Text(), nullable=False),
+        sa.Column("text_sha256", sa.Text(), nullable=False),
+        sa.Column("source", sa.Text(), nullable=False),
+        sa.Column("confirmed_at", sa.Text(), nullable=False),
+        sa.Column("key_epoch", sa.Integer(), nullable=False),
+        sa.Column("operation_id", sa.Text(), nullable=False),
+        sa.Column("status", sa.Text(), server_default="admitted", nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("delivered_at", sa.Text(), nullable=True),
+        sa.Column("revoked_at", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("seq", name=op.f("pk_signing_receipts")),
+        sa.UniqueConstraint("confirmation_id", name=op.f("uq_signing_receipts_confirmation_id")),
+        sa.UniqueConstraint("operation_id", name=op.f("uq_signing_receipts_operation_id")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("signing_receipts", schema=None) as batch_op:
+        batch_op.create_index("idx_signing_receipts_sender", ["sender_key", "seq"], unique=False)
+
+    op.create_table(
         "signing_transitions",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("request_id", sa.Text(), nullable=False),
@@ -532,6 +565,11 @@ def downgrade() -> None:
         batch_op.drop_index("idx_signing_transitions_sender")
 
     op.drop_table("signing_transitions")
+    with op.batch_alter_table("signing_receipts", schema=None) as batch_op:
+        batch_op.drop_index("idx_signing_receipts_sender")
+
+    op.drop_table("signing_receipts")
+    op.drop_table("signing_receipt_watermarks")
     op.drop_table("signing_owner")
     with op.batch_alter_table("signing_nonces", schema=None) as batch_op:
         batch_op.drop_index("idx_signing_nonces_seen")

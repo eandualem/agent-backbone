@@ -17,6 +17,7 @@ from agent_backbone.services.routing._delivery import (
     safe_deliver,
 )
 from agent_backbone.services.routing._dependencies import sync_dependencies
+from agent_backbone.services.routing._envelope import envelope, quote_envelope_lines
 from agent_backbone.services.routing._format import (
     format_next_issue_notification,
     format_offline_queue_notification,
@@ -60,6 +61,7 @@ __all__ = [
     "current_notification_issue",
     "dispatch_event",
     "dispatch_source_events",
+    "envelope",
     "format_next_issue_notification",
     "format_offline_queue_notification",
     "format_plan_notification",
@@ -71,6 +73,7 @@ __all__ = [
     "list_open_queue_for_target",
     "queue_detail",
     "queue_scope",
+    "quote_envelope_lines",
     "retry_outbox",
     "route_issue",
     "routing_in_flight",

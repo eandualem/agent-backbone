@@ -13,10 +13,54 @@ import uuid
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from agent_backbone.services.database._queue_repo import _INSERT_COLUMNS
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 
 NONCE_RETENTION_SECONDS = 3600
+RECEIPT_RETENTION_DAYS = 90
+_LIVE = "('pending', 'in_progress', 'checkpoint', 'uncertain')"
+_IMMUTABLE = (
+    "sender_key",
+    "recipient",
+    "kind",
+    "text",
+    "text_sha256",
+    "source",
+    "confirmed_at",
+    "key_epoch",
+)
+_SYNC_DELIVERED = """UPDATE signing_receipts SET delivered_at = (
+        SELECT MIN(d.created_at) FROM deliveries d
+        WHERE d.operation_id = signing_receipts.operation_id
+          AND d.outcome IN ('delivered', 'handed_off'))
+    WHERE delivered_at IS NULL AND status = 'admitted' {where} AND EXISTS (
+        SELECT 1 FROM deliveries d WHERE d.operation_id = signing_receipts.operation_id
+          AND d.outcome IN ('delivered', 'handed_off'))"""
+
+
+async def _revoke_epoch(conn, sender_key: str, epoch: int, at: str) -> None:
+    """A reset: the old epoch's confirmations that weren't delivered lose their
+    authority, and their queued deliveries (leased ones too) are expired with
+    a completion time, so ordinary retention removes their bodies."""
+    params = {"k": sender_key, "epoch": epoch, "at": at}
+    scope = "AND sender_key = :k AND key_epoch = :epoch"
+    await conn.execute(text(_SYNC_DELIVERED.format(where=scope)), params)
+    await conn.execute(
+        text(
+            "UPDATE signing_receipts SET status = 'revoked', revoked_at = :at"
+            f" WHERE status = 'admitted' AND delivered_at IS NULL {scope}"
+        ),
+        params,
+    )
+    await conn.execute(
+        text(
+            "UPDATE message_queue SET status = 'expired', delivered_at = :at"
+            f" WHERE status IN {_LIVE} AND operation_id IN (SELECT operation_id"
+            f" FROM signing_receipts WHERE status = 'revoked' {scope})"
+        ),
+        params,
+    )
 
 
 class _EpochChanged(Exception):
@@ -304,6 +348,8 @@ class SigningRepo(Repo):
                 ),
                 values,
             )
+        if transition["action"] in ("replace", "clear") and expected:
+            await _revoke_epoch(conn, key, expected, at)
 
     async def prune(self, days: int) -> int:
         """Drop refusal and observation rows older than ``days``; enrollment
@@ -487,6 +533,179 @@ class SigningRepo(Repo):
                 )
             ).fetchall()
         return {row[0]: row[1] for row in rows}
+
+    async def admit(
+        self,
+        *,
+        nonce: str,
+        request_hash: str,
+        now: int,
+        receipt: dict,
+        queue: dict | None,
+    ) -> tuple[str, dict | None]:
+        """Commit a confirmation in one transaction: the nonce, the receipt and,
+        for a message, its queued delivery.
+
+        Returns ``("admitted", receipt)``; ``("replay", receipt)`` for an
+        identical retry with the same nonce; ``("recovered", receipt)`` for the
+        same confirmation, unchanged, under a fresh nonce; ``("nonce_reused",
+        None)``; or ``("conflict", None)`` when the confirmation id is taken by
+        a different confirmation. Nothing is written unless admitted or
+        recovered."""
+        key, epoch = receipt["sender_key"], receipt["key_epoch"]
+        async with self._tx() as conn:
+            await conn.execute(
+                text("DELETE FROM signing_nonces WHERE seen_at < :cutoff"),
+                {"cutoff": now - NONCE_RETENTION_SECONDS},
+            )
+            seen = (
+                await conn.execute(
+                    text(
+                        "SELECT request_hash FROM signing_nonces"
+                        " WHERE sender_key = :k AND epoch = :epoch AND nonce = :nonce"
+                    ),
+                    {"k": key, "epoch": epoch, "nonce": nonce},
+                )
+            ).scalar()
+            existing = (
+                await conn.execute(
+                    text("SELECT * FROM signing_receipts WHERE confirmation_id = :c"),
+                    {"c": receipt["confirmation_id"]},
+                )
+            ).fetchone()
+            existing = dict(existing._mapping) if existing is not None else None
+            same = existing is not None and all(existing[f] == receipt[f] for f in _IMMUTABLE)
+            if seen is not None:
+                if seen == request_hash and same:
+                    return "replay", existing
+                return "nonce_reused", None
+            if existing is not None and not same:
+                return "conflict", None
+            await conn.execute(
+                text(
+                    "INSERT INTO signing_nonces (sender_key, epoch, nonce, request_hash, seen_at)"
+                    " VALUES (:k, :epoch, :nonce, :hash, :now)"
+                ),
+                {"k": key, "epoch": epoch, "nonce": nonce, "hash": request_hash, "now": now},
+            )
+            if existing is not None:
+                return "recovered", existing
+            row = (
+                await conn.execute(
+                    text(
+                        """INSERT INTO signing_receipts
+                           (confirmation_id, sender, sender_key, recipient, delivered_to, kind,
+                            text, text_sha256, source, confirmed_at, key_epoch, operation_id,
+                            status, created_at)
+                           VALUES (:confirmation_id, :sender, :sender_key, :recipient,
+                                   :delivered_to, :kind, :text, :text_sha256, :source,
+                                   :confirmed_at, :key_epoch, :operation_id, 'admitted', :at)
+                           RETURNING *"""
+                    ),
+                    {**receipt, "at": now_iso()},
+                )
+            ).fetchone()
+            if queue is not None:
+                await conn.execute(
+                    text(f"INSERT INTO message_queue {_INSERT_COLUMNS}"),
+                    {
+                        "operation_id": receipt["operation_id"],
+                        "repo": "",
+                        "issue_number": None,
+                        "delivery_kind": "direct_message",
+                        "enqueued_at": now_iso(),
+                        "initial_status": "pending",
+                        "dedup_key": f"src:confirmation:{receipt['confirmation_id']}",
+                        **queue,
+                    },
+                )
+        return "admitted", dict(row._mapping)
+
+    async def discard(self, confirmation_id: str) -> None:
+        """Forget a confirmation that was never offered (a refused steer)."""
+        async with self._tx() as conn:
+            await conn.execute(
+                text(
+                    "DELETE FROM signing_receipts WHERE confirmation_id = :c"
+                    " AND delivered_at IS NULL"
+                ),
+                {"c": confirmation_id},
+            )
+
+    async def receipt(self, confirmation_id: str) -> dict | None:
+        async with self._tx() as conn:
+            await conn.execute(
+                text(_SYNC_DELIVERED.format(where="AND confirmation_id = :c")),
+                {"c": confirmation_id},
+            )
+            row = (
+                await conn.execute(
+                    text("SELECT * FROM signing_receipts WHERE confirmation_id = :c"),
+                    {"c": confirmation_id},
+                )
+            ).fetchone()
+        return dict(row._mapping) if row is not None else None
+
+    async def receipts(self, sender_key: str, after: int, limit: int) -> dict:
+        """A sender's receipts after ``after``, and what retention removed."""
+        async with self._tx() as conn:
+            await conn.execute(
+                text(_SYNC_DELIVERED.format(where="AND sender_key = :k")), {"k": sender_key}
+            )
+            rows = (
+                await conn.execute(
+                    text(
+                        "SELECT * FROM signing_receipts WHERE sender_key = :k AND seq > :after"
+                        " ORDER BY seq LIMIT :limit"
+                    ),
+                    {"k": sender_key, "after": after, "limit": limit},
+                )
+            ).fetchall()
+            oldest = (
+                await conn.execute(
+                    text("SELECT MIN(seq) FROM signing_receipts WHERE sender_key = :k"),
+                    {"k": sender_key},
+                )
+            ).scalar()
+            pruned = (
+                await conn.execute(
+                    text(
+                        "SELECT pruned_through FROM signing_receipt_watermarks"
+                        " WHERE sender_key = :k"
+                    ),
+                    {"k": sender_key},
+                )
+            ).scalar()
+        return {
+            "rows": [dict(r._mapping) for r in rows],
+            "oldest_seq": oldest,
+            "pruned_through": pruned or 0,
+        }
+
+    async def prune_receipts(self) -> int:
+        """Drop receipts older than the retention period, remembering per sender
+        the highest seq removed, so a reader can tell a gap from nothing new.
+        Delivery times are settled first, from the deliveries still kept."""
+        cutoff = cutoff_iso(days=RECEIPT_RETENTION_DAYS)
+        async with self._tx() as conn:
+            await conn.execute(text(_SYNC_DELIVERED.format(where="")))
+            await conn.execute(
+                text(
+                    """INSERT INTO signing_receipt_watermarks (sender_key, pruned_through)
+                       SELECT sender_key, MAX(seq) FROM signing_receipts
+                       WHERE created_at < :cutoff GROUP BY sender_key
+                       ON CONFLICT(sender_key) DO UPDATE SET pruned_through = CASE
+                         WHEN excluded.pruned_through > signing_receipt_watermarks.pruned_through
+                         THEN excluded.pruned_through
+                         ELSE signing_receipt_watermarks.pruned_through END"""
+                ),
+                {"cutoff": cutoff},
+            )
+            gone = await conn.execute(
+                text("DELETE FROM signing_receipts WHERE created_at < :cutoff"),
+                {"cutoff": cutoff},
+            )
+        return gone.rowcount
 
     async def owner(self) -> dict:
         """``{telegram_user_id, pending_user_id}``; both None when never set."""

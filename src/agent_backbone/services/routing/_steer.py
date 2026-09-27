@@ -27,6 +27,7 @@ from agent_backbone.hooks.backbone_state import (
     steer_offers,
 )
 from agent_backbone.services.agents import AgentState, read_state_file
+from agent_backbone.services.routing._envelope import envelope as make_envelope
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing.models import SessionIntelligence
 from agent_backbone.services.runtimes import get_runtime
@@ -61,9 +62,21 @@ class SteerReport:
 
 
 async def steer_agent(
-    session_name: str, text: str, config: BackboneConfig, *, db: BackboneDB, sender: str
+    session_name: str,
+    text: str,
+    config: BackboneConfig,
+    *,
+    db: BackboneDB,
+    sender: str,
+    confirmation_id: str | None = None,
+    relay: bool = False,
+    operation_id: str | None = None,
 ) -> SteerReport:
-    """Offer ``text`` to the agent's current turn, or refuse with the reason."""
+    """Offer ``text`` to the agent's current turn, or refuse with the reason.
+
+    ``confirmation_id`` puts the owner-confirmed marker in the envelope (only
+    for a verified confirmation); ``relay`` labels a signed, unconfirmed steer;
+    ``operation_id`` ties the offer to its receipt."""
     # The turn this steer is for, read before the checks: a turn that ends
     # (or ends and another starts) while the offer is written is caught below.
     turn = await asyncio.to_thread(_hook_record, config, session_name)
@@ -102,8 +115,8 @@ async def steer_agent(
             "no_launch_id",
             evidence=[*evidence, "the session was not started by the backbone"],
         )
-    operation_id = uuid.uuid4().hex
-    envelope = f"[via:backbone from:{sender}] (steer for your current task) {text}"
+    operation_id = operation_id or uuid.uuid4().hex
+    envelope = make_envelope(sender, text, confirmation_id=confirmation_id, relay=relay, steer=True)
     delivery_id = await db.deliveries.record(
         issue_number=None,
         target_entity=session_name,

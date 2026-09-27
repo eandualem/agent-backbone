@@ -617,3 +617,43 @@ class SigningOwnerORM(Base):
     set_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     pending_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     pending_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SigningReceiptORM(Base):
+    """The immutable receipt of one owner confirmation (docs/owner-confirmed-messages.md).
+    Only ``delivered_at`` is set later, once; ``status`` records a revocation."""
+
+    __tablename__ = "signing_receipts"
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    confirmation_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    sender: Mapped[str] = mapped_column(Text, nullable=False)
+    sender_key: Mapped[str] = mapped_column(Text, nullable=False)
+    recipient: Mapped[str] = mapped_column(Text, nullable=False)
+    """``target_session`` exactly as sent: what the confirmation named."""
+    delivered_to: Mapped[str] = mapped_column(Text, nullable=False)
+    """The registered agent it went to (a swarm name resolves to its coordinator)."""
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    text_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    confirmed_at: Mapped[str] = mapped_column(Text, nullable=False)
+    key_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="admitted")
+    """``admitted`` or ``revoked`` (an owner-approved reset of its key)."""
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    delivered_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revoked_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    __table_args__ = (
+        Index("idx_signing_receipts_sender", "sender_key", "seq"),
+        # seq is the reconciliation cursor: never reuse a pruned value.
+        {"sqlite_autoincrement": True},
+    )
+
+
+class SigningReceiptWatermarkORM(Base):
+    """Per sender, the highest receipt seq retention removed (a gap below it)."""
+
+    __tablename__ = "signing_receipt_watermarks"
+    sender_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    pruned_through: Mapped[int] = mapped_column(Integer, nullable=False)

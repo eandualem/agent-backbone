@@ -23,7 +23,7 @@ from agent_backbone.services.agents.operations import StartRequest, resolve_agen
 from agent_backbone.services.agents.transitions import SOURCE, due_after
 from agent_backbone.services.database import now_iso
 from agent_backbone.services.jobs.diagnostics import observe_job
-from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.routing import envelope, safe_deliver
 from agent_backbone.services.terminal import query_environment_var
 
 if TYPE_CHECKING:
@@ -148,7 +148,7 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         sender = row["requested_by"] or "backbone"
         report = await safe_deliver(
             name,
-            f"[via:backbone from:{sender}] {row['message']}",
+            envelope(sender, row["message"]),
             config,
             db=db,
             delivery_kind="direct_message",

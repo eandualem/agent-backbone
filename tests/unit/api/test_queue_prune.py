@@ -26,7 +26,9 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
         queue=SimpleNamespace(prune=AsyncMock(return_value=4)),
         diagnostics=SimpleNamespace(prune=AsyncMock(return_value=6)),
         reports=SimpleNamespace(prune=AsyncMock(return_value=7)),
-        signing=SimpleNamespace(prune=AsyncMock(return_value=8)),
+        signing=SimpleNamespace(
+            prune=AsyncMock(return_value=8), prune_receipts=AsyncMock(return_value=9)
+        ),
     )
     with (
         patch("agent_backbone.services.scheduler.PeriodicScheduler") as scheduler,
@@ -47,6 +49,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
             "diagnostics": 6,
             "reports": 7,
             "signing_audit": 8,
+            "signing_receipts": 9,
             "action_log_lines": 5,
         }
     for repo in (

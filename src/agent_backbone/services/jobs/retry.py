@@ -223,6 +223,22 @@ async def drain_message_queue(
     return summary
 
 
+async def deliver_now(config, db, gh, session_name: str) -> None:
+    """Try one session's queue at once (a confirmed message was just queued),
+    under the retry job's own guard: a session is never drained twice at once,
+    and an inbox-only agent is never typed into."""
+    spec = config.agents.get(session_name)
+    if session_name in _draining or (spec is not None and spec.inbox_only):
+        return
+    _draining.add(session_name)
+    try:
+        await _drain_session(config, db, gh, session_name, {})
+    except Exception:
+        log.exception("Immediate drain failed for %s; the retry job tries again", session_name)
+    finally:
+        _draining.discard(session_name)
+
+
 async def drain_agent(config, db, session_name: str) -> None:
     """Deliver one agent's queued startup brief from outside the running
     service (an ``agent start`` while it is down), through the same delivery.
@@ -320,6 +336,10 @@ async def _drain_session(
                         repo=record.get("repo") or "",
                         issue_number=record.get("issue_number"),
                     )
+            if not await db.queue.still_leased(record["id"]):
+                # Revoked or completed meanwhile: never deliver the stale copy.
+                summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
+                continue
             outcome = (
                 await safe_deliver(
                     session_name,

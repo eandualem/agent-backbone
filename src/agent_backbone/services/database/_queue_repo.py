@@ -424,6 +424,31 @@ class QueueRepo(Repo):
             )
             return rows
 
+    async def by_operation(self, operation_id: str) -> dict | None:
+        """The queue row of one operation (``id``, ``status``), if it is still kept."""
+        async with self._tx() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT id, status FROM message_queue WHERE operation_id = :op"
+                        " ORDER BY id DESC LIMIT 1"
+                    ),
+                    {"op": operation_id},
+                )
+            ).fetchone()
+        return dict(row._mapping) if row is not None else None
+
+    async def still_leased(self, message_id: int) -> bool:
+        """Whether a leased row is still ours to deliver: nothing expired or
+        completed it (a key reset revokes leased work too) since the lease."""
+        async with self._tx() as conn:
+            status = (
+                await conn.execute(
+                    text("SELECT status FROM message_queue WHERE id = :id"), {"id": message_id}
+                )
+            ).scalar()
+        return status == "in_progress"
+
     async def release(self, message_id: int) -> None:
         async with self._tx() as conn:
             await conn.execute(
