@@ -53,16 +53,21 @@ class TestApproveAgent:
         "│   2. No                      │\n"
         "╰──────────────────────────────╯\n"
     )
+    # The cursor moved to "No": "1" still picks Yes.
+    DEEPCODE_DIALOG_ON_NO = DEEPCODE_DIALOG.replace("│ > 1. Yes", "│   1. Yes").replace(
+        "│   2. No ", "│ > 2. No "
+    )
     DEEPCODE_IDLE = (
         "status: completed · 14/1M · deepseek-v4-flash max\n"
         ">   Type your message...\n"
         "enter send · shift+enter newline · / commands · ctrl+d exit\n"
     )
 
-    async def test_deepcode_is_answered_with_its_yes_option(self):
+    @pytest.mark.parametrize("dialog", [DEEPCODE_DIALOG, DEEPCODE_DIALOG_ON_NO])
+    async def test_deepcode_is_answered_with_its_yes_option(self, dialog):
         with (
             patch(f"{_MOD}.session_exists", return_value=True),
-            patch(f"{_MOD}.capture_pane", side_effect=[self.DEEPCODE_DIALOG, self.DEEPCODE_IDLE]),
+            patch(f"{_MOD}.capture_pane", side_effect=[dialog, self.DEEPCODE_IDLE]),
             patch(f"{_BASE}.send_keys", return_value=True) as keys,
         ):
             outcome, evidence = await approve_agent("dc", runtime="deepcode", settle_seconds=0)

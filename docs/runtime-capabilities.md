@@ -31,11 +31,11 @@ claims support that the adapter's code does not declare.
 | Brief reaches a fresh session before other work | ✅ | ✅ | ? #302 | ✅ | ? #302 | ? #302 not verified live | n/a |
 | Current brief after resume | ✅ | ✅ | ❌ #273 | ❌ #273 | ❌ #273 | ❌ #273 | n/a |
 | Brief followed after context compaction | ✅ | ✅ | ? #291 | ❌ #291 the rule is kept but no longer followed | ? #291 | ? #291 | n/a |
-| Project AGENTS.md loaded at start | ✅ | ✅ | ❌ #286 reads GEMINI.md unless context.fileName is set | ✅ | ? #286 | ❌ #286 reads only files passed to it | n/a |
+| Project AGENTS.md loaded at start | ✅ | ✅ | ❌ #286 reads GEMINI.md unless context.fileName is set | ✅ | ✅ | ❌ #286 reads only files passed to it | n/a |
 | Non-empty user-level instruction file detected | ✅ | ✅ | ✅ | ✅ files listed under `instructions` in its config not checked | ✅ | ? #302 no default user-level file per its docs; not yet verified | n/a |
 | CLI-native memory disabled or detected | ❌ #292 auto-memory is on | ? #292 | ? #292 | ? #292 | ? #292 | ? #292 | n/a |
 | State reported by the runtime (hooks) | ✅ | ✅ from its first prompt (the brief): Codex runs no hook before its first turn | ✅ | ✅ | ❌ #275 read from the terminal only | ❌ #275 read from the terminal only | n/a |
-| Steer and high-priority events into a working agent | ✅ | ✅ | ❌ #276 | ❌ #276 | ❌ #276 | ❌ #276 | n/a |
+| Steer and high-priority events into a working agent | ✅ | ✅ | ❌ #276 | ✅ as a user message in the running turn, after the next tool call | ❌ #276 | ❌ #276 | n/a |
 | Permission dialog detected and alerted | ✅ | ✅ | ? #302 markers not verified live | ✅ | ✅ | ? #302 markers not verified live | n/a |
 | Permission dialog answered (agent approve) | ✅ | ✅ | ❌ #277 | ✅ | ✅ | ❌ #277 | n/a |
 | Permission dialog refused (agent deny) | ✅ | ✅ | ❌ #299 | ❌ #299 | ✅ | ❌ #299 | n/a |
@@ -47,7 +47,7 @@ claims support that the adapter's code does not declare.
 | No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ #281 | ❌ #281 | n/a |
 | Writes bounded while unattended | ❌ #285 | ✅ OS sandbox | ❌ #285 | ❌ #285 | ❌ #285 | ❌ #285 | n/a |
 | Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ `--approve-for-me` | ❌ #293 | ❌ #293 | ❌ #293 | ❌ #293 | n/a |
-| Shared skills linked | ✅ | ✅ | ? #302 linked by the shared code; not tested for this runtime | ? #302 linked by the shared code; not tested for this runtime | ❌ #282 | ❌ #282 | n/a |
+| Shared skills linked | ✅ | ✅ | ? #302 linked by the shared code; not tested for this runtime | ? #302 linked by the shared code; not tested for this runtime | ✅ | ❌ #282 | n/a |
 | Token usage recorded | ✅ | ✅ | ❌ #283 | ✅ | ❌ #283 | ❌ #283 | n/a |
 | agent output from the runtime's own record | ✅ | ✅ | ❌ #284 | ❌ #284 | ❌ #284 | ❌ #284 | n/a |
 | Provider capacity or rate-limit failure detected (blocked) | ✅ | ✅ | ❌ #295 | ✅ | ❌ #295 | ❌ #295 | n/a |
@@ -99,6 +99,7 @@ claims support that the adapter's code does not declare.
 - **Folder trust.** OpenCode and Deep Code show no folder-trust dialog, so
   that row is n/a for them. Every other n/a is the plain shell's.
 - **Deep Code** is `@vegamo/deepcode-cli`, the community CLI DeepSeek's docs
-  point to. Its permission dialog has not been captured, so `agent approve`
-  refuses it until then.
+  point to. Its permission dialog is detected, so the session reads as
+  `waiting_for_human` while it shows, and `agent approve` and `agent deny`
+  answer it.
 - `backbone runtimes` shows which of these CLIs are installed locally.
