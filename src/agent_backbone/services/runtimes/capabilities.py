@@ -137,6 +137,8 @@ _RESUME = "live: #273 post-fix probe (resume and compaction)"
 _LAUNCH = "tests/unit/services/runtimes/test_launch_commands.py"
 _NO_MODEL = "a plain shell runs no model"
 _USER_FILES = "tests/unit/services/runtimes/test_user_instructions.py"
+_SIGNED = "tests/unit/api/routes/test_api_signing.py"
+_API_BOUNDARY = "checked at the API, the same for every runtime"
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
@@ -540,6 +542,20 @@ CAPABILITIES: tuple[Capability, ...] = (
         deepcode=_unverified(294),
         aider=_unverified(294),
         shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "signed-senders",
+        "An enrolled sender name's requests must be signed",
+        "src/agent_backbone/api/signed.py",
+        fallback="Treat sender names as claims; confirm with the sender another way.",
+        implemented=lambda rt: True,
+        claude=_ok(_SIGNED, _API_BOUNDARY),
+        codex=_ok(_SIGNED, _API_BOUNDARY),
+        gemini=_ok(_SIGNED, _API_BOUNDARY),
+        opencode=_ok(_SIGNED, _API_BOUNDARY),
+        deepcode=_ok(_SIGNED, _API_BOUNDARY),
+        aider=_ok(_SIGNED, _API_BOUNDARY),
+        shell=_ok(_SIGNED, _API_BOUNDARY),
     ),
     _row(
         "deep-review",

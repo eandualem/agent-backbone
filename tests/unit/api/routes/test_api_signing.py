@@ -453,3 +453,42 @@ def test_every_sender_route_is_a_real_route(api_app):
 
     routes = {(m, r.path) for r in api_app.router.routes for m in getattr(r, "methods", None) or ()}
     assert {(r.method, r.template) for r in SENDER_ROUTES} <= routes
+
+
+# Every shipped adapter, by name: the capability contract cites this test.
+RUNTIME_IDS = ("claude", "codex", "gemini", "opencode", "deepcode", "aider", "shell")
+
+
+def test_the_runtime_list_is_every_shipped_adapter():
+    from agent_backbone.services.runtimes import RUNTIMES
+
+    assert set(RUNTIME_IDS) == set(RUNTIMES)
+
+
+@pytest.mark.parametrize("runtime", RUNTIME_IDS)
+async def test_the_same_check_for_a_recipient_on_every_runtime(
+    api_client, auth_headers, api_app, deliver, runtime
+):
+    """Enforcement happens at the API, before delivery: a recipient's runtime
+    makes no difference to what is refused or admitted."""
+    from dataclasses import replace
+
+    from agent_backbone.config import AgentsConfig, AgentSpec
+
+    config = api_app.state.config
+    target = f"{runtime}-agent"
+    specs = {**config.agents.specs, target: AgentSpec(name=target, dir="/tmp", runtime=runtime)}
+    api_app.state.config = replace(config, agents=AgentsConfig(specs=specs))
+    db = api_app.state.db
+    key = Ed25519PrivateKey.generate()
+    await _enroll(api_client, auth_headers, db, key)
+    message = {**MESSAGE, "target_session": target}
+
+    refused = await api_client.post("/api/messages", headers=auth_headers, json=message)
+    assert refused.json()["detail"]["reason"] == "signature_required"
+    raw, signed = await _signed(db, key, "POST", "/api/messages", message)
+    admitted = await api_client.post(
+        "/api/messages", headers={**auth_headers, **signed}, content=raw
+    )
+    assert admitted.status_code == 200, admitted.text
+    assert deliver.await_args.kwargs["session_name"] == target
