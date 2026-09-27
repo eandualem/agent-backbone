@@ -73,7 +73,8 @@ counts.
 **Reset.** A replace or clear that is not signed by the current key starts a new
 epoch: the old key admits nothing more, and a pending transition is replaced.
 Until owner confirmation ships, a signed message carries no marker or label, so
-one its old key got queued is delivered like any other message from that name.
+a message queued while the old key was active is delivered like any other
+message from that name.
 With owner confirmation, a reset also revokes the old epoch's unclaimed
 confirmations and their queued deliveries, and open grants lose their
 authority; their receipts are kept. After an ordinary rotation, work already admitted keeps its bounded
@@ -160,9 +161,8 @@ Backbone rejects a signed request whose timestamp differs from its own clock by
 more than 300 seconds, or whose nonce it has already seen for that sender and
 epoch (`nonce_reused`), so a request is never acted on twice. To retry after a
 lost response, sign again with a fresh nonce and timestamp. For an owner
-confirmation, the same `confirmation_id` then recovers the original result
-(below); returning the original result to a retry with the same nonce comes
-with owner confirmation.
+confirmation, the same `confirmation_id` in that fresh request recovers the
+original result (below).
 
 ### Strict parsing
 
