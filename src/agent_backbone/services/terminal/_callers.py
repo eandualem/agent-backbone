@@ -22,14 +22,20 @@ class CallerUnknown(Exception):
     """The caller could not be placed in a pane; the message says why."""
 
 
-def is_loopback(host: str) -> bool:
+def _address(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """An IP address as compared: an IPv4-mapped IPv6 address as its IPv4 one."""
     try:
         address = ipaddress.ip_address(host.strip("[]"))
     except ValueError:
-        return False
+        return None
     if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
-        address = address.ipv4_mapped
-    return address.is_loopback
+        return address.ipv4_mapped
+    return address
+
+
+def is_loopback(host: str) -> bool:
+    address = _address(host)
+    return address is not None and address.is_loopback
 
 
 async def _output(*argv: str) -> tuple[int, str]:
@@ -52,14 +58,17 @@ async def _output(*argv: str) -> tuple[int, str]:
     return proc.returncode, out.decode(errors="replace")
 
 
-def _endpoint(text: str) -> tuple[str, int] | None:
+def _endpoint(text: str) -> tuple[object, int] | None:
+    """``host:port`` as lsof prints it (``[::1]:80`` for IPv6)."""
     host, _, port = text.rpartition(":")
-    return (host, int(port)) if port.isdigit() else None
+    address = _address(host)
+    return (address, int(port)) if address is not None and port.isdigit() else None
 
 
-async def peer_pids(client_port: int, server_port: int) -> set[int]:
-    """The processes holding the client end of a loopback connection."""
-    code, out = await _output("lsof", "-nP", "-w", f"-iTCP:{client_port}", "-Fpn")
+async def peer_pids(client: tuple[str, int], server: tuple[str, int]) -> set[int]:
+    """The processes holding the client end of this loopback connection."""
+    wanted = ((_address(client[0]), client[1]), (_address(server[0]), server[1]))
+    code, out = await _output("lsof", "-nP", "-w", f"-iTCP:{client[1]}", "-Fpn")
     if code not in (0, 1):  # 1: nothing matched
         raise CallerUnknown(f"lsof failed (exit {code})")
     pids: set[int] = set()
@@ -69,14 +78,7 @@ async def peer_pids(client_port: int, server_port: int) -> set[int]:
             pid = int(line[1:])
         elif line.startswith("n") and pid is not None and "->" in line:
             local, remote = (_endpoint(part) for part in line[1:].split("->", 1))
-            if (
-                local is not None
-                and remote is not None
-                and local[1] == client_port
-                and remote[1] == server_port
-                and is_loopback(local[0])
-                and is_loopback(remote[0])
-            ):
+            if (local, remote) == wanted:
                 pids.add(pid)
     return pids
 
@@ -114,7 +116,7 @@ async def caller_sessions(client: tuple[str, int], server: tuple[str, int]) -> l
     sessions showing the pane it runs in."""
     if not is_loopback(client[0]) or not is_loopback(server[0]):
         raise CallerUnknown("the connection is not from this machine")
-    pids = await peer_pids(client[1], server[1])
+    pids = await peer_pids(client, server)
     if not pids:
         raise CallerUnknown("no local process holds the connection")
     parents, panes = await _parents(), await _panes()

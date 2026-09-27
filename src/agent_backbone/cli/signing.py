@@ -87,6 +87,14 @@ async def _validate(args: argparse.Namespace) -> int:
             ("Expires", f"{_when(data['grant']['expires_at'])}, or when closed with --done"),
         ],
     )
-    print("Confirmed text, exactly as signed:")
-    print(data["text"], end="" if data["text"].endswith("\n") else "\n")
+    print("Confirmed text (terminal controls shown escaped; --json gives it exactly):")
+    shown = _escaped(data["text"])
+    print(shown, end="" if shown.endswith("\n") else "\n")
     return 0
+
+
+def _escaped(text: str) -> str:
+    """The text with terminal controls written as escapes; line breaks and tabs kept."""
+    return "".join(
+        c if c in "\n\t" or c.isprintable() else c.encode("unicode_escape").decode() for c in text
+    )

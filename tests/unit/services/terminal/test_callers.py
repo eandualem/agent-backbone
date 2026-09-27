@@ -61,6 +61,14 @@ async def test_only_the_callers_end_of_the_connection_counts(monkeypatch):
     assert await caller_sessions(CLIENT, SERVER) == [{"ike"}]
 
 
+async def test_a_connection_on_other_loopback_addresses_is_not_the_callers(monkeypatch):
+    # Same ports, different loopback addresses: another process's connection.
+    lsof = LSOF + "p901\nf4\nn127.0.0.2:53166->127.0.0.1:8420\n"
+    _fake(monkeypatch, lsof=lsof, parents={900: 500, 901: 600, 500: 1, 600: 1},
+          panes={500: {"ike"}, 600: {"una"}})  # fmt: skip
+    assert await caller_sessions(CLIENT, SERVER) == [{"ike"}]
+
+
 async def test_ipv4_mapped_and_ipv6_loopback_are_local(monkeypatch):
     lsof = "p900\nf4\nn[::1]:53166->[::ffff:127.0.0.1]:8420\n"
     _fake(monkeypatch, lsof=lsof)
@@ -108,7 +116,7 @@ async def test_the_real_lsof_finds_this_process_on_its_own_connection(monkeypatc
     client = socket.create_connection(server.getsockname())
     accepted, _ = server.accept()
     try:
-        pids = await _callers.peer_pids(client.getsockname()[1], server.getsockname()[1])
+        pids = await _callers.peer_pids(client.getsockname(), server.getsockname())
         assert pids == {os.getpid()}
         assert (await _callers._parents())[os.getpid()] == os.getppid()
     finally:

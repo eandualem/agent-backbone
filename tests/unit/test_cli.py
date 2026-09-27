@@ -1116,7 +1116,15 @@ class TestMessageValidate:
         }
         out = capsys.readouterr().out
         assert "not fresh authority" in out and "1970-01-02T00:00:00+00:00" in out
-        assert out.endswith("exactly as signed:\n" + self.CLAIM["text"])
+        assert out.endswith("--json gives it exactly):\n" + self.CLAIM["text"])
+
+    def test_terminal_controls_in_the_text_are_shown_escaped(self, capsys):
+        claim = {**self.CLAIM, "text": "copy\x1b]52;c;ZXZpbA==\x07 this\u202e"}
+        with patch("agent_backbone.cli._common.api", AsyncMock(return_value=(200, claim))):
+            assert _run(["message", "validate", claim["confirmation_id"]]) == 0
+        out = capsys.readouterr().out
+        assert "\x1b" not in out and "\x07" not in out and "\u202e" not in out
+        assert out.endswith("copy\\x1b]52;c;ZXZpbA==\\x07 this\\u202e\n")
 
     def test_a_refusal_exits_1_with_its_reason(self, capsys):
         refusal = {"detail": {"reason": "wrong_recipient", "message": "delivered to another"}}

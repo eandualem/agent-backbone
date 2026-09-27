@@ -445,8 +445,10 @@ as an enrolled name leave a metadata-only audit row.
 
 `backbone message validate <confirmation_id>` claims the confirmation for the
 calling agent and prints the exact confirmed text, which the agent acts on.
-`backbone message validate <confirmation_id> --done` closes the claim. Both
-call `POST /api/messages/validate` with `{"confirmation_id": "…", "done": false}`.
+`backbone message validate <confirmation_id> --done` closes the claim. They
+call `POST /api/messages/validate` with `{"confirmation_id": "…", "done": false}`;
+`--done` sends `"done": true`. The command shows terminal control characters
+in the text as escapes; `--json` returns the text exactly.
 
 The confirmation is the task: its text defines the scope. A claim creates a
 grant bound to the recipient agent, its registered working directory and the
