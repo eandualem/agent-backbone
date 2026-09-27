@@ -153,8 +153,9 @@ result instead of acting twice.
 
 ### Strict parsing
 
-A signed JSON body is parsed strictly: a duplicate key anywhere, an unknown
-field, or a field of the wrong type is refused. `owner_confirmation` must
+A signed JSON body is parsed strictly: a duplicate key anywhere is refused,
+and on the shapes listed under [Owner confirmation](#owner-confirmation) so is
+an unknown field or a field of the wrong type. `owner_confirmation` must
 agree with the route (`message` for `POST /api/messages`, `steer` for
 `POST /api/steer`) and with the recipient in `target_session`.
 
