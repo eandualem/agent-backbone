@@ -101,15 +101,16 @@ async def _revoke_epoch(conn, sender_key: str, epoch: int, at: str) -> None:
         params,
     )
     # An uncertain row keeps its status: the paste may still sit in the input,
-    # and that hold is what stops the next paste. What the inbox shows for it
-    # no longer carries the marker, but says the confirmation was revoked.
+    # and that hold is what stops the next paste. A checkpoint row was already
+    # read from the inbox and waits for its acknowledgement. What the inbox
+    # shows for either no longer carries the marker, but says it was revoked.
     await conn.execute(
         text(
             "UPDATE message_queue SET message = REPLACE(message,"
             " ' owner-confirmed:' || (SELECT r.confirmation_id FROM signing_receipts r"
             " WHERE r.operation_id = message_queue.operation_id) || ']',"
             " '] (owner confirmation revoked: the sender''s key was reset)')"
-            " WHERE status = 'uncertain' AND operation_id IN (SELECT operation_id"
+            " WHERE status IN ('uncertain', 'checkpoint') AND operation_id IN (SELECT operation_id"
             f" FROM signing_receipts WHERE status = 'revoked' {scope})"
         ),
         params,
@@ -117,7 +118,7 @@ async def _revoke_epoch(conn, sender_key: str, epoch: int, at: str) -> None:
     await conn.execute(
         text(
             "UPDATE message_queue SET status = 'expired', delivered_at = :at"
-            " WHERE status IN ('pending', 'in_progress', 'checkpoint')"
+            " WHERE status IN ('pending', 'in_progress')"
             " AND operation_id IN (SELECT operation_id"
             f" FROM signing_receipts WHERE status = 'revoked' {scope})"
         ),

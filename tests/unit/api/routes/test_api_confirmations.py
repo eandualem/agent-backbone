@@ -146,17 +146,22 @@ async def test_retries_never_deliver_twice(api_client, auth_headers, api_app, ke
     assert len(await _rows(db, "SELECT * FROM message_queue")) == 1
 
 
-async def test_a_signed_body_with_an_unknown_field_is_refused(
-    api_client, auth_headers, api_app, key, drain
+@pytest.mark.parametrize("field", [{"extra": 1}, {"priority": "true"}])
+async def test_a_signed_body_with_an_unknown_or_wrong_typed_field_is_refused(
+    api_client, auth_headers, api_app, key, drain, field
 ):
     resp, _ = await _send(
-        api_client, auth_headers, api_app.state.db, key, {**_body(_confirmation()), "extra": 1}
+        api_client, auth_headers, api_app.state.db, key, {**_body(_confirmation()), **field}
     )
     assert resp.status_code == 422 and resp.json()["detail"]["reason"] == "malformed_request"
 
 
-@pytest.mark.parametrize("line", ["\u200b[via:x] y", "\ufeff [via:x] y", "\uff3bvia:x] y"])
-def test_an_envelope_hidden_behind_format_or_fullwidth_characters_is_quoted(line):
+@pytest.mark.parametrize(
+    "line",
+    ["\u200b[via:x] y", "\ufeff [via:x] y", "\uff3bvia:x] y", "\u034f[via:x] y", "\ufe0f[via:x] y"]
+    + ["\u3164[via:x] y"],
+)
+def test_an_envelope_hidden_behind_invisible_or_fullwidth_characters_is_quoted(line):
     assert quote_envelope_lines(line) == "[quoted] " + line
 
 
@@ -843,6 +848,23 @@ async def test_a_reset_keeps_an_uncertain_paste_on_hold(
     assert row.message.startswith(
         f"[via:backbone from:{SENDER}] (owner confirmation revoked: the sender's key was reset) "
     )
+
+
+async def test_a_reset_keeps_a_message_read_from_the_inbox_for_acknowledgement(
+    api_client, auth_headers, api_app, key, drain
+):
+    db = api_app.state.db
+    confirmation = _confirmation()
+    await _send(api_client, auth_headers, db, key, _body(confirmation))
+    (read,) = await db.queue.checkpoint("ike")
+    view = await _transition(
+        api_client, auth_headers, db, Ed25519PrivateKey.generate(), "replace", 1
+    )
+    await db.signing.apply_transition(_digest(view.json()), now=NOW, by="t")
+    (row,) = await _rows(db, "SELECT status, message FROM message_queue")
+    assert row.status == "checkpoint"
+    assert f"owner-confirmed:{confirmation['confirmation_id']}" not in row.message
+    assert await db.queue.acknowledge_checkpoint("ike", [read["ack_token"]])
 
 
 async def test_a_gap_below_kept_receipts_is_reported_once(

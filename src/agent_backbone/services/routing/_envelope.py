@@ -13,11 +13,22 @@ RELAY_LABEL = "(signed relay, not owner-confirmed)"
 STEER_LABEL = "(steer for your current task)"
 
 
+# Letters that render as nothing (Hangul fillers); NFKC keeps them.
+_BLANK_LETTERS = frozenset("\u115f\u1160\u3164\uffa0")
+
+
+def _invisible(c: str) -> bool:
+    """Control, format, unassigned and private characters, marks that
+    combine with nothing, and blank letters: none shows before ``[via:``."""
+    category = unicodedata.category(c)
+    return category[0] == "C" or category in {"Mn", "Me"} or c in _BLANK_LETTERS
+
+
 def _starts_like_envelope(line: str) -> bool:
-    """Compared after NFKC, without invisible format characters (Cf), so
-    ``\u200b[via:`` or a fullwidth ``［via:`` counts too."""
+    """Compared after NFKC, without invisible characters, so ``\u200b[via:``,
+    ``\u034f[via:`` or a fullwidth ``［via:`` counts too."""
     folded = unicodedata.normalize("NFKC", line)
-    visible = "".join(c for c in folded if unicodedata.category(c) != "Cf")
+    visible = "".join(c for c in folded if not _invisible(c))
     return visible.lstrip().casefold().startswith("[via:")
 
 

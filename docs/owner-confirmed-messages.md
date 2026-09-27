@@ -32,8 +32,8 @@ one app or one name.
 
 Backbone writes the marker and the label from the verified record only. In
 every message, steer and restart continuation, a line that starts with `[via:`
-(after optional spaces or invisible format characters, in any case, compared
-after NFKC normalization, so a fullwidth `［via:` counts) is shown as
+(after optional spaces or invisible characters, in any case, compared after
+NFKC normalization, so a fullwidth `［via:` counts) is shown as
 `[quoted] [via:…`, including
 the body's first line, which follows the envelope on the same line. That is presentation only: the signed text is kept
 unchanged in the receipt, and its hash covers the text as sent.
@@ -78,7 +78,9 @@ epoch: the old key admits nothing more, and a pending transition is replaced.
 In the same transaction, every confirmation of the old epoch that wasn't
 delivered yet is revoked (its receipt says `revoked`), and its queued delivery
 is expired, including one the delivery job is holding right now, so it is
-never delivered. A steer already offered to an agent's running turn can still
+never delivered. A message the agent already read from its inbox, or a paste
+whose outcome is unknown, stays held until the agent acknowledges it, but its
+inbox copy loses the marker and says the confirmation was revoked. A steer already offered to an agent's running turn can still
 be taken within its five minutes. With validate, open grants of the old epoch
 lose their authority too. After an ordinary rotation, work already admitted
 keeps its bounded lifetime; the old epoch admits no new requests.

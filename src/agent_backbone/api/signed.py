@@ -65,15 +65,26 @@ SENDER_ROUTES: tuple[SenderRoute, ...] = (
     SenderRoute("POST", "/api/signing/rotation", "header", "", "rotate"),
     SenderRoute("GET", "/api/signing/receipts", "header", ""),
 )
-# A signed body on these routes is exactly this shape: an unknown field is refused.
-SIGNED_SHAPES: dict[str, frozenset[str]] = {
-    "/api/messages": frozenset(
-        {"target_session", "from_entity", "message", "priority", "owner_confirmation"}
-    ),
-    "/api/steer": frozenset({"target_session", "from_entity", "message", "owner_confirmation"}),
-    "/api/messages/inbox": frozenset({"session", "acknowledge"}),
-    "/api/agents/{name}/approve": frozenset({"from_entity"}),
-    "/api/agents/{name}/deny": frozenset({"from_entity"}),
+# A signed body on these routes is exactly this shape: an unknown field, or one
+# of another JSON type (which the route's model might coerce), is refused.
+_TEXT, _FLAG, _LIST, _OBJECT = (str,), (bool,), (list,), (dict, type(None))
+SIGNED_SHAPES: dict[str, dict[str, tuple[type, ...]]] = {
+    "/api/messages": {
+        "target_session": _TEXT,
+        "from_entity": _TEXT,
+        "message": _TEXT,
+        "priority": _FLAG,
+        "owner_confirmation": _OBJECT,
+    },
+    "/api/steer": {
+        "target_session": _TEXT,
+        "from_entity": _TEXT,
+        "message": _TEXT,
+        "owner_confirmation": _OBJECT,
+    },
+    "/api/messages/inbox": {"session": _TEXT, "acknowledge": _LIST},
+    "/api/agents/{name}/approve": {"from_entity": _TEXT},
+    "/api/agents/{name}/deny": {"from_entity": _TEXT},
 }
 # Routes whose confirmed requests commit their nonce with the receipt, in one transaction.
 CONFIRMABLE = frozenset({"/api/messages", "/api/steer"})
@@ -269,8 +280,13 @@ async def check(db, scope, headers: Headers, body: bytes, route: SenderRoute, pa
         if not any(h in headers for h in HEADERS):
             raise Refusal(403, "signature_required", f"requests made as '{sender}' must be signed")
         shape = SIGNED_SHAPES.get(route.template)
-        if shape is not None and isinstance(parsed, dict) and set(parsed) - shape:
-            raise Refusal(422, "malformed_request", "the body has a field this route doesn't take")
+        if shape is not None and isinstance(parsed, dict):
+            if set(parsed) - set(shape):
+                raise Refusal(
+                    422, "malformed_request", "the body has a field this route doesn't take"
+                )
+            if any(not isinstance(value, shape[field]) for field, value in parsed.items()):
+                raise Refusal(422, "malformed_request", "a field of the body has the wrong type")
         confirmed = (
             route.template in CONFIRMABLE
             and isinstance(parsed, dict)
