@@ -494,24 +494,6 @@ async def test_the_same_check_for_a_recipient_on_every_runtime(
     assert deliver.await_args.kwargs["session_name"] == target
 
 
-async def test_a_signed_message_that_waits_is_tracked_for_a_reset(
-    api_client, auth_headers, api_app
-):
-    db = api_app.state.db
-    key = Ed25519PrivateKey.generate()
-    await _enroll(api_client, auth_headers, db, key)
-    stored = DeliveryReport(DeliveryOutcome.AGENT_WORKING, "stored", queue_id=77)
-    with patch("agent_backbone.api.routes.messages.safe_deliver", AsyncMock(return_value=stored)):
-        raw, signed = await _signed(db, key, "POST", "/api/messages", MESSAGE)
-        resp = await api_client.post(
-            "/api/messages", headers={**auth_headers, **signed}, content=raw
-        )
-    assert resp.status_code == 200
-    async with db.engine.begin() as conn:
-        row = (await conn.execute(text("SELECT sender_key, epoch FROM signing_queued"))).one()
-    assert tuple(row) == (SENDER, 1)
-
-
 async def test_a_database_failure_is_not_a_reused_request_id(api_client, auth_headers, api_app):
     from sqlalchemy.exc import OperationalError
 

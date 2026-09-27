@@ -36,7 +36,6 @@ _EXPECTED_TABLES = {
     "signing_keys",
     "signing_nonces",
     "signing_owner",
-    "signing_queued",
     "signing_transitions",
     "swarms",
     "usage_sessions",
@@ -78,7 +77,6 @@ _EXPECTED_INDEXES = {
     "idx_signing_nonces_seen",
     "idx_signing_audit_sender",
     "uq_signing_transitions_pending",
-    "idx_signing_queued_sender",
 }
 
 

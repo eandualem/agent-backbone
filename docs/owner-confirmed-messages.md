@@ -70,12 +70,13 @@ app reads this at `GET /api/signing/observations` to confirm that every path
 signs before the owner approves. The approval reply in Telegram shows the
 counts.
 
-**Reset.** A replace or clear that is not signed by the current key removes the
-authority of everything admitted under the old epoch: messages its key got
-queued that are still waiting are expired, and a pending transition is
-replaced; with owner confirmation and validate, open grants and unclaimed
-confirmations lose their authority too, and their receipts are kept. A steer
-already offered can still be taken within its five minutes. After an ordinary rotation, work already admitted keeps its bounded
+**Reset.** A replace or clear that is not signed by the current key starts a new
+epoch: the old key admits nothing more, and a pending transition is replaced.
+Until owner confirmation ships, a signed message carries no marker or label, so
+one its old key got queued is delivered like any other message from that name.
+With owner confirmation, a reset also revokes the old epoch's unclaimed
+confirmations and their queued deliveries, and open grants lose their
+authority; their receipts are kept. After an ordinary rotation, work already admitted keeps its bounded
 lifetime; the old epoch admits no new requests.
 
 ## Signed requests

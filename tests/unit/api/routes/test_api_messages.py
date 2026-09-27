@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -363,7 +362,6 @@ async def test_the_hint_waits_until_after_the_reply(config, db):
         reply = await send_message(
             MessageRequest(target_session="ike", from_entity="bell", message="hi"),
             background,
-            request=SimpleNamespace(state=SimpleNamespace()),
             config=config,
             db=db,
             feed=feed,

@@ -149,52 +149,6 @@ async def test_at_most_one_transition_per_name_is_pending(db):
             )
 
 
-async def _queued(db, message="m"):
-    result = await db.queue.enqueue(
-        session_name="ike", message=message, delivery_kind="direct_message", sender="assistant"
-    )
-    return result.id
-
-
-async def _status(db, queue_id):
-    async with db.engine.begin() as conn:
-        return (
-            await conn.execute(
-                text("SELECT status FROM message_queue WHERE id = :i"), {"i": queue_id}
-            )
-        ).scalar()
-
-
-async def test_a_reset_revokes_what_the_old_key_got_queued(db):
-    await db.signing.apply_transition(
-        await _start(db, "set", 0, PUB_A, request_id="r1"), now=NOW, by="x"
-    )
-    waiting = await _queued(db)
-    assert await db.signing.track_queued(waiting, "assistant", 1)
-    replace = await _start(db, "replace", 1, PUB_B, request_id="r2")
-    assert (await db.signing.apply_transition(replace, now=NOW, by="x"))[0] == "applied"
-    assert await _status(db, waiting) == "expired"
-
-    # Queued just after the reset (the request was checked before it): revoked at once.
-    late = await _queued(db, "late")
-    assert not await db.signing.track_queued(late, "assistant", 1)
-    assert await _status(db, late) == "expired"
-
-
-async def test_a_rotation_keeps_what_was_admitted(db):
-    await db.signing.apply_transition(
-        await _start(db, "set", 0, PUB_A, request_id="r1"), now=NOW, by="x"
-    )
-    waiting = await _queued(db)
-    await db.signing.track_queued(waiting, "assistant", 1)
-    fp = signing.fingerprint(b"b" * 32)
-    await db.signing.rotate(
-        sender_key="assistant", old_epoch=1, new_public_key=PUB_B, new_fingerprint=fp
-    )
-    assert await _status(db, waiting) == "pending"
-    assert await db.signing.track_queued(await _queued(db, "after"), "assistant", 1)
-
-
 async def test_prune_keeps_the_enrollment_history(db):
     await db.signing.apply_transition(
         await _start(db, "set", 0, PUB_A, request_id="r1"), now=NOW, by="x"
@@ -205,3 +159,11 @@ async def test_prune_keeps_the_enrollment_history(db):
     async with db.engine.begin() as conn:
         kinds = (await conn.execute(text("SELECT kind FROM signing_audit"))).scalars().all()
     assert kinds == ["transition"]
+
+
+async def test_an_observation_cursor_never_sees_a_reused_seq(db):
+    """Pruning the newest rows must not hand their seq to the next one."""
+    last = await db.signing.audit(kind="observation", outcome="unsigned", sender_key="assistant")
+    await db.signing.prune(-1)
+    after = await db.signing.audit(kind="observation", outcome="unsigned", sender_key="assistant")
+    assert after > last
