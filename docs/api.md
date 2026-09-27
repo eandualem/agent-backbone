@@ -407,6 +407,7 @@ messages](owner-confirmed-messages.md).
 | `GET /api/signing/observations?sender=&after=` | How requests made as the name fared while a transition was pending |
 | `GET /api/signing/receipts?after=&limit=` | The signed sender's owner-confirmation receipts, for reconciliation (a signed request) |
 | `POST /api/signing/owner` `{"telegram_user_id": 42}` | Set the Telegram user who approves key changes (once; a change waits for the current owner) |
+| `POST /api/messages/validate` `{"confirmation_id": "…", "done": false}` | An agent claims an owner confirmation delivered to it and gets its exact text, or closes the claim; the caller is identified from its connection |
 
 ## Config
 

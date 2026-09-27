@@ -11,9 +11,9 @@ import time
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from agent_backbone.api import confirmations
+from agent_backbone.api import confirmations, validation
 from agent_backbone.api.deps import get_config, get_db, get_feed, registered_agent_or_404
 from agent_backbone.api.models import (
     MessageRequest,
@@ -338,3 +338,21 @@ async def read_checkpoint_inbox(
             for row in rows
         ],
     }
+
+
+class ValidateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation_id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    )
+    done: bool = False
+
+
+@router.post("/messages/validate")
+async def validate_confirmation(
+    body: ValidateRequest, request: Request, config=Depends(get_config), db=Depends(get_db)
+):
+    """``backbone message validate``: claim an owner confirmation for the
+    calling agent, identified from its connection, or close the claim."""
+    return await validation.validate(request, config, db, body.confirmation_id, body.done)

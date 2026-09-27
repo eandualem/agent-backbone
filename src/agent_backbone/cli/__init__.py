@@ -48,7 +48,7 @@ from agent_backbone.cli.reports import add_report_parsers
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_up
 from agent_backbone.cli.service import cmd_service
 from agent_backbone.cli.setup import cmd_doctor, cmd_init, cmd_runtimes, cmd_secrets
-from agent_backbone.cli.signing import cmd_signing
+from agent_backbone.cli.signing import cmd_message, cmd_signing
 from agent_backbone.cli.skills import add_skill_commands, expand_shorthand
 from agent_backbone.cli.status import add_status_options, cmd_status
 from agent_backbone.cli.swarms import cmd_docs, cmd_help, cmd_swarm
@@ -469,6 +469,17 @@ def build_parser() -> argparse.ArgumentParser:
     owner.add_argument("user_id", type=int, help="the numeric Telegram user id")
     owner.add_argument("--json", action="store_true")
     owner.set_defaults(func=cmd_signing)
+
+    message_parser = sub.add_parser("message", help="owner-confirmed messages: validate one")
+    message_sub = message_parser.add_subparsers(dest="message_command", required=True)
+    validate = message_sub.add_parser(
+        "validate",
+        help="claim an owner confirmation delivered to this agent and print its exact text",
+    )
+    validate.add_argument("confirmation_id", help="the id in the owner-confirmed marker")
+    validate.add_argument("--done", action="store_true", help="close the claim once finished")
+    validate.add_argument("--json", action="store_true")
+    validate.set_defaults(func=cmd_message)
 
     usage = sub.add_parser(
         "usage", help="token usage by agent and CLI session; optional cost estimates"

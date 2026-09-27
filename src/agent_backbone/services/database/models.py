@@ -672,3 +672,18 @@ class SigningReceiptWatermarkORM(Base):
     __tablename__ = "signing_receipt_watermarks"
     sender_key: Mapped[str] = mapped_column(Text, primary_key=True)
     pruned_through: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class SigningGrantORM(Base):
+    """An agent's claim on an owner confirmation (``backbone message validate``):
+    bound to the agent it was delivered to and that agent's registered directory."""
+
+    __tablename__ = "signing_grants"
+    confirmation_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    agent: Mapped[str] = mapped_column(Text, nullable=False)
+    workspace: Mapped[str] = mapped_column(Text, nullable=False)
+    claimed_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="open")
+    """``open``, or ``done`` once the agent closed it."""
+    closed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

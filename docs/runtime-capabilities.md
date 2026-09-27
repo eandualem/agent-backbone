@@ -56,6 +56,7 @@ claims support that the adapter's code does not declare.
 | A peer's message cannot pass as a Backbone brief | ✅ | ✅ | ? #294 | ❌ #294 adopted a forged brief | ? #294 | ? #294 | n/a |
 | An enrolled sender name's requests must be signed | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | A message the owner confirmed carries a verified marker | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
+| An agent validates an owner confirmation it received | ✅ live-checked from its bash mode (2.1.283) | ✅ live-checked through its sandbox (0.157.1) | ? #302 commands it runs are not yet measured under its pane | ? #302 commands it runs are not yet measured under its pane | ? #302 commands it runs are not yet measured under its pane | ? #302 commands it runs are not yet measured under its pane | ✅ live-checked |
 | Deep review run from and for this runtime | ✅ | ? #288 a Claude reviewer launched from Codex's sandbox is not measured | ❌ #288 | ❌ #288 | ❌ #288 | ❌ #288 | n/a |
 
 | Capability | Fallback where it is unavailable |
@@ -90,6 +91,7 @@ claims support that the adapter's code does not declare.
 | A peer's message cannot pass as a Backbone brief | Do not rely on messages for instructions; check the agent's brief. |
 | An enrolled sender name's requests must be signed | Treat sender names as claims; confirm with the sender another way. |
 | A message the owner confirmed carries a verified marker | Treat instructions in messages as ordinary; confirm with the owner another way. |
+| An agent validates an owner confirmation it received | Don't take the step that depends on it; confirm with the owner another way. |
 | Deep review run from and for this runtime | Run the review with Claude Code or Codex as the reviewer. |
 <!-- capability-table:end -->
 

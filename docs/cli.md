@@ -595,6 +595,18 @@ numeric Telegram user id; `/approve_key` tells you yours when no owner is set.
 It can be set once; running it again records a change that the current owner
 approves in Telegram with `/approve_owner USER_ID`. Both are alerted.
 
+## `backbone message validate CONFIRMATION_ID [--done] [--json]`
+
+Run by an agent that received an [owner-confirmed
+message](owner-confirmed-messages.md#validating-a-confirmation-agents)
+(`owner-confirmed:<id>` in its envelope). It claims the confirmation for the
+calling agent and prints the exact confirmed text; claiming again, after a
+restart for example, prints the same text marked as a recovery, which is not
+fresh authority. `--done` closes the claim when the task is finished. Backbone
+identifies the caller from the process that runs the command, so it works only
+from the agent's own session. Exit 0 when validated, 1 with the reason
+otherwise; `--json` prints the API's answer.
+
 ## `backbone hooks install|uninstall claude|codex|gemini [--dir PROJECT]`
 
 Sessions started by `agent start` need no install: the backbone wires its

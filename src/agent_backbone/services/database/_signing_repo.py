@@ -16,12 +16,16 @@ from sqlalchemy.exc import IntegrityError
 
 from agent_backbone.services.database._queue_repo import _INSERT_COLUMNS
 from agent_backbone.services.database._repo import Repo
-from agent_backbone.services.database._time import cutoff_iso, now_iso
+from agent_backbone.services.database._time import cutoff_iso, now_iso, parse_iso
 
 NONCE_RETENTION_SECONDS = 3600
 CLAIM_SECONDS = 60
 """A steer offer's claim older than this is no longer held by its request."""
 RECEIPT_RETENTION_DAYS = 90
+CLAIM_WINDOW_SECONDS = 86400
+"""A confirmation is first claimed within a day of reaching its agent."""
+GRANT_SECONDS = 86400
+"""A claim lasts a day, or until the agent closes it."""
 _LIVE = "('pending', 'in_progress', 'checkpoint', 'uncertain')"
 _IMMUTABLE = (
     "sender_key",
@@ -132,6 +136,17 @@ class _EpochChanged(Exception):
 
 def _one(row) -> dict | None:
     return dict(row._mapping) if row is not None else None
+
+
+async def _grant(conn, confirmation_id: str) -> dict | None:
+    return _one(
+        (
+            await conn.execute(
+                text("SELECT * FROM signing_grants WHERE confirmation_id = :c"),
+                {"c": confirmation_id},
+            )
+        ).fetchone()
+    )
 
 
 class SigningRepo(Repo):
@@ -875,6 +890,99 @@ class SigningRepo(Repo):
             ).fetchone()
         return dict(row._mapping) if row is not None else None
 
+    async def validate(
+        self, confirmation_id: str, *, agent: str, workspace: str, done: bool, now: int
+    ) -> tuple[str, dict | None]:
+        """Claim, recover or close ``agent``'s grant on a confirmation, in one
+        transaction.
+
+        Returns ``(outcome, {"receipt", "grant"})``: ``claimed``, ``recovered``
+        or ``closed``. Anything else is a refusal reason, returned with None: its text
+        goes only to the agent it was delivered to, while its authority lasts.
+        A reset of its key (a replace or clear, not a rotation) at its epoch
+        or later ends that authority, claimed or not."""
+        async with self._tx() as conn:
+            await _settle(conn, "AND confirmation_id = :c", {"c": confirmation_id})
+            row = (
+                await conn.execute(
+                    text("SELECT * FROM signing_receipts WHERE confirmation_id = :c"),
+                    {"c": confirmation_id},
+                )
+            ).fetchone()
+            if row is None:
+                return "unknown_confirmation", None
+            receipt = dict(row._mapping)
+            if receipt["delivered_to"] != agent:
+                return "wrong_recipient", None
+            reset = (
+                await conn.execute(
+                    text(
+                        "SELECT 1 FROM signing_keys WHERE sender_key = :k AND epoch >= :epoch"
+                        " AND retired_by IN ('replace', 'clear')"
+                    ),
+                    {"k": receipt["sender_key"], "epoch": receipt["key_epoch"]},
+                )
+            ).fetchone()
+            if receipt["status"] != "admitted" or reset is not None:
+                return "revoked", None
+            # A message the agent reads from its inbox, or a paste whose outcome
+            # is unknown, is recorded as delivered only when it is acknowledged.
+            held = (
+                await conn.execute(
+                    text(
+                        "SELECT 1 FROM message_queue WHERE operation_id = :op"
+                        " AND session_name = :agent AND status IN ('checkpoint', 'uncertain')"
+                    ),
+                    {"op": receipt["operation_id"], "agent": agent},
+                )
+            ).fetchone()
+            if receipt["delivered_at"] is None and held is None:
+                return "not_delivered", None
+            grant = await _grant(conn, confirmation_id)
+            if grant is None:
+                if done:
+                    return "not_claimed", None
+                reached = parse_iso(receipt["delivered_at"] or receipt["created_at"])
+                if now - reached.timestamp() > CLAIM_WINDOW_SECONDS:
+                    return "claim_window_passed", None
+                inserted = await conn.execute(
+                    text(
+                        "INSERT INTO signing_grants"
+                        " (confirmation_id, agent, workspace, claimed_at, expires_at, status)"
+                        " VALUES (:c, :agent, :workspace, :now, :expires, 'open')"
+                        " ON CONFLICT(confirmation_id) DO NOTHING"
+                    ),
+                    {
+                        "c": confirmation_id,
+                        "agent": agent,
+                        "workspace": workspace,
+                        "now": now,
+                        "expires": now + GRANT_SECONDS,
+                    },
+                )
+                grant = await _grant(conn, confirmation_id)
+                if inserted.rowcount == 1:
+                    return "claimed", {"receipt": receipt, "grant": grant}
+                # A concurrent claim won: continue as a recovery of it.
+            if grant["agent"] != agent or grant["workspace"] != workspace:
+                return "wrong_workspace", None
+            if grant["status"] == "done":
+                if done:
+                    return "closed", {"receipt": receipt, "grant": grant}
+                return "grant_closed", None
+            if grant["expires_at"] <= now:
+                return "grant_expired", None
+            if not done:
+                return "recovered", {"receipt": receipt, "grant": grant}
+            await conn.execute(
+                text(
+                    "UPDATE signing_grants SET status = 'done', closed_at = :now"
+                    " WHERE confirmation_id = :c AND status = 'open'"
+                ),
+                {"c": confirmation_id, "now": now},
+            )
+            return "closed", {"receipt": receipt, "grant": await _grant(conn, confirmation_id)}
+
     async def receipts(self, sender_key: str, after: int, limit: int) -> dict:
         """A sender's receipts after ``after``, and what retention removed."""
         async with self._tx() as conn:
@@ -931,6 +1039,12 @@ class SigningRepo(Repo):
             gone = await conn.execute(
                 text(f"DELETE FROM signing_receipts WHERE created_at < :cutoff AND {_NOT_LIVE}"),
                 {"cutoff": cutoff},
+            )
+            await conn.execute(
+                text(
+                    "DELETE FROM signing_grants WHERE confirmation_id NOT IN"
+                    " (SELECT confirmation_id FROM signing_receipts)"
+                )
             )
         return gone.rowcount
 

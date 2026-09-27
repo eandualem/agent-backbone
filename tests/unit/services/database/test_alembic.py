@@ -32,6 +32,7 @@ _EXPECTED_TABLES = {
     "settings",
     "signing_audit",
     "signing_enrollments",
+    "signing_grants",
     "signing_install",
     "signing_keys",
     "signing_nonces",
