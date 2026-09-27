@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 17dd27b86564
+Revision ID: 59e64bd045d7
 Revises:
-Create Date: 2026-09-27 22:37:17.706346
+Create Date: 2026-09-28 00:29:20.578455
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "17dd27b86564"
+revision: str = "59e64bd045d7"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -373,6 +373,17 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("sender_key", name=op.f("pk_signing_enrollments")),
     )
     op.create_table(
+        "signing_grants",
+        sa.Column("confirmation_id", sa.Text(), nullable=False),
+        sa.Column("agent", sa.Text(), nullable=False),
+        sa.Column("workspace", sa.Text(), nullable=False),
+        sa.Column("claimed_at", sa.BigInteger(), nullable=False),
+        sa.Column("expires_at", sa.BigInteger(), nullable=False),
+        sa.Column("status", sa.Text(), server_default="open", nullable=False),
+        sa.Column("closed_at", sa.BigInteger(), nullable=True),
+        sa.PrimaryKeyConstraint("confirmation_id", name=op.f("pk_signing_grants")),
+    )
+    op.create_table(
         "signing_install",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("audience", sa.Text(), nullable=False),
@@ -583,6 +594,7 @@ def downgrade() -> None:
     op.drop_table("signing_nonces")
     op.drop_table("signing_keys")
     op.drop_table("signing_install")
+    op.drop_table("signing_grants")
     op.drop_table("signing_enrollments")
     with op.batch_alter_table("signing_audit", schema=None) as batch_op:
         batch_op.drop_index("idx_signing_audit_sender")

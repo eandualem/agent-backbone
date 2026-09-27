@@ -217,6 +217,16 @@ per-agent identity, give each agent its own token in its `env`.
   caller, not the name, except for enrolled signed senders.
 - **A process that edits Backbone's database or replaces its CLI** is outside
   what Backbone can defend against.
+- **Validating an owner confirmation trusts the terminal pane.** `backbone
+  message validate` identifies the calling agent by the tmux pane its process
+  runs in, so a same-user process that runs a command inside another agent's
+  session is identified as that agent. It identifies local callers only.
+- **A same-user process can hold off validation.** Callers that Backbone
+  can't identify share one failure budget, because a caller can't be told
+  apart before the lookup. Once the budget is spent, every validation is
+  refused as `rate_limited` until 10 minutes pass without another failure.
+  Validation fails closed, the owner is notified, and only the step that
+  depends on the confirmation waits.
 
 ## What to check before exposing anything
 

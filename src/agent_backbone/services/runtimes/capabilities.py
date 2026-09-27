@@ -140,6 +140,8 @@ _USER_FILES = "tests/unit/services/runtimes/test_user_instructions.py"
 _SIGNED = "tests/unit/api/routes/test_api_signing.py"
 _API_BOUNDARY = "checked at the API, the same for every runtime"
 _CONFIRMED = "tests/unit/api/routes/test_api_confirmations.py"
+_VALIDATE = "tests/unit/services/terminal/test_callers.py"
+_UNMEASURED = "commands it runs are not yet measured under its pane"
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
@@ -571,6 +573,20 @@ CAPABILITIES: tuple[Capability, ...] = (
         deepcode=_ok(_CONFIRMED, _API_BOUNDARY),
         aider=_ok(_CONFIRMED, _API_BOUNDARY),
         shell=_ok(_CONFIRMED, _API_BOUNDARY),
+    ),
+    _row(
+        "message-validate",
+        "An agent validates an owner confirmation it received",
+        "src/agent_backbone/api/validation.py",
+        fallback="Don't take the step that depends on it; confirm with the owner another way.",
+        implemented=lambda rt: True,
+        claude=_ok(_VALIDATE, "live-checked from its bash mode (2.1.283)"),
+        codex=_ok(_VALIDATE, "live-checked through its sandbox (0.157.1)"),
+        gemini=_unverified(302, _UNMEASURED),
+        opencode=_unverified(302, _UNMEASURED),
+        deepcode=_unverified(302, _UNMEASURED),
+        aider=_unverified(302, _UNMEASURED),
+        shell=_ok(_VALIDATE, "live-checked"),
     ),
     _row(
         "deep-review",

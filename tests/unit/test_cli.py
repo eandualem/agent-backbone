@@ -1089,6 +1089,50 @@ class TestCheckpointInbox:
         assert "--agent" in capsys.readouterr().out
 
 
+class TestMessageValidate:
+    CLAIM = {
+        "confirmation_id": "c0ffee00-0000-4000-8000-000000000001",
+        "outcome": "recovered",
+        "recovered": True,
+        "agent": "ike",
+        "sender": "assistant",
+        "kind": "message",
+        "text": "Merge the release branch\n  keeping this indent\n",
+        "text_sha256": "0" * 64,
+        "source": "button",
+        "confirmed_at": "2026-09-27T08:00:00+00:00",
+        "delivered_at": "2026-09-27T08:00:05.000000Z",
+        "grant": {"status": "open", "claimed_at": 0, "expires_at": 86400, "closed_at": None},
+    }
+
+    def test_prints_the_exact_text_and_says_a_recovery_is_not_fresh(self, capsys):
+        with patch(
+            "agent_backbone.cli._common.api", AsyncMock(return_value=(200, self.CLAIM))
+        ) as api:
+            assert _run(["message", "validate", self.CLAIM["confirmation_id"]]) == 0
+        assert api.call_args.kwargs["json_body"] == {
+            "confirmation_id": self.CLAIM["confirmation_id"],
+            "done": False,
+        }
+        out = capsys.readouterr().out
+        assert "not fresh authority" in out and "1970-01-02T00:00:00+00:00" in out
+        assert out.endswith("--json gives it exactly):\n" + self.CLAIM["text"])
+
+    def test_terminal_controls_in_the_text_are_shown_escaped(self, capsys):
+        claim = {**self.CLAIM, "text": "copy\x1b]52;c;ZXZpbA==\x07 this\u202e"}
+        with patch("agent_backbone.cli._common.api", AsyncMock(return_value=(200, claim))):
+            assert _run(["message", "validate", claim["confirmation_id"]]) == 0
+        out = capsys.readouterr().out
+        assert "\x1b" not in out and "\x07" not in out and "\u202e" not in out
+        assert out.endswith("copy\\x1b]52;c;ZXZpbA==\\x07 this\\u202e\n")
+
+    def test_a_refusal_exits_1_with_its_reason(self, capsys):
+        refusal = {"detail": {"reason": "wrong_recipient", "message": "delivered to another"}}
+        with patch("agent_backbone.cli._common.api", AsyncMock(return_value=(403, refusal))):
+            assert _run(["message", "validate", "x", "--done"]) == 1
+        assert capsys.readouterr().out.startswith("Not validated (wrong_recipient)")
+
+
 class TestAgentRestart:
     def test_parses_options_and_posts_the_transition(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_AGENT", "orch")

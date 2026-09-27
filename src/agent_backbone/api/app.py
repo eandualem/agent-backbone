@@ -317,6 +317,9 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     app.state.config = config
 
     from agent_backbone.api.signed import SignedSenderMiddleware
+    from agent_backbone.api.validation import Validations
+
+    app.state.validations = Validations()
 
     app.add_middleware(SignedSenderMiddleware)
 

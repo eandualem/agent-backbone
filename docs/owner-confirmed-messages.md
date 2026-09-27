@@ -4,7 +4,7 @@
 |---|---|
 | Enrollment, signed requests, the reservation of an enrolled name, rotation, observations | available |
 | Owner confirmation, receipts and the reconciliation feed | available |
-| `backbone message validate` | in progress |
+| `backbone message validate` | available |
 
 The wire format below is what the implementation follows; changes are made
 here first.
@@ -81,8 +81,8 @@ is expired, including one the delivery job is holding right now, so it is
 never delivered. A message the agent already read from its inbox, or a paste
 whose outcome is unknown, stays held until the agent acknowledges it, but its
 inbox copy loses the marker and says the confirmation was revoked. A steer already offered to an agent's running turn can still
-be taken within its five minutes. With validate, open grants of the old epoch
-lose their authority too. After an ordinary rotation, work already admitted
+be taken within its five minutes. `backbone message validate` refuses every
+confirmation of the old epoch, claimed or not. After an ordinary rotation, work already admitted
 keeps its bounded lifetime; the old epoch admits no new requests.
 
 ## Signed requests
@@ -445,30 +445,85 @@ as an enrolled name leave a metadata-only audit row.
 
 `backbone message validate <confirmation_id>` claims the confirmation for the
 calling agent and prints the exact confirmed text, which the agent acts on.
-`backbone message validate <confirmation_id> --done` closes the claim.
+`backbone message validate <confirmation_id> --done` closes the claim. They
+call `POST /api/messages/validate` with `{"confirmation_id": "…", "done": false}`;
+`--done` sends `"done": true`. The command shows terminal control characters
+in the text as escapes; `--json` returns the text exactly.
 
 The confirmation is the task: its text defines the scope. A claim creates a
 grant bound to the recipient agent, its registered working directory and the
 confirmation id.
 
-- The first claim must come within 24 hours of delivery.
+- A confirmation can be claimed once it has reached the agent: delivered, or
+  read from the agent's inbox (`backbone inbox`), or held there as uncertain,
+  before it is acknowledged. A steer counts once the agent's hook took it.
+- The first claim must come within 24 hours of the confirmation's admission,
+  when Backbone accepted it. A message is pasted within its queue expiry or
+  not at all, and acknowledging one read from the inbox doesn't renew the
+  window.
 - A grant lasts 24 hours from the claim, or until `--done`.
 - Claiming again, for example after a restart of the same agent in the same
   directory, returns the same text flagged `recovered`. That is not fresh
   authority.
-- After `--done` or expiry, a claim is refused. A fabricated id, a cancelled
-  confirmation or a claim from any other agent or directory is refused.
+- After `--done` or expiry, a claim is refused; `--done` again answers
+  `closed`, so a retry after a lost response is safe. A fabricated id, a
+  claim from any other agent, or from the same agent registered in another
+  directory, is refused.
+- A reset of the sender's key (a replace or clear, not a rotation) at the
+  confirmation's epoch or later ends its authority, claimed or not: it is
+  refused as `revoked`. After a rotation, a confirmation keeps its lifetime.
+
+A claim or recovery returns the grant and the confirmation:
+
+```json
+{
+  "confirmation_id": "…", "outcome": "claimed", "recovered": false, "agent": "ike",
+  "sender": "assistant", "kind": "message", "text": "…", "text_sha256": "…",
+  "source": "button", "confirmed_at": "…", "delivered_at": "…",
+  "grant": {"status": "open", "claimed_at": 1790500000, "expires_at": 1790586400, "closed_at": null}
+}
+```
+
+`--done` returns `outcome` `closed` and the grant, without the text.
 
 Backbone identifies the caller from the process that makes the call, not from
 a name, session id or environment variable the caller supplies. It follows
-the local connection to the calling process, walks the process's ancestry to
-a terminal pane Backbone manages, and takes that pane's agent session.
+the local connection to the calling process (`lsof`), walks the process's
+ancestry (`ps`) to the first process of a tmux pane, and takes the agent whose
+session shows that pane. A command run by the agent's CLI, including one
+Codex runs in its sandbox, descends from the CLI in the agent's pane.
 Validation fails closed when this mapping fails: a non-local connection, a
-process that is not under a managed pane, or an ambiguous ancestry. A caller
-that is not the confirmation's recipient gets no text.
+process that is not under a pane of exactly one registered agent, processes
+of different agents sharing the connection, or `lsof`, `ps` or tmux not
+answering. A caller that is not the confirmation's recipient gets no text.
 
-Failed validations are rate-limited and reported once per confirmation, with a
-count. An outage blocks only the step that depends on the confirmation.
+| Status | `reason` | Meaning |
+|---|---|---|
+| 403 | `caller_unidentified` | the calling process couldn't be placed in one agent's pane; the message says why |
+| 404 | `unknown_confirmation` | no confirmation has this id |
+| 403 | `wrong_recipient` | it was delivered to another agent |
+| 403 | `revoked` | the sender's key was reset |
+| 409 | `not_delivered` | it hasn't reached the agent yet |
+| 409 | `not_claimed` | `--done` on a confirmation that was never claimed |
+| 410 | `claim_window_passed` | more than 24 hours since admission |
+| 403 | `wrong_workspace` | claimed while the agent was registered in another directory |
+| 410 | `grant_closed` | the agent closed it with `--done` |
+| 410 | `grant_expired` | the grant's 24 hours are over |
+| 429 | `rate_limited` | too many failed validations from this caller |
+
+Failed validations are bounded per caller (an agent, or all callers that
+couldn't be identified). An incident lasts until 10 minutes pass without a
+failed check. Within it, a refusal that can't change (`unknown_confirmation`,
+`wrong_recipient`, `revoked`, `claim_window_passed`, `grant_expired`) is
+repeated for the same id without a check, and after 10 failed checks every
+further validation is refused as `rate_limited`. One caller's checks run one
+at a time, and so does identification. Callers that couldn't be identified
+share one budget; once it is spent, every validation is refused as
+`rate_limited` until that incident ends, because a caller can't be told apart
+before the lookup. The owner gets one notice per incident, 30 seconds after its first
+failure, with the count by reason. These counters live in the running service
+and restart with it. An outage blocks only the step that depends on the
+confirmation.
 
 ## Known limitations
 
