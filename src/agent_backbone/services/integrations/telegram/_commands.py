@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from telegram import Update
@@ -11,6 +12,7 @@ from telegram.ext import ContextTypes
 if TYPE_CHECKING:
     from agent_backbone.services.integrations.telegram.interface import TelegramService
 
+from agent_backbone import signing
 from agent_backbone.services.agents import (
     AgentState,
     AgentStore,
@@ -67,6 +69,8 @@ async def cmd_help(
         "/viewplan `<agent>` — View an agent's pending plan\n"
         "/approve `<agent>` — Approve an agent's plan (if enabled)\n"
         "/identify — Show this topic's thread ID for routing config\n"
+        "/approve\\_key `<digest>` — Apply a key change, with the digest the app shows\n"
+        "/approve\\_owner `<user id>` — Hand key approvals to another Telegram user\n"
         "/help — This message"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -473,3 +477,86 @@ async def cmd_approve(
             f"Could not approve the plan for `{agent}` ({outcome}): {evidence[0]}",
             parse_mode="Markdown",
         )
+
+
+_KEY_OUTCOMES = {
+    "unknown": "No key change is waiting with that digest. Copy it from the app again.",
+    "not_pending": "That key change was already applied, replaced or cancelled.",
+    "expired": "That key change expired. Start it again in the app.",
+    "epoch_changed": "The key changed since that request. Start it again in the app.",
+}
+
+
+async def _owner_or_refuse(bot: TelegramService, update: Update) -> int | None:
+    """The sender's user id when it is the approving owner; otherwise say why."""
+    user = update.effective_user
+    owner = (await bot._db.signing.owner())["telegram_user_id"]
+    if owner is None:
+        hint = f" `backbone signing owner {user.id}`" if user else ""
+        await update.message.reply_text(
+            "No approving owner is set. If this is you, run on the machine:" + hint,
+            parse_mode="Markdown",
+        )
+        return None
+    if user is None or user.id != owner:
+        await bot._db.signing.audit(
+            kind="transition",
+            outcome="refused_not_owner",
+            detail=f"telegram:{user.id if user else 'unknown'}",
+        )
+        await update.message.reply_text("Key changes are approved only by the owner's account.")
+        return None
+    return owner
+
+
+async def cmd_approve_key(
+    bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Apply a pending key change: /approve_key <digest copied from the app>"""
+    if not _authorized(bot, update) or bot._db is None:
+        return
+    owner = await _owner_or_refuse(bot, update)
+    if owner is None:
+        return
+    digest = "".join(context.args or []).lower()
+    if not signing.HEX64_RE.fullmatch(digest):
+        await update.message.reply_text(
+            "Usage: /approve_key <the 64-character digest from the app>"
+        )
+        return
+    outcome, transition = await bot._db.signing.apply_transition(
+        digest, now=int(time.time()), by=f"telegram:{owner}"
+    )
+    if outcome != "applied":
+        await update.message.reply_text(_KEY_OUTCOMES[outcome])
+        return
+    counts = await bot._db.signing.observation_counts(
+        transition["sender_key"], transition["created_at"]
+    )
+    seen = ", ".join(f"{n} {outcome}" for outcome, n in sorted(counts.items())) or "none"
+    what = transition["action"]
+    if what != "clear":
+        what += f", key {signing.grouped(transition['new_fingerprint'])[:35]}"
+    await update.message.reply_text(
+        f"Applied for '{transition['sender']}': {what}. Requests seen while it waited: {seen}."
+    )
+
+
+async def cmd_approve_owner(
+    bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Hand key approvals to another user: /approve_owner <user id>"""
+    if not _authorized(bot, update) or bot._db is None:
+        return
+    owner = await _owner_or_refuse(bot, update)
+    if owner is None:
+        return
+    try:
+        new_owner = int((context.args or [""])[0])
+    except ValueError:
+        await update.message.reply_text("Usage: /approve_owner <the new owner's user id>")
+        return
+    if await bot._db.signing.approve_owner_change(by_user_id=owner, new_user_id=new_owner):
+        await update.message.reply_text(f"Key approvals now come from Telegram user {new_owner}.")
+    else:
+        await update.message.reply_text(f"No change to user {new_owner} is waiting.")

@@ -382,6 +382,20 @@ class SigningRepo(Repo):
             ).fetchall()
         return [dict(r._mapping) for r in rows]
 
+    async def observation_counts(self, sender_key: str, since: str) -> dict[str, int]:
+        """How requests made as the name fared since ``since`` (ISO time)."""
+        async with self._tx() as conn:
+            rows = (
+                await conn.execute(
+                    text(
+                        "SELECT outcome, COUNT(*) FROM signing_audit WHERE sender_key = :k"
+                        " AND kind = 'observation' AND at >= :since GROUP BY outcome"
+                    ),
+                    {"k": sender_key, "since": since},
+                )
+            ).fetchall()
+        return {row[0]: row[1] for row in rows}
+
     async def owner(self) -> dict:
         """``{telegram_user_id, pending_user_id}``; both None when never set."""
         async with self._tx() as conn:
