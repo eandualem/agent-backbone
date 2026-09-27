@@ -30,6 +30,13 @@ _EXPECTED_TABLES = {
     "reports",
     "review_lifecycle",
     "settings",
+    "signing_audit",
+    "signing_enrollments",
+    "signing_install",
+    "signing_keys",
+    "signing_nonces",
+    "signing_owner",
+    "signing_transitions",
     "swarms",
     "usage_sessions",
     "usage_events",
@@ -66,6 +73,9 @@ _EXPECTED_INDEXES = {
     "idx_diagnostics_agent",
     "idx_usage_sessions_agent",
     "idx_usage_events_at",
+    "idx_signing_transitions_sender",
+    "idx_signing_nonces_seen",
+    "idx_signing_audit_sender",
 }
 
 

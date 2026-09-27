@@ -490,3 +490,114 @@ class UsageEventORM(Base):
     data: Mapped[str] = mapped_column(Text, nullable=False)
     cost: Mapped[str] = mapped_column(Text, nullable=False)
     __table_args__ = (Index("idx_usage_events_at", "at", "session"),)
+
+
+# --- Signed senders (docs/owner-confirmed-messages.md) ---
+
+
+class SigningInstallORM(Base):
+    """This install's audience id, created once (one row, id 1)."""
+
+    __tablename__ = "signing_install"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    audience: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class SigningEnrollmentORM(Base):
+    """A reserved sender name and its active key: one record, changed only by an
+    owner-approved transition or a rotation signed by the current key."""
+
+    __tablename__ = "signing_enrollments"
+    sender_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    """The name as compared (``signing.same_name``)."""
+    sender: Mapped[str] = mapped_column(Text, nullable=False)
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    enrolled_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class SigningKeyORM(Base):
+    """Every key a name has had, for audit; never used to admit a request."""
+
+    __tablename__ = "signing_keys"
+    sender_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    epoch: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sender: Mapped[str] = mapped_column(Text, nullable=False)
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    retired_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retired_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """``rotate``, ``replace`` or ``clear``."""
+
+
+class SigningTransitionORM(Base):
+    """An enrollment change waiting for the owner's approval in Telegram."""
+
+    __tablename__ = "signing_transitions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    sender: Mapped[str] = mapped_column(Text, nullable=False)
+    sender_key: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    audience: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    new_public_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    digest: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    """``pending``, ``applied``, ``expired``, ``superseded`` or ``cancelled``."""
+    resolved_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    __table_args__ = (Index("idx_signing_transitions_sender", "sender_key", "status"),)
+
+
+class SigningNonceORM(Base):
+    """Nonces seen per sender and epoch, kept past the clock-skew window."""
+
+    __tablename__ = "signing_nonces"
+    sender_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    epoch: Mapped[int] = mapped_column(Integer, primary_key=True)
+    nonce: Mapped[str] = mapped_column(Text, primary_key=True)
+    request_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    """SHA-256 of the signed bytes: an identical retry has the same hash."""
+    seen_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The original result, returned again to an identical retry (messages and steer)."""
+    __table_args__ = (Index("idx_signing_nonces_seen", "seen_at"),)
+
+
+class SigningAuditORM(Base):
+    """Metadata-only record of signed-sender events: refusals, observations
+    while a transition is pending, and enrollment changes. Never a body."""
+
+    __tablename__ = "signing_audit"
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    """``refusal``, ``observation``, ``transition``, ``rotation`` or ``owner``."""
+    sender_key: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    sender: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    method: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    path: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    target: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    operation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    __table_args__ = (Index("idx_signing_audit_sender", "sender_key", "kind", "seq"),)
+
+
+class SigningOwnerORM(Base):
+    """The owner's Telegram user id that approves transitions (one row, id 1).
+    Set once while empty; changed only with the current owner's approval."""
+
+    __tablename__ = "signing_owner"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    set_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pending_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    pending_at: Mapped[str | None] = mapped_column(Text, nullable=True)
