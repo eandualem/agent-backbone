@@ -141,8 +141,8 @@ agent-backbone signed request v1\n
   example `/api/messages`.
 - `canonical query`: the query parameters, each name and value percent-encoded
   (RFC 3986 unreserved characters left as they are, upper-case hex), sorted by
-  name and then value, joined as `name=value` with `&`. Empty when there is no
-  query.
+  the encoded name and then the encoded value, joined as `name=value` with
+  `&`. Empty when there is no query.
 - `body sha256`: the lowercase hex SHA-256 of the exact body bytes sent, or of
   the empty string when there is no body.
 

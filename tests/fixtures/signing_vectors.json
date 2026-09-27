@@ -1,0 +1,286 @@
+{
+  "version": 1,
+  "spec": "docs/owner-confirmed-messages.md",
+  "note": "Disposable test keys derived from fixed labels. Never use them for anything else.",
+  "keys": {
+    "app": {
+      "seed": "5S-eFPLzyI7-jw1GUZvF6bQ9fco6CE6wHMdCXu2f1cY",
+      "public_key": "mzKnSVUEx4jTQ071VTEAL33vzBiYiBVRpUKrMwN6rRI",
+      "fingerprint": "139ca6bcb6a7de66c5a9a9969cf3880c4f52318f65d7ddd7b93aa9bc09aec1ea"
+    },
+    "new": {
+      "seed": "zd-9ZpW-TfXOWM9icAl3oDLKKmisyBUTXLZe-TGMOd8",
+      "public_key": "IZuY5WQhryicqmHsS8pgD_qgFRaXHRcPa0id3iSeAS8",
+      "fingerprint": "a1765983f3f2e1f50710b072daee98c4c113cc1ca7aa1b1a080f4654aead9306"
+    }
+  },
+  "requests": [
+    {
+      "name": "message with owner confirmation (non-ASCII body)",
+      "key": "app",
+      "input": {
+        "purpose": "request",
+        "method": "POST",
+        "path": "/api/messages",
+        "query_params": [],
+        "body": "{\"target_session\":\"ike\",\"from_entity\":\"assistant\",\"message\":\"Please merge the release branch — ünïcødé ✓ 日本語\\n\",\"owner_confirmation\":{\"confirmation_id\":\"5f1e8b9c-2d3a-4b5c-9d6e-7f8a9b0c1d2e\",\"text_sha256\":\"68dbb39005ff5da4da08404129e286ad8d40e36fd48d7f545726c9ad3e3b40a3\",\"confirmed_at\":\"2026-09-27T11:00:00.123456+03:00\",\"source\":\"button\"}}",
+        "body_hex": "7b227461726765745f73657373696f6e223a22696b65222c2266726f6d5f656e74697479223a22617373697374616e74222c226d657373616765223a22506c65617365206d65726765207468652072656c65617365206272616e636820e2809420c3bc6ec3af63c3b864c3a920e29c9320e697a5e69cace8aa9e5c6e222c226f776e65725f636f6e6669726d6174696f6e223a7b22636f6e6669726d6174696f6e5f6964223a2235663165386239632d326433612d346235632d396436652d376638613962306331643265222c22746578745f736861323536223a2236386462623339303035666635646134646130383430343132396532383661643864343065333666643438643766353435373236633961643365336234306133222c22636f6e6669726d65645f6174223a22323032362d30392d32375431313a30303a30302e3132333435362b30333a3030222c22736f75726365223a22627574746f6e227d7d",
+        "timestamp": 1790496000,
+        "nonce": "00112233445566778899aabbccddeeff",
+        "audience": "0b6c1f2e-3a4d-4e5f-8a9b-0c1d2e3f4a5b",
+        "sender": "assistant",
+        "epoch": 1
+      },
+      "canonical_query": "",
+      "body_sha256": "98cb17dfe30b4f785aa349e1f26f229688c97459bd45ecfa89b6cfc122b77a81",
+      "signed_bytes_hex": "6167656e742d6261636b626f6e65207369676e656420726571756573742076310a373a726571756573740a343a504f53540a31333a2f6170692f6d657373616765730a303a0a36343a393863623137646665333062346637383561613334396531663236663232393638386339373435396264343565636661383962366366633132326237376138310a31303a313739303439363030300a33323a30303131323233333434353536363737383839396161626263636464656566660a33363a30623663316632652d336134642d346535662d386139622d3063316432653366346135620a393a617373697374616e740a313a310a",
+      "signature": "KU1N4oETPdCk5pDNUfPrSbgMJfJh82749bAOnCWmtw4hrbKzF5PsihcDohJHRvlxP5AlxQYtnRxeEMngNcDTBw"
+    },
+    {
+      "name": "inbox read, no query",
+      "key": "app",
+      "input": {
+        "purpose": "request",
+        "method": "POST",
+        "path": "/api/messages/inbox",
+        "query_params": [],
+        "body": "{\"session\":\"assistant\"}",
+        "body_hex": "7b2273657373696f6e223a22617373697374616e74227d",
+        "timestamp": 1790496001,
+        "nonce": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+        "audience": "0b6c1f2e-3a4d-4e5f-8a9b-0c1d2e3f4a5b",
+        "sender": "assistant",
+        "epoch": 1
+      },
+      "canonical_query": "",
+      "body_sha256": "40023e13274bd68915512f95aea94c0e6e40fd1257a8cb3f9985cb9061e92120",
+      "signed_bytes_hex": "6167656e742d6261636b626f6e65207369676e656420726571756573742076310a373a726571756573740a343a504f53540a31393a2f6170692f6d657373616765732f696e626f780a303a0a36343a343030323365313332373462643638393135353132663935616561393463306536653430666431323537613863623366393938356362393036316539323132300a31303a313739303439363030310a33323a30663165326433633462356136393738383739366135623463336432653166300a33363a30623663316632652d336134642d346535662d386139622d3063316432653366346135620a393a617373697374616e740a313a310a",
+      "signature": "1mju9UFeruKf9_A9JvJyrisJnAG0-RXSgH03o7uwtGdty358qqRa-JDbq7W-rqIxLPwns64xiY8kuHe4tV0WDA"
+    },
+    {
+      "name": "GET with reserved characters and a repeated name",
+      "key": "app",
+      "input": {
+        "purpose": "request",
+        "method": "GET",
+        "path": "/api/signing/receipts",
+        "query_params": [
+          [
+            "after",
+            "12"
+          ],
+          [
+            "tag",
+            "b&c=d"
+          ],
+          [
+            "tag",
+            "a b/ü"
+          ],
+          [
+            "limit",
+            "50"
+          ]
+        ],
+        "body": "",
+        "body_hex": "",
+        "timestamp": 1790496002,
+        "nonce": "ffeeddccbbaa99887766554433221100",
+        "audience": "0b6c1f2e-3a4d-4e5f-8a9b-0c1d2e3f4a5b",
+        "sender": "assistant",
+        "epoch": 1
+      },
+      "canonical_query": "after=12&limit=50&tag=a%20b%2F%C3%BC&tag=b%26c%3Dd",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "signed_bytes_hex": "6167656e742d6261636b626f6e65207369676e656420726571756573742076310a373a726571756573740a333a4745540a32313a2f6170692f7369676e696e672f72656365697074730a35303a61667465723d3132266c696d69743d3530267461673d6125323062253246254333254243267461673d6225323663253344640a36343a653362306334343239386663316331343961666266346338393936666239323432376165343165343634396239333463613439353939316237383532623835350a31303a313739303439363030320a33323a66666565646463636262616139393838373736363535343433333232313130300a33363a30623663316632652d336134642d346535662d386139622d3063316432653366346135620a393a617373697374616e740a313a310a",
+      "signature": "3t3PoJViCwipwqjmHQpcrAHpQMUy3rpDyrT2JYrlJIbuQIG-Mmf3gZCrJOxlm1dO-IwrbkWIGEwREGzIbXN7AQ"
+    },
+    {
+      "name": "rotation signed by the current key",
+      "key": "app",
+      "input": {
+        "purpose": "rotate",
+        "method": "POST",
+        "path": "/api/signing/rotation",
+        "query_params": [],
+        "body": "{\"new_public_key\":\"IZuY5WQhryicqmHsS8pgD_qgFRaXHRcPa0id3iSeAS8\",\"proof\":\"EGwmmSuDpJJnyfEZKplRtT8obeL2SALoLOZrXuhQk9ubpkcm3rqvB8Cbp8kZw9g14z2jJI12UUq55AQLgItDCw\"}",
+        "body_hex": "7b226e65775f7075626c69635f6b6579223a22495a75593557516872796963716d487353387067445f716746526158485263506130696433695365415338222c2270726f6f66223a224547776d6d537544704a4a6e7966455a4b706c527454386f62654c3253414c6f4c4f5a72587568516b397562706b636d337271764238436270386b5a77396731347a326a4a493132555571353541514c674974444377227d",
+        "timestamp": 1790496003,
+        "nonce": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "audience": "0b6c1f2e-3a4d-4e5f-8a9b-0c1d2e3f4a5b",
+        "sender": "assistant",
+        "epoch": 1
+      },
+      "canonical_query": "",
+      "body_sha256": "6241dd2dee66f64aa21c66074150d1debfeb54085c47515ddf6746625e833efb",
+      "signed_bytes_hex": "6167656e742d6261636b626f6e65207369676e656420726571756573742076310a363a726f746174650a343a504f53540a32313a2f6170692f7369676e696e672f726f746174696f6e0a303a0a36343a363234316464326465653636663634616132316336363037343135306431646562666562353430383563343735313564646636373436363235653833336566620a31303a313739303439363030330a33323a61306131613261336134613561366137613861396161616261636164616561660a33363a30623663316632652d336134642d346535662d386139622d3063316432653366346135620a393a617373697374616e740a313a310a",
+      "signature": "pWqxNs7gq1DIiRq7lmnDBGawHBP03DvN9jBCnULO7aOtI7g0NEqPjkcVygvB9VPVU19oWxltFnDEwwErnGx-Bg"
+    }
+  ],
+  "enroll_proofs": [
+    {
+      "key": "app",
+      "input": {
+        "sender": "assistant",
+        "audience": "0b6c1f2e-3a4d-4e5f-8a9b-0c1d2e3f4a5b",
+        "action": "set",
+        "expected_epoch": 0,
+        "new_public_key": "mzKnSVUEx4jTQ071VTEAL33vzBiYiBVRpUKrMwN6rRI",
+        "request_id": "7d3c2b1a-0f9e-4d8c-b7a6-958473625140"
+      },
+      "signed_bytes_hex": "6167656e742d6261636b626f6e6520656e726f6c6c2070726f6f662076310a393a617373697374616e740a33363a30623663316632652d336134642d346535662d386139622d3063316432653366346135620a333a7365740a313a300a34333a6d7a4b6e5356554578346a5451303731565445414c3333767a4269596942565270554b724d774e367252490a33363a37643363326231612d306639652d346438632d623761362d3935383437333632353134300a",
+      "proof": "Z-tjmORujctjTtE18bq6B_wTx__R-FkB_nVt7ZoXRFHZTyXr-2vsRbmaS_azOwBT0BidjUcteI2z4_znCOxCDw"
+    },
+    {
+      "key": "new",
+      "input": {
+        "sender": "assistant",
+        "audience": "0b6c1f2e-3a4d-4e5f-8a9b-0c1d2e3f4a5b",
+        "action": "replace",
+        "expected_epoch": 1,
+        "new_public_key": "IZuY5WQhryicqmHsS8pgD_qgFRaXHRcPa0id3iSeAS8",
+        "request_id": "8e4d3c2b-1a0f-4e9d-8c7b-a69584736251"
+      },
+      "signed_bytes_hex": "6167656e742d6261636b626f6e6520656e726f6c6c2070726f6f662076310a393a617373697374616e740a33363a30623663316632652d336134642d346535662d386139622d3063316432653366346135620a373a7265706c6163650a313a310a34333a495a75593557516872796963716d487353387067445f7167465261584852635061306964336953654153380a33363a38653464336332622d316130662d346539642d386337622d6136393538343733363235310a",
+      "proof": "XEIqRWDvL1iywPu4_rDCVaOLoUVCut5fAJTx8ElBJAeLPzL0PZmASlyc91LziGbCu5KyxGymzCMbx7mNrPDJBQ"
+    }
+  ],
+  "rotate_proofs": [
+    {
+      "key": "new",
+      "input": {
+        "sender": "assistant",
+        "audience": "0b6c1f2e-3a4d-4e5f-8a9b-0c1d2e3f4a5b",
+        "old_epoch": 1,
+        "new_public_key": "IZuY5WQhryicqmHsS8pgD_qgFRaXHRcPa0id3iSeAS8",
+        "nonce": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "timestamp": 1790496003
+      },
+      "signed_bytes_hex": "6167656e742d6261636b626f6e6520726f746174652070726f6f662076310a393a617373697374616e740a33363a30623663316632652d336134642d346535662d386139622d3063316432653366346135620a313a310a34333a495a75593557516872796963716d487353387067445f7167465261584852635061306964336953654153380a33323a61306131613261336134613561366137613861396161616261636164616561660a31303a313739303439363030330a",
+      "proof": "EGwmmSuDpJJnyfEZKplRtT8obeL2SALoLOZrXuhQk9ubpkcm3rqvB8Cbp8kZw9g14z2jJI12UUq55AQLgItDCw"
+    }
+  ],
+  "transition_digests": [
+    {
+      "input": {
+        "action": "set",
+        "sender": "assistant",
+        "audience": "0b6c1f2e-3a4d-4e5f-8a9b-0c1d2e3f4a5b",
+        "expected_epoch": 0,
+        "new_fingerprint": "139ca6bcb6a7de66c5a9a9969cf3880c4f52318f65d7ddd7b93aa9bc09aec1ea",
+        "request_id": "7d3c2b1a-0f9e-4d8c-b7a6-958473625140",
+        "expires_at": 1790496900
+      },
+      "framed_hex": "6167656e742d6261636b626f6e65206b6579207472616e736974696f6e2076310a333a7365740a393a617373697374616e740a33363a30623663316632652d336134642d346535662d386139622d3063316432653366346135620a313a300a36343a313339636136626362366137646536366335613961393936396366333838306334663532333138663635643764646437623933616139626330396165633165610a33363a37643363326231612d306639652d346438632d623761362d3935383437333632353134300a31303a313739303439363930300a",
+      "digest": "99edad4aee0d5a4a3c8dca65880ac929223a511fe4b3c854d291cd5470a11ebe",
+      "shown": "99edad4a ee0d5a4a 3c8dca65 880ac929 223a511f e4b3c854 d291cd54 70a11ebe"
+    },
+    {
+      "input": {
+        "action": "replace",
+        "sender": "assistant",
+        "audience": "0b6c1f2e-3a4d-4e5f-8a9b-0c1d2e3f4a5b",
+        "expected_epoch": 1,
+        "new_fingerprint": "a1765983f3f2e1f50710b072daee98c4c113cc1ca7aa1b1a080f4654aead9306",
+        "request_id": "8e4d3c2b-1a0f-4e9d-8c7b-a69584736251",
+        "expires_at": 1790497800
+      },
+      "framed_hex": "6167656e742d6261636b626f6e65206b6579207472616e736974696f6e2076310a373a7265706c6163650a393a617373697374616e740a33363a30623663316632652d336134642d346535662d386139622d3063316432653366346135620a313a310a36343a613137363539383366336632653166353037313062303732646165653938633463313133636331636137616131623161303830663436353461656164393330360a33363a38653464336332622d316130662d346539642d386337622d6136393538343733363235310a31303a313739303439373830300a",
+      "digest": "dfdc923023df54e06179afd71b3492c49c28b7edd1688f38c269f80edb5ccc03",
+      "shown": "dfdc9230 23df54e0 6179afd7 1b3492c4 9c28b7ed d1688f38 c269f80e db5ccc03"
+    },
+    {
+      "input": {
+        "action": "clear",
+        "sender": "assistant",
+        "audience": "0b6c1f2e-3a4d-4e5f-8a9b-0c1d2e3f4a5b",
+        "expected_epoch": 1,
+        "new_fingerprint": "none",
+        "request_id": "9f5e4d3c-2b1a-4f0e-9d8c-b7a695847362",
+        "expires_at": 1790498700
+      },
+      "framed_hex": "6167656e742d6261636b626f6e65206b6579207472616e736974696f6e2076310a353a636c6561720a393a617373697374616e740a33363a30623663316632652d336134642d346535662d386139622d3063316432653366346135620a313a310a343a6e6f6e650a33363a39663565346433632d326231612d346630652d396438632d6237613639353834373336320a31303a313739303439383730300a",
+      "digest": "774f0f55ba8b4ca7db600f1410354838853768116ede7a89f5d59a8086a7d52a",
+      "shown": "774f0f55 ba8b4ca7 db600f14 10354838 85376811 6ede7a89 f5d59a80 86a7d52a"
+    }
+  ],
+  "negative": [
+    {
+      "name": "tampered body",
+      "base": "message with owner confirmation (non-ASCII body)",
+      "change": {
+        "body": "{\"target_session\":\"ike\",\"from_entity\":\"assistant\",\"message\":\"Please delete the release branch — ünïcødé ✓ 日本語\\n\",\"owner_confirmation\":{\"confirmation_id\":\"5f1e8b9c-2d3a-4b5c-9d6e-7f8a9b0c1d2e\",\"text_sha256\":\"68dbb39005ff5da4da08404129e286ad8d40e36fd48d7f545726c9ad3e3b40a3\",\"confirmed_at\":\"2026-09-27T11:00:00.123456+03:00\",\"source\":\"button\"}}"
+      },
+      "expect": "signature_invalid"
+    },
+    {
+      "name": "tampered query value",
+      "base": "GET with reserved characters and a repeated name",
+      "change": {
+        "query_params": [
+          [
+            "after",
+            "13"
+          ],
+          [
+            "tag",
+            "b&c=d"
+          ],
+          [
+            "tag",
+            "a b/ü"
+          ],
+          [
+            "limit",
+            "50"
+          ]
+        ]
+      },
+      "expect": "signature_invalid"
+    },
+    {
+      "name": "wrong epoch",
+      "base": "message with owner confirmation (non-ASCII body)",
+      "change": {
+        "epoch": 2
+      },
+      "expect": "signature_invalid"
+    },
+    {
+      "name": "wrong audience",
+      "base": "message with owner confirmation (non-ASCII body)",
+      "change": {
+        "audience": "0b6c1f2e-3a4d-4e5f-8a9b-0c1d2e3f4a5c"
+      },
+      "expect": "signature_invalid"
+    },
+    {
+      "name": "changed timestamp",
+      "base": "message with owner confirmation (non-ASCII body)",
+      "change": {
+        "timestamp": 1790496001
+      },
+      "expect": "signature_invalid"
+    },
+    {
+      "name": "request purpose where rotate was signed",
+      "base": "rotation signed by the current key",
+      "change": {
+        "purpose": "request"
+      },
+      "expect": "signature_invalid"
+    }
+  ],
+  "malformed": [
+    {
+      "name": "duplicate key",
+      "body": "{\"target_session\":\"ike\",\"from_entity\":\"assistant\",\"from_entity\":\"other\",\"message\":\"hi\"}",
+      "expect": "malformed_request"
+    },
+    {
+      "name": "nested duplicate key",
+      "body": "{\"target_session\":\"ike\",\"from_entity\":\"assistant\",\"message\":\"hi\",\"owner_confirmation\":{\"source\":\"button\",\"source\":\"voice\"}}",
+      "expect": "malformed_request"
+    }
+  ]
+}
