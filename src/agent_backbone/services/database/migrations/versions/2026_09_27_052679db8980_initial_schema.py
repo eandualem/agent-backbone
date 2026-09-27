@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 0d745ce3b54e
+Revision ID: 052679db8980
 Revises:
-Create Date: 2026-09-27 18:35:34.232922
+Create Date: 2026-09-27 20:01:08.959106
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0d745ce3b54e"
+revision: str = "052679db8980"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -412,6 +412,17 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_signing_owner")),
     )
     op.create_table(
+        "signing_queued",
+        sa.Column("queue_id", sa.Integer(), nullable=False),
+        sa.Column("sender_key", sa.Text(), nullable=False),
+        sa.Column("epoch", sa.Integer(), nullable=False),
+        sa.Column("at", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("queue_id", name=op.f("pk_signing_queued")),
+    )
+    with op.batch_alter_table("signing_queued", schema=None) as batch_op:
+        batch_op.create_index("idx_signing_queued_sender", ["sender_key", "epoch"], unique=False)
+
+    op.create_table(
         "signing_transitions",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("request_id", sa.Text(), nullable=False),
@@ -531,6 +542,10 @@ def downgrade() -> None:
         batch_op.drop_index("idx_signing_transitions_sender")
 
     op.drop_table("signing_transitions")
+    with op.batch_alter_table("signing_queued", schema=None) as batch_op:
+        batch_op.drop_index("idx_signing_queued_sender")
+
+    op.drop_table("signing_queued")
     op.drop_table("signing_owner")
     with op.batch_alter_table("signing_nonces", schema=None) as batch_op:
         batch_op.drop_index("idx_signing_nonces_seen")

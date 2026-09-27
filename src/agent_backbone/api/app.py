@@ -93,6 +93,7 @@ def _register_jobs(app: FastAPI):
             "queue": await state.db.queue.prune(days),
             "diagnostics": await state.db.diagnostics.prune(days),
             "reports": await state.db.reports.prune(days),
+            "signing_audit": await state.db.signing.prune(days),
             "action_log_lines": rotate_action_log(state.config.action_log_path),
         }
 

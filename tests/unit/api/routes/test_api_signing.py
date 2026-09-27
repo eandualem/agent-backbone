@@ -492,3 +492,54 @@ async def test_the_same_check_for_a_recipient_on_every_runtime(
     )
     assert admitted.status_code == 200, admitted.text
     assert deliver.await_args.kwargs["session_name"] == target
+
+
+async def test_a_signed_message_that_waits_is_tracked_for_a_reset(
+    api_client, auth_headers, api_app
+):
+    db = api_app.state.db
+    key = Ed25519PrivateKey.generate()
+    await _enroll(api_client, auth_headers, db, key)
+    stored = DeliveryReport(DeliveryOutcome.AGENT_WORKING, "stored", queue_id=77)
+    with patch("agent_backbone.api.routes.messages.safe_deliver", AsyncMock(return_value=stored)):
+        raw, signed = await _signed(db, key, "POST", "/api/messages", MESSAGE)
+        resp = await api_client.post(
+            "/api/messages", headers={**auth_headers, **signed}, content=raw
+        )
+    assert resp.status_code == 200
+    async with db.engine.begin() as conn:
+        row = (await conn.execute(text("SELECT sender_key, epoch FROM signing_queued"))).one()
+    assert tuple(row) == (SENDER, 1)
+
+
+async def test_a_database_failure_is_not_a_reused_request_id(api_client, auth_headers, api_app):
+    from sqlalchemy.exc import OperationalError
+
+    failing = AsyncMock(side_effect=OperationalError("stmt", {}, Exception("locked")))
+    with (
+        patch.object(api_app.state.db.signing, "start_transition", failing),
+        pytest.raises(OperationalError),
+    ):
+        await _transition(api_client, auth_headers, api_app.state.db, Ed25519PrivateKey.generate())
+
+
+async def test_a_rotation_without_a_verifier_is_refused_in_shape(api_client, auth_headers, api_app):
+    db = api_app.state.db
+    old, new = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    await _enroll(api_client, auth_headers, db, old)
+    body = {"new_public_key": _pub(new), "proof": signing.b64url_encode(b"x" * 64)}
+    raw, signed = await _signed(db, old, "POST", "/api/signing/rotation", body, purpose="rotate")
+    real = signing.verify
+    calls = iter([real, None])
+
+    def verify(*args):
+        step = next(calls)
+        if step is None:  # the route's proof check, after the middleware's
+            raise signing.VerifierUnavailable("gone")
+        return step(*args)
+
+    with patch.object(signing, "verify", verify):
+        resp = await api_client.post(
+            "/api/signing/rotation", headers={**auth_headers, **signed}, content=raw
+        )
+    assert resp.status_code == 503 and resp.json()["detail"]["reason"] == "verifier_unavailable"

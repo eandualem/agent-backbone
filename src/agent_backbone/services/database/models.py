@@ -583,6 +583,18 @@ class SigningNonceORM(Base):
     __table_args__ = (Index("idx_signing_nonces_seen", "seen_at"),)
 
 
+class SigningQueuedORM(Base):
+    """A queued message a signed request created, with the key epoch that
+    admitted it: an owner-approved reset of that key revokes it."""
+
+    __tablename__ = "signing_queued"
+    queue_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sender_key: Mapped[str] = mapped_column(Text, nullable=False)
+    epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    at: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (Index("idx_signing_queued_sender", "sender_key", "epoch"),)
+
+
 class SigningAuditORM(Base):
     """Metadata-only record of signed-sender events: refusals, observations
     while a transition is pending, and enrollment changes. Never a body."""

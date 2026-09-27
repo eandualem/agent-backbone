@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from agent_backbone.api.deps import get_config, get_db, get_feed, registered_agent_or_404
@@ -37,6 +37,7 @@ router = APIRouter(prefix="/api", tags=["messages"])
 async def send_message(
     body: MessageRequest,
     background: BackgroundTasks,
+    request: Request,
     config=Depends(get_config),
     db=Depends(get_db),
     feed=Depends(get_feed),
@@ -68,6 +69,10 @@ async def send_message(
     log.info(
         "Message from %s → %s: %s (%s)", body.from_entity, target, report.outcome, report.queue
     )
+    signed = getattr(request.state, "signed_sender", None)
+    if signed is not None and report.queue_id is not None:
+        # An owner-approved reset of this key revokes it while it waits.
+        await db.signing.track_queued(report.queue_id, signed.sender_key, signed.epoch)
     if report.queue == "stored":
         # After the response: the hint never delays the sender.
         inbox = (target,) if spec.inbox_only else ()

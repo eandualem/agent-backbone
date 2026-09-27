@@ -71,9 +71,11 @@ signs before the owner approves. The approval reply in Telegram shows the
 counts.
 
 **Reset.** A replace or clear that is not signed by the current key removes the
-authority of everything admitted under the old epoch: open grants, unclaimed
-confirmations, queued deliveries and pending transitions. Their receipts are
-kept. After an ordinary rotation, work already admitted keeps its bounded
+authority of everything admitted under the old epoch: messages its key got
+queued that are still waiting are expired, and a pending transition is
+replaced; with owner confirmation and validate, open grants and unclaimed
+confirmations lose their authority too, and their receipts are kept. A steer
+already offered can still be taken within its five minutes. After an ordinary rotation, work already admitted keeps its bounded
 lifetime; the old epoch admits no new requests.
 
 ## Signed requests
@@ -155,8 +157,11 @@ agent-backbone signed request v1\n
 
 Backbone rejects a signed request whose timestamp differs from its own clock by
 more than 300 seconds, or whose nonce it has already seen for that sender and
-epoch. An identical retry (same nonce, same signed bytes) returns the original
-result instead of acting twice.
+epoch (`nonce_reused`), so a request is never acted on twice. To retry after a
+lost response, sign again with a fresh nonce and timestamp. For an owner
+confirmation, the same `confirmation_id` then recovers the original result
+(below); returning the original result to a retry with the same nonce comes
+with owner confirmation.
 
 ### Strict parsing
 
@@ -260,9 +265,9 @@ Telegram user id, in an allowed chat.
 
 The owner's Telegram user id is kept with the enrollment records, not in the
 ordinary settings. It can be set once while it is empty, with
-`backbone signing owner <user id>`, and the owner is alerted. Changing it later
-needs an approval sent from the current owner's account (the same digest
-step), and every change is alerted.
+`backbone signing owner <user id>`, and the owner is alerted. Running it again
+records a change that the current owner approves from their own account with
+`/approve_owner <user id>`, and every change is alerted.
 
 ### Rotation
 

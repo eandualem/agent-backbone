@@ -11,6 +11,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy.exc import IntegrityError
 
 from agent_backbone import signing
 from agent_backbone.api.deps import get_config, get_db
@@ -166,7 +167,7 @@ async def start_transition(body: TransitionRequest, config=Depends(get_config), 
             digest=digest,
             expires_at=expires_at,
         )
-    except Exception as exc:  # the request id is unique
+    except IntegrityError as exc:  # the request id is unique
         raise _refuse(409, "request_id_reused", "this request id was already used") from exc
     await notify_humans(
         config,
@@ -198,7 +199,11 @@ async def rotate(
         nonce=signed.nonce,
         timestamp=signed.timestamp,
     )
-    if not signing.verify(raw, proof, framed):
+    try:
+        valid = signing.verify(raw, proof, framed)
+    except signing.VerifierUnavailable as exc:
+        raise _refuse(503, "verifier_unavailable", "signatures can't be checked") from exc
+    if not valid:
         raise _refuse(403, "signature_invalid", "the proof does not verify with the new key")
     rotated = await db.signing.rotate(
         sender_key=signed.sender_key,

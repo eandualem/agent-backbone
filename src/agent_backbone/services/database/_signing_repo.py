@@ -14,9 +14,21 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from agent_backbone.services.database._repo import Repo
-from agent_backbone.services.database._time import now_iso
+from agent_backbone.services.database._time import cutoff_iso, now_iso
 
 NONCE_RETENTION_SECONDS = 3600
+
+
+async def _revoke_queued(conn, sender_key: str, epoch: int) -> None:
+    """Expire what the epoch's key got queued and not yet handed over."""
+    await conn.execute(
+        text(
+            "UPDATE message_queue SET status = 'expired' WHERE status IN"
+            " ('pending', 'checkpoint', 'uncertain') AND id IN (SELECT queue_id FROM"
+            " signing_queued WHERE sender_key = :k AND epoch = :epoch)"
+        ),
+        {"k": sender_key, "epoch": epoch},
+    )
 
 
 class _EpochChanged(Exception):
@@ -304,6 +316,57 @@ class SigningRepo(Repo):
                 ),
                 values,
             )
+        if transition["action"] in ("replace", "clear"):
+            # A reset: work the old key got admitted and still waiting loses it.
+            await _revoke_queued(conn, key, expected)
+
+    async def track_queued(self, queue_id: int, sender_key: str, epoch: int) -> bool:
+        """Remember which key epoch admitted a queued message. When that epoch
+        was reset in the meantime, revoke it at once (False)."""
+        async with self._tx() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO signing_queued (queue_id, sender_key, epoch, at)"
+                    " VALUES (:q, :k, :epoch, :at) ON CONFLICT(queue_id) DO NOTHING"
+                ),
+                {"q": queue_id, "k": sender_key, "epoch": epoch, "at": now_iso()},
+            )
+            current = (
+                await conn.execute(
+                    text("SELECT epoch FROM signing_enrollments WHERE sender_key = :k"),
+                    {"k": sender_key},
+                )
+            ).scalar()
+            reset = (
+                await conn.execute(
+                    text(
+                        "SELECT 1 FROM signing_keys WHERE sender_key = :k AND epoch = :epoch"
+                        " AND retired_by IN ('replace', 'clear')"
+                    ),
+                    {"k": sender_key, "epoch": epoch},
+                )
+            ).fetchone()
+            if current == epoch or reset is None:
+                return True
+            await _revoke_queued(conn, sender_key, epoch)
+        return False
+
+    async def prune(self, days: int) -> int:
+        """Drop refusal and observation rows (and queued-message links) older
+        than ``days``; enrollment history (transitions, rotations, owner) stays."""
+        cutoff = cutoff_iso(days=days)
+        async with self._tx() as conn:
+            gone = await conn.execute(
+                text(
+                    "DELETE FROM signing_audit WHERE kind IN ('refusal', 'observation')"
+                    " AND at < :cutoff"
+                ),
+                {"cutoff": cutoff},
+            )
+            await conn.execute(
+                text("DELETE FROM signing_queued WHERE at < :cutoff"), {"cutoff": cutoff}
+            )
+        return gone.rowcount
 
     async def rotate(
         self, *, sender_key: str, old_epoch: int, new_public_key: str, new_fingerprint: str
