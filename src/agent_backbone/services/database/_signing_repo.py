@@ -48,14 +48,16 @@ _SYNC_DELIVERED = """UPDATE signing_receipts SET delivered_at = (
         SELECT MIN(d.created_at) FROM deliveries d
         WHERE d.operation_id = signing_receipts.operation_id
           AND d.outcome IN ('delivered', 'handed_off'))
-    WHERE delivered_at IS NULL AND status = 'admitted' {where} AND EXISTS (
+    WHERE delivered_at IS NULL {where} AND EXISTS (
         SELECT 1 FROM deliveries d WHERE d.operation_id = signing_receipts.operation_id
           AND d.outcome IN ('delivered', 'handed_off'))"""
 
 
 async def _settle(conn, where: str = "", params: dict | None = None) -> None:
     """Copy onto receipts what their queue and delivery records say (delivered,
-    expired, not taken), so it outlives those records' shorter retention."""
+    expired, not taken), so it outlives those records' shorter retention. A
+    revoked receipt still records a handoff that happened (a steer offered
+    before the reset can be taken): revocation and delivery are separate facts."""
     for sql in (_SYNC_DELIVERED, _SETTLE_STEER, _SETTLE_MESSAGE):
         await conn.execute(text(sql.format(where=where)), params or {})
 

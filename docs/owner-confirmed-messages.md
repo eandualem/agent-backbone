@@ -401,9 +401,12 @@ after a sequence number, oldest first, across every key epoch:
   but not consecutive. `pruned_through` is the highest sequence number that
   retention removed for this sender (0 when none). `gap` is true when
   `after` is below it: receipts after the cursor were removed, which is a
-  coverage gap, not "nothing new". `next_after` is then at least
-  `pruned_through`, so each gap is reported once. With nothing new,
-  `next_after` equals `after`.
+  coverage gap, not "nothing new". Retention keeps a receipt whose delivery is
+  still waiting, so kept receipts can sit below `pruned_through`: `gap` is
+  reported on the page that returns the last of them (a page with fewer than
+  `limit` receipts), and that page's `next_after` is at least
+  `pruned_through`, so each gap is reported once and no kept receipt is
+  skipped. With nothing new, `next_after` equals `after`.
 - `oldest_seq` is the oldest receipt still kept for the sender, or `null`.
 
 ## Refusals

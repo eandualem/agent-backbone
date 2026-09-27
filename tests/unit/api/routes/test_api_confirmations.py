@@ -713,3 +713,58 @@ async def test_an_expired_message_stays_expired_after_its_queue_row_is_gone(
         await conn.execute(text("DELETE FROM message_queue"))
     again, _ = await _send(api_client, auth_headers, db, key, _body(confirmation))
     assert again.json()["outcome"] == "expired" and again.json()["queue"] is None
+
+
+async def test_paging_never_skips_a_receipt_kept_below_the_watermark(
+    api_client, auth_headers, api_app, key, drain
+):
+    db = api_app.state.db
+    for _ in range(2):
+        await _send(api_client, auth_headers, db, key, _body(_confirmation()))
+    seqs = [r.seq for r in await _rows(db, "SELECT seq FROM signing_receipts ORDER BY seq")]
+    async with db.engine.begin() as conn:  # a later receipt was pruned; these two were kept
+        await conn.execute(
+            text("INSERT INTO signing_receipt_watermarks VALUES (:k, :s)"),
+            {"k": SENDER, "s": seqs[-1] + 1},
+        )
+    seen, after, gaps = [], 0, 0
+    for _ in range(4):
+        params = [("after", str(after)), ("limit", "1")]
+        headers = await _signed_query(db, key, params)
+        page = (
+            await api_client.get(
+                f"/api/signing/receipts?after={after}&limit=1", headers={**auth_headers, **headers}
+            )
+        ).json()
+        seen += [r["seq"] for r in page["receipts"]]
+        gaps += page["gap"]
+        after = page["next_after"]
+    assert seen == seqs and gaps == 1 and after == seqs[-1] + 1
+
+
+async def test_a_steer_taken_after_its_key_was_reset_still_records_the_handoff(
+    api_client, auth_headers, api_app, key
+):
+    db = api_app.state.db
+    confirmation = _confirmation()
+    offered = AsyncMock(return_value=SteerReport("offered", "ike", delivery_id=1))
+    with patch("agent_backbone.api.routes.messages.steer_agent", offered):
+        resp, _ = await _send(
+            api_client, auth_headers, db, key, _body(confirmation), path="/api/steer"
+        )
+    view = await _transition(
+        api_client, auth_headers, db, Ed25519PrivateKey.generate(), "replace", 1
+    )
+    await db.signing.apply_transition(_digest(view.json()), now=NOW, by="t")
+    await db.deliveries.record(  # the hook took the offer it already had
+        issue_number=None,
+        target_entity="ike",
+        session_name="ike",
+        outcome="handed_off",
+        source="api-steer",
+        kind="steer",
+        preview="x",
+        operation_id=resp.json()["operation_id"],
+    )
+    receipt = await db.signing.receipt(confirmation["confirmation_id"])
+    assert receipt["status"] == "revoked" and receipt["delivered_at"] is not None

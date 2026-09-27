@@ -244,7 +244,8 @@ async def receipts(
 ):
     """The signed sender's confirmation receipts after ``after``, oldest first.
 
-    ``gap`` is true when retention removed a receipt after ``after``; then
+    ``gap`` is true when retention removed a receipt after ``after``; it is
+    reported on the page that returns the last kept receipt, whose
     ``next_after`` moves past the removed range, so each gap is reported once."""
     signed = getattr(request.state, "signed_sender", None)
     if signed is None:  # the middleware refuses first; this is a second lock
@@ -252,8 +253,12 @@ async def receipts(
     data = await db.signing.receipts(signed.sender_key, after, limit)
     rows = data["rows"]
     pruned = data["pruned_through"]
-    gap = after < pruned
-    next_after = max([after, *(row["seq"] for row in rows), *([pruned] if gap else [])])
+    last = rows[-1]["seq"] if rows else after
+    # Receipts still kept can sit below the watermark (their delivery was live
+    # when retention ran): move past it only once this page returned them all.
+    complete = len(rows) < limit
+    gap = after < pruned and complete
+    next_after = max(after, last, pruned if gap else 0)
     return {
         "receipts": [confirmations.public(row) for row in rows],
         "next_after": next_after,
