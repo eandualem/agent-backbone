@@ -44,6 +44,12 @@ _SETTLE_MESSAGE = """UPDATE signing_receipts SET outcome = 'expired'
 _NOT_LIVE = f"""NOT EXISTS (SELECT 1 FROM message_queue q
     WHERE q.operation_id = signing_receipts.operation_id AND q.status IN {_LIVE})"""
 """A receipt whose queued work still waits keeps its revocation link."""
+_SETTLE_CLAIM = """UPDATE signing_receipts SET offer_state = CASE WHEN (
+        SELECT d.outcome FROM deliveries d WHERE d.operation_id = signing_receipts.operation_id
+        ORDER BY d.id DESC LIMIT 1) IN ('offered', 'handed_off', 'not_taken')
+      THEN 'offered' ELSE 'failed' END
+    WHERE kind = 'steer' AND offer_state = 'claiming' {where} AND EXISTS (
+        SELECT 1 FROM deliveries d WHERE d.operation_id = signing_receipts.operation_id)"""
 _SYNC_DELIVERED = """UPDATE signing_receipts SET delivered_at = (
         SELECT MIN(d.created_at) FROM deliveries d
         WHERE d.operation_id = signing_receipts.operation_id
@@ -58,7 +64,7 @@ async def _settle(conn, where: str = "", params: dict | None = None) -> None:
     expired, not taken), so it outlives those records' shorter retention. A
     revoked receipt still records a handoff that happened (a steer offered
     before the reset can be taken): revocation and delivery are separate facts."""
-    for sql in (_SYNC_DELIVERED, _SETTLE_STEER, _SETTLE_MESSAGE):
+    for sql in (_SYNC_DELIVERED, _SETTLE_STEER, _SETTLE_MESSAGE, _SETTLE_CLAIM):
         await conn.execute(text(sql.format(where=where)), params or {})
 
 
@@ -77,7 +83,19 @@ async def _revoke_epoch(conn, sender_key: str, epoch: int, at: str) -> None:
         params,
     )
     # An uncertain row keeps its status: the paste may still sit in the input,
-    # and that hold is what stops the next paste; the receipt already says revoked.
+    # and that hold is what stops the next paste. What the inbox shows for it
+    # no longer carries the marker, but says the confirmation was revoked.
+    await conn.execute(
+        text(
+            "UPDATE message_queue SET message = REPLACE(message,"
+            " ' owner-confirmed:' || (SELECT r.confirmation_id FROM signing_receipts r"
+            " WHERE r.operation_id = message_queue.operation_id) || ']',"
+            " '] (owner confirmation revoked: the sender''s key was reset)')"
+            " WHERE status = 'uncertain' AND operation_id IN (SELECT operation_id"
+            f" FROM signing_receipts WHERE status = 'revoked' {scope})"
+        ),
+        params,
+    )
     await conn.execute(
         text(
             "UPDATE message_queue SET status = 'expired', delivered_at = :at"
@@ -705,17 +723,20 @@ class SigningRepo(Repo):
         already, or another request is offering it now. A claim older than a
         minute whose offer was recorded is marked offered, not offered again."""
         async with self._tx() as conn:
+            await _settle(conn, "AND confirmation_id = :c", {"c": confirmation_id})
             row = (
                 await conn.execute(
                     text(
-                        "SELECT operation_id, offer_state, offer_claimed_at FROM signing_receipts"
-                        " WHERE confirmation_id = :c AND status = 'admitted'"
+                        "SELECT operation_id, offer_state, offer_claimed_at, delivered_at, outcome"
+                        " FROM signing_receipts WHERE confirmation_id = :c AND status = 'admitted'"
                     ),
                     {"c": confirmation_id},
                 )
             ).fetchone()
             if row is None or row.offer_state in ("offered", "failed"):
                 return False
+            if row.delivered_at is not None or row.outcome is not None:
+                return False  # it reached the agent's hook once already
             if row.offer_state == "claiming":
                 if row.offer_claimed_at > now - 60:
                     return False
@@ -764,7 +785,7 @@ class SigningRepo(Repo):
                 text(
                     "DELETE FROM signing_receipts WHERE confirmation_id = :c"
                     " AND delivered_at IS NULL"
-                    " AND (offer_state IS NULL OR offer_state = 'claiming')"
+                    " AND (offer_state IS NULL OR offer_state IN ('claiming', 'failed'))"
                 ),
                 {"c": confirmation_id},
             )

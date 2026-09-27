@@ -825,9 +825,14 @@ async def test_a_reset_keeps_an_uncertain_paste_on_hold(
         api_client, auth_headers, db, Ed25519PrivateKey.generate(), "replace", 1
     )
     await db.signing.apply_transition(_digest(view.json()), now=NOW, by="t")
-    (row,) = await _rows(db, "SELECT status FROM message_queue")
+    (row,) = await _rows(db, "SELECT status, message FROM message_queue")
     assert row.status == "uncertain" and await db.queue.has_uncertain("ike")
     assert (await db.signing.receipt(confirmation["confirmation_id"]))["status"] == "revoked"
+    # What the inbox shows for it no longer passes for a live confirmation.
+    assert f"owner-confirmed:{confirmation['confirmation_id']}" not in row.message
+    assert row.message.startswith(
+        f"[via:backbone from:{SENDER}] (owner confirmation revoked: the sender's key was reset) "
+    )
 
 
 async def test_a_gap_below_kept_receipts_is_reported_once(
@@ -855,3 +860,44 @@ async def test_a_gap_below_kept_receipts_is_reported_once(
         gaps += page["gap"]
         after = page["next_after"]
     assert seen == kept and gaps == 1
+
+
+async def test_a_steer_published_before_a_crash_is_not_offered_again_after_pruning(
+    api_client, auth_headers, api_app, key, monkeypatch
+):
+    import time as real_time
+    from types import SimpleNamespace
+
+    db = api_app.state.db
+    confirmation = _confirmation()
+
+    async def publish_then_crash(*args, operation_id, **kwargs):
+        await db.deliveries.record(  # published, and the hook took it
+            issue_number=None,
+            target_entity="ike",
+            session_name="ike",
+            outcome="handed_off",
+            source="api-steer",
+            kind="steer",
+            preview="x",
+            operation_id=operation_id,
+        )
+        raise RuntimeError("stopped before the offer was marked")
+
+    with (
+        patch("agent_backbone.api.routes.messages.steer_agent", publish_then_crash),
+        pytest.raises(RuntimeError),
+    ):
+        await _send(api_client, auth_headers, db, key, _body(confirmation), path="/api/steer")
+    await db.signing.prune_receipts()  # the prune job settles receipts first...
+    async with db.engine.begin() as conn:  # ...then delivery retention removes the record
+        await conn.execute(text("DELETE FROM deliveries"))
+    later = SimpleNamespace(time=lambda: real_time.time() + 61)
+    monkeypatch.setattr("agent_backbone.api.routes.messages.time", later)
+    offered = AsyncMock(return_value=SteerReport("offered", "ike", delivery_id=1))
+    with patch("agent_backbone.api.routes.messages.steer_agent", offered):
+        resp, _ = await _send(
+            api_client, auth_headers, db, key, _body(confirmation), path="/api/steer"
+        )
+    offered.assert_not_awaited()
+    assert resp.json()["outcome"] == "handed_off"
