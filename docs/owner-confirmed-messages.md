@@ -218,7 +218,13 @@ characters. The owner copies it into Telegram:
 ```
 
 Spaces are ignored. Backbone accepts the command only from the owner's
-Telegram user id (`telegram.owner_user_id`) in an allowed chat.
+Telegram user id, in an allowed chat.
+
+The owner's Telegram user id is kept with the enrollment records, not in the
+ordinary settings. It can be set once while it is empty, with
+`backbone signing owner <user id>`, and the owner is alerted. Changing it later
+needs an approval sent from the current owner's account (the same digest
+step), and every change is alerted.
 
 ### Rotation
 
@@ -256,7 +262,9 @@ On `POST /api/messages` and `POST /api/steer`, a signed request may carry:
 ```
 
 `confirmed_at` must be no more than 30 minutes before the request timestamp and
-no more than 300 seconds after it.
+no more than 300 seconds after it. If Backbone could not be reached for longer
+than that, the app asks the owner to confirm again rather than sending an old
+confirmation.
 
 When the request is admitted, Backbone commits the nonce, the confirmation id,
 the receipt and the queued delivery in one transaction, then delivers. A steer
@@ -312,11 +320,28 @@ as an enrolled name leave a metadata-only audit row.
 calling agent and prints the exact confirmed text, which the agent acts on.
 `backbone message validate <confirmation_id> --done` closes the claim.
 
-Backbone identifies the caller from the process that makes the call (the agent
-session it runs in), not from a name, session id or environment variable the
-caller supplies. A caller that is not the confirmation's recipient gets no
-text. Details of the claim and its recovery after a restart are in [open
-questions](#open-questions).
+The confirmation is the task: its text defines the scope. A claim creates a
+grant bound to the recipient agent, its registered working directory and the
+confirmation id.
+
+- The first claim must come within 24 hours of delivery.
+- A grant lasts 24 hours from the claim, or until `--done`.
+- Claiming again, for example after a restart of the same agent in the same
+  directory, returns the same text flagged `recovered`. That is not fresh
+  authority.
+- After `--done` or expiry, a claim is refused. A fabricated id, a cancelled
+  confirmation or a claim from any other agent or directory is refused.
+
+Backbone identifies the caller from the process that makes the call, not from
+a name, session id or environment variable the caller supplies. It follows
+the local connection to the calling process, walks the process's ancestry to
+a terminal pane Backbone manages, and takes that pane's agent session.
+Validation fails closed when this mapping fails: a non-local connection, a
+process that is not under a managed pane, or an ambiguous ancestry. A caller
+that is not the confirmation's recipient gets no text.
+
+Failed validations are rate-limited and reported once per confirmation, with a
+count. An outage blocks only the step that depends on the confirmation.
 
 ## Known limitations
 
@@ -327,12 +352,10 @@ questions](#open-questions).
 - The shared API key still authenticates every caller. Sender names other than
   enrolled ones remain claims.
 - A process that edits Backbone's database or replaces its CLI is out of scope.
-
-## Open questions
-
-- The task binding of a validate claim, and exactly what recovers it after a
-  restart.
-- How the caller's session is determined for validate.
+- A same-user process can run a command inside another agent's terminal
+  session, and would then be identified as that agent by validate.
+- Validate identifies local callers only. A caller on another machine needs a
+  different mechanism (#218).
 
 ## Test vectors
 
