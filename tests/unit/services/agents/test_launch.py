@@ -42,6 +42,39 @@ class TestApproveAgent:
         assert evidence[0] == "answered with Enter; prompt cleared"
         assert "Do you want to proceed?" in evidence  # the dialog is quoted for the audit
 
+    DEEPCODE_DIALOG = (
+        "status: ask_permission · 14/1M · deepseek-v4-flash max\n"
+        "╭──────────────────────────────╮\n"
+        "│ Permission required 1/1      │\n"
+        "│ bash                         │\n"
+        "│ echo probe                   │\n"
+        "│ Do you want to proceed?      │\n"
+        "│ > 1. Yes                     │\n"
+        "│   2. No                      │\n"
+        "╰──────────────────────────────╯\n"
+    )
+    # The cursor moved to "No": "1" still picks Yes.
+    DEEPCODE_DIALOG_ON_NO = DEEPCODE_DIALOG.replace("│ > 1. Yes", "│   1. Yes").replace(
+        "│   2. No ", "│ > 2. No "
+    )
+    DEEPCODE_IDLE = (
+        "status: completed · 14/1M · deepseek-v4-flash max\n"
+        ">   Type your message...\n"
+        "enter send · shift+enter newline · / commands · ctrl+d exit\n"
+    )
+
+    @pytest.mark.parametrize("dialog", [DEEPCODE_DIALOG, DEEPCODE_DIALOG_ON_NO])
+    async def test_deepcode_is_answered_with_its_yes_option(self, dialog):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", side_effect=[dialog, self.DEEPCODE_IDLE]),
+            patch(f"{_BASE}.send_keys", return_value=True) as keys,
+        ):
+            outcome, evidence = await approve_agent("dc", runtime="deepcode", settle_seconds=0)
+        assert outcome == "approved"
+        assert keys.await_args.args == ("dc", "1")
+        assert evidence[0] == "answered with 1; prompt cleared"
+
     MODEL_SWITCH = (
         "  Approaching rate limits\n"
         "  Switch to gpt-5.6-luna for lower credit usage?\n"
