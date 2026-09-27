@@ -376,8 +376,11 @@ reading the reply. Two senders with identical text are two messages; the
 same sender repeating the same text while the first copy waits is one.
 
 `from_entity` must be nonblank, at most 64 characters, and contain no square
-brackets, CR or LF; invalid senders return 422. The API key grants access, but
-the supplied sender name is not authenticated identity.
+brackets or whitespace, and nothing that reads as `owner-confirmed` (in any
+case or character width, with any separator); invalid senders return 422.
+The same rule applies to `POST /api/steer` and to a restart's continuation
+sender. The API key grants access, but the supplied sender name is not
+authenticated identity.
 
 This is the endpoint agents use to talk to each other.
 

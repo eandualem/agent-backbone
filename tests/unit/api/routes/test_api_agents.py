@@ -503,6 +503,16 @@ class TestRestartAgent:
         )
         assert resp.status_code == 400 and "ISO 8601" in resp.json()["detail"]
 
+    async def test_the_continuation_sender_must_fit_the_envelope(
+        self, api_client, auth_headers, launch
+    ):
+        resp = await api_client.post(
+            "/api/agents/ike/restart",
+            json={"message": "carry on", "from_entity": "app owner-confirmed:abc"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422
+
     async def test_cross_cli_resume_is_400(self, api_client, auth_headers, launch):
         resp = await api_client.post(
             "/api/agents/ike/restart",
