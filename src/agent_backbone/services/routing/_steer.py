@@ -14,6 +14,7 @@ is not incorporation.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -27,6 +28,8 @@ from agent_backbone.hooks.backbone_state import (
     steer_offers,
 )
 from agent_backbone.services.agents import AgentState, read_state_file
+from agent_backbone.services.routing._delivery import revocation_guard
+from agent_backbone.services.routing._envelope import envelope as make_envelope
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing.models import SessionIntelligence
 from agent_backbone.services.runtimes import get_runtime
@@ -61,9 +64,23 @@ class SteerReport:
 
 
 async def steer_agent(
-    session_name: str, text: str, config: BackboneConfig, *, db: BackboneDB, sender: str
+    session_name: str,
+    text: str,
+    config: BackboneConfig,
+    *,
+    db: BackboneDB,
+    sender: str,
+    confirmation_id: str | None = None,
+    relay: bool = False,
+    operation_id: str | None = None,
+    claim_token: str | None = None,
 ) -> SteerReport:
-    """Offer ``text`` to the agent's current turn, or refuse with the reason."""
+    """Offer ``text`` to the agent's current turn, or refuse with the reason.
+
+    ``confirmation_id`` puts the owner-confirmed marker in the envelope (only
+    for a verified confirmation); ``relay`` labels a signed, unconfirmed steer;
+    ``operation_id`` ties the offer to its receipt, and ``claim_token`` is
+    the request's claim on its one offer: it publishes only while it holds it."""
     # The turn this steer is for, read before the checks: a turn that ends
     # (or ends and another starts) while the offer is written is caught below.
     turn = await asyncio.to_thread(_hook_record, config, session_name)
@@ -102,26 +119,44 @@ async def steer_agent(
             "no_launch_id",
             evidence=[*evidence, "the session was not started by the backbone"],
         )
-    operation_id = uuid.uuid4().hex
-    envelope = f"[via:backbone from:{sender}] (steer for your current task) {text}"
-    delivery_id = await db.deliveries.record(
-        issue_number=None,
-        target_entity=session_name,
-        session_name=session_name,
-        outcome="offered",
-        source=STEER_SOURCE,
-        kind=STEER_KIND,
-        preview=envelope,
-        operation_id=operation_id,
-    )
-    try:
-        key = steer_key(delivery_id)
-        placed = await asyncio.to_thread(
-            offer_steer, config.state_dir, session_name, launch_id, key, envelope
+    operation_id = operation_id or uuid.uuid4().hex
+    envelope = make_envelope(sender, text, confirmation_id=confirmation_id, relay=relay, steer=True)
+    # A confirmed steer is published under the key reset's guard, and only
+    # while its confirmation still holds: a reset lands before this or after.
+    guard = revocation_guard() if confirmation_id else contextlib.nullcontext()
+    async with guard:
+        if confirmation_id and await db.signing.is_revoked(operation_id):
+            return SteerReport(
+                "refused",
+                session_name,
+                "revoked",
+                evidence=[*evidence, "its key was reset: the confirmation no longer holds"],
+            )
+        if claim_token and not await db.signing.holds_claim(confirmation_id, claim_token):
+            return SteerReport(
+                "refused",
+                session_name,
+                "claim_lost",
+                evidence=[*evidence, "another request took over this confirmation's offer"],
+            )
+        delivery_id = await db.deliveries.record(
+            issue_number=None,
+            target_entity=session_name,
+            session_name=session_name,
+            outcome="offered",
+            source=STEER_SOURCE,
+            kind=STEER_KIND,
+            preview=envelope,
+            operation_id=operation_id,
         )
-    except OSError as exc:
-        placed = False
-        evidence.append(f"could not write the offer: {type(exc).__name__}")
+        try:
+            key = steer_key(delivery_id)
+            placed = await asyncio.to_thread(
+                offer_steer, config.state_dir, session_name, launch_id, key, envelope
+            )
+        except OSError as exc:
+            placed = False
+            evidence.append(f"could not write the offer: {type(exc).__name__}")
     if not placed:
         await db.deliveries.settle(delivery_id, "failed", expected="offered")
         return SteerReport(

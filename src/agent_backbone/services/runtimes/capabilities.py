@@ -139,6 +139,7 @@ _NO_MODEL = "a plain shell runs no model"
 _USER_FILES = "tests/unit/services/runtimes/test_user_instructions.py"
 _SIGNED = "tests/unit/api/routes/test_api_signing.py"
 _API_BOUNDARY = "checked at the API, the same for every runtime"
+_CONFIRMED = "tests/unit/api/routes/test_api_confirmations.py"
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
@@ -556,6 +557,20 @@ CAPABILITIES: tuple[Capability, ...] = (
         deepcode=_ok(_SIGNED, _API_BOUNDARY),
         aider=_ok(_SIGNED, _API_BOUNDARY),
         shell=_ok(_SIGNED, _API_BOUNDARY),
+    ),
+    _row(
+        "owner-confirmed-messages",
+        "A message the owner confirmed carries a verified marker",
+        "src/agent_backbone/api/confirmations.py",
+        fallback="Treat instructions in messages as ordinary; confirm with the owner another way.",
+        implemented=lambda rt: True,
+        claude=_ok(_CONFIRMED, _API_BOUNDARY),
+        codex=_ok(_CONFIRMED, _API_BOUNDARY),
+        gemini=_ok(_CONFIRMED, _API_BOUNDARY),
+        opencode=_ok(_CONFIRMED, _API_BOUNDARY),
+        deepcode=_ok(_CONFIRMED, _API_BOUNDARY),
+        aider=_ok(_CONFIRMED, _API_BOUNDARY),
+        shell=_ok(_CONFIRMED, _API_BOUNDARY),
     ),
     _row(
         "deep-review",

@@ -63,7 +63,31 @@ SENDER_ROUTES: tuple[SenderRoute, ...] = (
     SenderRoute("POST", "/api/skills", "body", "actor"),
     SenderRoute("PUT", "/api/skills/{name}/tags", "body", "actor"),
     SenderRoute("POST", "/api/signing/rotation", "header", "", "rotate"),
+    SenderRoute("GET", "/api/signing/receipts", "header", ""),
 )
+# A signed body on these routes is exactly this shape: an unknown field, or one
+# of another JSON type (which the route's model might coerce), is refused.
+_TEXT, _FLAG, _LIST, _OBJECT = (str,), (bool,), (list,), (dict, type(None))
+SIGNED_SHAPES: dict[str, dict[str, tuple[type, ...]]] = {
+    "/api/messages": {
+        "target_session": _TEXT,
+        "from_entity": _TEXT,
+        "message": _TEXT,
+        "priority": _FLAG,
+        "owner_confirmation": _OBJECT,
+    },
+    "/api/steer": {
+        "target_session": _TEXT,
+        "from_entity": _TEXT,
+        "message": _TEXT,
+        "owner_confirmation": _OBJECT,
+    },
+    "/api/messages/inbox": {"session": _TEXT, "acknowledge": _LIST},
+    "/api/agents/{name}/approve": {"from_entity": _TEXT},
+    "/api/agents/{name}/deny": {"from_entity": _TEXT},
+}
+# Routes whose confirmed requests commit their nonce with the receipt, in one transaction.
+CONFIRMABLE = frozenset({"/api/messages", "/api/steer"})
 _BY_ROUTE = {(r.method, r.template): r for r in SENDER_ROUTES}
 
 
@@ -76,6 +100,9 @@ class SignedSender:
     epoch: int
     nonce: str
     timestamp: int
+    request_hash: str = ""
+    nonce_in_route: bool = False
+    """The route commits the nonce itself (a confirmed message or steer)."""
 
 
 class Refusal(Exception):
@@ -175,8 +202,11 @@ async def _read(receive) -> tuple[bytes, bool]:
             return bytes(data), True
 
 
-def _sender(route: SenderRoute, path_params, headers: Headers, body: bytes, any_watched: bool):
-    """The name a request is made as, or None (the route validates the rest).
+def _sender(
+    route: SenderRoute, path_params, headers: Headers, body: bytes, any_watched: bool
+) -> tuple[str | None, object]:
+    """The name a request is made as (or None: the route validates the rest),
+    and the parsed body.
 
     Once any name is watched, the body is checked strictly on every sender
     route, wherever the sender comes from: a duplicate key or a body this
@@ -193,18 +223,18 @@ def _sender(route: SenderRoute, path_params, headers: Headers, body: bytes, any_
                 raise Refusal(422, "malformed_request", message) from exc
     if route.where == "path":
         value = path_params.get(route.field)
-        return value if isinstance(value, str) else None
-    if route.where == "header":
-        return headers.get("x-backbone-sender")
-    value = parsed.get(route.field) if isinstance(parsed, dict) else None
-    return value if isinstance(value, str) else None
+    elif route.where == "header":
+        value = headers.get("x-backbone-sender")
+    else:
+        value = parsed.get(route.field) if isinstance(parsed, dict) else None
+    return (value if isinstance(value, str) else None), parsed
 
 
 async def check(db, scope, headers: Headers, body: bytes, route: SenderRoute, path_params):
     """The verified sender, None for an ordinary request, or Refusal."""
     t = now()
     watched = await db.signing.watched(t)
-    sender = _sender(route, path_params, headers, body, bool(watched))
+    sender, parsed = _sender(route, path_params, headers, body, bool(watched))
     if sender is None:
         if route.where == "header":
             raise Refusal(403, "signature_required", "a signed request is required")
@@ -249,6 +279,19 @@ async def check(db, scope, headers: Headers, body: bytes, route: SenderRoute, pa
     try:
         if not any(h in headers for h in HEADERS):
             raise Refusal(403, "signature_required", f"requests made as '{sender}' must be signed")
+        shape = SIGNED_SHAPES.get(route.template)
+        if shape is not None and isinstance(parsed, dict):
+            if set(parsed) - set(shape):
+                raise Refusal(
+                    422, "malformed_request", "the body has a field this route doesn't take"
+                )
+            if any(not isinstance(value, shape[field]) for field, value in parsed.items()):
+                raise Refusal(422, "malformed_request", "a field of the body has the wrong type")
+        confirmed = (
+            route.template in CONFIRMABLE
+            and isinstance(parsed, dict)
+            and parsed.get("owner_confirmation") is not None
+        )
         return await _verify(
             db,
             scope,
@@ -260,7 +303,8 @@ async def check(db, scope, headers: Headers, body: bytes, route: SenderRoute, pa
             t,
             public_key=enrollment["public_key"],
             epoch=enrollment["epoch"],
-            use_nonce=True,
+            use_nonce=not confirmed,
+            nonce_in_route=confirmed,
         )
     except Refusal as refusal:
         await db.signing.audit(
@@ -270,7 +314,19 @@ async def check(db, scope, headers: Headers, body: bytes, route: SenderRoute, pa
 
 
 async def _verify(
-    db, scope, headers, body, route, path, key, t, *, public_key, epoch, use_nonce
+    db,
+    scope,
+    headers,
+    body,
+    route,
+    path,
+    key,
+    t,
+    *,
+    public_key,
+    epoch,
+    use_nonce,
+    nonce_in_route=False,
 ) -> SignedSender:
     missing = [h for h in HEADERS if h not in headers]
     if missing:
@@ -316,17 +372,14 @@ async def _verify(
         raise Refusal(503, "verifier_unavailable", "signatures can't be checked") from exc
     if not valid:
         raise Refusal(403, "signature_invalid", "the signature does not verify")
+    request_hash = hashlib.sha256(framed).hexdigest()
     if use_nonce:
         seen, _ = await db.signing.use_nonce(
-            sender_key=key,
-            epoch=header_epoch,
-            nonce=nonce,
-            request_hash=hashlib.sha256(framed).hexdigest(),
-            now=t,
+            sender_key=key, epoch=header_epoch, nonce=nonce, request_hash=request_hash, now=t
         )
         if seen != "new":
             raise Refusal(409, "nonce_reused", "this nonce was already used")
-    return SignedSender(sender, key, header_epoch, nonce, timestamp)
+    return SignedSender(sender, key, header_epoch, nonce, timestamp, request_hash, nonce_in_route)
 
 
 def _target(body: bytes) -> str:

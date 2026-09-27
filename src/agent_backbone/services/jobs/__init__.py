@@ -9,7 +9,7 @@ imports the API.
 from agent_backbone.services.jobs.diagnostics import observe_job
 from agent_backbone.services.jobs.github_poll import GitHubPoller
 from agent_backbone.services.jobs.monitor import monitor_agents
-from agent_backbone.services.jobs.retry import delivery_retry, drain_agent
+from agent_backbone.services.jobs.retry import deliver_now, delivery_retry, drain_agent
 from agent_backbone.services.jobs.sources_poll import SourcesPoller
 from agent_backbone.services.jobs.transitions import run_transitions
 from agent_backbone.services.jobs.upgrade_watch import UpgradeWatch
@@ -18,6 +18,7 @@ __all__ = [
     "GitHubPoller",
     "SourcesPoller",
     "UpgradeWatch",
+    "deliver_now",
     "delivery_retry",
     "drain_agent",
     "monitor_agents",

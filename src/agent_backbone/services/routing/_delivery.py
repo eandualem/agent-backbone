@@ -100,6 +100,16 @@ _session_locks: WeakValueDictionary[tuple[int, str], asyncio.Lock] = WeakValueDi
 _Result = TypeVar("_Result")
 
 
+_revocation_locks: dict[int, asyncio.Lock] = {}
+
+
+def revocation_guard() -> asyncio.Lock:
+    """Held by an owner-approved key reset and around the last check and paste
+    of a queued owner-confirmed message: a reset lands either before that check
+    (the message is skipped) or after the paste (it counts as delivered)."""
+    return _revocation_locks.setdefault(id(asyncio.get_running_loop()), asyncio.Lock())
+
+
 def _serialized(fn: Callable[..., Awaitable[_Result]]):
     """One gate/paste/record transaction per session; idle locks are released.
 
@@ -113,6 +123,36 @@ def _serialized(fn: Callable[..., Awaitable[_Result]]):
         lock = _session_locks.setdefault(key, asyncio.Lock())
         async with lock:
             db = kwargs.get("db")
+            queue_id = kwargs.get("queue_id")
+            if (
+                db is not None
+                and queue_id is not None
+                and kwargs.get("requeue") is False
+                and await db.signing.is_confirmation(kwargs.get("operation_id"))
+            ):
+                # A queued owner confirmation: its whole delivery, from this
+                # check to the success record, runs under the reset's guard.
+                async with revocation_guard():
+                    if not await db.queue.still_leased(queue_id) or await db.signing.was_delivered(
+                        kwargs.get("operation_id")
+                    ):
+                        # Revoked, or already delivered (its row just wasn't
+                        # completed): never paste a confirmation twice.
+                        return DeliveryReport(
+                            DeliveryOutcome.ALREADY_DELIVERED,
+                            operation_id=kwargs.get("operation_id"),
+                        )
+                    if await db.signing.was_attempted(kwargs.get("operation_id")):
+                        # An earlier paste was interrupted before its outcome
+                        # was recorded: it may have landed, so hold it.
+                        await db.queue.hold_uncertain(queue_id)
+                        return DeliveryReport(
+                            DeliveryOutcome.AWAITING_ACK,
+                            unconfirmed=True,
+                            operation_id=kwargs.get("operation_id"),
+                            queue_id=queue_id,
+                        )
+                    return await fn(session_name, *args, **kwargs)
             source_key = kwargs.get("source_key") or ""
             if db is not None and source_key.startswith("review-start:"):
                 async with db.events.review_delivery(source_key) as eligible:
@@ -546,10 +586,23 @@ async def safe_deliver(
 
     async def submit() -> bool:
         nonlocal uncertain
+        confirmed = (
+            db is not None
+            and queue_id is not None
+            and not requeue
+            and await db.signing.is_confirmation(operation_id)
+        )
+        if confirmed:
+            # Recorded before the paste: an attempt interrupted after it is
+            # held as uncertain, never pasted again (``_serialized``).
+            await db.signing.attempt(operation_id, begun=True)
         pasted_at = time.time()
         note_submission(config.state_dir, session_name)
         try:
-            return await send_message(session_name, message, runtime_hint=profile.runtime)
+            sent = await send_message(session_name, message, runtime_hint=profile.runtime)
+            if not sent and confirmed:
+                await db.signing.attempt(operation_id, begun=False)
+            return sent
         except SubmissionUnconfirmed as exc:
             # Only a runtime whose hook sees UserPromptSubmit can send a receipt. One
             # not identified before the paste may be (send_message looks again): it waits.

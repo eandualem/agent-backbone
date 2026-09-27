@@ -148,6 +148,19 @@ def expiry_notices(config: BackboneConfig, expired: list[dict]) -> list[tuple]:
     ]
 
 
+async def _expire(config, db) -> list:
+    """Expire queued messages past ``timing.queue_expiry_minutes`` (swarm and
+    inbox rules apply); each leaves a delivery row and a notice."""
+    active_swarms = {row["name"] for row in await db.swarms.list(active_only=True)}
+    protected = tuple(spec.name for spec in config.agents if spec.swarm in active_swarms)
+    return await db.queue.expire_pending(
+        max_age_minutes=config.timing.queue_expiry_minutes,
+        protected_sessions=protected,
+        inbox_sessions=tuple(spec.name for spec in config.agents if spec.inbox_only),
+        notices=partial(expiry_notices, config),
+    )
+
+
 async def drain_message_queue(
     config: BackboneConfig,
     db: BackboneDB,
@@ -169,14 +182,7 @@ async def drain_message_queue(
         await observe_job(db, source=SOURCE, stage="lease_recovery")
 
     try:
-        active_swarms = {row["name"] for row in await db.swarms.list(active_only=True)}
-        protected = tuple(spec.name for spec in config.agents if spec.swarm in active_swarms)
-        expired = await db.queue.expire_pending(
-            max_age_minutes=config.timing.queue_expiry_minutes,
-            protected_sessions=protected,
-            inbox_sessions=tuple(spec.name for spec in config.agents if spec.inbox_only),
-            notices=partial(expiry_notices, config),
-        )
+        expired = await _expire(config, db)
         if expired:
             log.info(
                 "Expired %d queued messages (> %d min)",
@@ -221,6 +227,23 @@ async def drain_message_queue(
         finally:
             _draining.discard(session_name)
     return summary
+
+
+async def deliver_now(config, db, gh, session_name: str) -> None:
+    """Try one session's queue at once (a confirmed message was just queued),
+    under the retry job's own guard: a session is never drained twice at once,
+    and an inbox-only agent is never typed into."""
+    spec = config.agents.get(session_name)
+    if session_name in _draining or (spec is not None and spec.inbox_only):
+        return
+    _draining.add(session_name)
+    try:
+        await _expire(config, db)  # nothing overdue rides along on this drain
+        await _drain_session(config, db, gh, session_name, {})
+    except Exception:
+        log.exception("Immediate drain failed for %s; the retry job tries again", session_name)
+    finally:
+        _draining.discard(session_name)
 
 
 async def drain_agent(config, db, session_name: str) -> None:
@@ -320,6 +343,10 @@ async def _drain_session(
                         repo=record.get("repo") or "",
                         issue_number=record.get("issue_number"),
                     )
+            if not await db.queue.still_leased(record["id"]):
+                # Revoked or completed meanwhile: never deliver the stale copy.
+                summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
+                continue
             outcome = (
                 await safe_deliver(
                     session_name,

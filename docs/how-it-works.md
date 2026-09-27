@@ -284,7 +284,12 @@ sequenceDiagram
   check, paste, verification and delivery record. Other sessions remain
   independent.
 - **Envelope.** The API adds `[via:backbone from:<from_entity>] `; Telegram
-  `[via:telegram from:<name>]`; GitHub events `[via:github issue:N]`.
+  `[via:telegram from:<name>]`; GitHub events `[via:github issue:N]`. A line
+  of an API message, steer or restart continuation that starts like an
+  envelope is shown as `[quoted] [via:…`, so no text can pass for one. An
+  [enrolled signed sender](owner-confirmed-messages.md) gets
+  `owner-confirmed:<id>` in the envelope for a message the owner confirmed, or
+  `(signed relay, not owner-confirmed)` after it otherwise.
 - **Paste, don't type.** Text goes in through tmux's paste buffer as one
   chunk, then Enter; the pane is re-read to confirm the text left the input
   box, including an envelope still buffered in the prompt. If the runtime queued it for its next turn (Claude does), that

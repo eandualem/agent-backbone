@@ -14,9 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 
 from agent_backbone import signing
+from agent_backbone.api import confirmations
 from agent_backbone.api.deps import get_config, get_db
 from agent_backbone.api.models import envelope_sender
 from agent_backbone.api.signed import Refusal, now
+from agent_backbone.services.database import RECEIPT_RETENTION_DAYS
 from agent_backbone.services.integrations import notify_humans
 
 router = APIRouter(prefix="/api/signing", tags=["signing"])
@@ -231,6 +233,40 @@ async def observations(
     """How requests made as the name fared against its pending key."""
     rows = await db.signing.observations(signing.same_name(sender), after, limit)
     return {"observations": rows, "next_after": rows[-1]["seq"] if rows else after}
+
+
+@router.get("/receipts")
+async def receipts(
+    request: Request,
+    after: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
+    db=Depends(get_db),
+):
+    """The signed sender's confirmation receipts after ``after``, oldest first.
+
+    ``gap`` is true on the one page whose cursor crosses the highest receipt
+    retention removed (``after < pruned_through <= next_after``), so each gap
+    is reported once and no kept receipt is skipped."""
+    signed = getattr(request.state, "signed_sender", None)
+    if signed is None:  # the middleware refuses first; this is a second lock
+        raise Refusal(403, "signature_required", "a signed request is required").as_http()
+    data = await db.signing.receipts(signed.sender_key, after, limit)
+    rows = data["rows"]
+    pruned = data["pruned_through"]
+    last = rows[-1]["seq"] if rows else after
+    # Receipts still kept can sit below the watermark (their delivery was live
+    # when retention ran): jump to it only once a page returned them all. The
+    # gap is reported on the one page whose cursor crosses the watermark.
+    next_after = last if len(rows) == limit else max(after, last, pruned)
+    gap = after < pruned <= next_after
+    return {
+        "receipts": [confirmations.public(row) for row in rows],
+        "next_after": next_after,
+        "oldest_seq": data["oldest_seq"],
+        "pruned_through": pruned,
+        "retention_days": RECEIPT_RETENTION_DAYS,
+        "gap": gap,
+    }
 
 
 @router.post("/owner")

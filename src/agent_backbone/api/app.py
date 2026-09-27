@@ -87,6 +87,8 @@ def _register_jobs(app: FastAPI):
 
     async def _prune():
         days = state.config.timing.delivery_retention_days
+        # Receipts first: they take their delivery times from the records pruned next.
+        receipts = await state.db.signing.prune_receipts()
         return {
             "deliveries": await state.db.deliveries.prune(days),
             "events": await state.db.events.prune(days),
@@ -94,6 +96,7 @@ def _register_jobs(app: FastAPI):
             "diagnostics": await state.db.diagnostics.prune(days),
             "reports": await state.db.reports.prune(days),
             "signing_audit": await state.db.signing.prune(days),
+            "signing_receipts": receipts,
             "action_log_lines": rotate_action_log(state.config.action_log_path),
         }
 

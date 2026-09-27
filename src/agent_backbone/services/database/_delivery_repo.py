@@ -119,10 +119,10 @@ class DeliveryRepo(Repo):
         async with self._tx() as conn:
             result = await conn.execute(
                 text(
-                    "UPDATE deliveries SET outcome = :outcome"
+                    "UPDATE deliveries SET outcome = :outcome, settled_at = :at"
                     " WHERE id = :id AND outcome = :expected"
                 ),
-                {"id": delivery_id, "outcome": outcome, "expected": expected},
+                {"id": delivery_id, "outcome": outcome, "expected": expected, "at": now_iso()},
             )
             return result.rowcount > 0
 

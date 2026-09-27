@@ -5,7 +5,8 @@ from __future__ import annotations
 import math
 import time
 import unicodedata
-from typing import Generic, TypeVar
+from datetime import datetime
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -468,6 +469,32 @@ def envelope_sender(value: str) -> str:
     return value
 
 
+class OwnerConfirmation(BaseModel):
+    """The owner confirmed exactly this text for this recipient in the app
+    (docs/owner-confirmed-messages.md). Only a signed request may carry it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation_id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    )
+    text_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirmed_at: str
+    """ISO 8601 with an offset, compared as the exact string sent."""
+    source: Literal["button", "typed", "voice"]
+
+    @field_validator("confirmed_at")
+    @classmethod
+    def _with_offset(cls, value: str) -> str:
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("confirmed_at is ISO 8601") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("confirmed_at needs an offset")
+        return value
+
+
 class MessageRequest(BaseModel):
     """Request body for message delivery to an agent."""
 
@@ -475,6 +502,7 @@ class MessageRequest(BaseModel):
     from_entity: str
     message: str
     priority: bool = False
+    owner_confirmation: OwnerConfirmation | None = None
 
     @field_validator("from_entity")
     @classmethod
@@ -490,6 +518,7 @@ class SteerRequest(BaseModel):
     target_session: str
     from_entity: str
     message: str = Field(min_length=1, max_length=4000)
+    owner_confirmation: OwnerConfirmation | None = None
 
     _sender = field_validator("from_entity")(MessageRequest._sender_must_fit_the_envelope.__func__)
 
@@ -506,6 +535,8 @@ class SteerResponse(BaseModel):
     launch_id: str | None = None
     evidence: list[str] = Field(default_factory=list)
     detail: str = ""
+    confirmation_id: str | None = None
+    receipt: dict | None = None
 
 
 class MessageResponse(BaseModel):
@@ -523,6 +554,9 @@ class MessageResponse(BaseModel):
     not be stored — not queued), or None when nothing needed queueing."""
     detail: str = ""
     """One plain sentence for the sender, whoever they are."""
+    confirmation_id: str | None = None
+    receipt: dict | None = None
+    """The confirmation's immutable receipt, for an owner-confirmed message."""
 
 
 class IntegrationReplyRequest(BaseModel):

@@ -224,6 +224,8 @@ class DeliveryORM(Base):
     """Which code path made the attempt (``issue-dispatcher``, ``api-messages``, …)."""
     preview: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    settled_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """When a later outcome replaced the first (a steer's handoff time)."""
 
     __table_args__ = (
         Index("idx_deliveries_issue", "repo", "issue_number"),
@@ -617,3 +619,56 @@ class SigningOwnerORM(Base):
     set_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     pending_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     pending_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SigningReceiptORM(Base):
+    """The immutable receipt of one owner confirmation (docs/owner-confirmed-messages.md).
+    Only ``delivered_at`` is set later, once; ``status`` records a revocation."""
+
+    __tablename__ = "signing_receipts"
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    confirmation_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    sender: Mapped[str] = mapped_column(Text, nullable=False)
+    sender_key: Mapped[str] = mapped_column(Text, nullable=False)
+    recipient: Mapped[str] = mapped_column(Text, nullable=False)
+    """``target_session`` exactly as sent: what the confirmation named."""
+    delivered_to: Mapped[str] = mapped_column(Text, nullable=False)
+    """The registered agent it went to (a swarm name resolves to its coordinator)."""
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    text_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    confirmed_at: Mapped[str] = mapped_column(Text, nullable=False)
+    key_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="admitted")
+    """``admitted`` or ``revoked`` (an owner-approved reset of its key)."""
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    delivered_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revoked_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempted_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """A message's paste began and no outcome was recorded yet: an attempt
+    interrupted there is held as uncertain, never pasted again."""
+    outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Why it was never delivered, kept past the queue and delivery records:
+    ``expired`` (a message) or ``not_taken`` / ``cancelled`` (a steer)."""
+    offer_state: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """A steer's offer: None, ``claiming`` (one request is offering it),
+    ``offered`` (permanent: it is never offered again) or ``failed`` (an
+    interrupted attempt that never reached the agent: confirm it again)."""
+    offer_claimed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    offer_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The claim's holder: only it may publish, mark offered or discard."""
+    __table_args__ = (
+        Index("idx_signing_receipts_sender", "sender_key", "seq"),
+        # seq is the reconciliation cursor: never reuse a pruned value.
+        {"sqlite_autoincrement": True},
+    )
+
+
+class SigningReceiptWatermarkORM(Base):
+    """Per sender, the highest receipt seq retention removed (a gap below it)."""
+
+    __tablename__ = "signing_receipt_watermarks"
+    sender_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    pruned_through: Mapped[int] = mapped_column(Integer, nullable=False)

@@ -7,11 +7,13 @@ wrapped in a provenance envelope so the receiving agent knows who sent it.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from agent_backbone.api import confirmations
 from agent_backbone.api.deps import get_config, get_db, get_feed, registered_agent_or_404
 from agent_backbone.api.models import (
     MessageRequest,
@@ -20,9 +22,11 @@ from agent_backbone.api.models import (
     SteerResponse,
 )
 from agent_backbone.models import DeliveryOutcome
+from agent_backbone.services.jobs import deliver_now
 from agent_backbone.services.routing import (
     STEER_TTL_SECONDS,
     checkpoint_inbox,
+    envelope,
     queue_detail,
     safe_deliver,
     steer_agent,
@@ -37,13 +41,12 @@ router = APIRouter(prefix="/api", tags=["messages"])
 async def send_message(
     body: MessageRequest,
     background: BackgroundTasks,
+    request: Request,
     config=Depends(get_config),
     db=Depends(get_db),
     feed=Depends(get_feed),
 ):
     """Send a message to an agent session using the state-aware delivery pipeline."""
-    envelope = f"[via:backbone from:{body.from_entity}] {body.message}"
-
     # A swarm is addressed through its coordinator: telling the swarm's name
     # delivers to the coordinator session.
     target = body.target_session
@@ -53,10 +56,19 @@ async def send_message(
             target = swarm["coordinator"]
     # Only registered agents are typed into — never an arbitrary tmux session.
     spec = registered_agent_or_404(config, target)
+    signed = getattr(request.state, "signed_sender", None)
+    if body.owner_confirmation is not None:
+        try:
+            return await _confirmed_message(body, target, signed, request, config, db)
+        except HTTPException as exc:
+            await confirmations.audit_refusal(
+                db, exc, sender=body.from_entity, path="/api/messages", target=target
+            )
+            raise
 
     report = await safe_deliver(
         session_name=target,
-        message=envelope,
+        message=envelope(body.from_entity, body.message, relay=signed is not None),
         config=config,
         db=db,
         source="api-messages",
@@ -87,6 +99,71 @@ async def send_message(
     )
 
 
+async def _confirmed_message(body, target, signed, request, config, db) -> MessageResponse:
+    """Admit an owner-confirmed message and try to deliver it at once."""
+    confirmation = body.owner_confirmation
+    confirmations.check(confirmation, body.message, signed)
+    receipt = confirmations.receipt_fields(
+        confirmation,
+        signed=signed,
+        sender=body.from_entity,
+        recipient=body.target_session,
+        delivered_to=target,
+        kind="message",
+        text=body.message,
+    )
+    queued = {
+        "session_name": target,
+        "message": envelope(
+            body.from_entity, body.message, confirmation_id=confirmation.confirmation_id
+        ),
+        "target_entity": None,
+        "source": "api-messages",
+        "sender": body.from_entity,
+        "priority": int(body.priority),
+    }
+    outcome, row = await confirmations.admit(
+        db, signed, receipt, queued, is_fresh=confirmations.fresh(confirmation, signed)
+    )
+    await deliver_now(config, db, getattr(request.app.state, "github", None), target)
+    row = await db.signing.receipt(confirmation.confirmation_id) or row
+    state = await db.queue.by_operation(row["operation_id"])
+    status = state["status"] if state else None
+    delivered = row["delivered_at"] is not None
+    if row["status"] == "revoked":
+        result, detail = "revoked", "Its key was reset before delivery; it will not be delivered."
+    elif delivered:
+        result, detail = "delivered", f"Delivered to {target}."
+    elif status == "uncertain":
+        result = "uncertain"
+        detail = (
+            f"Pasted into {target}, but the paste wasn't confirmed; it is held until "
+            "the agent acknowledges it (backbone inbox)."
+        )
+    elif status == "expired" or row.get("outcome") == "expired":
+        result, detail = "expired", "It expired before it could be delivered."
+    elif status in ("pending", "in_progress", "checkpoint"):
+        result = "queued"
+        detail = f"Kept for {target}; delivered when the agent is ready."
+    else:  # its queued delivery is no longer kept, and nothing says it was delivered
+        result = "unknown"
+        detail = "Its queued delivery is no longer kept; the receipt shows no delivery."
+    if outcome != "admitted":
+        detail = f"Already admitted as {confirmation.confirmation_id}. " + detail
+    return MessageResponse(
+        ok=delivered,
+        session=target,
+        outcome=result,
+        queued=status in ("pending", "in_progress", "checkpoint", "uncertain"),
+        queue="stored" if result in ("queued", "uncertain") else None,
+        detail=detail,
+        operation_id=row["operation_id"],
+        queue_id=state["id"] if state else None,
+        confirmation_id=confirmation.confirmation_id,
+        receipt=confirmations.public(row),
+    )
+
+
 async def _hint_inbox(feed, db, target: str, inbox: tuple[str, ...]) -> None:
     try:
         await feed.hint_inbox(lambda: db.queue.inbox_rows(target, inbox_sessions=inbox))
@@ -97,6 +174,7 @@ async def _hint_inbox(feed, db, target: str, inbox: tuple[str, ...]) -> None:
 @router.post("/steer", response_model=SteerResponse)
 async def steer(
     body: SteerRequest,
+    request: Request,
     config=Depends(get_config),
     db=Depends(get_db),
 ):
@@ -106,9 +184,89 @@ async def steer(
     no hook context (Claude Code, Codex and OpenCode only) or the session was not
     started by the backbone; nothing is queued on refusal."""
     registered_agent_or_404(config, body.target_session)
-    report = await steer_agent(
-        body.target_session, body.message, config, db=db, sender=body.from_entity
-    )
+    signed = getattr(request.state, "signed_sender", None)
+    confirmation = body.owner_confirmation
+    row = None
+    if confirmation is None:
+        report = await steer_agent(
+            body.target_session,
+            body.message,
+            config,
+            db=db,
+            sender=body.from_entity,
+            relay=signed is not None,
+        )
+    else:
+        try:
+            confirmations.check(confirmation, body.message, signed)
+            receipt = confirmations.receipt_fields(
+                confirmation,
+                signed=signed,
+                sender=body.from_entity,
+                recipient=body.target_session,
+                delivered_to=body.target_session,
+                kind="steer",
+                text=body.message,
+            )
+            _, row = await confirmations.admit(
+                db, signed, receipt, None, is_fresh=confirmations.fresh(confirmation, signed)
+            )
+        except HTTPException as exc:
+            await confirmations.audit_refusal(
+                db, exc, sender=body.from_entity, path="/api/steer", target=body.target_session
+            )
+            raise
+        token = await db.signing.claim_offer(confirmation.confirmation_id, int(time.time()))
+        if token is None:
+            # Offered once already, or an earlier request is offering it now:
+            # a confirmed steer is never offered twice.
+            row = await db.signing.receipt(confirmation.confirmation_id) or row
+            state = row.get("offer_state")
+            taken = row["delivered_at"] is not None
+            if state == "offered" and row.get("outcome") in ("not_taken", "cancelled"):
+                outcome, detail = (
+                    row["outcome"],
+                    "It was offered but never reached the agent; confirm it again.",
+                )
+            elif state == "offered":
+                outcome, detail = (
+                    "handed_off" if taken else "offered",
+                    f"Already admitted as {confirmation.confirmation_id}.",
+                )
+            elif state == "failed":
+                outcome, detail = (
+                    "failed",
+                    "An earlier attempt never reached the agent; confirm it again.",
+                )
+            else:
+                outcome, detail = "offering", "An earlier request is offering it now."
+            return SteerResponse(
+                ok=outcome in ("offered", "handed_off"),
+                session=body.target_session,
+                outcome=outcome,
+                operation_id=row["operation_id"],
+                detail=detail,
+                confirmation_id=confirmation.confirmation_id,
+                receipt=confirmations.public(row),
+            )
+        report = await steer_agent(
+            body.target_session,
+            body.message,
+            config,
+            db=db,
+            sender=body.from_entity,
+            confirmation_id=confirmation.confirmation_id,
+            operation_id=row["operation_id"],
+            claim_token=token,
+        )
+        if report.outcome == "offered":
+            await db.signing.mark_offered(confirmation.confirmation_id, token)
+        elif report.reason != "claim_lost":
+            # Nothing was offered: the confirmation may be sent again.
+            await db.signing.discard(confirmation.confirmation_id, token)
+            row = None
+        else:  # another request holds its offer now; its receipt stays
+            row = None
     if report.outcome == "offered":
         detail = (
             f"Offered to {report.session}'s current turn; its hook hands it over on the next "
@@ -126,10 +284,12 @@ async def steer(
         outcome=report.outcome,
         reason=report.reason,
         delivery_id=report.delivery_id,
-        operation_id=report.operation_id,
+        operation_id=row["operation_id"] if row else report.operation_id,
         launch_id=report.launch_id,
         evidence=report.evidence,
         detail=detail,
+        confirmation_id=confirmation.confirmation_id if row else None,
+        receipt=confirmations.public(row) if row else None,
     )
 
 
