@@ -50,6 +50,8 @@ reads never ask an agent to regenerate a report or create a new topic.
 | `/approve <agent>` | Approve it — only when `security.allow_remote_plan_control` is on, and only for runtimes with a plan mode the backbone can drive (Claude Code) |
 | *buttons on alerts* | A permission alert carries **Allow** / **Deny**, a plan alert **Approve plan** / **Reject plan** (see below). A button is bound to the prompt it was raised for: once the agent has moved on it answers nothing. Pressing one is answered once; the alert is edited with the outcome and who pressed it (name and Telegram user id), and a successful answer is recorded under the user id |
 | `/identify` | Print this chat/topic id and its current mapping |
+| `/approve_key <digest>` | Apply a pending key change for a [signed sender](owner-confirmed-messages.md), with the digest copied from the app. Only the owner's Telegram account (`backbone signing owner`) can |
+| `/approve_owner <user id>` | Hand key approvals to another Telegram user; sent by the current owner |
 | `/help` | Command list |
 
 `/start NAME` behaves like a CLI/API start: it keeps the configured CLI/model

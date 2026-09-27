@@ -36,8 +36,11 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   whatever the caller says; the `[from:<agent>]` prefix on GitHub is the
    same. They tell an agent who *claims* to be speaking. Anyone holding the
    key can claim any name. The sender must still fit the envelope (1–64
-   characters, no newlines or `[ ]`) so one message cannot forge a second
-   envelope — anything else is a 422.
+   characters, no whitespace or `[ ]`, and nothing that reads as
+   `owner-confirmed`) so one message cannot forge a second envelope or the
+   owner-confirmed marker — anything else is a 422. The exception is a
+   [signed sender](owner-confirmed-messages.md): once a name has an enrolled
+   key, every request made as it must carry a valid signature.
 - **Per-agent `env` lives in the database.** "Secrets only in `.env`" is
   true for the backbone's own secrets; values you attach to an agent with
   `agent set env=` are stored with the agent record so they can be
@@ -202,6 +205,18 @@ conventions, not authentication. With the shipped hooks installed, an
 agent's own `gh issue comment` calls are logged locally and used for
 acknowledgement, which does not depend on the prefix. If you need real
 per-agent identity, give each agent its own token in its `env`.
+
+## Known limitations
+
+- **The signing key of a signed sender is an ordinary file for now.** Any
+  process running as the owner's user, agents included, can read it, and
+  could then sign a request or a key rotation. The app's reconciliation of its
+  own log against Backbone's receipts finds this only afterwards. Protected
+  key storage is tracked in #323.
+- **Every other sender name is a claim.** The shared API key authenticates the
+  caller, not the name, except for enrolled signed senders.
+- **A process that edits Backbone's database or replaces its CLI** is outside
+  what Backbone can defend against.
 
 ## What to check before exposing anything
 

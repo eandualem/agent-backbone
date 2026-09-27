@@ -1,7 +1,13 @@
 # Signed senders and owner-confirmed messages
 
-Status: draft specification for review. The wire format below is what the
-implementation follows; changes are made here first.
+| Part | Status |
+|---|---|
+| Enrollment, signed requests, the reservation of an enrolled name, rotation, observations | available |
+| Owner confirmation, receipts and the reconciliation feed | in progress |
+| `backbone message validate` | in progress |
+
+The wire format below is what the implementation follows; changes are made
+here first.
 
 Backbone authenticates callers with one shared API key, so a sender name in a
 request is normally a claim, not a proof. This page describes the optional
@@ -85,6 +91,7 @@ these fields count:
 | `POST /api/integrations/reply` | `session` |
 | `POST /api/reports` | `agent` |
 | `POST /api/swarms` | `initiator` |
+| `POST /api/skills`, `PUT /api/skills/{name}/tags` | `actor` |
 | `POST /api/agents/{name}/state` | the `{name}` path parameter (a hook writing its own state) |
 
 Names are compared after Unicode NFKC normalization, case folding and trimming,
