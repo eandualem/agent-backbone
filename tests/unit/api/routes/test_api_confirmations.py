@@ -327,3 +327,135 @@ async def test_the_marker_reaches_a_recipient_on_every_runtime(
     assert row.message.startswith(
         f"[via:backbone from:{SENDER} owner-confirmed:{confirmation['confirmation_id']}] "
     )
+
+
+async def test_a_null_confirmation_is_an_ordinary_signed_request(
+    api_client, auth_headers, api_app, key
+):
+    """It must not skip the nonce: a replay of it is refused, never delivered twice."""
+    deliver = AsyncMock(return_value=DeliveryReport(DeliveryOutcome.DELIVERED))
+    with patch("agent_backbone.api.routes.messages.safe_deliver", deliver):
+        raw, signed = await _signed(
+            api_app.state.db, key, "POST", "/api/messages", {**MESSAGE, "owner_confirmation": None}
+        )
+        first = await api_client.post(
+            "/api/messages", headers={**auth_headers, **signed}, content=raw
+        )
+        again = await api_client.post(
+            "/api/messages", headers={**auth_headers, **signed}, content=raw
+        )
+    assert first.status_code == 200
+    assert again.status_code == 409 and again.json()["detail"]["reason"] == "nonce_reused"
+    assert deliver.await_count == 1
+
+
+async def test_an_old_confirmation_still_recovers_its_receipt(
+    api_client, auth_headers, api_app, key, drain, monkeypatch
+):
+    db = api_app.state.db
+    confirmation = _confirmation()
+    first, _ = await _send(api_client, auth_headers, db, key, _body(confirmation))
+    later = NOW + 2000  # past the 30-minute age for a new confirmation
+    monkeypatch.setattr("agent_backbone.api.signed.now", lambda: later)
+    again, _ = await _send(api_client, auth_headers, db, key, _body(confirmation), timestamp=later)
+    assert again.status_code == 200, again.text
+    assert again.json()["receipt"]["seq"] == first.json()["receipt"]["seq"]
+    new, _ = await _send(api_client, auth_headers, db, key, _body(_confirmation()), timestamp=later)
+    assert new.json()["detail"]["reason"] == "confirmation_expired"
+
+
+async def test_a_steer_that_was_never_offered_is_offered_on_retry(
+    api_client, auth_headers, api_app, key
+):
+    db = api_app.state.db
+    confirmation = _confirmation()
+    crash = AsyncMock(side_effect=RuntimeError("readiness failed"))
+    with (
+        patch("agent_backbone.api.routes.messages.steer_agent", crash),
+        pytest.raises(RuntimeError),
+    ):
+        await _send(api_client, auth_headers, db, key, _body(confirmation), path="/api/steer")
+    offered = AsyncMock(return_value=SteerReport("offered", "ike", delivery_id=1))
+    with patch("agent_backbone.api.routes.messages.steer_agent", offered):
+        resp, _ = await _send(
+            api_client, auth_headers, db, key, _body(confirmation), path="/api/steer"
+        )
+    assert resp.status_code == 200 and resp.json()["outcome"] == "offered"
+    offered.assert_awaited_once()
+
+
+async def test_an_uncertain_paste_is_reported_as_uncertain(api_client, auth_headers, api_app, key):
+    db = api_app.state.db
+
+    async def uncertain(config, db_, gh, session):
+        async with db.engine.begin() as conn:
+            await conn.execute(text("UPDATE message_queue SET status = 'uncertain'"))
+
+    with patch("agent_backbone.api.routes.messages.deliver_now", uncertain):
+        resp, _ = await _send(api_client, auth_headers, db, key, _body(_confirmation()))
+    assert resp.json()["outcome"] == "uncertain" and resp.json()["queue"] == "stored"
+    assert "acknowledges" in resp.json()["detail"]
+
+
+async def test_a_reset_after_the_check_stops_admission(api_client, auth_headers, api_app, key):
+    """A key reset that lands between the signature check and the commit wins."""
+    db = api_app.state.db
+    replacement = Ed25519PrivateKey.generate()
+    view = await _transition(api_client, auth_headers, db, replacement, "replace", 1)
+    await db.signing.apply_transition(_digest(view.json()), now=NOW, by="t")
+    confirmation = _confirmation()
+    receipt = {
+        "confirmation_id": confirmation["confirmation_id"],
+        "sender": SENDER,
+        "sender_key": SENDER,
+        "recipient": "ike",
+        "delivered_to": "ike",
+        "kind": "message",
+        "text": TEXT,
+        "text_sha256": confirmation["text_sha256"],
+        "source": "button",
+        "confirmed_at": confirmation["confirmed_at"],
+        "key_epoch": 1,  # checked under the old key
+        "operation_id": uuid.uuid4().hex,
+    }
+    outcome, _ = await db.signing.admit(
+        nonce="1" * 32, request_hash="h", now=NOW, receipt=receipt, queue=None
+    )
+    assert outcome == "epoch_changed"
+    assert await db.signing.receipt(confirmation["confirmation_id"]) is None
+
+
+async def test_a_revoked_leased_confirmation_is_never_pasted(
+    api_client, auth_headers, api_app, key, drain, config
+):
+    from agent_backbone.services.routing import safe_deliver
+    from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+    db = api_app.state.db
+    resp, _ = await _send(api_client, auth_headers, db, key, _body(_confirmation()))
+    queue_id, operation_id = resp.json()["queue_id"], resp.json()["operation_id"]
+    (leased,) = await db.queue.dequeue("ike")  # the drain holds it...
+    async with db.engine.begin() as conn:  # ...when a reset expires it
+        await conn.execute(
+            text("UPDATE message_queue SET status = 'expired' WHERE id = :i"), {"i": queue_id}
+        )
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(return_value=SessionProfile("ike", SessionIntelligence.READY)),
+        ),
+        patch("agent_backbone.services.routing._delivery.send_message", AsyncMock()) as send,
+    ):
+        report = await safe_deliver(
+            "ike",
+            leased["message"],
+            config,
+            db=db,
+            delivery_kind="direct_message",
+            sender=SENDER,
+            requeue=False,
+            operation_id=operation_id,
+            queue_id=queue_id,
+        )
+    send.assert_not_awaited()
+    assert report.outcome == DeliveryOutcome.ALREADY_DELIVERED

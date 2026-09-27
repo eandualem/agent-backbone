@@ -40,19 +40,22 @@ def refuse(status: int, reason: str, message: str) -> HTTPException:
 
 
 def check(confirmation: OwnerConfirmation, text: str, signed: SignedSender | None) -> None:
-    """Refuse a confirmation that isn't signed, doesn't match the text, or is
-    too old; nothing is recorded on a refusal."""
+    """Refuse a confirmation that isn't signed or doesn't match the text;
+    nothing is recorded on a refusal. Its age is checked at admission, where an
+    identical confirmation already admitted is recovered whatever its age."""
     if signed is None or not signed.nonce_in_route:
         raise refuse(
             403, "not_enrolled", "a confirmation needs a request signed by an enrolled key"
         )
     if hashlib.sha256(text.encode("utf-8")).hexdigest() != confirmation.text_sha256:
         raise refuse(400, "text_hash_mismatch", "text_sha256 does not match the message")
+
+
+def fresh(confirmation: OwnerConfirmation, signed: SignedSender) -> bool:
+    """Whether a new confirmation is recent enough to admit."""
     confirmed = datetime.fromisoformat(confirmation.confirmed_at).timestamp()
-    if signed.timestamp - confirmed > MAX_AGE_SECONDS or confirmed - signed.timestamp > (
-        signing.SKEW_SECONDS
-    ):
-        raise refuse(400, "confirmation_expired", "confirmed_at is outside the allowed age")
+    age = signed.timestamp - confirmed
+    return -signing.SKEW_SECONDS <= age <= MAX_AGE_SECONDS
 
 
 def receipt_fields(
@@ -81,16 +84,25 @@ def receipt_fields(
     }
 
 
-async def admit(db, signed: SignedSender, receipt: dict, queue: dict | None) -> tuple[str, dict]:
+async def admit(
+    db, signed: SignedSender, receipt: dict, queue: dict | None, *, is_fresh: bool
+) -> tuple[str, dict]:
     """Commit the confirmation; ``(outcome, receipt row)``. Refuses a reused
-    nonce or a confirmation id taken by a different confirmation (409)."""
+    nonce or a confirmation id taken by a different confirmation (409), a key
+    reset since the request was checked (403) and a new confirmation that is
+    too old (400)."""
     outcome, row = await db.signing.admit(
         nonce=signed.nonce,
         request_hash=signed.request_hash,
         now=int(time.time()),
         receipt=receipt,
         queue=queue,
+        fresh=is_fresh,
     )
+    if outcome == "epoch_changed":
+        raise refuse(403, "key_epoch_unknown", "the key was reset; sign with the current key")
+    if outcome == "expired":
+        raise refuse(400, "confirmation_expired", "confirmed_at is outside the allowed age")
     if outcome == "nonce_reused":
         raise refuse(
             409, "nonce_reused", "this nonce was already used; sign again with a fresh one"

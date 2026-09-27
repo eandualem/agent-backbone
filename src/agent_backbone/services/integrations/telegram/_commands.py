@@ -33,7 +33,7 @@ from agent_backbone.services.integrations.telegram._routing import _delivery_rep
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     process_message_for_discovery,
 )
-from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.routing import revocation_guard, safe_deliver
 from agent_backbone.services.terminal import list_sessions, session_exists
 
 log = logging.getLogger(__name__)
@@ -524,9 +524,10 @@ async def cmd_approve_key(
             "Usage: /approve_key <the 64-character digest from the app>"
         )
         return
-    outcome, transition = await bot._db.signing.apply_transition(
-        digest, now=int(time.time()), by=f"telegram:{owner}"
-    )
+    async with revocation_guard():  # a reset never interleaves with a confirmed paste
+        outcome, transition = await bot._db.signing.apply_transition(
+            digest, now=int(time.time()), by=f"telegram:{owner}"
+        )
     if outcome != "applied":
         await update.message.reply_text(_KEY_OUTCOMES[outcome])
         return

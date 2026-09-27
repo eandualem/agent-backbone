@@ -274,7 +274,7 @@ async def check(db, scope, headers: Headers, body: bytes, route: SenderRoute, pa
         confirmed = (
             route.template in CONFIRMABLE
             and isinstance(parsed, dict)
-            and "owner_confirmation" in parsed
+            and parsed.get("owner_confirmation") is not None
         )
         return await _verify(
             db,

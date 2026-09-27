@@ -115,15 +115,26 @@ async def _confirmed_message(body, target, signed, request, config, db) -> Messa
         "sender": body.from_entity,
         "priority": int(body.priority),
     }
-    outcome, row = await confirmations.admit(db, signed, receipt, queued)
+    outcome, row = await confirmations.admit(
+        db, signed, receipt, queued, is_fresh=confirmations.fresh(confirmation, signed)
+    )
     await deliver_now(config, db, getattr(request.app.state, "github", None), target)
     row = await db.signing.receipt(confirmation.confirmation_id) or row
     state = await db.queue.by_operation(row["operation_id"])
+    status = state["status"] if state else None
     delivered = row["delivered_at"] is not None
     if row["status"] == "revoked":
         result, detail = "revoked", "Its key was reset before delivery; it will not be delivered."
     elif delivered:
         result, detail = "delivered", f"Delivered to {target}."
+    elif status == "uncertain":
+        result = "uncertain"
+        detail = (
+            f"Pasted into {target}, but the paste wasn't confirmed; it is held until "
+            "the agent acknowledges it (backbone inbox)."
+        )
+    elif status == "expired":
+        result, detail = "expired", "It expired before it could be delivered."
     else:
         result = "queued"
         detail = f"Kept for {target}; delivered when the agent is ready."
@@ -133,8 +144,8 @@ async def _confirmed_message(body, target, signed, request, config, db) -> Messa
         ok=delivered,
         session=target,
         outcome=result,
-        queued=state is not None and state["status"] not in ("delivered", "expired"),
-        queue="stored" if result == "queued" else None,
+        queued=status in ("pending", "in_progress", "checkpoint", "uncertain"),
+        queue="stored" if result in ("queued", "uncertain") else None,
         detail=detail,
         operation_id=row["operation_id"],
         queue_id=state["id"] if state else None,
@@ -186,14 +197,16 @@ async def steer(
             kind="steer",
             text=body.message,
         )
-        outcome, row = await confirmations.admit(db, signed, receipt, None)
-        if outcome != "admitted":  # offered once already: never offer it twice
+        outcome, row = await confirmations.admit(
+            db, signed, receipt, None, is_fresh=confirmations.fresh(confirmation, signed)
+        )
+        offered = await db.signing.offer_state(row["operation_id"])
+        if outcome != "admitted" and offered is not None:  # never offer it twice
             row = await db.signing.receipt(confirmation.confirmation_id) or row
-            taken = row["delivered_at"] is not None
             return SteerResponse(
-                ok=True,
+                ok=offered in ("offered", "handed_off"),
                 session=body.target_session,
-                outcome="handed_off" if taken else "offered",
+                outcome=offered,
                 operation_id=row["operation_id"],
                 detail=f"Already admitted as {confirmation.confirmation_id}.",
                 confirmation_id=confirmation.confirmation_id,

@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import FastAPI
 
@@ -30,6 +30,9 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
             prune=AsyncMock(return_value=8), prune_receipts=AsyncMock(return_value=9)
         ),
     )
+    manager = MagicMock()
+    manager.attach_mock(app.state.db.signing.prune_receipts, "receipts")
+    manager.attach_mock(app.state.db.deliveries.prune, "deliveries")
     with (
         patch("agent_backbone.services.scheduler.PeriodicScheduler") as scheduler,
         patch("agent_backbone.services.jobs.UpgradeWatch"),
@@ -61,3 +64,6 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
         app.state.db.signing,
     ):
         repo.prune.assert_awaited_once_with(9)
+    # Receipts take their delivery times from records that the deliveries prune removes.
+    order = [c[0] for c in manager.mock_calls if c[0] in ("receipts", "deliveries")]
+    assert order == ["receipts", "deliveries"]

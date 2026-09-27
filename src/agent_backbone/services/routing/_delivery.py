@@ -100,6 +100,16 @@ _session_locks: WeakValueDictionary[tuple[int, str], asyncio.Lock] = WeakValueDi
 _Result = TypeVar("_Result")
 
 
+_revocation_locks: dict[int, asyncio.Lock] = {}
+
+
+def revocation_guard() -> asyncio.Lock:
+    """Held by an owner-approved key reset and around the last check and paste
+    of a queued owner-confirmed message: a reset lands either before that check
+    (the message is skipped) or after the paste (it counts as delivered)."""
+    return _revocation_locks.setdefault(id(asyncio.get_running_loop()), asyncio.Lock())
+
+
 def _serialized(fn: Callable[..., Awaitable[_Result]]):
     """One gate/paste/record transaction per session; idle locks are released.
 
@@ -543,8 +553,24 @@ async def safe_deliver(
             )
 
     uncertain = False
+    revoked = False
 
     async def submit() -> bool:
+        nonlocal revoked
+        if (
+            queue_id is not None
+            and not requeue
+            and db is not None
+            and await db.signing.is_confirmation(operation_id)
+        ):
+            async with revocation_guard():
+                if not await db.queue.still_leased(queue_id):
+                    revoked = True  # a key reset expired it: never paste it
+                    return False
+                return await paste()
+        return await paste()
+
+    async def paste() -> bool:
         nonlocal uncertain
         pasted_at = time.time()
         note_submission(config.state_dir, session_name)
@@ -588,6 +614,8 @@ async def safe_deliver(
             return await finish(DeliveryOutcome.NOT_WAITING, queue=False)
         if await submit():
             return await finish(DeliveryOutcome.DELIVERED, queue=False)
+        if revoked:
+            return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED, operation_id=operation_id)
         return await finish(DeliveryOutcome.DELIVERY_FAILED, queue=False)
 
     if intel in BLOCKED_OUTCOMES:
@@ -658,6 +686,8 @@ async def safe_deliver(
     # 4. Paste + submit
     if await submit():
         return await finish(DeliveryOutcome.DELIVERED, queue=False)
+    if revoked:
+        return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED, operation_id=operation_id)
     report = await finish(DeliveryOutcome.DELIVERY_FAILED, queue=True)
     if uncertain:
         return DeliveryReport(

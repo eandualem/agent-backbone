@@ -14,6 +14,7 @@ from agent_backbone.services.routing._delivery import (
     checkpoint_inbox,
     is_acknowledged,
     queue_detail,
+    revocation_guard,
     safe_deliver,
 )
 from agent_backbone.services.routing._dependencies import sync_dependencies
@@ -75,6 +76,7 @@ __all__ = [
     "queue_scope",
     "quote_envelope_lines",
     "retry_outbox",
+    "revocation_guard",
     "route_issue",
     "routing_in_flight",
     "safe_deliver",

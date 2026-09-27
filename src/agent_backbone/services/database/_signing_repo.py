@@ -542,6 +542,7 @@ class SigningRepo(Repo):
         now: int,
         receipt: dict,
         queue: dict | None,
+        fresh: bool = True,
     ) -> tuple[str, dict | None]:
         """Commit a confirmation in one transaction: the nonce, the receipt and,
         for a message, its queued delivery.
@@ -549,15 +550,26 @@ class SigningRepo(Repo):
         Returns ``("admitted", receipt)``; ``("replay", receipt)`` for an
         identical retry with the same nonce; ``("recovered", receipt)`` for the
         same confirmation, unchanged, under a fresh nonce; ``("nonce_reused",
-        None)``; or ``("conflict", None)`` when the confirmation id is taken by
-        a different confirmation. Nothing is written unless admitted or
-        recovered."""
+        None)``; ``("conflict", None)`` when the confirmation id is taken by
+        a different confirmation; ``("epoch_changed", None)`` when the key was
+        reset since the request was checked; or ``("expired", None)`` for a new
+        confirmation that isn't ``fresh`` (an identical one is still
+        recovered). Nothing is written unless admitted or recovered."""
         key, epoch = receipt["sender_key"], receipt["key_epoch"]
         async with self._tx() as conn:
-            await conn.execute(
+            await conn.execute(  # also takes SQLite's write lock for what follows
                 text("DELETE FROM signing_nonces WHERE seen_at < :cutoff"),
                 {"cutoff": now - NONCE_RETENTION_SECONDS},
             )
+            lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
+            current = (
+                await conn.execute(
+                    text(f"SELECT epoch FROM signing_enrollments WHERE sender_key = :k{lock}"),
+                    {"k": key},
+                )
+            ).scalar()
+            if current != epoch:  # reset after the request was checked
+                return "epoch_changed", None
             seen = (
                 await conn.execute(
                     text(
@@ -581,6 +593,8 @@ class SigningRepo(Repo):
                 return "nonce_reused", None
             if existing is not None and not same:
                 return "conflict", None
+            if existing is None and not fresh:
+                return "expired", None
             await conn.execute(
                 text(
                     "INSERT INTO signing_nonces (sender_key, epoch, nonce, request_hash, seen_at)"
@@ -620,6 +634,33 @@ class SigningRepo(Repo):
                     },
                 )
         return "admitted", dict(row._mapping)
+
+    async def is_confirmation(self, operation_id: str | None) -> bool:
+        """Whether an operation delivers an owner confirmation."""
+        if not operation_id:
+            return False
+        async with self._tx() as conn:
+            row = (
+                await conn.execute(
+                    text("SELECT 1 FROM signing_receipts WHERE operation_id = :op"),
+                    {"op": operation_id},
+                )
+            ).fetchone()
+        return row is not None
+
+    async def offer_state(self, operation_id: str) -> str | None:
+        """The latest recorded outcome of a confirmed steer's offer, or None
+        when it was never offered."""
+        async with self._tx() as conn:
+            return (
+                await conn.execute(
+                    text(
+                        "SELECT outcome FROM deliveries WHERE operation_id = :op"
+                        " ORDER BY id DESC LIMIT 1"
+                    ),
+                    {"op": operation_id},
+                )
+            ).scalar()
 
     async def discard(self, confirmation_id: str) -> None:
         """Forget a confirmation that was never offered (a refused steer)."""
