@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 0d778aea511e
+Revision ID: 0eac83053d6a
 Revises:
-Create Date: 2026-09-27 21:49:42.702453
+Create Date: 2026-09-27 22:26:28.924302
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0d778aea511e"
+revision: str = "0eac83053d6a"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -132,6 +132,7 @@ def upgrade() -> None:
         sa.Column("source", sa.Text(), server_default="", nullable=False),
         sa.Column("preview", sa.Text(), server_default="", nullable=False),
         sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("settled_at", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_deliveries")),
     )
     with op.batch_alter_table("deliveries", schema=None) as batch_op:
@@ -440,6 +441,7 @@ def upgrade() -> None:
         sa.Column("outcome", sa.Text(), nullable=True),
         sa.Column("offer_state", sa.Text(), nullable=True),
         sa.Column("offer_claimed_at", sa.BigInteger(), nullable=True),
+        sa.Column("offer_token", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("seq", name=op.f("pk_signing_receipts")),
         sa.UniqueConstraint("confirmation_id", name=op.f("uq_signing_receipts_confirmation_id")),
         sa.UniqueConstraint("operation_id", name=op.f("uq_signing_receipts_operation_id")),

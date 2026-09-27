@@ -57,7 +57,8 @@ _SETTLE_CLAIM = """UPDATE signing_receipts SET offer_state = CASE WHEN (
 """Only a claim nobody holds any more (older than a minute): an active one is
 settled by the request that holds it, once its offer is published or not."""
 _SYNC_DELIVERED = """UPDATE signing_receipts SET delivered_at = (
-        SELECT MIN(d.created_at) FROM deliveries d
+        SELECT MIN(CASE WHEN d.outcome = 'handed_off'
+          THEN COALESCE(d.settled_at, d.created_at) ELSE d.created_at END) FROM deliveries d
         WHERE d.operation_id = signing_receipts.operation_id
           AND d.outcome IN ('delivered', 'handed_off'))
     WHERE delivered_at IS NULL {where} AND EXISTS (
@@ -728,10 +729,11 @@ class SigningRepo(Repo):
             ).scalar()
         return status == "revoked"
 
-    async def claim_offer(self, confirmation_id: str, now: int) -> bool:
-        """Claim the one offer of a confirmed steer. False when it was offered
+    async def claim_offer(self, confirmation_id: str, now: int) -> str | None:
+        """Claim the one offer of a confirmed steer: a token only its holder
+        can publish, mark offered or discard with. None when it was offered
         already, or another request is offering it now. A claim older than a
-        minute whose offer was recorded is marked offered, not offered again."""
+        minute whose offer was recorded is settled from that, not offered again."""
         async with self._tx() as conn:
             await _settle(conn, "AND confirmation_id = :c", {"c": confirmation_id})
             row = (
@@ -744,7 +746,7 @@ class SigningRepo(Repo):
                 )
             ).fetchone()
             if row is None or row.offer_state in ("offered", "failed"):
-                return False
+                return None
             if row.delivered_at is not None or row.outcome is not None:
                 # Its attempt is on record already: settle the claim from it.
                 reached = row.delivered_at is not None or row.outcome == "not_taken"
@@ -755,10 +757,10 @@ class SigningRepo(Repo):
                     ),
                     {"c": confirmation_id, "state": "offered" if reached else "failed"},
                 )
-                return False
+                return None
             if row.offer_state == "claiming":
                 if row.offer_claimed_at > now - CLAIM_SECONDS:
-                    return False
+                    return None
                 recorded = (
                     await conn.execute(
                         text(
@@ -777,36 +779,53 @@ class SigningRepo(Repo):
                         ),
                         {"c": confirmation_id, "state": "offered" if reached else "failed"},
                     )
-                    return False
+                    return None
+            token = uuid.uuid4().hex
             claimed = await conn.execute(
                 text(
                     "UPDATE signing_receipts SET offer_state = 'claiming',"
-                    " offer_claimed_at = :now WHERE confirmation_id = :c"
+                    " offer_claimed_at = :now, offer_token = :token WHERE confirmation_id = :c"
                     " AND (offer_state IS NULL OR offer_claimed_at = :was)"
                 ),
-                {"c": confirmation_id, "now": now, "was": row.offer_claimed_at},
+                {"c": confirmation_id, "now": now, "was": row.offer_claimed_at, "token": token},
             )
-        return claimed.rowcount == 1
+        return token if claimed.rowcount == 1 else None
 
-    async def mark_offered(self, confirmation_id: str) -> None:
+    async def holds_claim(self, confirmation_id: str, token: str) -> bool:
+        """Whether ``token`` still holds the offer's claim (none replaced it)."""
+        async with self._tx() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT 1 FROM signing_receipts WHERE confirmation_id = :c"
+                        " AND offer_state = 'claiming' AND offer_token = :t"
+                    ),
+                    {"c": confirmation_id, "t": token},
+                )
+            ).fetchone()
+        return row is not None
+
+    async def mark_offered(self, confirmation_id: str, token: str) -> None:
         async with self._tx() as conn:
             await conn.execute(
                 text(
-                    "UPDATE signing_receipts SET offer_state = 'offered' WHERE confirmation_id = :c"
+                    "UPDATE signing_receipts SET offer_state = 'offered'"
+                    " WHERE confirmation_id = :c AND offer_token = :t"
                 ),
-                {"c": confirmation_id},
+                {"c": confirmation_id, "t": token},
             )
 
-    async def discard(self, confirmation_id: str) -> None:
-        """Forget a confirmation that was never offered (a refused steer)."""
+    async def discard(self, confirmation_id: str, token: str) -> None:
+        """Forget a confirmation that was never offered (a refused steer), for
+        the request holding its claim."""
         async with self._tx() as conn:
             await conn.execute(
                 text(
                     "DELETE FROM signing_receipts WHERE confirmation_id = :c"
-                    " AND delivered_at IS NULL"
+                    " AND delivered_at IS NULL AND offer_token = :t"
                     " AND (offer_state IS NULL OR offer_state IN ('claiming', 'failed'))"
                 ),
-                {"c": confirmation_id},
+                {"c": confirmation_id, "t": token},
             )
 
     async def receipt(self, confirmation_id: str) -> dict | None:

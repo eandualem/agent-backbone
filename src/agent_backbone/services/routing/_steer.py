@@ -73,12 +73,14 @@ async def steer_agent(
     confirmation_id: str | None = None,
     relay: bool = False,
     operation_id: str | None = None,
+    claim_token: str | None = None,
 ) -> SteerReport:
     """Offer ``text`` to the agent's current turn, or refuse with the reason.
 
     ``confirmation_id`` puts the owner-confirmed marker in the envelope (only
     for a verified confirmation); ``relay`` labels a signed, unconfirmed steer;
-    ``operation_id`` ties the offer to its receipt."""
+    ``operation_id`` ties the offer to its receipt, and ``claim_token`` is
+    the request's claim on its one offer: it publishes only while it holds it."""
     # The turn this steer is for, read before the checks: a turn that ends
     # (or ends and another starts) while the offer is written is caught below.
     turn = await asyncio.to_thread(_hook_record, config, session_name)
@@ -129,6 +131,13 @@ async def steer_agent(
                 session_name,
                 "revoked",
                 evidence=[*evidence, "its key was reset: the confirmation no longer holds"],
+            )
+        if claim_token and not await db.signing.holds_claim(confirmation_id, claim_token):
+            return SteerReport(
+                "refused",
+                session_name,
+                "claim_lost",
+                evidence=[*evidence, "another request took over this confirmation's offer"],
             )
         delivery_id = await db.deliveries.record(
             issue_number=None,

@@ -216,7 +216,8 @@ async def steer(
                 db, exc, sender=body.from_entity, path="/api/steer", target=body.target_session
             )
             raise
-        if not await db.signing.claim_offer(confirmation.confirmation_id, int(time.time())):
+        token = await db.signing.claim_offer(confirmation.confirmation_id, int(time.time()))
+        if token is None:
             # Offered once already, or an earlier request is offering it now:
             # a confirmed steer is never offered twice.
             row = await db.signing.receipt(confirmation.confirmation_id) or row
@@ -256,12 +257,15 @@ async def steer(
             sender=body.from_entity,
             confirmation_id=confirmation.confirmation_id,
             operation_id=row["operation_id"],
+            claim_token=token,
         )
         if report.outcome == "offered":
-            await db.signing.mark_offered(confirmation.confirmation_id)
-        else:
+            await db.signing.mark_offered(confirmation.confirmation_id, token)
+        elif report.reason != "claim_lost":
             # Nothing was offered: the confirmation may be sent again.
-            await db.signing.discard(confirmation.confirmation_id)
+            await db.signing.discard(confirmation.confirmation_id, token)
+            row = None
+        else:  # another request holds its offer now; its receipt stays
             row = None
     if report.outcome == "offered":
         detail = (

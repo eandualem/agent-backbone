@@ -224,6 +224,8 @@ class DeliveryORM(Base):
     """Which code path made the attempt (``issue-dispatcher``, ``api-messages``, …)."""
     preview: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    settled_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """When a later outcome replaced the first (a steer's handoff time)."""
 
     __table_args__ = (
         Index("idx_deliveries_issue", "repo", "issue_number"),
@@ -652,6 +654,8 @@ class SigningReceiptORM(Base):
     ``offered`` (permanent: it is never offered again) or ``failed`` (an
     interrupted attempt that never reached the agent: confirm it again)."""
     offer_claimed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    offer_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The claim's holder: only it may publish, mark offered or discard."""
     __table_args__ = (
         Index("idx_signing_receipts_sender", "sender_key", "seq"),
         # seq is the reconciliation cursor: never reuse a pruned value.

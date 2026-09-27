@@ -184,7 +184,7 @@ async def test_a_confirmed_steer_is_offered_with_its_marker(api_client, auth_hea
     assert resp.status_code == 200 and resp.json()["receipt"]["kind"] == "steer"
     kwargs = offered.await_args.kwargs
     assert kwargs["confirmation_id"] == confirmation["confirmation_id"]
-    assert kwargs["operation_id"] == resp.json()["operation_id"]
+    assert kwargs["operation_id"] == resp.json()["operation_id"] and kwargs["claim_token"]
 
 
 async def test_a_refused_steer_commits_no_receipt(api_client, auth_headers, api_app, key):
@@ -936,7 +936,8 @@ async def test_an_active_claim_is_settled_only_by_its_request(
         receipt=_steer_receipt(confirmation, operation_id),
         queue=None,
     )
-    assert await db.signing.claim_offer(confirmation["confirmation_id"], int(real_time.time()))
+    token = await db.signing.claim_offer(confirmation["confirmation_id"], int(real_time.time()))
+    assert token
     await db.deliveries.record(
         issue_number=None,
         target_entity="ike",
@@ -949,7 +950,7 @@ async def test_an_active_claim_is_settled_only_by_its_request(
     )
     row = await db.signing.receipt(confirmation["confirmation_id"])  # a poll settles receipts
     assert row["offer_state"] == "claiming"
-    await db.signing.discard(confirmation["confirmation_id"])  # its publish failed
+    await db.signing.discard(confirmation["confirmation_id"], token)  # its publish failed
     assert await db.signing.receipt(confirmation["confirmation_id"]) is None
 
 
@@ -986,3 +987,73 @@ async def test_the_receipt_alone_proves_a_delivery_after_retention(
         )
     send.assert_not_awaited()
     assert report.outcome == DeliveryOutcome.ALREADY_DELIVERED
+
+
+async def test_a_claim_taken_over_can_not_publish(api_client, auth_headers, api_app, key, config):
+    """A request that stalled past its claim loses it: only one offer goes out."""
+    from agent_backbone.services.agents import AgentState
+    from agent_backbone.services.routing import steer_agent
+    from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+    db = api_app.state.db
+    confirmation = _confirmation()
+    operation_id = uuid.uuid4().hex
+    await db.signing.admit(
+        nonce="4" * 32,
+        request_hash="h",
+        now=NOW,
+        receipt=_steer_receipt(confirmation, operation_id),
+        queue=None,
+    )
+    stalled = await db.signing.claim_offer(confirmation["confirmation_id"], NOW)
+    retry = await db.signing.claim_offer(confirmation["confirmation_id"], NOW + 61)
+    assert stalled and retry and stalled != retry
+    working = SessionProfile(
+        "ike", SessionIntelligence.AGENT_WORKING, runtime="claude", agent_state=AgentState.BUSY
+    )
+    steer = "agent_backbone.services.routing._steer"
+    with (
+        patch(f"{steer}.get_session_intelligence", AsyncMock(return_value=working)),
+        patch(f"{steer}.query_environment_var", AsyncMock(return_value="L1")),
+    ):
+        report = await steer_agent(
+            "ike",
+            TEXT,
+            config,
+            db=db,
+            sender=SENDER,
+            confirmation_id=confirmation["confirmation_id"],
+            operation_id=operation_id,
+            claim_token=stalled,
+        )
+    assert report.outcome == "refused" and report.reason == "claim_lost"
+    assert await db.deliveries.query(session_name="ike", kind="steer") == []
+    assert await db.signing.holds_claim(confirmation["confirmation_id"], retry)
+
+
+async def test_a_steer_is_delivered_when_its_handoff_is_recorded(api_app, key):
+    db = api_app.state.db
+    confirmation = _confirmation()
+    operation_id = uuid.uuid4().hex
+    await db.signing.admit(
+        nonce="5" * 32,
+        request_hash="h",
+        now=NOW,
+        receipt=_steer_receipt(confirmation, operation_id),
+        queue=None,
+    )
+    delivery_id = await db.deliveries.record(
+        issue_number=None,
+        target_entity="ike",
+        session_name="ike",
+        outcome="offered",
+        source="api-steer",
+        kind="steer",
+        preview="x",
+        operation_id=operation_id,
+    )
+    async with db.engine.begin() as conn:  # offered minutes before the hook took it
+        await conn.execute(text("UPDATE deliveries SET created_at = '2026-01-01T00:00:00.000000Z'"))
+    await db.deliveries.settle(delivery_id, "handed_off", expected="offered")
+    receipt = await db.signing.receipt(confirmation["confirmation_id"])
+    assert receipt["delivered_at"] > "2026-01-01T00:00:00.000000Z"
