@@ -103,6 +103,16 @@ def now() -> int:
     return int(time.time())
 
 
+def route_path(scope) -> str:
+    """The path the router matches: without ``root_path`` when the app is
+    mounted under a prefix (as Starlette's own routing does)."""
+    path: str = scope["path"]
+    root = scope.get("root_path", "")
+    if root and path.startswith(root) and path[len(root) : len(root) + 1] == "/":
+        return path[len(root) :]
+    return path
+
+
 def match(method: str, path: str) -> tuple[SenderRoute, re.Match[str]] | None:
     for route in SENDER_ROUTES:
         if route.method == method:
@@ -121,7 +131,7 @@ class SignedSenderMiddleware:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
-        found = match(scope["method"], scope["path"])
+        found = match(scope["method"], route_path(scope))
         state = scope["app"].state
         config = getattr(state, "config", None)
         db = getattr(state, "db", None)

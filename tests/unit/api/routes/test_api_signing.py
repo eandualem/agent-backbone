@@ -382,3 +382,31 @@ async def test_a_signing_name_is_printable_ascii(api_client, auth_headers):
         },
     )
     assert resp.status_code == 422
+
+
+@pytest.mark.parametrize("sender", ["unknown", "Backbone"])
+async def test_a_name_the_api_fills_in_can_not_sign(api_client, auth_headers, sender):
+    resp = await api_client.post(
+        "/api/signing/transitions",
+        headers=auth_headers,
+        json={
+            "sender": sender,
+            "action": "set",
+            "expected_epoch": 0,
+            "new_public_key": signing.b64url_encode(b"k" * 32),
+            "request_id": str(uuid.uuid4()),
+            "proof": "x",
+        },
+    )
+    assert resp.status_code == 422
+
+
+async def test_enforced_when_the_app_is_mounted_under_a_prefix(api_app, auth_headers, deliver):
+    from httpx import ASGITransport, AsyncClient
+
+    transport = ASGITransport(app=api_app, root_path="/bb")
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await _enroll(client, auth_headers, api_app.state.db, Ed25519PrivateKey.generate())
+        resp = await client.post("/bb/api/messages", headers=auth_headers, json=MESSAGE)
+    assert resp.status_code == 403
+    deliver.assert_not_awaited()

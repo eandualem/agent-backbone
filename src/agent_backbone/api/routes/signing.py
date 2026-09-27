@@ -21,6 +21,9 @@ from agent_backbone.services.integrations import notify_humans
 router = APIRouter(prefix="/api/signing", tags=["signing"])
 
 TRANSITION_SECONDS = 900
+DEFAULT_SENDERS = frozenset({"unknown", "backbone"})
+"""Names the API fills in when a request gives none (a skill change's actor, a
+restart's continuation); enrolling one would leave an unsigned path to it."""
 
 
 class TransitionRequest(BaseModel):
@@ -42,6 +45,8 @@ class TransitionRequest(BaseModel):
         envelope_sender(value)
         if not value.isascii() or not value.isprintable():
             raise ValueError("a signing sender name is printable ASCII")
+        if signing.same_name(value) in DEFAULT_SENDERS:
+            raise ValueError(f"'{value}' is what Backbone records when no sender is given")
         return value
 
 
