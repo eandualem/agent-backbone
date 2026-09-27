@@ -18,6 +18,7 @@ from fastapi import Request
 from agent_backbone.api.confirmations import refuse
 from agent_backbone.config import AgentSpec, BackboneConfig
 from agent_backbone.services.integrations import notify_humans
+from agent_backbone.services.routing import settle_steers
 from agent_backbone.services.terminal import CallerUnknown, caller_sessions
 
 INCIDENT_SECONDS = 600
@@ -54,12 +55,12 @@ _CACHED = frozenset(
         "wrong_recipient",
         "revoked",
         "claim_window_passed",
-        "wrong_workspace",
         "grant_expired",
     }
 )
 """Refusals that don't change with time: repeated within an incident without a check."""
 _UNIDENTIFIED = ""
+_sleep = asyncio.sleep
 
 
 @dataclass
@@ -78,6 +79,10 @@ class Validations:
     def __init__(self) -> None:
         self._incidents: dict[str, _Incident] = {}
         self._notices: set[asyncio.Task] = set()
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def lock(self, caller: str) -> asyncio.Lock:
+        return self._locks.setdefault(caller, asyncio.Lock())
 
     def _current(self, caller: str, now: float) -> _Incident | None:
         incident = self._incidents.get(caller)
@@ -120,7 +125,7 @@ class Validations:
 
     @staticmethod
     async def _notice(config: BackboneConfig, caller: str, incident: _Incident) -> None:
-        await asyncio.sleep(NOTICE_SECONDS)
+        await _sleep(NOTICE_SECONDS)
         who = f"agent '{caller}'" if caller else "callers Backbone couldn't identify"
         count = sum(incident.reasons.values())
         reasons = ", ".join(f"{reason} ×{n}" for reason, n in sorted(incident.reasons.items()))
@@ -149,6 +154,16 @@ async def caller_agent(request: Request, config: BackboneConfig) -> AgentSpec:
     return next(iter(found.values()))
 
 
+async def _check(db, agent: AgentSpec, confirmation_id: str, done: bool):
+    return await db.signing.validate(
+        confirmation_id,
+        agent=agent.name,
+        workspace=str(agent.path),
+        done=done,
+        now=int(time.time()),
+    )
+
+
 async def validate(request: Request, config: BackboneConfig, db, confirmation_id: str, done: bool):
     """Claim, recover or close the calling agent's grant; the confirmed text
     is returned only on a claim or recovery."""
@@ -160,19 +175,21 @@ async def validate(request: Request, config: BackboneConfig, db, confirmation_id
         validations.failed(config, _UNIDENTIFIED, confirmation_id, "caller_unidentified", now)
         status, message = REFUSALS["caller_unidentified"]
         raise refuse(status, "caller_unidentified", f"{message}: {exc}") from exc
-    if reason := validations.refused(agent.name, confirmation_id, now):
-        validations.failed(config, agent.name, confirmation_id, reason, now, checked=False)
-        raise refuse(REFUSALS[reason][0], reason, REFUSALS[reason][1])
-    outcome, record = await db.signing.validate(
-        confirmation_id,
-        agent=agent.name,
-        workspace=str(agent.path),
-        done=done,
-        now=int(time.time()),
-    )
-    if record is None:
-        validations.failed(config, agent.name, confirmation_id, outcome, now)
-        raise refuse(REFUSALS[outcome][0], outcome, REFUSALS[outcome][1])
+    # One check at a time per caller, so a burst can't outrun the bound.
+    async with validations.lock(agent.name):
+        now = time.monotonic()
+        if reason := validations.refused(agent.name, confirmation_id, now):
+            validations.failed(config, agent.name, confirmation_id, reason, now, checked=False)
+            raise refuse(REFUSALS[reason][0], reason, REFUSALS[reason][1])
+        outcome, record = await _check(db, agent, confirmation_id, done)
+        if outcome == "not_delivered":
+            # A steer the agent's hook just took is recorded on the next
+            # settle tick; settle it now rather than refuse the recipient.
+            await settle_steers(config, db)
+            outcome, record = await _check(db, agent, confirmation_id, done)
+        if record is None:
+            validations.failed(config, agent.name, confirmation_id, outcome, now)
+            raise refuse(REFUSALS[outcome][0], outcome, REFUSALS[outcome][1])
     receipt, grant = record["receipt"], record["grant"]
     result = {
         "confirmation_id": confirmation_id,

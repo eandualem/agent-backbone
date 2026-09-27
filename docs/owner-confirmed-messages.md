@@ -454,7 +454,7 @@ confirmation id.
 
 - A confirmation can be claimed once it has reached the agent: delivered, or
   read from the agent's inbox (`backbone inbox`), or held there as uncertain,
-  before it is acknowledged.
+  before it is acknowledged. A steer counts once the agent's hook took it.
 - The first claim must come within 24 hours of delivery. For a message still
   held in the inbox, the 24 hours count from its admission.
 - A grant lasts 24 hours from the claim, or until `--done`.
@@ -510,12 +510,13 @@ answering. A caller that is not the confirmation's recipient gets no text.
 Failed validations are bounded per caller (an agent, or all callers that
 couldn't be identified). An incident lasts until 10 minutes pass without a
 failed check. Within it, a refusal that can't change (`unknown_confirmation`,
-`wrong_recipient`, `revoked`, `claim_window_passed`, `wrong_workspace`,
-`grant_expired`) is repeated for the same id without a check, and after 10
-failed checks every further validation is refused as `rate_limited`. The
-owner gets one notice per incident, 30 seconds after its first failure, with
-the count by reason. These counters live in the running service and restart
-with it. An outage blocks only the step that depends on the confirmation.
+`wrong_recipient`, `revoked`, `claim_window_passed`, `grant_expired`) is
+repeated for the same id without a check, and after 10 failed checks every
+further validation is refused as `rate_limited`. One caller's checks run one
+at a time. The owner gets one notice per incident, 30 seconds after its first
+failure, with the count by reason. These counters live in the running service
+and restart with it. An outage blocks only the step that depends on the
+confirmation.
 
 ## Known limitations
 

@@ -7,7 +7,7 @@ import time
 import uuid
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -72,10 +72,23 @@ def clock(monkeypatch):
 
 @pytest.fixture
 def notices(monkeypatch):
-    monkeypatch.setattr(validation, "NOTICE_SECONDS", 0.05)
+    """Owner notices, sent when the test releases the incident's wait."""
+    release = asyncio.Event()
+
+    async def wait(seconds):
+        await release.wait()
+
+    monkeypatch.setattr(validation, "_sleep", wait)
     notify = AsyncMock(return_value=True)
     monkeypatch.setattr(validation, "notify_humans", notify)
-    return notify
+    return SimpleNamespace(notify=notify, release=release)
+
+
+async def _released(notices) -> None:
+    notices.release.set()
+    for _ in range(5):
+        await asyncio.sleep(0)
+    notices.release.clear()
 
 
 async def _admitted(client, headers, db, key, text=TEXT) -> dict:
@@ -253,14 +266,88 @@ async def test_failures_are_bounded_cached_and_noticed_once_per_incident(
     repeat = await _validate(api_client, auth_headers, fabricated[0])
     assert _reason(repeat) == "unknown_confirmation"
 
-    await asyncio.sleep(0.1)
-    notices.assert_awaited_once()
-    text = notices.await_args.args[1]
+    await _released(notices)
+    notices.notify.assert_awaited_once()
+    text = notices.notify.await_args.args[1]
     assert "12 failed validations" in text and "agent 'ike'" in text
     assert "rate_limited ×1" in text and "unknown_confirmation ×11" in text
 
     clock.mono += validation.INCIDENT_SECONDS  # quiet long enough: a new incident
     resp = await _validate(api_client, auth_headers, str(uuid.uuid4()))
     assert _reason(resp) == "unknown_confirmation"
-    await asyncio.sleep(0.1)
-    assert notices.await_count == 2
+    await _released(notices)
+    assert notices.notify.await_count == 2
+
+
+async def test_a_steer_counts_as_soon_as_its_hook_took_it(
+    api_client, auth_headers, api_app, key, caller, clock
+):
+    from agent_backbone.hooks.backbone_state import STEER_PREFIX
+    from agent_backbone.services.agents import AgentState
+    from agent_backbone.services.routing import steer_agent
+    from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+    db, config = api_app.state.db, api_app.state.config
+    confirmation = _confirmation()
+    operation_id = uuid.uuid4().hex
+    receipt = {
+        "confirmation_id": confirmation["confirmation_id"],
+        "sender": SENDER,
+        "sender_key": SENDER,
+        "recipient": "ike",
+        "delivered_to": "ike",
+        "kind": "steer",
+        "text": TEXT,
+        "text_sha256": confirmation["text_sha256"],
+        "source": "button",
+        "confirmed_at": confirmation["confirmed_at"],
+        "key_epoch": 1,
+        "operation_id": operation_id,
+    }
+    await db.signing.admit(nonce="3" * 32, request_hash="h", now=NOW, receipt=receipt, queue=None)
+    working = SessionProfile(
+        "ike", SessionIntelligence.AGENT_WORKING, runtime="claude", agent_state=AgentState.BUSY
+    )
+    steer = "agent_backbone.services.routing._steer"
+    with (
+        patch(f"{steer}.get_session_intelligence", AsyncMock(return_value=working)),
+        patch(f"{steer}.query_environment_var", AsyncMock(return_value="L1")),
+    ):
+        report = await steer_agent(
+            "ike",
+            TEXT,
+            config,
+            db=db,
+            sender=SENDER,
+            confirmation_id=confirmation["confirmation_id"],
+            operation_id=operation_id,
+        )
+    assert report.outcome == "offered"
+    (offer,) = config.state_dir.rglob(f"{STEER_PREFIX}*.md")
+    offer.rename(offer.with_suffix(".taken"))  # what the hook does; no settle tick has run
+    resp = await _validate(api_client, auth_headers, confirmation["confirmation_id"])
+    assert resp.status_code == 200 and resp.json()["kind"] == "steer", resp.text
+
+
+async def test_a_burst_cant_outrun_the_bound(api_client, auth_headers, caller, clock):
+    burst = [
+        _validate(api_client, auth_headers, str(uuid.uuid4()))
+        for _ in range(3 * validation.MAX_FAILURES)
+    ]
+    reasons = [_reason(resp) for resp in await asyncio.gather(*burst)]
+    assert reasons.count("unknown_confirmation") == validation.MAX_FAILURES
+    assert reasons.count("rate_limited") == 2 * validation.MAX_FAILURES
+
+
+async def test_a_directory_refusal_is_not_remembered(
+    api_client, auth_headers, api_app, key, drain, caller, clock, tmp_path
+):
+    cid = await _delivered(api_client, auth_headers, api_app.state.db, key)
+    assert (await _validate(api_client, auth_headers, cid)).status_code == 200
+    config = api_app.state.config
+    specs = {spec.name: spec for spec in config.agents}
+    moved = replace(specs["ike"], dir=str(tmp_path / "elsewhere"))
+    api_app.state.config = replace(config, agents=AgentsConfig(specs={**specs, "ike": moved}))
+    assert _reason(await _validate(api_client, auth_headers, cid)) == "wrong_workspace"
+    api_app.state.config = config  # registered in its own directory again
+    assert (await _validate(api_client, auth_headers, cid)).json()["outcome"] == "recovered"
