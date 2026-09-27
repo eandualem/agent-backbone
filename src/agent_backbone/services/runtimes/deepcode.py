@@ -7,8 +7,10 @@ exit`` bar, and while it works a spinner line ``status: processing ·
 <model> <effort>`` with ``press esc to interrupt`` in the footer (a failed
 turn leaves ``status: failed · …``). The model is not a CLI flag: it comes
 from ``MODEL`` in the environment or ``~/.deepcode/settings.json`` (under
-``env``). The permission dialog has not been captured yet, so ``approve``
-refuses this runtime until it has.
+``env``). A permission dialog (live, 0.3.1) replaces the input box: the
+spinner line reads ``status: ask_permission`` above a box with ``Permission
+required 1/1``, the tool and its command, ``Do you want to proceed?`` and
+``> 1. Yes`` / ``2. No``.
 """
 
 from __future__ import annotations
@@ -48,8 +50,7 @@ class DeepCode(Runtime):
         "status: failed",
     )
     busy_markers = ("status: processing", "press esc to interrupt")
-    # prompt_markers / approve_keys: the permission dialog is pending a live
-    # capture (README's Deep Code note).
+    prompt_markers = ("permission required", "do you want to proceed?")
 
     def _is_status_chrome_line(self, line: str) -> bool:
         # The footer wraps at narrow widths and leaves "exit" alone on a line.

@@ -36,7 +36,7 @@ claims support that the adapter's code does not declare.
 | CLI-native memory disabled or detected | ❌ #292 auto-memory is on | ? #292 | ? #292 | ? #292 | ? #292 | ? #292 | n/a |
 | State reported by the runtime (hooks) | ✅ | ✅ from its first prompt (the brief): Codex runs no hook before its first turn | ✅ | ✅ | ❌ #275 read from the terminal only | ❌ #275 read from the terminal only | n/a |
 | Steer and high-priority events into a working agent | ✅ | ✅ | ❌ #276 | ✅ as a user message in the running turn, after the next tool call | ❌ #276 | ❌ #276 | n/a |
-| Permission dialog detected and alerted | ✅ | ✅ | ? #302 markers not verified live | ✅ | ❌ #287 dialog not captured | ? #302 markers not verified live | n/a |
+| Permission dialog detected and alerted | ✅ | ✅ | ? #302 markers not verified live | ✅ | ✅ | ? #302 markers not verified live | n/a |
 | Permission dialog answered (agent approve) | ✅ | ✅ | ❌ #277 | ✅ | ❌ #277 | ❌ #277 | n/a |
 | Permission dialog refused (agent deny) | ✅ | ✅ | ❌ #299 | ❌ #299 | ❌ #299 | ❌ #299 | n/a |
 | Plan approval answered | ✅ | ❌ #278 | ❌ #278 | ❌ #278 | ❌ #278 | ❌ #278 | n/a |
@@ -99,6 +99,7 @@ claims support that the adapter's code does not declare.
 - **Folder trust.** OpenCode and Deep Code show no folder-trust dialog, so
   that row is n/a for them. Every other n/a is the plain shell's.
 - **Deep Code** is `@vegamo/deepcode-cli`, the community CLI DeepSeek's docs
-  point to. Its permission dialog has not been captured, so `agent approve`
-  refuses it until then.
+  point to. Its permission dialog is detected, so the session reads as
+  `waiting_for_human` while it shows, but `agent approve` and `agent deny`
+  do not answer it yet (#277, #299).
 - `backbone runtimes` shows which of these CLIs are installed locally.
