@@ -901,3 +901,88 @@ async def test_a_steer_published_before_a_crash_is_not_offered_again_after_pruni
         )
     offered.assert_not_awaited()
     assert resp.json()["outcome"] == "handed_off"
+
+
+def _steer_receipt(confirmation: dict, operation_id: str) -> dict:
+    return {
+        "confirmation_id": confirmation["confirmation_id"],
+        "sender": SENDER,
+        "sender_key": SENDER,
+        "recipient": "ike",
+        "delivered_to": "ike",
+        "kind": "steer",
+        "text": TEXT,
+        "text_sha256": confirmation["text_sha256"],
+        "source": "button",
+        "confirmed_at": confirmation["confirmed_at"],
+        "key_epoch": 1,
+        "operation_id": operation_id,
+    }
+
+
+async def test_an_active_claim_is_settled_only_by_its_request(
+    api_client, auth_headers, api_app, key
+):
+    """A provisional offer record doesn't make it offered while its file is written."""
+    import time as real_time
+
+    db = api_app.state.db
+    confirmation = _confirmation()
+    operation_id = uuid.uuid4().hex
+    await db.signing.admit(
+        nonce="3" * 32,
+        request_hash="h",
+        now=NOW,
+        receipt=_steer_receipt(confirmation, operation_id),
+        queue=None,
+    )
+    assert await db.signing.claim_offer(confirmation["confirmation_id"], int(real_time.time()))
+    await db.deliveries.record(
+        issue_number=None,
+        target_entity="ike",
+        session_name="ike",
+        outcome="offered",
+        source="api-steer",
+        kind="steer",
+        preview="x",
+        operation_id=operation_id,
+    )
+    row = await db.signing.receipt(confirmation["confirmation_id"])  # a poll settles receipts
+    assert row["offer_state"] == "claiming"
+    await db.signing.discard(confirmation["confirmation_id"])  # its publish failed
+    assert await db.signing.receipt(confirmation["confirmation_id"]) is None
+
+
+async def test_the_receipt_alone_proves_a_delivery_after_retention(
+    api_client, auth_headers, api_app, key, drain, config
+):
+    from agent_backbone.services.routing import safe_deliver
+    from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+    db = api_app.state.db
+    resp, _ = await _send(api_client, auth_headers, db, key, _body(_confirmation()))
+    async with db.engine.begin() as conn:  # delivered long ago; its record was pruned
+        await conn.execute(
+            text("UPDATE signing_receipts SET delivered_at = '2026-01-01T00:00:00.000000Z'")
+        )
+    (leased,) = await db.queue.dequeue("ike")
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(return_value=SessionProfile("ike", SessionIntelligence.READY)),
+        ),
+        patch("agent_backbone.services.routing._delivery.send_message", AsyncMock()) as send,
+    ):
+        report = await safe_deliver(
+            "ike",
+            leased["message"],
+            config,
+            db=db,
+            delivery_kind="direct_message",
+            sender=SENDER,
+            requeue=False,
+            operation_id=resp.json()["operation_id"],
+            queue_id=resp.json()["queue_id"],
+        )
+    send.assert_not_awaited()
+    assert report.outcome == DeliveryOutcome.ALREADY_DELIVERED

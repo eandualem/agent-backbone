@@ -8,6 +8,7 @@ signed by the current key); there is no settings path to it.
 
 from __future__ import annotations
 
+import time
 import uuid
 
 from sqlalchemy import text
@@ -18,6 +19,8 @@ from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 
 NONCE_RETENTION_SECONDS = 3600
+CLAIM_SECONDS = 60
+"""A steer offer's claim older than this is no longer held by its request."""
 RECEIPT_RETENTION_DAYS = 90
 _LIVE = "('pending', 'in_progress', 'checkpoint', 'uncertain')"
 _IMMUTABLE = (
@@ -48,8 +51,11 @@ _SETTLE_CLAIM = """UPDATE signing_receipts SET offer_state = CASE WHEN (
         SELECT d.outcome FROM deliveries d WHERE d.operation_id = signing_receipts.operation_id
         ORDER BY d.id DESC LIMIT 1) IN ('offered', 'handed_off', 'not_taken')
       THEN 'offered' ELSE 'failed' END
-    WHERE kind = 'steer' AND offer_state = 'claiming' {where} AND EXISTS (
+    WHERE kind = 'steer' AND offer_state = 'claiming' AND offer_claimed_at < :claim_cutoff
+      {where} AND EXISTS (
         SELECT 1 FROM deliveries d WHERE d.operation_id = signing_receipts.operation_id)"""
+"""Only a claim nobody holds any more (older than a minute): an active one is
+settled by the request that holds it, once its offer is published or not."""
 _SYNC_DELIVERED = """UPDATE signing_receipts SET delivered_at = (
         SELECT MIN(d.created_at) FROM deliveries d
         WHERE d.operation_id = signing_receipts.operation_id
@@ -64,8 +70,9 @@ async def _settle(conn, where: str = "", params: dict | None = None) -> None:
     expired, not taken), so it outlives those records' shorter retention. A
     revoked receipt still records a handoff that happened (a steer offered
     before the reset can be taken): revocation and delivery are separate facts."""
+    params = {**(params or {}), "claim_cutoff": int(time.time()) - CLAIM_SECONDS}
     for sql in (_SYNC_DELIVERED, _SETTLE_STEER, _SETTLE_MESSAGE, _SETTLE_CLAIM):
-        await conn.execute(text(sql.format(where=where)), params or {})
+        await conn.execute(text(sql.format(where=where)), params)
 
 
 async def _revoke_epoch(conn, sender_key: str, epoch: int, at: str) -> None:
@@ -693,7 +700,8 @@ class SigningRepo(Repo):
         return row is not None
 
     async def was_delivered(self, operation_id: str | None) -> bool:
-        """Whether a successful delivery of this confirmation was recorded."""
+        """Whether a successful delivery of this confirmation was recorded, in
+        the delivery records or on the receipt, which outlives them."""
         if not operation_id:
             return False
         async with self._tx() as conn:
@@ -702,6 +710,8 @@ class SigningRepo(Repo):
                     text(
                         "SELECT 1 FROM deliveries WHERE operation_id = :op"
                         " AND outcome IN ('delivered', 'handed_off')"
+                        " UNION ALL SELECT 1 FROM signing_receipts WHERE operation_id = :op"
+                        " AND delivered_at IS NOT NULL"
                     ),
                     {"op": operation_id},
                 )
@@ -736,9 +746,18 @@ class SigningRepo(Repo):
             if row is None or row.offer_state in ("offered", "failed"):
                 return False
             if row.delivered_at is not None or row.outcome is not None:
-                return False  # it reached the agent's hook once already
+                # Its attempt is on record already: settle the claim from it.
+                reached = row.delivered_at is not None or row.outcome == "not_taken"
+                await conn.execute(
+                    text(
+                        "UPDATE signing_receipts SET offer_state = :state"
+                        " WHERE confirmation_id = :c"
+                    ),
+                    {"c": confirmation_id, "state": "offered" if reached else "failed"},
+                )
+                return False
             if row.offer_state == "claiming":
-                if row.offer_claimed_at > now - 60:
+                if row.offer_claimed_at > now - CLAIM_SECONDS:
                     return False
                 recorded = (
                     await conn.execute(
