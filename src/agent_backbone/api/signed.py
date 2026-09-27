@@ -195,9 +195,10 @@ def _sender(route: SenderRoute, path_match, headers: Headers, body: bytes, any_w
             parsed = signing.strict_json(body)
         except ValueError as exc:  # a duplicate key, or a body the check can't read
             if any_watched:
-                raise Refusal(
-                    422, "malformed_request", f"the body can't be checked: {exc}"
-                ) from exc
+                # A fixed message: the input is never echoed into the response.
+                duplicate = isinstance(exc, signing.DuplicateKey)
+                message = "the body repeats a key" if duplicate else "the body isn't readable JSON"
+                raise Refusal(422, "malformed_request", message) from exc
     if route.where == "path":
         return unquote(path_match.group(route.field))
     if route.where == "header":

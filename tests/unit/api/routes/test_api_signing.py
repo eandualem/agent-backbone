@@ -424,3 +424,17 @@ async def test_a_signed_rotation_with_a_duplicate_key_is_refused(api_client, aut
     )
     assert resp.status_code == 422 and resp.json()["detail"]["reason"] == "malformed_request"
     assert (await db.signing.enrollment(SENDER))["epoch"] == 1
+
+
+@pytest.mark.parametrize("key", ["\\ud800", "k" * 7000])
+async def test_a_refused_body_is_never_echoed(api_client, auth_headers, api_app, deliver, key):
+    await _enroll(api_client, auth_headers, api_app.state.db, Ed25519PrivateKey.generate())
+    body = f'{{"from_entity":"assistant","{key}":1,"{key}":2}}'
+    resp = await api_client.post(
+        "/api/messages", headers={**auth_headers, "Content-Type": "application/json"}, content=body
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == {
+        "reason": "malformed_request",
+        "message": "the body repeats a key",
+    }
