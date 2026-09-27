@@ -7,6 +7,7 @@ wrapped in a provenance envelope so the receiving agent knows who sent it.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -197,18 +198,25 @@ async def steer(
             kind="steer",
             text=body.message,
         )
-        outcome, row = await confirmations.admit(
+        _, row = await confirmations.admit(
             db, signed, receipt, None, is_fresh=confirmations.fresh(confirmation, signed)
         )
-        offered = await db.signing.offer_state(row["operation_id"])
-        if outcome != "admitted" and offered is not None:  # never offer it twice
+        if not await db.signing.claim_offer(confirmation.confirmation_id, int(time.time())):
+            # Offered once already, or an earlier request is offering it now:
+            # a confirmed steer is never offered twice.
             row = await db.signing.receipt(confirmation.confirmation_id) or row
+            offered = row.get("offer_state") == "offered"
+            taken = row["delivered_at"] is not None
             return SteerResponse(
-                ok=offered in ("offered", "handed_off"),
+                ok=offered,
                 session=body.target_session,
-                outcome=offered,
+                outcome=("handed_off" if taken else "offered") if offered else "offering",
                 operation_id=row["operation_id"],
-                detail=f"Already admitted as {confirmation.confirmation_id}.",
+                detail=(
+                    f"Already admitted as {confirmation.confirmation_id}."
+                    if offered
+                    else "An earlier request is offering it now; retry shortly."
+                ),
                 confirmation_id=confirmation.confirmation_id,
                 receipt=confirmations.public(row),
             )
@@ -221,7 +229,9 @@ async def steer(
             confirmation_id=confirmation.confirmation_id,
             operation_id=row["operation_id"],
         )
-        if report.outcome != "offered":
+        if report.outcome == "offered":
+            await db.signing.mark_offered(confirmation.confirmation_id)
+        else:
             # Nothing was offered: the confirmation may be sent again.
             await db.signing.discard(confirmation.confirmation_id)
             row = None

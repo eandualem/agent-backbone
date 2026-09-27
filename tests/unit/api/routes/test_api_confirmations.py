@@ -364,9 +364,12 @@ async def test_an_old_confirmation_still_recovers_its_receipt(
     assert new.json()["detail"]["reason"] == "confirmation_expired"
 
 
-async def test_a_steer_that_was_never_offered_is_offered_on_retry(
-    api_client, auth_headers, api_app, key
+async def test_a_steer_whose_offer_crashed_is_offered_once_its_claim_is_stale(
+    api_client, auth_headers, api_app, key, monkeypatch
 ):
+    import time as real_time
+    from types import SimpleNamespace
+
     db = api_app.state.db
     confirmation = _confirmation()
     crash = AsyncMock(side_effect=RuntimeError("readiness failed"))
@@ -377,6 +380,12 @@ async def test_a_steer_that_was_never_offered_is_offered_on_retry(
         await _send(api_client, auth_headers, db, key, _body(confirmation), path="/api/steer")
     offered = AsyncMock(return_value=SteerReport("offered", "ike", delivery_id=1))
     with patch("agent_backbone.api.routes.messages.steer_agent", offered):
+        busy, _ = await _send(
+            api_client, auth_headers, db, key, _body(confirmation), path="/api/steer"
+        )
+        assert busy.json()["outcome"] == "offering"  # the claim is fresh: never twice
+        later = SimpleNamespace(time=lambda: real_time.time() + 61)
+        monkeypatch.setattr("agent_backbone.api.routes.messages.time", later)
         resp, _ = await _send(
             api_client, auth_headers, db, key, _body(confirmation), path="/api/steer"
         )
@@ -459,3 +468,119 @@ async def test_a_revoked_leased_confirmation_is_never_pasted(
         )
     send.assert_not_awaited()
     assert report.outcome == DeliveryOutcome.ALREADY_DELIVERED
+
+
+async def test_an_offered_steer_is_never_offered_again_even_after_pruning(
+    api_client, auth_headers, api_app, key
+):
+    db = api_app.state.db
+    confirmation = _confirmation()
+    offered = AsyncMock(return_value=SteerReport("offered", "ike", delivery_id=1))
+    with patch("agent_backbone.api.routes.messages.steer_agent", offered):
+        await _send(api_client, auth_headers, db, key, _body(confirmation), path="/api/steer")
+        async with db.engine.begin() as conn:  # delivery retention removed the record
+            await conn.execute(text("DELETE FROM deliveries"))
+        again, _ = await _send(
+            api_client, auth_headers, db, key, _body(confirmation), path="/api/steer"
+        )
+    assert again.json()["outcome"] == "offered" and offered.await_count == 1
+    assert not await db.signing.claim_offer(confirmation["confirmation_id"], NOW)
+
+
+async def test_a_revoked_confirmation_is_never_published_as_a_steer(
+    api_client, auth_headers, api_app, key, config
+):
+    from agent_backbone.services.agents import AgentState
+    from agent_backbone.services.routing import steer_agent
+    from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+    db = api_app.state.db
+    confirmation = _confirmation()
+    operation_id = uuid.uuid4().hex
+    receipt = {
+        "confirmation_id": confirmation["confirmation_id"],
+        "sender": SENDER,
+        "sender_key": SENDER,
+        "recipient": "ike",
+        "delivered_to": "ike",
+        "kind": "steer",
+        "text": TEXT,
+        "text_sha256": confirmation["text_sha256"],
+        "source": "button",
+        "confirmed_at": confirmation["confirmed_at"],
+        "key_epoch": 1,
+        "operation_id": operation_id,
+    }
+    await db.signing.admit(nonce="2" * 32, request_hash="h", now=NOW, receipt=receipt, queue=None)
+    async with db.engine.begin() as conn:  # a reset revoked it while readiness was read
+        await conn.execute(text("UPDATE signing_receipts SET status = 'revoked'"))
+    working = SessionProfile(
+        "ike", SessionIntelligence.AGENT_WORKING, runtime="claude", agent_state=AgentState.BUSY
+    )
+    steer = "agent_backbone.services.routing._steer"
+    with (
+        patch(f"{steer}.get_session_intelligence", AsyncMock(return_value=working)),
+        patch(f"{steer}.query_environment_var", AsyncMock(return_value="L1")),
+    ):
+        report = await steer_agent(
+            "ike",
+            TEXT,
+            config,
+            db=db,
+            sender=SENDER,
+            confirmation_id=confirmation["confirmation_id"],
+            operation_id=operation_id,
+        )
+    assert report.outcome == "refused" and report.reason == "revoked"
+    assert await db.deliveries.query(session_name="ike", kind="steer") == []
+
+
+async def test_a_reset_during_a_confirmed_paste_finds_it_delivered(
+    api_client, auth_headers, api_app, key, drain, config
+):
+    """The reset waits for the whole delivery, success record included."""
+    import asyncio
+
+    from agent_backbone.services.routing import revocation_guard, safe_deliver
+    from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+    db = api_app.state.db
+    confirmation = _confirmation()
+    resp, _ = await _send(api_client, auth_headers, db, key, _body(confirmation))
+    view = await _transition(
+        api_client, auth_headers, db, Ed25519PrivateKey.generate(), "replace", 1
+    )
+    (leased,) = await db.queue.dequeue("ike")
+    resets: list[asyncio.Task] = []
+
+    async def reset():
+        async with revocation_guard():
+            await db.signing.apply_transition(_digest(view.json()), now=NOW, by="t")
+
+    async def paste(*args, **kwargs):
+        resets.append(asyncio.create_task(reset()))  # the owner approves mid-paste
+        await asyncio.sleep(0)
+        return True
+
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(return_value=SessionProfile("ike", SessionIntelligence.READY)),
+        ),
+        patch("agent_backbone.services.routing._delivery.send_message", paste),
+    ):
+        report = await safe_deliver(
+            "ike",
+            leased["message"],
+            config,
+            db=db,
+            delivery_kind="direct_message",
+            sender=SENDER,
+            requeue=False,
+            operation_id=resp.json()["operation_id"],
+            queue_id=resp.json()["queue_id"],
+        )
+    await resets[0]
+    assert report.outcome == DeliveryOutcome.DELIVERED
+    receipt = await db.signing.receipt(confirmation["confirmation_id"])
+    assert receipt["status"] == "admitted" and receipt["delivered_at"] is not None

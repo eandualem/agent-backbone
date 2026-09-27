@@ -123,6 +123,22 @@ def _serialized(fn: Callable[..., Awaitable[_Result]]):
         lock = _session_locks.setdefault(key, asyncio.Lock())
         async with lock:
             db = kwargs.get("db")
+            queue_id = kwargs.get("queue_id")
+            if (
+                db is not None
+                and queue_id is not None
+                and kwargs.get("requeue") is False
+                and await db.signing.is_confirmation(kwargs.get("operation_id"))
+            ):
+                # A queued owner confirmation: its whole delivery, from this
+                # check to the success record, runs under the reset's guard.
+                async with revocation_guard():
+                    if not await db.queue.still_leased(queue_id):
+                        return DeliveryReport(
+                            DeliveryOutcome.ALREADY_DELIVERED,
+                            operation_id=kwargs.get("operation_id"),
+                        )
+                    return await fn(session_name, *args, **kwargs)
             source_key = kwargs.get("source_key") or ""
             if db is not None and source_key.startswith("review-start:"):
                 async with db.events.review_delivery(source_key) as eligible:
@@ -553,24 +569,8 @@ async def safe_deliver(
             )
 
     uncertain = False
-    revoked = False
 
     async def submit() -> bool:
-        nonlocal revoked
-        if (
-            queue_id is not None
-            and not requeue
-            and db is not None
-            and await db.signing.is_confirmation(operation_id)
-        ):
-            async with revocation_guard():
-                if not await db.queue.still_leased(queue_id):
-                    revoked = True  # a key reset expired it: never paste it
-                    return False
-                return await paste()
-        return await paste()
-
-    async def paste() -> bool:
         nonlocal uncertain
         pasted_at = time.time()
         note_submission(config.state_dir, session_name)
@@ -614,8 +614,6 @@ async def safe_deliver(
             return await finish(DeliveryOutcome.NOT_WAITING, queue=False)
         if await submit():
             return await finish(DeliveryOutcome.DELIVERED, queue=False)
-        if revoked:
-            return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED, operation_id=operation_id)
         return await finish(DeliveryOutcome.DELIVERY_FAILED, queue=False)
 
     if intel in BLOCKED_OUTCOMES:
@@ -686,8 +684,6 @@ async def safe_deliver(
     # 4. Paste + submit
     if await submit():
         return await finish(DeliveryOutcome.DELIVERED, queue=False)
-    if revoked:
-        return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED, operation_id=operation_id)
     report = await finish(DeliveryOutcome.DELIVERY_FAILED, queue=True)
     if uncertain:
         return DeliveryReport(
