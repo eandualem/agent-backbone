@@ -231,7 +231,7 @@ async def test_the_receipts_feed_and_its_gap(api_client, auth_headers, api_app, 
     assert feed["next_after"] == feed["receipts"][-1]["seq"]
     assert set(feed["receipts"][0]) == {
         "seq", "confirmation_id", "sender", "recipient", "kind", "text", "text_sha256",
-        "source", "confirmed_at", "delivered_at", "key_epoch",
+        "source", "confirmed_at", "delivered_at", "key_epoch", "status", "revoked_at",
     }  # fmt: skip
 
     async with db.engine.begin() as conn:  # retention removed everything up to seq 50
@@ -245,7 +245,7 @@ async def test_the_receipts_feed_and_its_gap(api_client, auth_headers, api_app, 
     assert unsigned.status_code == 403
 
 
-async def _signed_query(db, key, params):
+async def _signed_query(db, key, params, epoch=1):
     import secrets
 
     audience = await db.signing.audience()
@@ -260,11 +260,11 @@ async def _signed_query(db, key, params):
         nonce=nonce,
         audience=audience,
         sender=SENDER,
-        epoch=1,
+        epoch=epoch,
     )
     return {
         "X-Backbone-Sender": SENDER,
-        "X-Backbone-Key-Epoch": "1",
+        "X-Backbone-Key-Epoch": str(epoch),
         "X-Backbone-Timestamp": str(NOW),
         "X-Backbone-Nonce": nonce,
         "X-Backbone-Audience": audience,
@@ -297,6 +297,11 @@ async def test_a_reset_revokes_what_the_old_key_confirmed(
     (row,) = await _rows(db, "SELECT status, delivered_at FROM message_queue")
     assert row.status == "expired" and row.delivered_at is not None  # retention removes it
     assert not await db.queue.still_leased(queue_id)  # the drain won't deliver its copy
+    # The sender reconciles it with the new key: the feed says it was revoked.
+    signed = await _signed_query(db, replacement, [], epoch=2)
+    resp = await api_client.get("/api/signing/receipts", headers={**auth_headers, **signed})
+    (public,) = resp.json()["receipts"]
+    assert public["status"] == "revoked" and public["revoked_at"] is not None
 
 
 # Every shipped adapter by name, for the capability contract (kept equal to the
@@ -1057,3 +1062,80 @@ async def test_a_steer_is_delivered_when_its_handoff_is_recorded(api_app, key):
     await db.deliveries.settle(delivery_id, "handed_off", expected="offered")
     receipt = await db.signing.receipt(confirmation["confirmation_id"])
     assert receipt["delivered_at"] > "2026-01-01T00:00:00.000000Z"
+
+
+async def _paste_ready(config, db, send):
+    """One immediate drain of ike's queue with ``send`` as the terminal paste."""
+    from agent_backbone.services.jobs import deliver_now
+    from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(return_value=SessionProfile("ike", SessionIntelligence.READY)),
+        ),
+        patch("agent_backbone.services.routing._delivery.send_message", send),
+    ):
+        await deliver_now(config, db, None, "ike")
+
+
+async def test_a_paste_interrupted_before_its_record_is_held_not_repeated(
+    api_client, auth_headers, api_app, key, drain, config
+):
+    """Cancelled after the terminal took it, before the delivery record: the
+    next drain holds it as uncertain instead of pasting it again."""
+    import asyncio
+
+    db = api_app.state.db
+    confirmation = _confirmation()
+    resp, _ = await _send(api_client, auth_headers, db, key, _body(confirmation))
+    send = AsyncMock(return_value=True)
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery._record",
+            AsyncMock(side_effect=asyncio.CancelledError),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _paste_ready(config, db, send)
+    (row,) = await _rows(db, "SELECT status FROM message_queue")
+    assert row.status == "pending"  # the drain released it
+
+    await _paste_ready(config, db, send)
+    send.assert_awaited_once()
+    (row,) = await _rows(db, "SELECT status FROM message_queue")
+    assert row.status == "uncertain" and await db.queue.has_uncertain("ike")
+    receipt = await db.signing.receipt(confirmation["confirmation_id"])
+    assert receipt["delivered_at"] is None and receipt["status"] == "admitted"
+
+
+async def test_a_paste_that_never_reached_the_terminal_is_retried(
+    api_client, auth_headers, api_app, key, drain, config
+):
+    db = api_app.state.db
+    resp, _ = await _send(api_client, auth_headers, db, key, _body(_confirmation()))
+    await _paste_ready(config, db, AsyncMock(return_value=False))
+    assert not await db.signing.was_attempted(resp.json()["operation_id"])
+    send = AsyncMock(return_value=True)
+    await _paste_ready(config, db, send)
+    send.assert_awaited_once()
+    (row,) = await _rows(db, "SELECT status FROM message_queue")
+    assert row.status == "delivered"
+
+
+async def test_a_reset_holds_an_interrupted_paste_as_uncertain(
+    api_client, auth_headers, api_app, key, drain
+):
+    """Revoked before the next drain found it: it may sit in the terminal, so
+    the inbox keeps it, without the marker."""
+    db = api_app.state.db
+    confirmation = _confirmation()
+    resp, _ = await _send(api_client, auth_headers, db, key, _body(confirmation))
+    await db.signing.attempt(resp.json()["operation_id"], begun=True)
+    view = await _transition(
+        api_client, auth_headers, db, Ed25519PrivateKey.generate(), "replace", 1
+    )
+    await db.signing.apply_transition(_digest(view.json()), now=NOW, by="t")
+    (row,) = await _rows(db, "SELECT status, message FROM message_queue")
+    assert row.status == "uncertain"
+    assert f"owner-confirmed:{confirmation['confirmation_id']}" not in row.message

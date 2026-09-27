@@ -32,6 +32,8 @@ PUBLIC_FIELDS = (
     "confirmed_at",
     "delivered_at",
     "key_epoch",
+    "status",
+    "revoked_at",
 )
 
 

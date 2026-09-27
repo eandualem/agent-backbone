@@ -142,6 +142,16 @@ def _serialized(fn: Callable[..., Awaitable[_Result]]):
                             DeliveryOutcome.ALREADY_DELIVERED,
                             operation_id=kwargs.get("operation_id"),
                         )
+                    if await db.signing.was_attempted(kwargs.get("operation_id")):
+                        # An earlier paste was interrupted before its outcome
+                        # was recorded: it may have landed, so hold it.
+                        await db.queue.hold_uncertain(queue_id)
+                        return DeliveryReport(
+                            DeliveryOutcome.AWAITING_ACK,
+                            unconfirmed=True,
+                            operation_id=kwargs.get("operation_id"),
+                            queue_id=queue_id,
+                        )
                     return await fn(session_name, *args, **kwargs)
             source_key = kwargs.get("source_key") or ""
             if db is not None and source_key.startswith("review-start:"):
@@ -576,10 +586,23 @@ async def safe_deliver(
 
     async def submit() -> bool:
         nonlocal uncertain
+        confirmed = (
+            db is not None
+            and queue_id is not None
+            and not requeue
+            and await db.signing.is_confirmation(operation_id)
+        )
+        if confirmed:
+            # Recorded before the paste: an attempt interrupted after it is
+            # held as uncertain, never pasted again (``_serialized``).
+            await db.signing.attempt(operation_id, begun=True)
         pasted_at = time.time()
         note_submission(config.state_dir, session_name)
         try:
-            return await send_message(session_name, message, runtime_hint=profile.runtime)
+            sent = await send_message(session_name, message, runtime_hint=profile.runtime)
+            if not sent and confirmed:
+                await db.signing.attempt(operation_id, begun=False)
+            return sent
         except SubmissionUnconfirmed as exc:
             # Only a runtime whose hook sees UserPromptSubmit can send a receipt. One
             # not identified before the paste may be (send_message looks again): it waits.

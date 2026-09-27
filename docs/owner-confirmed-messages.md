@@ -343,7 +343,10 @@ rule to lines that start with `[via:`; a terminal may render whitespace its own
 way. The text `backbone message validate` returns is the authoritative one.
 
 When the request is admitted, Backbone commits the nonce, the confirmation id,
-the receipt and the queued delivery in one transaction, then delivers. A steer
+the receipt and the queued delivery in one transaction, then delivers. A
+message is never pasted twice: Backbone records the start of each paste, and a
+paste interrupted before its outcome was recorded is held as uncertain in the
+agent's inbox (`backbone inbox`) instead of being retried. A steer
 that is refused (the agent is not working) commits nothing, and the same
 confirmation may be sent again.
 
@@ -368,7 +371,7 @@ response.
 
 Each confirmation keeps an immutable receipt: sequence number, confirmation id,
 sender, recipient, kind, the exact signed text, its hash, source,
-`confirmed_at`, `delivered_at` and key epoch. Receipts are kept for 90 days.
+`confirmed_at`, `delivered_at`, key epoch and status. Receipts are kept for 90 days.
 
 `GET /api/signing/receipts?after=<seq>&limit=<n>` is a signed request made as
 the sender in `X-Backbone-Sender`; `after` (default 0) and `limit` (default 100,
@@ -381,7 +384,7 @@ after a sequence number, oldest first, across every key epoch:
     {"seq": 12, "confirmation_id": "…", "sender": "assistant", "recipient": "ike",
      "kind": "message", "text": "…", "text_sha256": "…", "source": "button",
      "confirmed_at": "2026-09-27T11:00:00.123456+03:00", "delivered_at": null,
-     "key_epoch": 1}
+     "key_epoch": 1, "status": "admitted", "revoked_at": null}
   ],
   "next_after": 12,
   "oldest_seq": 3,
@@ -395,8 +398,9 @@ after a sequence number, oldest first, across every key epoch:
   message (a swarm's name to its coordinator), `recipient` is unchanged.
 - `delivered_at` is `null` until the message is delivered (for a steer, until
   the agent's hook takes it) and set once. It stays `null` for a message that
-  expired or was revoked, and for a steer that wasn't taken. Every other field
-  never changes.
+  expired or was revoked, and for a steer that wasn't taken.
+- `status` is `admitted`, or `revoked` once a reset of its key revoked it
+  before delivery; `revoked_at` says when. Every other field never changes.
 - Sequence numbers are shared by all senders, so one sender's are increasing
   but not consecutive. `pruned_through` is the highest sequence number that
   retention removed for this sender (0 when none). `gap` is true when

@@ -90,6 +90,16 @@ async def _revoke_epoch(conn, sender_key: str, epoch: int, at: str) -> None:
         ),
         params,
     )
+    # A paste that began without a recorded outcome is uncertain too.
+    await conn.execute(
+        text(
+            "UPDATE message_queue SET status = 'uncertain', leased_at = NULL"
+            " WHERE status IN ('pending', 'in_progress') AND operation_id IN (SELECT"
+            " operation_id FROM signing_receipts WHERE status = 'revoked'"
+            f" AND attempted_at IS NOT NULL {scope})"
+        ),
+        params,
+    )
     # An uncertain row keeps its status: the paste may still sit in the input,
     # and that hold is what stops the next paste. What the inbox shows for it
     # no longer carries the marker, but says the confirmation was revoked.
@@ -713,6 +723,31 @@ class SigningRepo(Repo):
                         " AND outcome IN ('delivered', 'handed_off')"
                         " UNION ALL SELECT 1 FROM signing_receipts WHERE operation_id = :op"
                         " AND delivered_at IS NOT NULL"
+                    ),
+                    {"op": operation_id},
+                )
+            ).fetchone()
+        return row is not None
+
+    async def attempt(self, operation_id: str, *, begun: bool) -> None:
+        """Record that a message's paste begins (``begun``), or that it
+        definitely didn't reach the terminal."""
+        async with self._tx() as conn:
+            await conn.execute(
+                text("UPDATE signing_receipts SET attempted_at = :at WHERE operation_id = :op"),
+                {"at": now_iso() if begun else None, "op": operation_id},
+            )
+
+    async def was_attempted(self, operation_id: str | None) -> bool:
+        """Whether a paste of this confirmation began without a recorded outcome."""
+        if not operation_id:
+            return False
+        async with self._tx() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT 1 FROM signing_receipts WHERE operation_id = :op"
+                        " AND attempted_at IS NOT NULL"
                     ),
                     {"op": operation_id},
                 )

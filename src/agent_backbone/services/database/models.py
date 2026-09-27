@@ -646,6 +646,9 @@ class SigningReceiptORM(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     delivered_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     revoked_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempted_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """A message's paste began and no outcome was recorded yet: an attempt
+    interrupted there is held as uncertain, never pasted again."""
     outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Why it was never delivered, kept past the queue and delivery records:
     ``expired`` (a message) or ``not_taken`` / ``cancelled`` (a steer)."""
