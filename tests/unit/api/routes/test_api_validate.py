@@ -6,15 +6,18 @@ import asyncio
 import time
 import uuid
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from sqlalchemy import text
 
 from agent_backbone import signing
 from agent_backbone.api import validation
 from agent_backbone.config import AgentsConfig
+from agent_backbone.services.database import format_iso
 from agent_backbone.services.terminal import CallerUnknown
 from tests.unit.api.routes.test_api_confirmations import TEXT, _body, _confirmation, _send
 from tests.unit.api.routes.test_api_signing import (
@@ -351,3 +354,48 @@ async def test_a_directory_refusal_is_not_remembered(
     assert _reason(await _validate(api_client, auth_headers, cid)) == "wrong_workspace"
     api_app.state.config = config  # registered in its own directory again
     assert (await _validate(api_client, auth_headers, cid)).json()["outcome"] == "recovered"
+
+
+async def test_a_late_inbox_acknowledgement_doesnt_renew_the_window(
+    api_client, auth_headers, api_app, key, drain, caller, clock
+):
+    db = api_app.state.db
+    admitted = await _admitted(api_client, auth_headers, db, key)
+    read = await api_client.post(
+        "/api/messages/inbox", headers=auth_headers, json={"session": "ike"}
+    )
+    (held,) = read.json()["messages"]
+    async with db.engine.begin() as conn:  # admitted two days ago, read, never acknowledged
+        await conn.execute(
+            text("UPDATE signing_receipts SET created_at = :at"),
+            {"at": format_iso(datetime.now(UTC) - timedelta(days=2))},
+        )
+    resp = await _validate(api_client, auth_headers, admitted["confirmation_id"])
+    assert _reason(resp) == "claim_window_passed"
+    ack = await api_client.post(
+        "/api/messages/inbox",
+        headers=auth_headers,
+        json={"session": "ike", "acknowledge": [held["ack_token"]]},
+    )
+    assert ack.status_code == 200  # now recorded as delivered, two days late
+    clock.mono += validation.INCIDENT_SECONDS  # a new incident: checked again, not cached
+    resp = await _validate(api_client, auth_headers, admitted["confirmation_id"])
+    assert _reason(resp) == "claim_window_passed"
+
+
+async def test_unidentified_callers_share_one_bound_checked_before_the_lookup(
+    api_client, auth_headers, monkeypatch, clock
+):
+    lookups = []
+
+    async def unplaceable(client, server):
+        lookups.append(client)
+        raise CallerUnknown("the calling process doesn't run in a tmux pane")
+
+    monkeypatch.setattr(validation, "caller_sessions", unplaceable)
+    for _ in range(validation.MAX_FAILURES):
+        resp = await _validate(api_client, auth_headers, str(uuid.uuid4()))
+        assert _reason(resp) == "caller_unidentified"
+    resp = await _validate(api_client, auth_headers, str(uuid.uuid4()))
+    assert resp.status_code == 429 and _reason(resp) == "rate_limited"
+    assert len(lookups) == validation.MAX_FAILURES  # no further lsof, ps or tmux

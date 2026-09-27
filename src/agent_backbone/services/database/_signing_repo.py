@@ -23,7 +23,7 @@ CLAIM_SECONDS = 60
 """A steer offer's claim older than this is no longer held by its request."""
 RECEIPT_RETENTION_DAYS = 90
 CLAIM_WINDOW_SECONDS = 86400
-"""A confirmation is first claimed within a day of reaching its agent."""
+"""A confirmation is first claimed within a day of its admission."""
 GRANT_SECONDS = 86400
 """A claim lasts a day, or until the agent closes it."""
 _LIVE = "('pending', 'in_progress', 'checkpoint', 'uncertain')"
@@ -942,8 +942,10 @@ class SigningRepo(Repo):
             if grant is None:
                 if done:
                     return "not_claimed", None
-                reached = parse_iso(receipt["delivered_at"] or receipt["created_at"])
-                if now - reached.timestamp() > CLAIM_WINDOW_SECONDS:
+                # From admission, which a late inbox acknowledgement (recorded
+                # as the delivery time) can't move.
+                admitted = parse_iso(receipt["created_at"])
+                if now - admitted.timestamp() > CLAIM_WINDOW_SECONDS:
                     return "claim_window_passed", None
                 inserted = await conn.execute(
                     text(

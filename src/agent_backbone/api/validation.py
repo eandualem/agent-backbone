@@ -36,7 +36,7 @@ REFUSALS = {
     "not_claimed": (409, "the confirmation was never claimed, so there is nothing to close"),
     "claim_window_passed": (
         410,
-        "more than 24 hours passed since it was delivered; ask the owner to confirm it again",
+        "more than 24 hours passed since it was sent; ask the owner to confirm it again",
     ),
     "wrong_workspace": (
         403,
@@ -60,6 +60,9 @@ _CACHED = frozenset(
 )
 """Refusals that don't change with time: repeated within an incident without a check."""
 _UNIDENTIFIED = ""
+_UNIDENTIFIED_LIMIT = (
+    "too many validations from callers Backbone couldn't identify; wait 10 minutes without another"
+)
 _sleep = asyncio.sleep
 
 
@@ -91,6 +94,11 @@ class Validations:
             return None
         return incident
 
+    def spent(self, caller: str, now: float) -> bool:
+        """Whether the caller's current incident used up its failed checks."""
+        incident = self._current(caller, now)
+        return incident is not None and incident.checked >= MAX_FAILURES
+
     def refused(self, caller: str, confirmation_id: str, now: float) -> str | None:
         """The refusal to repeat without a check, if any."""
         incident = self._current(caller, now)
@@ -98,7 +106,7 @@ class Validations:
             return None
         if cached := incident.refused.get(confirmation_id):
             return cached
-        return "rate_limited" if incident.checked >= MAX_FAILURES else None
+        return "rate_limited" if self.spent(caller, now) else None
 
     def failed(
         self,
@@ -168,13 +176,22 @@ async def validate(request: Request, config: BackboneConfig, db, confirmation_id
     """Claim, recover or close the calling agent's grant; the confirmed text
     is returned only on a claim or recovery."""
     validations: Validations = request.app.state.validations
-    now = time.monotonic()
-    try:
-        agent = await caller_agent(request, config)
-    except CallerUnknown as exc:
-        validations.failed(config, _UNIDENTIFIED, confirmation_id, "caller_unidentified", now)
-        status, message = REFUSALS["caller_unidentified"]
-        raise refuse(status, "caller_unidentified", f"{message}: {exc}") from exc
+    # Identification runs one at a time. Callers that couldn't be identified
+    # share one budget, and a caller can't be told apart before the lookup:
+    # once that budget is spent, every validation waits out the incident.
+    async with validations.lock(_UNIDENTIFIED):
+        now = time.monotonic()
+        if validations.spent(_UNIDENTIFIED, now):
+            validations.failed(
+                config, _UNIDENTIFIED, confirmation_id, "rate_limited", now, checked=False
+            )
+            raise refuse(429, "rate_limited", _UNIDENTIFIED_LIMIT)
+        try:
+            agent = await caller_agent(request, config)
+        except CallerUnknown as exc:
+            validations.failed(config, _UNIDENTIFIED, confirmation_id, "caller_unidentified", now)
+            status, message = REFUSALS["caller_unidentified"]
+            raise refuse(status, "caller_unidentified", f"{message}: {exc}") from exc
     # One check at a time per caller, so a burst can't outrun the bound.
     async with validations.lock(agent.name):
         now = time.monotonic()

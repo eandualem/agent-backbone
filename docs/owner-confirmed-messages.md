@@ -455,8 +455,10 @@ confirmation id.
 - A confirmation can be claimed once it has reached the agent: delivered, or
   read from the agent's inbox (`backbone inbox`), or held there as uncertain,
   before it is acknowledged. A steer counts once the agent's hook took it.
-- The first claim must come within 24 hours of delivery. For a message still
-  held in the inbox, the 24 hours count from its admission.
+- The first claim must come within 24 hours of the confirmation's admission,
+  when Backbone accepted it. A message is pasted within its queue expiry or
+  not at all, and acknowledging one read from the inbox doesn't renew the
+  window.
 - A grant lasts 24 hours from the claim, or until `--done`.
 - Claiming again, for example after a restart of the same agent in the same
   directory, returns the same text flagged `recovered`. That is not fresh
@@ -501,7 +503,7 @@ answering. A caller that is not the confirmation's recipient gets no text.
 | 403 | `revoked` | the sender's key was reset |
 | 409 | `not_delivered` | it hasn't reached the agent yet |
 | 409 | `not_claimed` | `--done` on a confirmation that was never claimed |
-| 410 | `claim_window_passed` | more than 24 hours since delivery |
+| 410 | `claim_window_passed` | more than 24 hours since admission |
 | 403 | `wrong_workspace` | claimed while the agent was registered in another directory |
 | 410 | `grant_closed` | the agent closed it with `--done` |
 | 410 | `grant_expired` | the grant's 24 hours are over |
@@ -513,7 +515,10 @@ failed check. Within it, a refusal that can't change (`unknown_confirmation`,
 `wrong_recipient`, `revoked`, `claim_window_passed`, `grant_expired`) is
 repeated for the same id without a check, and after 10 failed checks every
 further validation is refused as `rate_limited`. One caller's checks run one
-at a time. The owner gets one notice per incident, 30 seconds after its first
+at a time, and so does identification. Callers that couldn't be identified
+share one budget; once it is spent, every validation is refused as
+`rate_limited` until that incident ends, because a caller can't be told apart
+before the lookup. The owner gets one notice per incident, 30 seconds after its first
 failure, with the count by reason. These counters live in the running service
 and restart with it. An outage blocks only the step that depends on the
 confirmation.
