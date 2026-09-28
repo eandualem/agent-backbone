@@ -140,6 +140,25 @@ def has_text(path: Path) -> bool:
     return bool(decoder.decode(b"", final=True).strip())
 
 
+def git_root(directory: Path) -> Path | None:
+    """The nearest directory, ``directory`` itself included, with a ``.git``."""
+    return next((d for d in (directory, *directory.parents) if (d / ".git").exists()), None)
+
+
+def main_checkout(root: Path) -> Path | None:
+    """The main checkout of a git worktree at ``root`` (its ``.git`` is a file
+    naming the worktree's git directory, whose ``commondir`` leads back)."""
+    try:
+        line = (root / ".git").read_text().strip()
+        if not line.startswith("gitdir:"):
+            return None
+        gitdir = root / line.removeprefix("gitdir:").strip()
+        common = gitdir / (gitdir / "commondir").read_text().strip()
+    except (OSError, ValueError):
+        return None
+    return common.resolve().parent
+
+
 def agent_home(env: dict[str, str]) -> Path:
     """The home directory the agent's CLI sees: its own ``HOME``, else ours."""
     return Path(env["HOME"]).expanduser() if env.get("HOME") else Path.home()

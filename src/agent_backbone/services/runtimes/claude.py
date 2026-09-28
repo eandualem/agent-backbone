@@ -16,7 +16,9 @@ from agent_backbone.services.runtimes.base import (
     Runtime,
     TranscriptEntry,
     agent_home,
+    git_root,
     has_text,
+    main_checkout,
     transcript_clock,
 )
 from agent_backbone.usage import UsageEvent, timestamp
@@ -298,10 +300,16 @@ class ClaudeCode(Runtime):
         ).expanduser()
         layers = [home / "settings.json"]
         if project is not None:
-            layers += [
-                Path(project) / ".claude" / name
-                for name in ("settings.json", "settings.local.json")
-            ]
+            # 2.1.283 keeps local settings at the canonical git root (a
+            # worktree's main checkout), after the directory's own legacy file,
+            # unless that root is the home directory (its ownership check is
+            # not repeated here).
+            here = Path(project).expanduser().resolve()
+            root = git_root(here)
+            canonical = root and (main_checkout(root) or root)
+            layers += [here / ".claude/settings.json", here / ".claude/settings.local.json"]
+            if canonical not in (None, here, Path.home().resolve()):
+                layers.append(canonical / ".claude/settings.local.json")
         # 2.1.283: a settings file's `env` applies over the process environment,
         # and the variables decide before `autoMemoryEnabled` (a later layer wins).
         variables, enabled = {**os.environ, **env}, True

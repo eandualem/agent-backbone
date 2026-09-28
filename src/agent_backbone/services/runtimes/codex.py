@@ -19,7 +19,9 @@ from agent_backbone.services.runtimes.base import (
     RuntimeDiagnostic,
     TranscriptEntry,
     agent_home,
+    git_root,
     has_text,
+    main_checkout,
     transcript_clock,
 )
 from agent_backbone.usage import UsageEvent, timestamp
@@ -66,20 +68,6 @@ def _toml_object(path: Path) -> dict:
         return tomllib.loads(path.read_text())
     except (OSError, ValueError):
         return {}
-
-
-def _main_checkout(root: Path) -> Path | None:
-    """The main checkout of a git worktree at ``root`` (its ``.git`` is a file
-    naming the worktree's git directory, whose ``commondir`` leads back)."""
-    try:
-        line = (root / ".git").read_text().strip()
-        if not line.startswith("gitdir:"):
-            return None
-        gitdir = root / line.removeprefix("gitdir:").strip()
-        common = gitdir / (gitdir / "commondir").read_text().strip()
-    except (OSError, ValueError):
-        return None
-    return common.resolve().parent
 
 
 def _toml_string(value: str) -> str:
@@ -395,10 +383,10 @@ class Codex(Runtime):
             # checkout) is trusted.
             here = Path(project).expanduser().resolve()
             chain = [here, *here.parents]
-            root = next((d for d in chain if (d / ".git").exists()), here)
+            root = git_root(here) or here
             projects = user.get("projects")
             projects = projects if isinstance(projects, dict) else {}
-            entries = [projects.get(str(key)) for key in (root, _main_checkout(root)) if key]
+            entries = [projects.get(str(key)) for key in (root, main_checkout(root)) if key]
             if any(isinstance(e, dict) and e.get("trust_level") == "trusted" for e in entries):
                 below = chain[: chain.index(root) + 1]
                 layers += [_toml_object(d / ".codex/config.toml") for d in reversed(below)]

@@ -25,8 +25,6 @@ def home(monkeypatch):
         "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
         "CLAUDE_CODE_SIMPLE",
         "CLAUDE_CODE_SAFE_MODE",
-        "GEMINI_SYSTEM_MD",
-        "GEMINI_PROMPT_OPERATIONALGUIDELINES",
     ):
         monkeypatch.delenv(key, raising=False)
     return Path.home()
@@ -105,6 +103,19 @@ def test_a_claude_code_settings_env_applies_over_the_process(home, tmp_path):
     assert not _reported("claude", {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0"}, project)
 
 
+def test_claude_code_reads_local_settings_at_the_canonical_git_root(home, tmp_path):
+    main, worktree = tmp_path / "app", tmp_path / "app-feature"
+    _write(main / ".git/worktrees/app-feature/commondir", "../..\n")
+    _write(worktree / ".git", f"gitdir: {main}/.git/worktrees/app-feature\n")
+    (main / "service").mkdir()
+    _write(main / ".claude/settings.local.json", '{"autoMemoryEnabled": false}')
+    assert not _reported("claude", project=main / "service")
+    assert not _reported("claude", project=worktree)
+    # The directory's own local file comes first; the canonical root's wins.
+    _write(worktree / ".claude/settings.local.json", '{"autoMemoryEnabled": true}')
+    assert not _reported("claude", project=worktree)
+
+
 def test_codex_reads_project_settings_only_under_a_trusted_root(home, tmp_path):
     project = tmp_path / "project"
     (project / ".git").mkdir(parents=True)
@@ -138,11 +149,9 @@ def test_the_agents_own_environment_moves_the_codex_home(home, tmp_path):
     assert _reported("codex", {"CODEX_HOME": str(tmp_path / "elsewhere")})
 
 
-def test_gemini_cli_keeps_it_in_its_default_system_prompt(home):
+def test_gemini_cli_loads_its_memory_whatever_its_prompt_settings(home):
     assert _reported("gemini")
-    assert _reported("gemini", {"GEMINI_SYSTEM_MD": "false"})
-    assert not _reported("gemini", {"GEMINI_SYSTEM_MD": "/prompts/system.md"})
-    assert not _reported("gemini", {"GEMINI_PROMPT_OPERATIONALGUIDELINES": "0"})
+    assert _reported("gemini", {"GEMINI_SYSTEM_MD": "/prompts/system.md"})
 
 
 @pytest.mark.parametrize("runtime", ["opencode", "deepcode", "aider", "shell"])
