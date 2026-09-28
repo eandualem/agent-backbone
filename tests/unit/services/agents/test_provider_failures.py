@@ -128,9 +128,9 @@ async def test_provider_block_queues_even_priority_delivery(config, db):
     assert await db.queue.pending_count("ike") == 1
 
 
-def _deepcode_pane(status: str, reply: str = "") -> str:
-    """Deep Code 0.3.1 at 80 columns (live, local error endpoint)."""
-    rule = "─" * 80
+def _deepcode_pane(status: str, reply: str = "", width: int = 80) -> str:
+    """Deep Code 0.3.1 (live, local error endpoint)."""
+    rule = "─" * width
     return (
         f" > say hi\n{reply}{status}\n{rule}\n>   Type your message...\n{rule}\n"
         "enter send · shift+enter newline · @ files · ctrl+v image · / commands · ctrl+d\n"
@@ -156,23 +156,36 @@ def test_deepcode_status_line_failure_is_blocked(error):
 
 
 @pytest.mark.parametrize(
-    "status,detail",
+    "width,status,detail",
     [
-        (  # 80 columns: Deep Code wraps at spaces
+        (  # Deep Code wraps at spaces
+            80,
             "status: failed · deepseek-v4-flash max · fail: HTTP 429: Rate Limit Reached\n"
             "[type: invalid_request_error, request ID: req-0123, trace ID:\n"
             "0123456789abcdef]",
             "HTTP 429: Rate Limit Reached [type: invalid_request_error, request ID: req-0123, "
             "trace ID: 0123456789abcdef]",
         ),
-        (  # 50 columns: the terminal splits a word
+        (  # a narrower pane also splits words, even the status code's
+            50,
             "status: failed · deepseek-v4-flash max · fail: HTT\nP 429: Rate Limit Reached",
             "HTTP 429: Rate Limit Reached",
         ),
+        (
+            64,
+            "status: failed · deepseek-v4-flash max · fail: HTTP 429: Rate Li\n"
+            "mit Reached\n"
+            "[type: invalid_request_error, request ID: req-0123456789abcdef,\n"
+            "trace ID:\n"
+            "0123456789abcdef]",
+            "HTTP 429: Rate Limit Reached [type: invalid_request_error, "
+            "request ID: req-0123456789abcdef, trace ID: 0123456789abcdef]",
+        ),
     ],
 )
-def test_deepcode_status_line_wrapped_in_a_narrow_pane(status, detail):
-    assert RUNTIMES["deepcode"].provider_failure(_deepcode_pane(status)) == detail
+def test_deepcode_status_line_wrapped_in_a_narrow_pane(width, status, detail):
+    pane = _deepcode_pane(status, width=width)
+    assert RUNTIMES["deepcode"].provider_failure(pane) == detail
 
 
 @pytest.mark.parametrize(

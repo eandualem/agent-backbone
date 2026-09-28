@@ -78,23 +78,27 @@ class DeepCode(Runtime):
         The line starts at the left edge; replies and echoed prompts are
         indented, so a reply quoting an error never matches, and the next
         turn replaces the line (``status: processing``, then ``status:
-        completed``). It wraps down to the separator: at a space in a narrow
-        pane, or mid-word where the pane is narrower than the text.
+        completed``). It wraps down to the input box's separator: at a space,
+        or mid-word where the pane is narrower than the text.
         """
-        parts: list[str] = []
-        wrapping = False
+        rows: list[str] = []
+        width, wrapping = 0, False
         for line in sanitize_pane_content(pane_content).rstrip().splitlines()[-25:]:
             text = line.strip()
             if line.startswith("status: "):
-                parts, wrapping = [text], True
+                rows, wrapping = [line.rstrip()], True
             elif wrapping and text and not is_box_line(text):
-                parts.append(text)
+                rows.append(line.rstrip())
             else:
+                if wrapping and is_box_line(text):
+                    width = len(text)
                 wrapping = False
-        for status in (" ".join(parts), "".join(parts)):
-            for pattern in self.provider_error_patterns:
-                if match := re.match(pattern, status):
-                    return match.group(1)[:500]
+        # A row as wide as the separator was cut mid-word; a shorter one ended
+        # at a space (live at 50 and 64 columns).
+        status = "".join(row if width and len(row) >= width else row + " " for row in rows)
+        for pattern in self.provider_error_patterns:
+            if match := re.match(pattern, status.strip()):
+                return match.group(1)[:500]
         return None
 
     def detect_prompt(self, pane_content: str) -> str | None:
