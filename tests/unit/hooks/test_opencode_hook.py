@@ -52,8 +52,10 @@ const reply = (sessionID, extra) => hook.event({event: {type: "message.updated",
 const created = (info) => hook.event({event: {type: "session.created", properties: {info}}});
 await created({id: "root"});
 await created({id: "sub", parentID: "root"});
-await reply("root", {time: {created: 1, completed: 2}});
-await reply("sub", {modelID: "subagent", time: {created: 1, completed: 2}});
+await reply("root", {time: {created: 1, completed: 2}, finish: "stop"});
+await reply("sub", {modelID: "subagent", time: {created: 1, completed: 2}, finish: "stop"});
+// A shell command the user ran completes a message no model answered.
+await reply("root", {modelID: "shell", time: {created: 3, completed: 4}});
 await reply("root", {modelID: "streaming", time: {created: 3}});
 await reply("root", {modelID: "failed", time: {completed: 4}, error: {name: "APIError"}});
 await hook.event({event: {type: "session.idle", properties: {sessionID: "root"}}});
@@ -113,7 +115,7 @@ const { readFileSync } = await import("node:fs");
 const hook = await AgentBackbone();
 const reply = (sessionID, extra) => hook.event({event: {type: "message.updated", properties: {
     info: {role: "assistant", sessionID, providerID: "acme", modelID: "large",
-           time: {created: 1, completed: 2}, ...extra}
+           time: {created: 1, completed: 2}, finish: "stop", ...extra}
 }}});
 const seen = [];
 const idle = async () => {
@@ -130,6 +132,7 @@ await reply("root", {error: {name: "APIError", data: {
     message: "PROVIDER TEXT", statusCode: 400, responseBody: "PROVIDER BODY"}}});
 await idle();
 await reply("root", {error: {name: "MessageAbortedError", data: {message: "aborted"}}});
+await reply("root", {modelID: "small", finish: undefined});  // a shell command
 await reply("sub", {modelID: "subagent"});
 await idle();
 await reply("root", {modelID: "small"});
@@ -152,7 +155,7 @@ console.log(JSON.stringify(seen));
     assert json.loads(result.stdout) == [
         {},
         {"request_error": failed},
-        {"request_error": failed},  # a stopped reply or a subagent's changes nothing
+        {"request_error": failed},  # a stopped reply, a shell command, a subagent: no change
         {"model_changed": "acme/small"},  # a reply without an error clears it
         {"request_error": {"name": "UnknownError"}, "model_changed": "acme/small"},
     ]
@@ -184,7 +187,7 @@ const busy = async (sessionID) => {
 await busy("root");
 await hook.event({event: {type: "message.updated", properties: {info: {
     role: "assistant", sessionID: "root", providerID: "acme", modelID: "small",
-    time: {created: 1, completed: 2}
+    time: {created: 1, completed: 2}, finish: "stop"
 }}}});
 await busy("root");
 await busy("another");

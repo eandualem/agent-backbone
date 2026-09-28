@@ -328,6 +328,7 @@ export const AgentBackbone = async ({ client, directory } = {}) => {
             outcomes.set(info.sessionID, { model_changed: seen.model_changed, request_error });
             return;
           }
+          if (!info.finish) return; // no model answered: a shell command the user ran
           const outcome = { model_changed: seen.model_changed }; // no error: the last one is cleared
           if (info.providerID && info.modelID) {
             const model = `${info.providerID}/${info.modelID}`;
