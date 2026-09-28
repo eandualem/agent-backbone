@@ -181,13 +181,34 @@ class TestApproveAgent:
         + GEMINI_DIALOG.split("╰──────────────────────────────────────╯\n", 1)[1]
     )
 
-    @pytest.mark.parametrize(
-        "picker", [GEMINI_AUTH_PICKER, GEMINI_AUTH_PICKER_FAILED], ids=["ok", "failed"]
+    # A question the model asks (ask_user, live): "1" would answer it.
+    GEMINI_QUESTION = (
+        "╭──────────────────────────────────────────────────────────╮\n"
+        "│ Answer Questions                                         │\n"
+        "│ Do you want to proceed?                                  │\n"
+        "│ ● 1.  Yes                                                │\n"
+        "│       Go ahead                                           │\n"
+        "│   2.  No                                                 │\n"
+        "│   3.  Enter a custom value                               │\n"
+        "│ Enter to select · ↑/↓ to navigate · Esc to cancel        │\n"
+        "╰──────────────────────────────────────────────────────────╯\n"
     )
-    async def test_gemini_sign_in_picker_is_not_approved(self, picker):
+    GEMINI_TRUST = (
+        "│ Do you trust the files in this folder?\n"
+        "│ ● 1. Trust folder (proj)\n"
+        "│   2. Trust parent folder (work)\n"
+        "│   3. Don't trust\n"
+    )
+
+    @pytest.mark.parametrize(
+        "dialog",
+        [GEMINI_AUTH_PICKER, GEMINI_AUTH_PICKER_FAILED, GEMINI_QUESTION, GEMINI_TRUST],
+        ids=["sign-in", "sign-in-failed", "question", "trust"],
+    )
+    async def test_gemini_only_allow_once_is_approved(self, dialog):
         with (
             patch(f"{_MOD}.session_exists", return_value=True),
-            patch(f"{_MOD}.capture_pane", return_value=picker),
+            patch(f"{_MOD}.capture_pane", return_value=dialog),
             patch(f"{_BASE}.send_keys") as keys,
         ):
             outcome, _ = await approve_agent("gm", runtime="gemini", settle_seconds=0)

@@ -17,6 +17,9 @@ log = logging.getLogger(__name__)
 _JSON_COMMENT = re.compile(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/', re.S)
 """A JSON string (kept) or a comment (dropped), as Gemini CLI strips them."""
 
+_ALLOW_ONCE_FIRST = re.compile(r"(?:●\s*)?1\.\s+allow once", re.I)
+"""A tool-permission dialog's first option (live, 0.46: shell, edit, fetch)."""
+
 
 def _context_file_names(settings: Path) -> list[str] | None:
     """``context.fileName`` in one Gemini settings file, None where it sets none."""
@@ -88,12 +91,21 @@ class Gemini(Runtime):
     # "3. No, suggest changes (esc)": the request is cancelled and the tool
     # never runs (live, 0.46), as Escape does in Claude Code and Codex.
     deny_keys = ("Escape",)
-    # The sign-in picker ("● 1. Sign in with Google", live, 0.46) is a choice:
-    # "1" would pick an auth method, not allow a tool.
-    choice_markers = ("how would you like to authenticate", "use gemini api key")
     # "--approval-mode yolo  auto-approve all tools" (gemini-cli --help). No
     # OS sandbox behind it: trust on the machine.
     unattended_args = ("--approval-mode", "yolo")
+
+    def detect_choice_dialog(self, pane_content: str) -> bool:
+        # "1" allows a tool only where option 1 is "Allow once". Every other
+        # numbered dialog is a choice, where "1" would pick an answer: the
+        # sign-in picker, folder trust, or a question the model asks ("Answer
+        # Questions", live, 0.46).
+        if not self.detect_active_dialog(pane_content):
+            return False
+        above, options = self._dialog_block(pane_content)
+        if any(line.lower() == "answer questions" for line in above):
+            return True
+        return not any(_ALLOW_ONCE_FIRST.fullmatch(option) for option in options)
 
     @staticmethod
     def _dialog_block(pane_content: str) -> tuple[list[str], list[str]]:
