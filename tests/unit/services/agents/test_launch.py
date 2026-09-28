@@ -75,6 +75,45 @@ class TestApproveAgent:
         assert keys.await_args.args == ("dc", "1")
         assert evidence[0] == "answered with 1; prompt cleared"
 
+    # gemini 0.46 (live); its update notice may be drawn below the dialog.
+    GEMINI_DIALOG = (
+        "╭──────────────────────────────────────╮\n"
+        "│ ? Shell  touch probe.txt             │\n"
+        "│ Allow execution of [Shell]?          │\n"
+        "│                                      │\n"
+        "│ ● 1. Allow once                      │\n"
+        "│   2. Allow for this session          │\n"
+        "│   3. No, suggest changes (esc)       │\n"
+        "╰──────────────────────────────────────╯\n"
+        "╭──────────────────────────────────────╮\n"
+        "│ Gemini CLI update available!         │\n"
+        "╰──────────────────────────────────────╯\n"
+    )
+    # The cursor moved to "No": "1" still picks "Allow once" (live).
+    GEMINI_DIALOG_ON_NO = GEMINI_DIALOG.replace("│ ● 1. Allow", "│   1. Allow").replace(
+        "│   3. No", "│ ● 3. No"
+    )
+    GEMINI_IDLE = (
+        "                                                   ? for shortcuts\n"
+        "────────────────────────────────────────────────────────────────\n"
+        " Shift+Tab to accept edits\n"
+        "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n"
+        " >   Type your message or @path/to/file\n"
+        "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+    )
+
+    @pytest.mark.parametrize("dialog", [GEMINI_DIALOG, GEMINI_DIALOG_ON_NO])
+    async def test_gemini_is_answered_with_allow_once(self, dialog):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", side_effect=[dialog, self.GEMINI_IDLE]),
+            patch(f"{_BASE}.send_keys", return_value=True) as keys,
+        ):
+            outcome, evidence = await approve_agent("gm", runtime="gemini", settle_seconds=0)
+        assert outcome == "approved"
+        assert keys.await_args.args == ("gm", "1")
+        assert evidence[0] == "answered with 1; prompt cleared"
+
     MODEL_SWITCH = (
         "  Approaching rate limits\n"
         "  Switch to gpt-5.6-luna for lower credit usage?\n"
@@ -160,29 +199,50 @@ class TestDenyAgent:
         assert outcome == "not_waiting"
         keys.assert_not_called()
 
-    async def test_deepcode_is_refused_with_escape(self):
+    # opencode 1.18 (live): no Escape hint on screen, but Escape rejects the call.
+    OPENCODE_DIALOG = (
+        "  ┃  △ Permission required\n"
+        "  ┃    # Shell command\n"
+        "  ┃\n"
+        "  ┃  $ touch probe.txt\n"
+        "  ┃\n"
+        "  ┃   Allow once   Allow always   Reject          ⇆ select  enter confirm\n"
+        "  ┃\n"
+    )
+    OPENCODE_IDLE = (
+        "     $ touch probe.txt\n"
+        "     ▣  Build · Stub main\n"
+        "  ┃\n"
+        "  ┃  Build · Stub main Local stub\n"
+        "   /tmp/proj                                    14  ctrl+p commands\n"
+    )
+
+    @pytest.mark.parametrize(
+        ("runtime", "dialog", "idle"),
+        [
+            ("deepcode", TestApproveAgent.DEEPCODE_DIALOG, TestApproveAgent.DEEPCODE_IDLE),
+            ("gemini", TestApproveAgent.GEMINI_DIALOG_ON_NO, TestApproveAgent.GEMINI_IDLE),
+            ("opencode", OPENCODE_DIALOG, OPENCODE_IDLE),
+        ],
+    )
+    async def test_escape_refuses(self, runtime, dialog, idle):
         with (
             patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
-            patch(
-                f"{_MOD}.capture_pane",
-                side_effect=[TestApproveAgent.DEEPCODE_DIALOG, TestApproveAgent.DEEPCODE_IDLE],
-            ),
+            patch(f"{_MOD}.capture_pane", side_effect=[dialog, idle]),
             patch(f"{_BASE}.send_keys", new_callable=AsyncMock, return_value=True) as keys,
         ):
-            outcome, evidence = await deny_agent("dc", runtime="deepcode", settle_seconds=0)
+            outcome, evidence = await deny_agent("ag", runtime=runtime, settle_seconds=0)
         assert outcome == "denied"
-        keys.assert_awaited_once_with("dc", "Escape")
-        assert evidence[0].startswith("sent Escape to deepcode; dialog cleared")
+        keys.assert_awaited_once_with("ag", "Escape")
+        assert evidence[0].startswith(f"sent Escape to {runtime}; dialog cleared")
 
     async def test_runtimes_without_a_verified_key_are_refused(self):
         with (
             patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
-            patch(
-                f"{_MOD}.capture_pane", return_value="│ Allow execution?\n│ ● 1. Yes, allow once\n"
-            ),
+            patch(f"{_MOD}.capture_pane", return_value="Run shell command? (Y)es/(N)o [Yes]:"),
             patch(f"{_BASE}.send_keys", new_callable=AsyncMock) as keys,
         ):
-            outcome, _ = await deny_agent("ike", runtime="gemini")
+            outcome, _ = await deny_agent("ike", runtime="aider")
         assert outcome == "unsupported"
         keys.assert_not_called()
 

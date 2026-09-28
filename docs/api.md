@@ -191,8 +191,9 @@ approval is an `approval` event in `GET /api/events`.
 ### `POST /api/agents/{name}/deny`
 
 Same body. Refuses the prompt with the runtime's refusing key (Escape for
-Claude Code and Codex), under the same gate: only a dialog on screen is
-answered, and the denial is recorded as a `denial` event. Response
+Claude Code, Codex, Gemini CLI, OpenCode and Deep Code), under the same
+gate: only a dialog on screen is answered, and the denial is recorded as a
+`denial` event. Response
 `{"ok": true, "session": "app", "outcome": "denied", "evidence": ["answered with Escape; prompt cleared"],
 "denied_by": "orch"}`. `approve` answers `409 not_permission` for a
 *choice* dialog (Codex's rate-limit model switch, where Enter would pick

@@ -427,7 +427,6 @@ class TestActiveDialogGate:
         assert not opencode.detect_active_dialog(OPENCODE_DIALOG_ANSWERED)
 
     def test_unverified_runtimes_have_no_answer(self):
-        assert RUNTIMES["gemini"].approve_keys == ()
         assert RUNTIMES["aider"].approve_keys == ()
 
 

@@ -78,8 +78,12 @@ class Gemini(Runtime):
         "failed to sign in",
         "waiting for auth",
     )
-    # approve_keys stays empty until the dialog is captured live (README's
-    # Gemini note): the backbone answers only what it has seen.
+    # "1" picks "Allow once" wherever the cursor is (live, 0.46); Enter would
+    # pick the highlighted option, which a person may have moved.
+    approve_keys = ("1",)
+    # "3. No, suggest changes (esc)": the request is cancelled and the tool
+    # never runs (live, 0.46), as Escape does in Claude Code and Codex.
+    deny_keys = ("Escape",)
     # "--approval-mode yolo  auto-approve all tools" (gemini-cli --help). No
     # OS sandbox behind it: trust on the machine.
     unattended_args = ("--approval-mode", "yolo")

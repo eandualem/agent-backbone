@@ -52,6 +52,9 @@ class OpenCode(Runtime):
     # with "Allow once" preselected (live capture, 1.18).
     prompt_markers = ("permission required", "allow once", "allow always")
     approve_keys = ("Enter",)
+    # Escape rejects the tool call wherever the cursor is and ends the turn
+    # ("The user rejected permission to use this specific tool call", live, 1.18).
+    deny_keys = ("Escape",)
     # "--auto  auto-approve permissions that are not explicitly denied"
     # (opencode 1.18 TUI); a `permission` deny in the user's config still
     # holds. OpenCode has no OS sandbox: this is trust on the machine.
