@@ -19,7 +19,9 @@ from agent_backbone.services.runtimes.base import (
     RuntimeDiagnostic,
     TranscriptEntry,
     agent_home,
+    git_root,
     has_text,
+    main_checkout,
     transcript_clock,
 )
 from agent_backbone.usage import UsageEvent, timestamp
@@ -59,6 +61,13 @@ def pre_trust_codex_directory(directory: Path | str, *, codex_config: Path | Non
     except (OSError, ValueError, tomllib.TOMLDecodeError):
         log.warning("Could not pre-trust %s for Codex (the trust dialog will appear)", path)
         return False
+
+
+def _toml_object(path: Path) -> dict:
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
 
 
 def _toml_string(value: str) -> str:
@@ -360,6 +369,43 @@ class Codex(Runtime):
             if has_text(path):
                 return [path]
         return []
+
+    def native_memory(self, env, project=None):
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
+        ).expanduser()
+        user = _toml_object(home / "config.toml")
+        layers = [user]
+        if project is not None:
+            # 0.157.1: `.codex/config.toml` from the project root (the nearest
+            # directory with `.git`) down to the session's directory, the nearer
+            # one winning. Each counts when its directory is trusted: the nearest
+            # entry from it up to the root, then a worktree's main checkout.
+            here = Path(project).expanduser().resolve()
+            root = git_root(here) or here
+            chain = [here, *here.parents]
+            below = chain[: chain.index(root) + 1]
+            projects = user.get("projects")
+            projects = projects if isinstance(projects, dict) else {}
+
+            def trusted(directory: Path) -> bool:
+                for key in (*below[below.index(directory) :], main_checkout(root)):
+                    entry = projects.get(str(key)) if key else None
+                    if isinstance(entry, dict) and "trust_level" in entry:
+                        return entry["trust_level"] == "trusted"
+                return False
+
+            layers += [
+                _toml_object(d / ".codex/config.toml") for d in reversed(below) if trusted(d)
+            ]
+        enabled = False  # off by default (`codex features list`)
+        for layer in layers:
+            features = layer.get("features")
+            if isinstance(features, dict) and isinstance(features.get("memories"), bool):
+                enabled = features["memories"]
+        if not enabled:
+            return None
+        return "memories are on (off: `memories = false` under `[features]` in config.toml)"
 
     usage_supported = True
     transcript_supported = True

@@ -130,6 +130,15 @@ class Gemini(Runtime):
         names = dict.fromkeys([*(name.strip() for name in configured or ()), "GEMINI.md"])
         return [gemini / name for name in names if name and has_text(gemini / name)]
 
+    def native_memory(self, env, project=None):
+        # 0.46 loads them into every session whatever its prompt settings; its
+        # default prompt also has the model write them.
+        return (
+            "it loads GEMINI.md files and a private per-project MEMORY.md into every "
+            "session, and its default prompt has the model write them (no setting "
+            "turns this off)"
+        )
+
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         args: list[str] = []
         if model:

@@ -140,6 +140,25 @@ def has_text(path: Path) -> bool:
     return bool(decoder.decode(b"", final=True).strip())
 
 
+def git_root(directory: Path) -> Path | None:
+    """The nearest directory, ``directory`` itself included, with a ``.git``."""
+    return next((d for d in (directory, *directory.parents) if (d / ".git").exists()), None)
+
+
+def main_checkout(root: Path) -> Path | None:
+    """The main checkout of a git worktree at ``root`` (its ``.git`` is a file
+    naming the worktree's git directory, whose ``commondir`` leads back)."""
+    try:
+        line = (root / ".git").read_text().strip()
+        if not line.startswith("gitdir:"):
+            return None
+        gitdir = root / line.removeprefix("gitdir:").strip()
+        common = gitdir / (gitdir / "commondir").read_text().strip()
+    except (OSError, ValueError):
+        return None
+    return common.resolve().parent
+
+
 def agent_home(env: dict[str, str]) -> Path:
     """The home directory the agent's CLI sees: its own ``HOME``, else ours."""
     return Path(env["HOME"]).expanduser() if env.get("HOME") else Path.home()
@@ -319,6 +338,13 @@ class Runtime:
         own overrides of the process environment; ``project``, when given, is the
         directory the session starts in."""
         return []
+
+    def native_memory(self, env: dict[str, str], project: Path | None = None) -> str | None:
+        """The CLI's own memory across sessions, when the settings Backbone can
+        read leave it on for an agent (#292): what it is and how to turn it
+        off. ``None`` when it is off or the CLI keeps none. ``env`` and
+        ``project`` as for ``user_instructions``."""
+        return None
 
     def pre_trust(self, directory: Path | str) -> None:
         """Answer the runtime's folder-trust dialog ahead of launch, if it has one."""

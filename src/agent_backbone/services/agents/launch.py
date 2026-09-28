@@ -365,6 +365,8 @@ async def _start_agent(
     resume_evidence.extend(
         f"user-level instructions: {path}" for path in rt.user_instructions(extra_env, spec.path)
     )
+    if memory := rt.native_memory(extra_env, spec.path):
+        resume_evidence.append(f"native memory: {memory}")
     environment = launch_environment(
         spec.name,
         rt.id,

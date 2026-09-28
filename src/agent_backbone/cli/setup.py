@@ -309,6 +309,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 runtime = REGISTRY[runtime_id]
                 for path in runtime.user_instructions({}):
                     note(f"  ! {runtime.display_name} user-level instructions: {path}")
+                if memory := runtime.native_memory({}):
+                    note(f"  ! {runtime.display_name} native memory: {memory}")
             # The capability contract: what each installed runtime lacks, and its issue.
             gaps = [
                 (
