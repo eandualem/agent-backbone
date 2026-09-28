@@ -10,10 +10,11 @@ from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.hooks.install import save_settings
-from agent_backbone.services.runtimes._pane import sanitize_pane_content
+from agent_backbone.services.runtimes._pane import sanitize_pane_content, sgr_attributes
 from agent_backbone.services.runtimes._usage import count
 from agent_backbone.services.runtimes.base import (
     Runtime,
+    RuntimeDiagnostic,
     TranscriptEntry,
     agent_home,
     git_root,
@@ -36,6 +37,42 @@ def _json_object(path: Path) -> dict:
 
 def _truthy(value: object) -> bool:
     return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# A failed request ends in one banner (live captures, 2.1.283): "⏺ API Error:
+# 400 …", "API Error: Request rejected (429) · …", "API Error: Repeated 529
+# Overloaded errors…", or for a missing model "There's an issue with the
+# selected model (claude-…). …". The provider's message after it is not kept.
+_REQUEST_ERROR = re.compile(
+    r"⏺ API Error: (?:Repeated |Request rejected \()?(?P<status>[45]\d\d)\b"
+)
+_MODEL_UNAVAILABLE = re.compile(
+    r"⏺ There's an issue with the selected model \((?P<model>[A-Za-z0-9_./:@+\[\]\-]{1,160})\)"
+)
+# "⎿  Set model to Sonnet 5 and saved as your default for new sessions",
+# "… Sonnet 5 for this session only with xhigh effort": the display name.
+_MODEL_SET = re.compile(
+    r"⎿ +Set model to (?P<model>[A-Za-z0-9][A-Za-z0-9 ._()\[\]:@+/-]{0,159}?)"
+    r"(?: for this session only| and saved as your default for new sessions)?"
+    r"(?: with (?P<effort>low|medium|high|xhigh|max) effort)?"
+)
+
+
+def _runs(raw: str) -> list[tuple[tuple[int, ...] | None, str]]:
+    """Visible text runs of one captured line, each with its foreground colour."""
+    runs: list[tuple[tuple[int, ...] | None, str]] = []
+    foreground = None
+    for part in re.split(r"(\x1b\[[0-9;]*m)", raw):
+        if not part.startswith("\x1b["):
+            if part.strip():
+                runs.append((foreground, part.strip()))
+            continue
+        for attribute in sgr_attributes(part[2:-1]):
+            if attribute[0] in (0, 39):
+                foreground = None
+            elif attribute[0] == 38 or 30 <= attribute[0] <= 37 or 90 <= attribute[0] <= 97:
+                foreground = attribute
+    return runs
 
 
 def pre_accept_bypass(*, claude_config: Path | None = None) -> bool:
@@ -219,6 +256,52 @@ class ClaudeCode(Runtime):
             return True
         tail = sanitize_pane_content(pane_content).strip().splitlines()[-25:]
         return any(self._SPINNER_RE.match(line) for line in tail)
+
+    def diagnostics(self, pane_content: str) -> tuple[RuntimeDiagnostic, ...]:
+        """Observe request-error banners and model changes.
+
+        Claude Code draws a banner's glyph and text in one warning colour and
+        a model name in an accent; a reply quoting either is drawn in the
+        default colour and is not recorded. Retry lines shown while Claude
+        Code still retries are not recorded; the final banner is.
+        """
+        observations = {item.observation_key: item for item in super().diagnostics(pane_content)}
+        lines = pane_content.splitlines()[-80:]
+        for index, raw in enumerate(lines):
+            line = sanitize_pane_content(raw).strip()
+            runs = _runs(raw)
+            if line.startswith("⏺") and len(runs) > 1 and runs[0][0] and runs[0][0] == runs[1][0]:
+                # A narrow pane wraps the banner onto indented lines.
+                for more in lines[index + 1 : index + 4]:
+                    more = sanitize_pane_content(more)
+                    if not more.startswith("  ") or not more.strip():
+                        break
+                    line += " " + more.strip()
+                if error := _REQUEST_ERROR.match(line):
+                    signal = RuntimeDiagnostic(
+                        code="request_error", http_status=int(error["status"])
+                    )
+                elif unavailable := _MODEL_UNAVAILABLE.match(line):
+                    signal = RuntimeDiagnostic(
+                        code="request_error",
+                        reason="model_unavailable",
+                        model=unavailable["model"],
+                    )
+                else:
+                    continue
+            elif (changed := _MODEL_SET.fullmatch(line)) and any(
+                colour and text == changed["model"] for colour, text in runs
+            ):
+                signal = RuntimeDiagnostic(
+                    code="model_changed",
+                    severity="info",
+                    model=changed["model"],
+                    observed_effort=changed["effort"],
+                )
+            else:
+                continue
+            observations[signal.observation_key] = signal
+        return tuple(observations.values())
 
     def detect_dialog_chrome(self, pane_content: str) -> bool:
         return self._unnumbered_dialog(pane_content) or super().detect_dialog_chrome(pane_content)

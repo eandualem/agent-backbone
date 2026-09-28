@@ -124,3 +124,116 @@ def test_existing_provider_failure_has_a_generic_metadata_signal():
         "provider",
         None,
     )
+
+
+# Claude Code 2.1.283, captured live against a local Anthropic-compatible stub.
+def _claude_banner(text: str) -> str:
+    return f"\x1b[38;5;220m\x1b[49m⏺\x1b[39m \x1b[38;5;220m{text}\x1b[39m"
+
+
+def _claude_model_line(text: str) -> str:
+    return f"\x1b[38;5;246m\x1b[49m  ⎿  \x1b[39m{text}"
+
+
+_ACCENT = "\x1b[38;5;153m{}\x1b[39m"
+
+
+@pytest.mark.parametrize(
+    ("banner", "status"),
+    [
+        (_claude_banner("API Error: 400 stub bad request"), 400),
+        (_claude_banner("API Error: Request rejected (429) · stub slow down"), 429),
+        (
+            _claude_banner(
+                "API Error: 500 Internal server error. This is a server-side issue, usually "
+                "temporary — try again in a moment. "
+            )
+            + "\n  \x1b[38;5;220mIf it persists, check your inference gateway.\x1b[39m",
+            500,
+        ),
+        (_claude_banner("API Error: Repeated 529 Overloaded errors. The API is at capacity"), 529),
+    ],
+)
+def test_claude_records_a_request_error_status_without_its_message(banner, status):
+    signals = RUNTIMES["claude"].diagnostics(banner + "\n❯ \n")
+    errors = [signal for signal in signals if signal.code == "request_error"]
+    assert len(errors) == 1 and errors[0].http_status == status
+    serialized = json.dumps([asdict(signal) for signal in signals])
+    assert "stub" not in serialized and "server-side" not in serialized
+
+
+def test_claude_records_an_unavailable_model_when_the_banner_wraps():
+    model = "claude-opus-5-5[1m]"
+    wide = (
+        _claude_banner(f"There's an issue with the selected model ({model}). It may not exist")
+        + "\n  \x1b[38;5;220mit. Run /model to pick a different model.\x1b[39m"
+    )
+    narrow = (
+        _claude_banner("There's an issue with the selected model")
+        + f"\n  \x1b[38;5;220m({model}). It may not exist\x1b[39m"
+    )
+    for pane in (wide, narrow):
+        (signal,) = RUNTIMES["claude"].diagnostics(pane + "\n❯ \n")
+        assert (signal.code, signal.reason, signal.model) == (
+            "request_error",
+            "model_unavailable",
+            model,
+        )
+
+
+@pytest.mark.parametrize(
+    ("line", "model", "effort"),
+    [
+        (
+            "Set model to " + _ACCENT.format("Sonnet 5") + " and saved as your default for "
+            "new sessions",
+            "Sonnet 5",
+            None,
+        ),
+        (
+            "Set model to " + _ACCENT.format("Opus 5.5 (1M context) (default)") + " and saved "
+            "as your default for new sessions",
+            "Opus 5.5 (1M context) (default)",
+            None,
+        ),
+        (
+            "Set model to "
+            + _ACCENT.format("Sonnet 5")
+            + " for this session only with "
+            + _ACCENT.format("xhigh")
+            + " effort",
+            "Sonnet 5",
+            "xhigh",
+        ),
+        (
+            "Set model to " + _ACCENT.format("Sonnet 5") + " and saved as your default for "
+            "new sessions with " + _ACCENT.format("high") + " effort",
+            "Sonnet 5",
+            "high",
+        ),
+    ],
+)
+def test_claude_records_a_model_change_with_the_effort_shown(line, model, effort):
+    (signal,) = RUNTIMES["claude"].diagnostics(_claude_model_line(line) + "\n❯ \n")
+    assert (signal.code, signal.severity, signal.model, signal.observed_effort) == (
+        "model_changed",
+        "info",
+        model,
+        effort,
+    )
+
+
+@pytest.mark.parametrize(
+    "pane",
+    [
+        # A reply quoting a banner: white glyph, text in the default colour.
+        "\x1b[38;5;231m\x1b[49m⏺\x1b[39m API Error: 500 Internal server error",
+        "  ⎿  Set model to Sonnet 5 and saved as your default for new sessions",
+        # Claude Code is still retrying; the final banner is the observation.
+        "\x1b[38;5;211m\x1b[49m✻\x1b[39m \x1b[38;5;211m500 Internal server error\x1b[38;5;246m"
+        " · Retrying in 2s · attempt 3/10\x1b[39m",
+    ],
+    ids=["quoted-banner", "uncoloured-model-line", "retry-line"],
+)
+def test_claude_ignores_quoted_banners_and_retries(pane):
+    assert RUNTIMES["claude"].diagnostics(pane + "\n❯ \n") == ()

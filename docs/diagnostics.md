@@ -129,11 +129,16 @@ The supported codes include:
   `reason: unsupported_model_for_account`, the HTTP status, the error type
   and the model identifier observed in the error. The raw provider error
   body is not retained.
-- `request_error`: a recognized runtime JSON error reports an HTTP 4xx or
-  5xx failure. The status and safe error-type identifier are retained;
-  arbitrary error messages are not.
+- `request_error`: a recognized runtime error banner reports an HTTP 4xx or
+  5xx failure. The status and, when the runtime shows one, the safe
+  error-type identifier are retained; arbitrary error messages are not.
+  Claude Code shows the status only. When it reports that the selected model
+  may not exist or be available, the record has `reason: model_unavailable`
+  and the model identifier from the banner instead.
 - `model_changed`: an informational observation of the runtime's model
   change announcement, with the observed model and effort when present.
+  Claude Code announces its display name (for example "Sonnet 5"), not the
+  model identifier.
 - `provider_failure`: a provider capacity, quota or rate-limit failure
   recognized by the runtime's existing classifier.
 - `<code>_no_longer_visible`: a later usable terminal observation no longer
