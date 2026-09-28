@@ -12,12 +12,17 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.services.agents.models import AgentState, StateSnapshot
+from agent_backbone.services.runtimes import RuntimeDiagnostic
 
 log = logging.getLogger(__name__)
+
+_ERROR_NAME = re.compile(r"[A-Za-z0-9_.-]{1,80}")
+_MODEL_ID = re.compile(r"[A-Za-z0-9_./:@+-]{1,160}")
 
 
 def write_state_file(state_dir: Path, session: str, record: dict) -> Path:
@@ -68,6 +73,31 @@ def _finite(value) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def _hook_diagnostics(data: dict) -> tuple[RuntimeDiagnostic, ...]:
+    """What a hook recorded about the runtime's replies, for runtimes whose screen does not show it.
+
+    ``request_error`` is ``{"name": ..., "status": 400-599}`` (status optional),
+    ``model_changed`` a ``provider/model`` identifier. The file is data: a
+    value of any other shape is ignored.
+    """
+    found = []
+    error = data.get("request_error")
+    if isinstance(error, dict) and isinstance(error.get("name"), str):
+        status = error.get("status")
+        if _ERROR_NAME.fullmatch(error["name"]) and (
+            status is None or (type(status) is int and 400 <= status <= 599)
+        ):
+            found.append(
+                RuntimeDiagnostic(
+                    code="request_error", error_type=error["name"], http_status=status
+                )
+            )
+    model = data.get("model_changed")
+    if isinstance(model, str) and _MODEL_ID.fullmatch(model):
+        found.append(RuntimeDiagnostic(code="model_changed", severity="info", model=model))
+    return tuple(found)
 
 
 def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
@@ -121,6 +151,7 @@ def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
         prompted_at=_finite(data.get("prompted_at")),
         prompt_digest=data["prompt_digest"] if isinstance(data.get("prompt_digest"), str) else None,
         detail=data.get("detail") or None,
+        diagnostics=_hook_diagnostics(data),
         evidence=[
             f"hook state file {state_file.name}: {state.value}"
             + (f" (event {data['event']})" if data.get("event") else "")

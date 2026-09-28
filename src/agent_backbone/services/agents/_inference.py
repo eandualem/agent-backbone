@@ -22,6 +22,7 @@ from agent_backbone.services.agents.models import (
 from agent_backbone.services.runtimes import (
     GENERIC_BUSY_FRAGMENTS,
     UNKNOWN,
+    RuntimeDiagnostic,
     detect_runtime,
     get_runtime,
     sanitize_pane_content,
@@ -69,15 +70,24 @@ def infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) ->
 def _with_diagnostics(
     snapshot: StateSnapshot, pane_content: str | None, runtime_hint: str | None
 ) -> StateSnapshot:
-    """Attach classified observations without changing a state decision or reading a pane."""
+    """Attach classified observations without changing a state decision or reading a pane.
+
+    The terminal's join those the hook recorded (already on a push snapshot).
+    """
     if not pane_content or not pane_content.strip():
         return snapshot
     runtime = get_runtime(runtime_hint)
     if runtime is UNKNOWN:
         runtime = detect_runtime(pane_content)
     return replace(
-        snapshot, diagnostics=runtime.diagnostics(pane_content), diagnostics_observed=True
+        snapshot,
+        diagnostics=_joined(snapshot.diagnostics, runtime.diagnostics(pane_content)),
+        diagnostics_observed=True,
     )
+
+
+def _joined(*groups: tuple[RuntimeDiagnostic, ...]) -> tuple[RuntimeDiagnostic, ...]:
+    return tuple(dict.fromkeys(signal for group in groups for signal in group))
 
 
 def _infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) -> StateSnapshot:
@@ -277,6 +287,7 @@ async def _get_agent_state(
                 dialog.last_message = push.last_message
                 dialog.runtime = push.runtime
                 dialog.model = push.model
+                dialog.diagnostics = push.diagnostics
                 dialog.evidence.append("the dialog on screen beats the hook's idle")
                 return _with_diagnostics(dialog, pane_content, runtime_hint)
         if push.state == AgentState.WAITING_FOR_HUMAN and push.reason == REASON_PERMISSION:
@@ -297,6 +308,7 @@ async def _get_agent_state(
                 dialog.last_message = push.last_message
                 dialog.runtime = push.runtime
                 dialog.model = push.model
+                dialog.diagnostics = push.diagnostics
                 dialog.evidence.append("the choice dialog on screen beats the hook's permission")
                 return _with_diagnostics(dialog, pane_content, runtime_hint)
         return _with_diagnostics(push, pane_content, runtime_hint)
@@ -312,6 +324,7 @@ async def _get_agent_state(
             pull.last_message = push.last_message
             pull.runtime = push.runtime
             pull.model = push.model
+            pull.diagnostics = _joined(push.diagnostics, pull.diagnostics)
             pull.evidence.insert(
                 0, f"hook state '{push.state.value}' is stale ({push_age:.0f}s) — reading terminal"
             )

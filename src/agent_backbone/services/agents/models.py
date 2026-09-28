@@ -96,7 +96,8 @@ class StateSnapshot:
     screen): stable while it is up, different for the next one."""
     evidence: list[str] = field(default_factory=list)
     diagnostics: tuple[RuntimeDiagnostic, ...] = ()
-    """Typed terminal observations, independent of the reconciled state."""
+    """Typed observations, the terminal's and those the hook recorded, independent of the
+    reconciled state."""
     diagnostics_observed: bool = False
     """Whether nonempty terminal output was available (empty also means capture failed)."""
 

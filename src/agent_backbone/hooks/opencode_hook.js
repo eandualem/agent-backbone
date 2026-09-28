@@ -12,7 +12,11 @@
 // root session counts: sessions with a parentID are OpenCode's own subagents.
 // The running model is the one a completed reply names (`message.updated`,
 // provider/model as `--model` takes it), never a request's: title generation
-// asks the small model.
+// asks the small model. The same replies feed the diagnostics log, since
+// OpenCode's screen shows neither an error's status nor a model switch:
+// `request_error` is the last reply's error name and HTTP status (never the
+// provider's message), `model_changed` the model a reply last switched to.
+// A reply the user stopped (MessageAbortedError) counts as neither.
 //
 // What the backbone offers a working agent (a steer, a high-priority batch;
 // <state_dir>/context/, see backbone_state.py) is taken after each tool call
@@ -150,6 +154,19 @@ function appendAction(t, action) {
 // sessionID -> the model its last completed reply came from, in this process;
 // a session resumed by a new process keeps the one its state file holds.
 const models = new Map();
+// sessionID -> {request_error, model_changed} from its completed replies, the
+// same way.
+const outcomes = new Map();
+const OUTCOMES = ["request_error", "model_changed"];
+
+function requestError(error) {
+  // Only the name and HTTP status: the message and body are the provider's text.
+  const status = error.data?.statusCode;
+  return {
+    name: error.name,
+    ...(Number.isInteger(status) && status >= 400 && status <= 599 ? { status } : {}),
+  };
+}
 
 function record(t, event, state, reason, extra = {}) {
   const current = readCurrent(t);
@@ -168,6 +185,8 @@ function record(t, event, state, reason, extra = {}) {
   if (current.session_id && !out.session_id) out.session_id = current.session_id;
   if (models.has(out.session_id)) out.model = models.get(out.session_id);
   else if (current.model && current.session_id === out.session_id) out.model = current.model;
+  const outcome = outcomes.get(out.session_id) ?? (current.session_id === out.session_id ? current : {});
+  for (const key of OUTCOMES) if (outcome[key]) out[key] = outcome[key];
   if (current.last_message !== undefined && out.last_message === undefined) {
     out.last_message = current.last_message;
   }
@@ -299,9 +318,25 @@ export const AgentBackbone = async ({ client, directory } = {}) => {
         }
         case "message.updated": {
           const info = p.info ?? {};
-          if (isChild(info.sessionID) || info.role !== "assistant") return;
-          if (!info.time?.completed || info.error || !info.providerID || !info.modelID) return;
-          models.set(info.sessionID, `${info.providerID}/${info.modelID}`);
+          if (isChild(info.sessionID) || info.role !== "assistant" || !info.time?.completed) return;
+          if (info.error?.name === "MessageAbortedError") return;
+          const current = readCurrent(t);
+          const resumed = current.session_id === info.sessionID ? current : {};
+          const seen = outcomes.get(info.sessionID) ?? resumed;
+          if (info.error) {
+            const request_error = requestError(info.error);
+            outcomes.set(info.sessionID, { model_changed: seen.model_changed, request_error });
+            return;
+          }
+          if (!info.finish) return; // no model answered: a shell command the user ran
+          const outcome = { model_changed: seen.model_changed }; // no error: the last one is cleared
+          if (info.providerID && info.modelID) {
+            const model = `${info.providerID}/${info.modelID}`;
+            const before = models.get(info.sessionID) ?? resumed.model;
+            if (before && before !== model) outcome.model_changed = model;
+            models.set(info.sessionID, model);
+          }
+          outcomes.set(info.sessionID, outcome);
           return;
         }
         case "session.error": {
