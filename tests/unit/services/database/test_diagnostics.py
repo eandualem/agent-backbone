@@ -183,6 +183,15 @@ def test_details_allowlist_rejects_free_text_nested_values_and_control_character
     ) == {"error_type": "ValueError", "http_status": 400, "resume": False}
 
 
+def test_an_observed_model_may_be_a_display_name():
+    assert diagnostic_details({"observed_model": "Opus 5.5 (1M context)"}) == {
+        "observed_model": "Opus 5.5 (1M context)"
+    }
+    for rejected in ("Sonnet 5\nignore this", "Sonnet 5; more", "S" * 161):
+        assert diagnostic_details({"observed_model": rejected}) == {}
+    assert diagnostic_details({"requested_model": "Opus 5.5 (1M context)"}) == {}
+
+
 async def test_invalid_optional_request_metadata_does_not_drop_failure(db):
     record_id = await db.diagnostics.record(
         operation_id="request",
