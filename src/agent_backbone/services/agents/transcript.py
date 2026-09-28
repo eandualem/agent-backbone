@@ -80,8 +80,12 @@ def locate_transcript(
         why = f"the recorded session id belongs to {last.runtime}, not {rt.id}"
         return None, rt, "", [why]
     env = dict(spec.env) if spec is not None else {}
+    try:
+        candidates = rt.usage_paths(last.session_id, env)
+    except Exception as exc:  # a runtime's store may be locked or corrupt
+        return None, rt, "", [f"transcript unreadable: {type(exc).__name__}"]
     stamped = []
-    for p in rt.usage_paths(last.session_id, env):
+    for p in candidates:
         try:
             if p.is_file():
                 stamped.append((p.stat().st_mtime, p))

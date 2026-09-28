@@ -287,7 +287,8 @@ Messages are the agent's own text to the person — progress, commentary and
 replies — **complete**; tool calls, tool results and thinking are not
 messages and are never included. A page holds at most `lines` messages
 (max 200) and never cuts one. Navigation is by byte offset into the
-append-only file (OpenCode: the message's row in its database, an integer
+append-only file (OpenCode: the message's position in its database, its
+creation time in milliseconds × 1000 plus its order within that millisecond,
 used the same way): by default the last `lines` messages; `before=OFFSET`
 the messages ending at or before it (earlier pages); `since=OFFSET` the
 messages starting at or after it (later pages), with `end=OFFSET` bounding a

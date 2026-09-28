@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,7 +19,6 @@ from tests.support import opencode_db
 
 _MOD = "agent_backbone.services.agents.transcript"
 _CLAUDE = "agent_backbone.services.runtimes.claude.ClaudeCode.usage_paths"
-_OPENCODE = "agent_backbone.services.runtimes.opencode.OpenCode.usage_paths"
 
 
 def _assistant(index: int, text: str) -> str:
@@ -180,24 +180,31 @@ class TestOutputPage:
         assert page.evidence == [f"transcript {path}"]
         live[2].assert_not_awaited()
 
-    async def test_opencode_reads_the_hooks_session_from_its_database(self, config, tmp_path, live):
+    async def test_opencode_reads_the_hooks_session_from_its_database(
+        self, config, tmp_path, live, monkeypatch
+    ):
         live[1].return_value = "opencode"
-        path = _opencode_transcript(tmp_path, 3)
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+        path = _opencode_transcript(tmp_path / "opencode", 3)
         write_state_file(
             config.state_dir, "ike", {"state": "idle", "session_id": "s1", "runtime": "opencode"}
         )
-        with patch(_OPENCODE, return_value=[path]):
-            page = await output_page(config, "ike", limit=2)
+        page = await output_page(config, "ike", limit=2)
         assert page.source == "transcript" and page.runtime == "opencode"
         assert _texts(page.messages) == ["reply 1", "reply 2"]
         assert page.more_before is True and page.more_after is False
         assert page.evidence == [f"transcript {path}"]
 
-        (tmp_path / "broken.db").write_text("not a database")
-        with patch(_OPENCODE, return_value=[tmp_path / "broken.db"]):
-            page = await output_page(config, "ike")
+        # A database that cannot be read, found (or not) by the real discovery.
+        with sqlite3.connect(path) as conn:
+            conn.execute("DROP TABLE part")
+        page = await output_page(config, "ike")
         assert page.source == "screen"
-        assert page.evidence[-1].startswith("transcript unreadable: OpenCode database:")
+        assert page.evidence[-1] == "transcript unreadable: OpenCode database: no such table: part"
+        path.write_text("not a database")
+        page = await output_page(config, "ike")
+        assert page.source == "screen"
+        assert page.evidence == ["transcript unreadable: DatabaseError"]
 
     async def test_a_candidate_that_vanishes_is_skipped(self, config, tmp_path, live):
         path = _transcript(tmp_path, 3, name="abc.jsonl")
