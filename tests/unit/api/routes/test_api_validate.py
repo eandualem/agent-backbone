@@ -17,7 +17,7 @@ from sqlalchemy import text
 from agent_backbone import signing
 from agent_backbone.api import validation
 from agent_backbone.config import AgentsConfig
-from agent_backbone.services.database import format_iso
+from agent_backbone.services.database import format_iso, parse_iso
 from agent_backbone.services.terminal import CallerUnknown
 from tests.unit.api.routes.test_api_confirmations import TEXT, _body, _confirmation, _send
 from tests.unit.api.routes.test_api_signing import (
@@ -207,7 +207,11 @@ async def test_the_claim_window_and_the_grant_both_last_a_day(
     late = await _delivered(api_client, auth_headers, db, key)
     held = await _delivered(api_client, auth_headers, db, key, "Another step\n")
     assert (await _validate(api_client, auth_headers, held)).json()["outcome"] == "claimed"
-    clock.wall += DAY + 1
+    async with db.engine.begin() as conn:  # the window runs from admission, stamped by the DB
+        admitted = await conn.scalar(
+            text("SELECT created_at FROM signing_receipts WHERE confirmation_id = :c"), {"c": late}
+        )
+    clock.wall = parse_iso(admitted).timestamp() + DAY + 1
     resp = await _validate(api_client, auth_headers, late)
     assert resp.status_code == 410 and _reason(resp) == "claim_window_passed"
     resp = await _validate(api_client, auth_headers, held)
