@@ -200,6 +200,8 @@ class ClaudeCode(Runtime):
     # turn with no hook event (2.1.284: no Stop, StopFailure,
     # PostToolUseFailure or Notification) and leaves this line (live captures).
     interrupt_patterns = (r"⎿\s+Interrupted · What should Claude do instead\?$",)
+    # Right-aligned above the input box (live captures, 2.1.284).
+    notice_fragments = ("restart to update", "tmux focus-events off")
     prompt_markers = (
         "do you want to proceed?",
         "do you want to make this edit",

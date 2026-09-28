@@ -284,6 +284,9 @@ class Runtime:
     """Anchored patterns for the line a runtime leaves when a person interrupts
     its turn and no hook reports it. Empty: the hooks report interrupts, and
     the terminal is not read for one while a hook state is fresh."""
+    notice_fragments: tuple[str, ...] = ()
+    """Fragments of the notices a runtime draws at the right edge above its
+    input box, which may follow an interrupt line (lowercase)."""
     prompt_markers: tuple[str, ...] = ()
     """Fragments shown when the runtime is asking the human a yes/no question."""
     approve_keys: tuple[str, ...] = ()
@@ -662,9 +665,9 @@ class Runtime:
         nothing working and no dialog on screen: a newer turn below it is
         history. A block's head starts at most two columns in. Below it may
         follow only its own wrap (indented to its text, joined before
-        matching) and notices that end two columns short of the input box's
-        border, as Claude Code draws them (live captures, 80 to 202 columns).
-        Any other line is newer output.
+        matching) and known notices (``notice_fragments``) ending two columns
+        short of the input box's border, as Claude Code draws them (live
+        captures, 80 to 202 columns). Any other line is newer output.
         """
         if not self.interrupt_patterns or not self.detect_idle(pane_content):
             return False
@@ -690,7 +693,11 @@ class Runtime:
             column = head.end() if head else indent
             notices = False
             for more in below:
-                if border is not None and len(more) == border - 2:
+                if (
+                    border is not None
+                    and len(more) == border - 2
+                    and any(fragment in more.lower() for fragment in self.notice_fragments)
+                ):
                     notices = True
                 elif notices or len(more) - len(more.lstrip(" ")) != column:
                     return False

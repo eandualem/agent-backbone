@@ -149,10 +149,12 @@ def test_claude_code_shows_the_interrupt_as_its_latest_output(pane):
         "❯ next task\n✳ Harmonizing… (3s · ↓ 10 tokens)\n",
         # A dialog of that newer turn.
         " Do you want to proceed?\n ❯ 1. Yes\n   2. No\n Esc to cancel · Tab to amend\n",
-        # Indented output that is neither the interrupt's wrap nor a notice.
+        # Indented output that is neither the interrupt's wrap nor a notice,
+        # even where it ends as a notice would.
         "    newer output\n",
+        "     " + "x" * 53 + "\n",
     ],
-    ids=["finished", "running", "dialog", "indented"],
+    ids=["finished", "running", "dialog", "indented", "at-notice-edge"],
 )
 def test_an_older_interrupt_is_history(after):
     old = CLAUDE_REFUSED.split("✻", 1)[0]
