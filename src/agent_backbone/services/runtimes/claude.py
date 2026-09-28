@@ -308,7 +308,7 @@ class ClaudeCode(Runtime):
             root = git_root(here)
             canonical = root and (main_checkout(root) or root)
             layers += [here / ".claude/settings.json", here / ".claude/settings.local.json"]
-            if canonical not in (None, here, Path.home().resolve()):
+            if canonical not in (None, here, agent_home(env).resolve()):
                 layers.append(canonical / ".claude/settings.local.json")
         # 2.1.283: a settings file's `env` applies over the process environment,
         # and the variables decide before `autoMemoryEnabled` (a later layer wins).

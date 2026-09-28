@@ -114,6 +114,8 @@ def test_claude_code_reads_local_settings_at_the_canonical_git_root(home, tmp_pa
     # The directory's own local file comes first; the canonical root's wins.
     _write(worktree / ".claude/settings.local.json", '{"autoMemoryEnabled": true}')
     assert not _reported("claude", project=worktree)
+    # Not when the root is the agent's own home directory.
+    assert _reported("claude", {"HOME": str(main)}, main / "service")
 
 
 def test_codex_reads_project_settings_only_under_a_trusted_root(home, tmp_path):
