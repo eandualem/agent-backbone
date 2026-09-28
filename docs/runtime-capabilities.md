@@ -55,7 +55,7 @@ claims support that the adapter's code does not declare.
 | agent output from the runtime's own record | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
 | Provider capacity or rate-limit failure detected (blocked) | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | n/a |
 | Running model observed (status) | ✅ | ✅ | ✅ | ✅ | ❌ no hook state | ❌ no hook state | n/a |
-| Request errors and model changes recorded (diagnostics) | ❌ #304 | ✅ | ❌ | ❌ #304 | ❌ | ❌ | n/a |
+| Request errors and model changes recorded (diagnostics) | ✅ | ✅ | ❌ | ❌ #304 | ❌ | ❌ | n/a |
 | A peer's message cannot pass as a Backbone brief | ✅ | ✅ | ? | ❌ #294 adopted a forged brief | ? | ? | n/a |
 | An enrolled sender name's requests must be signed | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | A message the owner confirmed carries a verified marker | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
