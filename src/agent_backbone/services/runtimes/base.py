@@ -606,10 +606,14 @@ class Runtime:
         # Join visually wrapped banner continuations before scanning backwards.
         # A new response glyph or prompt always starts a new logical line.
         lines: list[str] = []
-        for raw in pane_content.splitlines()[-25:]:
+        # Count the window in lines with text: a runtime that draws its input
+        # box at the bottom pads the space above it with blank lines.
+        raws = pane_content.splitlines()
+        filled = [i for i, raw in enumerate(raws) if sanitize_pane_content(raw).strip()]
+        for raw in raws[filled[-25] if len(filled) >= 25 else 0 :]:
             clean = sanitize_pane_content(raw)
             previous = sanitize_pane_content(lines[-1]).strip() if lines else ""
-            banner = previous.lstrip("│┃■●⎿✕✖! ").strip()
+            banner = previous.lstrip("│┃■●⏺⎿✕✖! ").strip()
             if (
                 clean.startswith("  ")
                 and clean.strip()
@@ -633,7 +637,7 @@ class Runtime:
                 continue
             if line in self.prompt_prefixes or line.lower() in self.placeholder_fragments:
                 continue
-            text = line.lstrip("│┃■●⎿✕✖! ").strip()
+            text = line.lstrip("│┃■●⏺⎿✕✖! ").strip()
             if any(
                 re.match(pattern, text, re.IGNORECASE) for pattern in self.provider_error_patterns
             ):

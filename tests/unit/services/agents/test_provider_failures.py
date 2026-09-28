@@ -201,3 +201,59 @@ def test_deepcode_status_line_wrapped_in_a_narrow_pane(width, status, detail):
 )
 def test_deepcode_other_status_lines_do_not_block(status, reply):
     assert RUNTIMES["deepcode"].provider_failure(_deepcode_pane(status, reply)) is None
+
+
+# Claude Code 2.1.283, captured live against a local Anthropic-compatible stub:
+# the banner is "⏺" and text in one warning colour, a "✻ … · done" line follows,
+# and blank lines pad the space above the input box at the bottom of the pane.
+_CLAUDE_INPUT = (
+    "\n" * 22
+    + "\x1b[38;5;244m"
+    + "─" * 60
+    + "\n\x1b[39m❯\xa0\x1b[7m \x1b[0m\n"
+    + "\x1b[38;5;244m"
+    + "─" * 60
+    + "\n"
+    + "\x1b[39m  \x1b[38;5;246m⏸ manual mode on · ? for shortcuts · ← for agents\x1b[39m\n"
+)
+
+
+def _claude_turn(reply: str) -> str:
+    done = "\x1b[38;5;246m✻\x1b[39m \x1b[38;5;246mChurned for 3m 6s · done 5:51 PM\x1b[39m"
+    return f"❯ hello\n\n{reply}\n\n{done}\n{_CLAUDE_INPUT}"
+
+
+def _warning(text: str) -> str:
+    return f"\x1b[38;5;220m{text}\x1b[39m"
+
+
+@pytest.mark.parametrize(
+    "banner",
+    [
+        _warning("⏺")
+        + " "
+        + _warning("API Error: 529 Overloaded. This is a server-side issue")
+        + "\n  "
+        + _warning("usually temporary — try again in a moment."),
+        _warning("⏺")
+        + " "
+        + _warning("API Error: Repeated 529 Overloaded errors. The API is busy"),
+        _warning("⏺") + " " + _warning("API Error: Request rejected (429) · slow down"),
+    ],
+    ids=["529", "repeated-529", "429"],
+)
+def test_claude_2_1_283_provider_banner_is_blocked(banner):
+    snapshot = infer_state_from_pane(_claude_turn(banner), "claude")
+    assert snapshot.state == AgentState.BLOCKED and snapshot.reason == "provider"
+    assert snapshot.detail.startswith("API Error: ")
+
+
+def test_claude_earlier_provider_banner_is_blocked():
+    banner = '  ⎿  API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}'
+    snapshot = infer_state_from_pane(f"❯ hello\n{banner}\n\n❯ \n", "claude")
+    assert snapshot.state == AgentState.BLOCKED and snapshot.reason == "provider"
+
+
+def test_claude_reply_quoting_a_provider_banner_is_not_blocked():
+    reply = "\x1b[38;5;231m⏺\x1b[39m API Error: 529 Overloaded means the API is busy."
+    assert infer_state_from_pane(_claude_turn(reply), "claude").state == AgentState.IDLE

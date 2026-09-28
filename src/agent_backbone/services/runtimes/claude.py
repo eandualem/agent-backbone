@@ -190,7 +190,9 @@ class ClaudeCode(Runtime):
     busy_markers = ("esc to interrupt",)
     provider_error_patterns = (
         r"^you(?:'ve| have) hit your (?:(?:usage|session|weekly|monthly spend) )?limit\b",
-        r"^API Error:\s*(?:429|529)\b",
+        # 2.1.283 also reads "API Error: Repeated 529 Overloaded errors…" and
+        # "API Error: Request rejected (429) · …" (live captures).
+        r"^API Error:\s*(?:Repeated |Request rejected \()?(?:429|529)\b",
         r"^(?:error:\s*)?(?:credit balance is too low|rate limit (?:reached|exceeded))\b",
     )
     provider_error_prefixes = ("⎿", "✕")
@@ -312,6 +314,17 @@ class ClaudeCode(Runtime):
                 continue
             observations[signal.observation_key] = signal
         return tuple(observations.values())
+
+    # "✻ Churned for 3m 6s · done 5:51 PM" is left where a turn ended (live
+    # capture, 2.1.283): chrome, not output that supersedes an error above it.
+    _TURN_DONE_RE = re.compile(
+        r"[·✢✳✶✻✽*] \S+ for \d+[hms](?: \d+[hms])*(?: · done \S+(?: [AP]M)?)?"
+    )
+
+    def _is_status_chrome_line(self, line: str) -> bool:
+        return super()._is_status_chrome_line(line) or bool(
+            self._TURN_DONE_RE.fullmatch(line.strip())
+        )
 
     def detect_dialog_chrome(self, pane_content: str) -> bool:
         return self._unnumbered_dialog(pane_content) or super().detect_dialog_chrome(pane_content)
