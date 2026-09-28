@@ -128,10 +128,7 @@ def _infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) -
 def _dialog_snapshot(runtime, pane_content: str, prefix: list[str] | None = None) -> StateSnapshot:
     """``waiting_for_human`` as read from the terminal: a known permission
     prompt, or any dialog recognised by its numbered options."""
-    known = runtime.prompt_markers and any(
-        marker in sanitize_pane_content(pane_content).lower()[-2000:]
-        for marker in runtime.prompt_markers
-    )
+    known = runtime.detect_permission_prompt(pane_content)
     if runtime.detect_choice_dialog(pane_content):
         reason, seen = REASON_QUESTION, "a choice dialog (Enter would pick, not allow)"
     elif known:

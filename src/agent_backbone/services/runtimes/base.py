@@ -671,6 +671,12 @@ class Runtime:
         lowered = "\n".join(line.lower() for line in tail)
         return any(marker in lowered for marker in self.prompt_markers)
 
+    def detect_permission_prompt(self, pane_content: str) -> bool:
+        """Whether the dialog on screen is a known permission prompt, not
+        some other question (``prompt_markers`` near the end of the pane)."""
+        lowered = sanitize_pane_content(pane_content).lower()[-2000:]
+        return any(marker in lowered for marker in self.prompt_markers)
+
     def detect_dialog_chrome(self, pane_content: str) -> bool:
         """Whether the tail shows a numbered-option block with a selection cursor.
 

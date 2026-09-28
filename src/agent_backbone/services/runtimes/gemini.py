@@ -158,6 +158,9 @@ class Gemini(Runtime):
     def detect_active_dialog(self, pane_content: str) -> bool:
         return _permission_dialog(pane_content) or super().detect_active_dialog(pane_content)
 
+    def detect_permission_prompt(self, pane_content: str) -> bool:
+        return _permission_dialog(pane_content) or super().detect_permission_prompt(pane_content)
+
     def detect_choice_dialog(self, pane_content: str) -> bool:
         # "1" allows a tool only in a recognised permission dialog. Any other
         # active dialog is a choice, where "1" would pick an answer: the

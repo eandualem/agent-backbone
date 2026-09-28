@@ -236,6 +236,7 @@ class TestGeminiAdapter:
     def test_edit_dialog_detected_and_summarised_above_the_update_notice(self):
         snapshot = infer_state_from_pane(GEMINI_EDIT_DIALOG, "gemini")
         assert snapshot.state == AgentState.WAITING_FOR_HUMAN
+        assert snapshot.reason == "permission"
         assert self.adapter.detect_active_dialog(GEMINI_EDIT_DIALOG)
         assert not self.adapter.detect_choice_dialog(GEMINI_EDIT_DIALOG)
         assert self.adapter.dialog_summary(GEMINI_EDIT_DIALOG) == (
