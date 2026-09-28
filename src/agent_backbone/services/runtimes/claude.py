@@ -260,23 +260,30 @@ class ClaudeCode(Runtime):
     def diagnostics(self, pane_content: str) -> tuple[RuntimeDiagnostic, ...]:
         """Observe request-error banners and model changes.
 
-        Claude Code draws a banner's glyph and text in one warning colour and
-        a model name in an accent; a reply quoting either is drawn in the
-        default colour and is not recorded. Retry lines shown while Claude
-        Code still retries are not recorded; the final banner is.
+        Claude Code draws a banner's glyph and every line of its text in one
+        warning colour, and a model name in a colour of its own; a reply
+        quoting either is drawn in the default colour and is not recorded.
+        Retry lines shown while Claude Code still retries are not recorded;
+        the final banner is.
         """
         observations = {item.observation_key: item for item in super().diagnostics(pane_content)}
         lines = pane_content.splitlines()[-80:]
         for index, raw in enumerate(lines):
+            head = re.match(r"\s*[⏺⎿]\s+", sanitize_pane_content(raw))
+            if not head:
+                continue
             line = sanitize_pane_content(raw).strip()
+            # A narrow pane wraps a banner or a confirmation onto lines indented
+            # to its text; a right-aligned status line below it is not one.
             runs = _runs(raw)
-            if line.startswith("⏺") and len(runs) > 1 and runs[0][0] and runs[0][0] == runs[1][0]:
-                # A narrow pane wraps the banner onto indented lines.
-                for more in lines[index + 1 : index + 4]:
-                    more = sanitize_pane_content(more)
-                    if not more.startswith("  ") or not more.strip():
-                        break
-                    line += " " + more.strip()
+            for more in lines[index + 1 : index + 4]:
+                text = sanitize_pane_content(more)
+                if not text.strip() or len(text) - len(text.lstrip(" ")) != head.end():
+                    break
+                line += " " + text.strip()
+                runs += _runs(more)
+            colour = runs[0][0]
+            if line.startswith("⏺") and colour and all(other == colour for other, _ in runs):
                 if error := _REQUEST_ERROR.match(line):
                     signal = RuntimeDiagnostic(
                         code="request_error", http_status=int(error["status"])

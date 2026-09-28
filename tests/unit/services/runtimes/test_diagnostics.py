@@ -223,17 +223,44 @@ def test_claude_records_a_model_change_with_the_effort_shown(line, model, effort
     )
 
 
+def test_claude_records_a_model_change_wrapped_by_a_narrow_pane():
+    suffix_wrapped = (
+        _claude_model_line(
+            "Set model to " + _ACCENT.format("Opus 5.5 (1M context) (default)") + " and saved as"
+        )
+        + "\n     your default for new sessions"
+    )
+    effort_wrapped = (
+        _claude_model_line(
+            "Set model to " + _ACCENT.format("Sonnet 5") + " for this session only with"
+        )
+        + "\n     "
+        + _ACCENT.format("xhigh")
+        + " effort"
+    )
+    # Claude Code briefly shows the new effort right-aligned below the change.
+    indicator = "\n" + " " * 42 + "● high · /effort"
+    pane = suffix_wrapped + indicator + "\n" + effort_wrapped + indicator + "\n❯ \n"
+    signals = RUNTIMES["claude"].diagnostics(pane)
+    assert [(signal.model, signal.observed_effort) for signal in signals] == [
+        ("Opus 5.5 (1M context) (default)", None),
+        ("Sonnet 5", "xhigh"),
+    ]
+
+
 @pytest.mark.parametrize(
     "pane",
     [
         # A reply quoting a banner: white glyph, text in the default colour.
         "\x1b[38;5;231m\x1b[49m⏺\x1b[39m API Error: 500 Internal server error",
+        # Only part of the banner's text in the glyph's colour.
+        "\x1b[38;5;220m⏺\x1b[39m \x1b[38;5;220mAPI \x1b[39mError: 400 stub bad request",
         "  ⎿  Set model to Sonnet 5 and saved as your default for new sessions",
         # Claude Code is still retrying; the final banner is the observation.
         "\x1b[38;5;211m\x1b[49m✻\x1b[39m \x1b[38;5;211m500 Internal server error\x1b[38;5;246m"
         " · Retrying in 2s · attempt 3/10\x1b[39m",
     ],
-    ids=["quoted-banner", "uncoloured-model-line", "retry-line"],
+    ids=["quoted-banner", "partly-coloured-banner", "uncoloured-model-line", "retry-line"],
 )
 def test_claude_ignores_quoted_banners_and_retries(pane):
     assert RUNTIMES["claude"].diagnostics(pane + "\n❯ \n") == ()
