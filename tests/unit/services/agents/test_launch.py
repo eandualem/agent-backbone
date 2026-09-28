@@ -216,8 +216,14 @@ class TestApproveAgent:
 
     @pytest.mark.parametrize(
         "dialog",
-        [GEMINI_AUTH_PICKER, GEMINI_AUTH_PICKER_FAILED, GEMINI_QUESTION, GEMINI_TRUST],
-        ids=["sign-in", "sign-in-failed", "question", "trust"],
+        [
+            GEMINI_AUTH_PICKER,
+            GEMINI_AUTH_PICKER_FAILED,
+            GEMINI_QUESTION,
+            GEMINI_QUESTION.split("\n", 2)[2],  # its title scrolled off screen
+            GEMINI_TRUST,
+        ],
+        ids=["sign-in", "sign-in-failed", "question", "question-clipped", "trust"],
     )
     async def test_gemini_only_allow_once_is_approved(self, dialog):
         with (

@@ -17,8 +17,8 @@ log = logging.getLogger(__name__)
 _JSON_COMMENT = re.compile(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/', re.S)
 """A JSON string (kept) or a comment (dropped), as Gemini CLI strips them."""
 
-_ALLOW_ONCE_FIRST = re.compile(r"(?:●\s*)?1\.\s+allow once", re.I)
-"""A tool-permission dialog's first option (live, 0.46: shell, edit, fetch)."""
+_OPTION = re.compile(r"(?:●\s*)?(\d+)\.\s+(.+)")
+"""A numbered option inside a dialog's frame, the cursor (●) optional."""
 
 
 def _box_title(box: list[str]) -> str:
@@ -44,6 +44,38 @@ def _without_update_notice(pane_content: str) -> list[str]:
                 kept.extend(box)
             box = []
     return [*kept, *box]
+
+
+def _permission_dialog(pane_content: str) -> bool:
+    """Whether the last thing on screen is a tool-permission dialog.
+
+    Recognised by its options, not by any text a reply could also contain:
+    option 1 "Allow once" and a last option "No, suggest changes (esc)"
+    (live, 0.46: shell, edit, fetch). A question the model asks ends with
+    "Enter a custom value" and a hint line instead, even when its title is
+    off screen. Only the frame's own rows count: a command or diff sits in
+    a nested box, and its rows keep their "│".
+    """
+    lines = _without_update_notice(pane_content)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if not lines or not lines[-1].lstrip().startswith("╰"):
+        return False
+    rows: list[str] = []
+    for line in reversed(lines[:-1]):
+        line = line.strip()
+        if not line.startswith("│"):
+            break
+        rows.append(line[1:].removesuffix("│").strip())
+    rows.reverse()
+    if any(row.lower().startswith(("answer questions", "enter to select")) for row in rows):
+        return False
+    options = [match.groups() for row in rows if (match := _OPTION.fullmatch(row))]
+    return (
+        bool(options)
+        and options[0] == ("1", "Allow once")
+        and options[-1][1] == "No, suggest changes (esc)"
+    )
 
 
 def _context_file_names(settings: Path) -> list[str] | None:
@@ -100,10 +132,6 @@ class Gemini(Runtime):
     busy_markers = ("esc to cancel",)
     prompt_markers = (
         "allow execution",
-        # Option 1 of every tool-permission dialog (shell, edit, fetch; live,
-        # 0.46). The questions above it ("Apply this change?") also appear in
-        # replies; this line is on screen only while the dialog is.
-        "1. allow once",
         "yes, allow once",
         "yes, allow always",
         "do you trust the files in this folder",
@@ -121,19 +149,20 @@ class Gemini(Runtime):
     # OS sandbox behind it: trust on the machine.
     unattended_args = ("--approval-mode", "yolo")
 
+    # A file edit or a web fetch asks "Apply this change?" or "Do you want to
+    # proceed?", which replies ask too: those dialogs are recognised by their
+    # options instead (_permission_dialog).
+    def detect_waiting_for_human(self, pane_content: str) -> bool:
+        return _permission_dialog(pane_content) or super().detect_waiting_for_human(pane_content)
+
+    def detect_active_dialog(self, pane_content: str) -> bool:
+        return _permission_dialog(pane_content) or super().detect_active_dialog(pane_content)
+
     def detect_choice_dialog(self, pane_content: str) -> bool:
-        # "1" allows a tool only where option 1 is "Allow once". Every other
-        # numbered dialog is a choice, where "1" would pick an answer: the
-        # sign-in picker, folder trust, or a question the model asks (its
-        # frame is titled "Answer Questions", live, 0.46).
-        if not self.detect_active_dialog(pane_content):
-            return False
-        lines = _without_update_notice(pane_content)
-        tops = [i for i, line in enumerate(lines) if line.lstrip().startswith("╭")]
-        if tops and _box_title(lines[tops[-1] :]).startswith("answer questions"):
-            return True
-        _, options = Runtime._dialog_block("\n".join(lines))
-        return not any(_ALLOW_ONCE_FIRST.fullmatch(option) for option in options)
+        # "1" allows a tool only in a recognised permission dialog. Any other
+        # active dialog is a choice, where "1" would pick an answer: the
+        # sign-in picker, folder trust, or a question the model asks.
+        return self.detect_active_dialog(pane_content) and not _permission_dialog(pane_content)
 
     @staticmethod
     def _dialog_block(pane_content: str) -> tuple[list[str], list[str]]:

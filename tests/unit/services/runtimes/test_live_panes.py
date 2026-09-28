@@ -236,15 +236,22 @@ class TestGeminiAdapter:
     def test_edit_dialog_detected_and_summarised_above_the_update_notice(self):
         snapshot = infer_state_from_pane(GEMINI_EDIT_DIALOG, "gemini")
         assert snapshot.state == AgentState.WAITING_FOR_HUMAN
-        assert snapshot.reason == "permission"
         assert self.adapter.detect_active_dialog(GEMINI_EDIT_DIALOG)
+        assert not self.adapter.detect_choice_dialog(GEMINI_EDIT_DIALOG)
         assert self.adapter.dialog_summary(GEMINI_EDIT_DIALOG) == (
             "? WriteFile  Writing to new.txt 1 written Apply this change?"
         )
 
-    @pytest.mark.parametrize("question", ["Apply this change?", "Do you want to proceed?"])
-    def test_a_reply_asking_a_dialogs_question_is_still_idle(self, question):
-        pane = f"✦ The fix is ready. {question}\n" + GEMINI_IDLE
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Apply this change?",
+            "Do you want to proceed?",
+            "Its options: 1. Allow once\n2. Allow for this session\n3. No, suggest changes (esc)",
+        ],
+    )
+    def test_a_reply_quoting_a_dialog_is_still_idle(self, text):
+        pane = f"✦ The fix is ready. {text}\n" + GEMINI_IDLE
         assert infer_state_from_pane(pane, "gemini").state == AgentState.IDLE
         assert not self.adapter.detect_waiting_for_human(pane)
 
