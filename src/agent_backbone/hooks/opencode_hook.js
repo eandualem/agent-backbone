@@ -320,6 +320,11 @@ export const AgentBackbone = async ({ client, directory } = {}) => {
           const info = p.info ?? {};
           if (isChild(info.sessionID) || info.role !== "assistant" || !info.time?.completed) return;
           if (info.error?.name === "MessageAbortedError") return;
+          // A resumed subagent may not be known yet; its reply is never the agent's.
+          if (!roots.has(info.sessionID)) {
+            await learn(info.sessionID);
+            if (isChild(info.sessionID)) return;
+          }
           const current = readCurrent(t);
           const resumed = current.session_id === info.sessionID ? current : {};
           const seen = outcomes.get(info.sessionID) ?? resumed;

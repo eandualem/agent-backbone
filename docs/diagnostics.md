@@ -144,13 +144,15 @@ The supported codes include:
   change announcement, with the observed model and effort when present.
   Claude Code announces its display name (for example "Sonnet 5"), not the
   model identifier. For OpenCode it is the `provider/model` a reply used
-  when that differs from the previous reply's model in the same session.
+  when that differs from the model of the session's previous successful
+  reply.
 - `provider_failure`: a provider capacity, quota or rate-limit failure
   recognized by the runtime's existing classifier.
 - `<code>_no_longer_visible`: a later usable terminal observation no longer
   contains a previously observed error. The error may have scrolled away;
   this does not establish recovery or a successful model request. For
-  OpenCode it means a later reply completed without an error.
+  OpenCode it means the plugin no longer records that error: a later reply
+  completed without one, or failed differently.
 
 For example, one capture may show `model_account_incompatible` followed by
 `model_changed`. That records a rejected selection and a later announcement.

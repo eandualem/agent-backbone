@@ -134,7 +134,8 @@ await reply("sub", {modelID: "subagent"});
 await idle();
 await reply("root", {modelID: "small"});
 await idle();
-await reply("root", {error: {name: "UnknownError", data: {message: "PROVIDER TEXT", statusCode: 0}}});
+await reply("root", {error: {name: "UnknownError", data: {
+    message: "PROVIDER TEXT", statusCode: 0}}});
 await idle();
 console.log(JSON.stringify(seen));
 """
@@ -156,6 +157,42 @@ console.log(JSON.stringify(seen));
         {"request_error": {"name": "UnknownError"}, "model_changed": "acme/small"},
     ]
     assert "PROVIDER" not in state.read_text()
+
+
+def test_a_resumed_subagents_failed_reply_is_never_the_agents(tmp_path):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to exercise the JavaScript plugin")
+    plugin = tmp_path / "hook.mjs"
+    plugin.write_text(hook_source("opencode_hook.js").read_text())
+    script = """
+const { AgentBackbone } = await import(process.argv[1]);
+// A subagent resumed from an earlier run has no session.created: the plugin
+// asks OpenCode for its parent, and the answer arrives after the failure.
+let answer;
+const get = () => new Promise((resolve) => {
+    answer = () => resolve({data: {id: "sub", parentID: "root"}});
+});
+const hook = await AgentBackbone({client: {session: {get}}});
+const event = (type, properties) => hook.event({event: {type, properties}});
+await event("session.status", {sessionID: "sub", status: {type: "busy"}});
+const replied = event("message.updated", {info: {
+    role: "assistant", sessionID: "sub", providerID: "acme", modelID: "large",
+    time: {created: 1, completed: 2}, error: {name: "APIError", data: {statusCode: 500}}
+}});
+await event("session.error", {sessionID: "sub"});
+answer();
+await replied;
+"""
+    subprocess.run(
+        [node, "--input-type=module", "-e", script, plugin.as_uri()],
+        env={**os.environ, "BACKBONE_AGENT": "app", "BACKBONE_STATE_DIR": str(tmp_path)},
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert "request_error" not in json.loads((tmp_path / "app.json").read_text())
 
 
 def test_a_resumed_opencode_session_keeps_its_reply_outcomes(tmp_path):
