@@ -65,7 +65,7 @@ def pre_trust_codex_directory(directory: Path | str, *, codex_config: Path | Non
 
 def _toml_object(path: Path) -> dict:
     try:
-        return tomllib.loads(path.read_text())
+        return tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 
@@ -379,17 +379,25 @@ class Codex(Runtime):
         if project is not None:
             # 0.157.1: `.codex/config.toml` from the project root (the nearest
             # directory with `.git`) down to the session's directory, the nearer
-            # one winning, and only when that root (or a worktree's main
-            # checkout) is trusted.
+            # one winning. Each counts when its directory is trusted: the nearest
+            # entry from it up to the root, then a worktree's main checkout.
             here = Path(project).expanduser().resolve()
-            chain = [here, *here.parents]
             root = git_root(here) or here
+            chain = [here, *here.parents]
+            below = chain[: chain.index(root) + 1]
             projects = user.get("projects")
             projects = projects if isinstance(projects, dict) else {}
-            entries = [projects.get(str(key)) for key in (root, main_checkout(root)) if key]
-            if any(isinstance(e, dict) and e.get("trust_level") == "trusted" for e in entries):
-                below = chain[: chain.index(root) + 1]
-                layers += [_toml_object(d / ".codex/config.toml") for d in reversed(below)]
+
+            def trusted(directory: Path) -> bool:
+                for key in (*below[below.index(directory) :], main_checkout(root)):
+                    entry = projects.get(str(key)) if key else None
+                    if isinstance(entry, dict) and "trust_level" in entry:
+                        return entry["trust_level"] == "trusted"
+                return False
+
+            layers += [
+                _toml_object(d / ".codex/config.toml") for d in reversed(below) if trusted(d)
+            ]
         enabled = False  # off by default (`codex features list`)
         for layer in layers:
             features = layer.get("features")

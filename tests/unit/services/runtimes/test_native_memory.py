@@ -127,13 +127,34 @@ def test_codex_reads_project_settings_only_under_a_trusted_root(home, tmp_path):
     assert not _reported("codex", project=session)
     trusted = f'[projects."{session.resolve()}"]\ntrust_level = "trusted"\n'
     _write(home / ".codex/config.toml", trusted)
-    assert not _reported("codex", project=session)  # trust belongs to the root
+    assert not _reported("codex", project=session)  # the root's layer needs the root's trust
     _write(
         home / ".codex/config.toml", trusted.replace(str(session.resolve()), str(project.resolve()))
     )
     assert _reported("codex", project=session)
     _write(session / ".codex/config.toml", "[features]\nmemories = false\n")
     assert not _reported("codex", project=session)  # the nearer directory wins
+
+
+def test_codex_decides_trust_for_each_project_layer(home, tmp_path):
+    project, session = tmp_path / "project", tmp_path / "project/service"
+    (project / ".git").mkdir(parents=True)
+    _write(session / ".codex/config.toml", "[features]\nmemories = true\n")
+
+    def trust(**levels):
+        entries = {"project": project, "session": session}
+        _write(
+            home / ".codex/config.toml",
+            "".join(
+                f'[projects."{entries[name].resolve()}"]\ntrust_level = "{level}"\n'
+                for name, level in levels.items()
+            ),
+        )
+
+    trust(project="untrusted", session="trusted")
+    assert _reported("codex", project=session)  # a trusted directory below an untrusted root
+    trust(project="trusted", session="untrusted")
+    assert not _reported("codex", project=session)  # an untrusted one below a trusted root
 
 
 def test_codex_trust_on_a_worktrees_main_checkout_covers_the_worktree(home, tmp_path):
