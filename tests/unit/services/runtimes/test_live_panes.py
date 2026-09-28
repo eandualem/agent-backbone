@@ -242,6 +242,12 @@ class TestGeminiAdapter:
             "? WriteFile  Writing to new.txt 1 written Apply this change?"
         )
 
+    @pytest.mark.parametrize("question", ["Apply this change?", "Do you want to proceed?"])
+    def test_a_reply_asking_a_dialogs_question_is_still_idle(self, question):
+        pane = f"✦ The fix is ready. {question}\n" + GEMINI_IDLE
+        assert infer_state_from_pane(pane, "gemini").state == AgentState.IDLE
+        assert not self.adapter.detect_waiting_for_human(pane)
+
     def test_declined_dialog_is_idle(self):
         assert infer_state_from_pane(GEMINI_DIALOG_DECLINED, "gemini").state == AgentState.IDLE
         assert not self.adapter.detect_active_dialog(GEMINI_DIALOG_DECLINED)

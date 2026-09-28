@@ -21,6 +21,31 @@ _ALLOW_ONCE_FIRST = re.compile(r"(?:●\s*)?1\.\s+allow once", re.I)
 """A tool-permission dialog's first option (live, 0.46: shell, edit, fetch)."""
 
 
+def _box_title(box: list[str]) -> str:
+    """The first text line inside a ``╭ … ╰`` frame, lowercased."""
+    for row in box[1:]:
+        if text := row.strip().strip("│").strip():
+            return text.lower()
+    return ""
+
+
+def _without_update_notice(pane_content: str) -> list[str]:
+    """The pane's lines without the "Gemini CLI update available!" box, which
+    Gemini can draw below a dialog (live, 0.46)."""
+    kept: list[str] = []
+    box: list[str] = []
+    for line in sanitize_pane_content(pane_content).splitlines():
+        if not box and not line.lstrip().startswith("╭"):
+            kept.append(line)
+            continue
+        box.append(line)
+        if line.lstrip().startswith("╰"):
+            if not _box_title(box).startswith("gemini cli update available!"):
+                kept.extend(box)
+            box = []
+    return [*kept, *box]
+
+
 def _context_file_names(settings: Path) -> list[str] | None:
     """``context.fileName`` in one Gemini settings file, None where it sets none."""
     try:
@@ -75,9 +100,10 @@ class Gemini(Runtime):
     busy_markers = ("esc to cancel",)
     prompt_markers = (
         "allow execution",
-        # A file edit and a web fetch ask these instead (live, 0.46).
-        "apply this change?",
-        "do you want to proceed?",
+        # Option 1 of every tool-permission dialog (shell, edit, fetch; live,
+        # 0.46). The questions above it ("Apply this change?") also appear in
+        # replies; this line is on screen only while the dialog is.
+        "1. allow once",
         "yes, allow once",
         "yes, allow always",
         "do you trust the files in this folder",
@@ -98,32 +124,21 @@ class Gemini(Runtime):
     def detect_choice_dialog(self, pane_content: str) -> bool:
         # "1" allows a tool only where option 1 is "Allow once". Every other
         # numbered dialog is a choice, where "1" would pick an answer: the
-        # sign-in picker, folder trust, or a question the model asks ("Answer
-        # Questions", live, 0.46).
+        # sign-in picker, folder trust, or a question the model asks (its
+        # frame is titled "Answer Questions", live, 0.46).
         if not self.detect_active_dialog(pane_content):
             return False
-        above, options = self._dialog_block(pane_content)
-        if any(line.lower() == "answer questions" for line in above):
+        lines = _without_update_notice(pane_content)
+        tops = [i for i, line in enumerate(lines) if line.lstrip().startswith("╭")]
+        if tops and _box_title(lines[tops[-1] :]).startswith("answer questions"):
             return True
+        _, options = Runtime._dialog_block("\n".join(lines))
         return not any(_ALLOW_ONCE_FIRST.fullmatch(option) for option in options)
 
     @staticmethod
     def _dialog_block(pane_content: str) -> tuple[list[str], list[str]]:
-        # The "Gemini CLI update available!" box can be drawn below a dialog
-        # (live, 0.46); it is not the dialog, so it must not end the dialog's
-        # frame.
-        kept: list[str] = []
-        box: list[str] = []
-        for line in sanitize_pane_content(pane_content).splitlines():
-            if not box and not line.lstrip().startswith("╭"):
-                kept.append(line)
-                continue
-            box.append(line)
-            if line.lstrip().startswith("╰"):
-                if not any("update available!" in row.lower() for row in box):
-                    kept.extend(box)
-                box = []
-        return Runtime._dialog_block("\n".join([*kept, *box]))
+        # The update notice below a dialog must not end the dialog's frame.
+        return Runtime._dialog_block("\n".join(_without_update_notice(pane_content)))
 
     def hook_settings_path(self, project_dir: Path | None) -> Path:
         if project_dir is not None:

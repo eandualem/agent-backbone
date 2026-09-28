@@ -111,6 +111,10 @@ class TestApproveAgent:
         "│ Gemini CLI update available!         │\n"
         "╰──────────────────────────────────────╯\n"
     )
+    # The command itself mentions the update notice: still the dialog.
+    GEMINI_NOTICE_IN_COMMAND = GEMINI_DIALOG.replace(
+        "? Shell  touch probe.txt ", "? Shell  echo update available!"
+    )
     GEMINI_FETCH_DIALOG = GEMINI_DIALOG.replace(
         "? Shell  touch probe.txt ", "?  WebFetch https://ex.com/"
     ).replace("Allow execution of [Shell]?", "Do you want to proceed?    ")
@@ -125,8 +129,14 @@ class TestApproveAgent:
 
     @pytest.mark.parametrize(
         "dialog",
-        [GEMINI_DIALOG, GEMINI_DIALOG_ON_NO, GEMINI_EDIT_DIALOG, GEMINI_FETCH_DIALOG],
-        ids=["shell", "cursor-on-no", "edit", "fetch"],
+        [
+            GEMINI_DIALOG,
+            GEMINI_DIALOG_ON_NO,
+            GEMINI_EDIT_DIALOG,
+            GEMINI_FETCH_DIALOG,
+            GEMINI_NOTICE_IN_COMMAND,
+        ],
+        ids=["shell", "cursor-on-no", "edit", "fetch", "notice-in-command"],
     )
     async def test_gemini_is_answered_with_allow_once(self, dialog):
         with (
@@ -181,16 +191,20 @@ class TestApproveAgent:
         + GEMINI_DIALOG.split("╰──────────────────────────────────────╯\n", 1)[1]
     )
 
-    # A question the model asks (ask_user, live): "1" would answer it.
+    # A question the model asks (ask_user; layout live): "1" would answer it,
+    # even when it quotes a permission prompt and offers "Allow once" first.
     GEMINI_QUESTION = (
         "╭──────────────────────────────────────────────────────────╮\n"
         "│ Answer Questions                                         │\n"
-        "│ Do you want to proceed?                                  │\n"
-        "│ ● 1.  Yes                                                │\n"
-        "│       Go ahead                                           │\n"
+        "│ ← □ Deploy │ □ Notify │ ≡ Review →                       │\n"
+        + "│ A long question, one of many lines                       │\n"
+        * 8
+        + "│ Allow execution of deploy.sh?                            │\n"
+        "│ ● 1.  Allow once                                         │\n"
+        "│       Run it                                             │\n"
         "│   2.  No                                                 │\n"
         "│   3.  Enter a custom value                               │\n"
-        "│ Enter to select · ↑/↓ to navigate · Esc to cancel        │\n"
+        "│ Enter to select · ←/→ to switch questions · Esc to cancel │\n"
         "╰──────────────────────────────────────────────────────────╯\n"
     )
     GEMINI_TRUST = (
