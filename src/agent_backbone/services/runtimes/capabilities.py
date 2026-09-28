@@ -406,7 +406,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok(_LAUNCH),
         gemini=_unverified(296, "whether the CLI has an effort setting is not checked"),
         opencode=_gap(296, "the CLI has one; Backbone refuses the effort"),
-        deepcode=_gap(296, "the CLI has one; Backbone refuses the effort"),
+        deepcode=_ok(_LAUNCH, note="low, high or max, through DEEPCODE_REASONING_EFFORT"),
         aider=_unverified(296, "whether the CLI has an effort setting is not checked"),
         shell=_na(_NO_MODEL),
     ),
