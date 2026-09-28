@@ -58,7 +58,6 @@ REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
         ("reasoning-effort", "opencode", 296),
         ("bounded-unattended", "opencode", 285),
         ("auto-review", "opencode", 293),
-        ("request-diagnostics", "opencode", 304),
         ("message-authority", "opencode", 294),
         ("message-validate", "opencode", 302),
         ("deep-review", "opencode", 288),
@@ -541,11 +540,14 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Request errors and model changes recorded (diagnostics)",
         "src/agent_backbone/services/runtimes/base.py",
         fallback="Check the session for errors and model changes (`agent output`).",
-        implemented=lambda rt: type(rt).diagnostics is not Runtime.diagnostics,
+        implemented=lambda rt: (
+            type(rt).diagnostics is not Runtime.diagnostics
+            or "request-diagnostics" in rt.declared_capabilities
+        ),
         claude=_ok("tests/unit/services/runtimes/test_diagnostics.py"),
         codex=_ok("tests/unit/services/runtimes/test_diagnostics.py"),
         gemini=_gap(),
-        opencode=_gap(304),
+        opencode=_ok("tests/unit/services/agents/test_runtime_diagnostics.py"),
         deepcode=_gap(),
         aider=_gap(),
         shell=_na(_NO_MODEL),

@@ -36,7 +36,9 @@ class OpenCode(Runtime):
     aliases = ("open-code", "open_code")
     binary = "opencode"
     brief_mode = "initial_prompt"
-    declared_capabilities = frozenset({"observed-model", "project-instructions"})
+    declared_capabilities = frozenset(
+        {"observed-model", "project-instructions", "request-diagnostics"}
+    )
     model_tags = True
 
     runtime_markers = ("opencode", "ask anything...", "tab agents")

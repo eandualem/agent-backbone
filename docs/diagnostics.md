@@ -120,7 +120,10 @@ evidence that the message was successfully handled.
 The monitor classifies a bounded terminal capture even when a fresh hook
 says the agent is busy. Those observations do not override the hook's
 state or change the delivery rules. Startup classifies terminal output
-already read while waiting for the agent's prompt.
+already read while waiting for the agent's prompt. OpenCode's screen shows
+neither an error's status nor a model switch, so its plugin takes both from
+OpenCode's own record of each completed reply and writes them with its hook
+state, where the monitor reads them.
 
 The supported codes include:
 
@@ -134,16 +137,20 @@ The supported codes include:
   error-type identifier are retained; arbitrary error messages are not.
   Claude Code shows the status only. When it reports that the selected model
   may not exist or be available, the record has `reason: model_unavailable`
-  and the model identifier from the banner instead.
+  and the model identifier from the banner instead. For OpenCode the error
+  type is the error's name (for example `APIError`), with the status when
+  OpenCode has one; a reply the user stopped is not a request error.
 - `model_changed`: an informational observation of the runtime's model
   change announcement, with the observed model and effort when present.
   Claude Code announces its display name (for example "Sonnet 5"), not the
-  model identifier.
+  model identifier. For OpenCode it is the `provider/model` a reply used
+  when that differs from the previous reply's model in the same session.
 - `provider_failure`: a provider capacity, quota or rate-limit failure
   recognized by the runtime's existing classifier.
 - `<code>_no_longer_visible`: a later usable terminal observation no longer
   contains a previously observed error. The error may have scrolled away;
-  this does not establish recovery or a successful model request.
+  this does not establish recovery or a successful model request. For
+  OpenCode it means a later reply completed without an error.
 
 For example, one capture may show `model_account_incompatible` followed by
 `model_changed`. That records a rejected selection and a later announcement.

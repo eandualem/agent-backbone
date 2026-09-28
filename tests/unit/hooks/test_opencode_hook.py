@@ -101,6 +101,109 @@ await hook.event({event: {type: "session.status", properties: {
     assert "model" not in json.loads(state.read_text())
 
 
+def test_opencode_replies_record_request_errors_and_model_changes(tmp_path):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to exercise the JavaScript plugin")
+    plugin = tmp_path / "hook.mjs"
+    plugin.write_text(hook_source("opencode_hook.js").read_text())
+    script = """
+const { AgentBackbone } = await import(process.argv[1]);
+const { readFileSync } = await import("node:fs");
+const hook = await AgentBackbone();
+const reply = (sessionID, extra) => hook.event({event: {type: "message.updated", properties: {
+    info: {role: "assistant", sessionID, providerID: "acme", modelID: "large",
+           time: {created: 1, completed: 2}, ...extra}
+}}});
+const seen = [];
+const idle = async () => {
+    await hook.event({event: {type: "session.idle", properties: {sessionID: "root"}}});
+    const { request_error, model_changed } = JSON.parse(readFileSync(process.argv[2], "utf8"));
+    seen.push({ request_error, model_changed });
+};
+const created = (info) => hook.event({event: {type: "session.created", properties: {info}}});
+await created({id: "root"});
+await created({id: "sub", parentID: "root"});
+await reply("root", {});
+await idle();
+await reply("root", {error: {name: "APIError", data: {
+    message: "PROVIDER TEXT", statusCode: 400, responseBody: "PROVIDER BODY"}}});
+await idle();
+await reply("root", {error: {name: "MessageAbortedError", data: {message: "aborted"}}});
+await reply("sub", {modelID: "subagent"});
+await idle();
+await reply("root", {modelID: "small"});
+await idle();
+await reply("root", {error: {name: "UnknownError", data: {message: "PROVIDER TEXT", statusCode: 0}}});
+await idle();
+console.log(JSON.stringify(seen));
+"""
+    state = tmp_path / "app.json"
+    result = subprocess.run(
+        [node, "--input-type=module", "-e", script, plugin.as_uri(), str(state)],
+        env={**os.environ, "BACKBONE_AGENT": "app", "BACKBONE_STATE_DIR": str(tmp_path)},
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    failed = {"name": "APIError", "status": 400}
+    assert json.loads(result.stdout) == [
+        {},
+        {"request_error": failed},
+        {"request_error": failed},  # a stopped reply or a subagent's changes nothing
+        {"model_changed": "acme/small"},  # a reply without an error clears it
+        {"request_error": {"name": "UnknownError"}, "model_changed": "acme/small"},
+    ]
+    assert "PROVIDER" not in state.read_text()
+
+
+def test_a_resumed_opencode_session_keeps_its_reply_outcomes(tmp_path):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to exercise the JavaScript plugin")
+    plugin = tmp_path / "hook.mjs"
+    plugin.write_text(hook_source("opencode_hook.js").read_text())
+    state = tmp_path / "app.json"
+    failed = {"name": "APIError", "status": 429}
+    saved = {"runtime": "opencode", "session_id": "root", "model": "acme/large"}
+    state.write_text(json.dumps({**saved, "request_error": failed}))
+    script = """
+const { AgentBackbone } = await import(process.argv[1]);
+const { readFileSync } = await import("node:fs");
+const hook = await AgentBackbone();
+const seen = [];
+const busy = async (sessionID) => {
+    await hook.event({event: {type: "session.status", properties: {
+        sessionID, status: {type: "busy"}
+    }}});
+    const { request_error, model_changed } = JSON.parse(readFileSync(process.argv[2], "utf8"));
+    seen.push({ request_error, model_changed });
+};
+await busy("root");
+await hook.event({event: {type: "message.updated", properties: {info: {
+    role: "assistant", sessionID: "root", providerID: "acme", modelID: "small",
+    time: {created: 1, completed: 2}
+}}}});
+await busy("root");
+await busy("another");
+console.log(JSON.stringify(seen));
+"""
+    result = subprocess.run(
+        [node, "--input-type=module", "-e", script, plugin.as_uri(), str(state)],
+        env={**os.environ, "BACKBONE_AGENT": "app", "BACKBONE_STATE_DIR": str(tmp_path)},
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert json.loads(result.stdout) == [
+        {"request_error": failed},
+        {"model_changed": "acme/small"},  # compared with the model the state file held
+        {},
+    ]
+
+
 def test_plugin_uses_shared_parser_and_acknowledges_only_success(tmp_path):
     node = shutil.which("node")
     if node is None:
