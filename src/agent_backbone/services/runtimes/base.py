@@ -178,9 +178,10 @@ class TranscriptEntry:
     text: str
     """The whole message text, never shortened."""
     start: int = 0
-    """Byte offset where the record begins in the transcript file."""
+    """Byte offset where the record begins in the transcript file (the
+    record's own position when the runtime keeps a database instead)."""
     end: int = 0
-    """Byte offset just after the record (the cursor to continue from)."""
+    """Offset just after the record (the cursor to continue from)."""
 
 
 def transcript_clock(timestamp: object) -> str:
@@ -794,7 +795,8 @@ class Runtime:
 
     transcript_supported = False
     """The runtime keeps its own conversation record that ``usage_paths``
-    locates and ``transcript_entries`` can read (``backbone agent output``)."""
+    locates and ``transcript_entries`` (a JSONL file) or ``transcript_page``
+    (a database) can read (``backbone agent output``)."""
 
     def transcript_entries(self, records: list[dict]) -> list[TranscriptEntry]:
         """The agent's user-facing messages out of parsed JSONL records, oldest
@@ -802,6 +804,22 @@ class Runtime:
         offsets. Tool calls, tool results, reasoning and bookkeeping records
         are not messages and are left out."""
         return []
+
+    def transcript_page(
+        self,
+        path: Path,
+        session_id: str,
+        *,
+        limit: int,
+        since: int | None = None,
+        before: int | None = None,
+        end: int | None = None,
+    ) -> tuple[list[TranscriptEntry], bool, bool] | None:
+        """A page of messages out of a record that is not a JSONL file, as
+        ``(messages, more_before, more_after)``, navigated by the record's own
+        positions the way ``read_messages`` navigates byte offsets. ``None``:
+        the record is JSONL, read with ``transcript_entries``."""
+        return None
 
     def usage_children(
         self, path: Path, session_id: str, env: dict[str, str]
