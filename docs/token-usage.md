@@ -88,10 +88,13 @@ as `reported_cost_usd` in request JSON and never added to the calculated estimat
 
 ## Sources and limits
 
-Codex JSONL rollouts, Claude Code JSONL conversations and OpenCode's local SQLite
-message records are supported. Their schemas were checked against local records;
-runtime upgrades can change them. Gemini, Deep Code, Aider and shell currently
-report unavailable. This does not claim universal per-request coverage.
+Codex JSONL rollouts, Claude Code JSONL conversations, Gemini CLI JSONL sessions
+and OpenCode's local SQLite message records are supported. Their schemas were
+checked against local records; runtime upgrades can change them. Deep Code, Aider
+and shell currently report unavailable. This does not claim universal per-request
+coverage: Gemini CLI records the tokens of its conversation's requests only, not
+those of the smaller requests it makes for itself, such as choosing a model or
+compressing the history.
 
 `usage limits` shows Codex's last recorded allowance windows with observation
 time, percentage and reset, marking expired windows. These are snapshots rather
