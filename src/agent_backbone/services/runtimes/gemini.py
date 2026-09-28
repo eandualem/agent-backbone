@@ -10,6 +10,7 @@ from pathlib import Path
 
 from agent_backbone.hooks.install import save_settings
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
+from agent_backbone.services.runtimes._usage import count
 from agent_backbone.services.runtimes.base import (
     Runtime,
     TranscriptEntry,
@@ -18,6 +19,7 @@ from agent_backbone.services.runtimes.base import (
     read_brief,
     transcript_clock,
 )
+from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
 
@@ -236,6 +238,8 @@ class Gemini(Runtime):
             "turns this off)"
         )
 
+    usage_supported = True
+
     def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
         # 0.46 names the file after the session's start and the first eight
         # characters of its id; only its header line carries the whole id.
@@ -254,6 +258,48 @@ class Gemini(Runtime):
             if isinstance(header, dict) and header.get("sessionId") == session_id:
                 found.append(path)
         return found
+
+    def usage_children(
+        self, path: Path, session_id: str, env: dict[str, str]
+    ) -> list[tuple[str, Path]]:
+        # 0.46 records each subagent's conversation beside the session's, in a
+        # directory named after the session's whole id.
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session_id):
+            return []
+        return [
+            (session_id + "/" + p.stem, p)
+            for p in sorted((path.parent / session_id).glob("*.jsonl"))
+        ]
+
+    def parse_usage(self, record: dict, state: dict):
+        """One API response's tokens: the ``tokens`` of the ``gemini`` record
+        the response produced. 0.46 appends a message again under the same
+        ``id`` whenever it changes, so a response counts once. The counts are
+        the API's, read as its ``/stats`` reads them: ``input`` includes
+        ``cached``; ``thoughts`` and ``tool`` are beside ``output`` and
+        ``input``."""
+        tokens = record.get("tokens")
+        if record.get("type") != "gemini" or not tokens:
+            return None
+        if not isinstance(tokens, dict) or not isinstance(record.get("id"), str):
+            raise ValueError("invalid token usage")
+        cached = count(tokens, "cached")
+        uncached = count(tokens, "input") - cached
+        if uncached < 0:
+            raise ValueError("overlapping input counters")
+        thoughts = count(tokens, "thoughts")
+        return UsageEvent(
+            key=record["id"],
+            at=timestamp(record["timestamp"]),
+            model=record.get("model") or "unknown",
+            provider="google",
+            input_tokens=uncached + count(tokens, "tool"),
+            cache_read_tokens=cached,
+            output_tokens=count(tokens, "output") + thoughts,
+            reasoning_tokens=thoughts,
+            context_tokens=count(tokens, "input"),
+            coverage="partial" if state.get("partial") else "measured",
+        )
 
     transcript_supported = True
 
