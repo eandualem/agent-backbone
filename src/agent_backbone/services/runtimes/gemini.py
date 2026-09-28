@@ -84,6 +84,9 @@ class Gemini(Runtime):
     # "3. No, suggest changes (esc)": the request is cancelled and the tool
     # never runs (live, 0.46), as Escape does in Claude Code and Codex.
     deny_keys = ("Escape",)
+    # The sign-in picker ("● 1. Sign in with Google", live, 0.46) is a choice:
+    # "1" would pick an auth method, not allow a tool.
+    choice_markers = ("how would you like to authenticate", "use gemini api key")
     # "--approval-mode yolo  auto-approve all tools" (gemini-cli --help). No
     # OS sandbox behind it: trust on the machine.
     unattended_args = ("--approval-mode", "yolo")

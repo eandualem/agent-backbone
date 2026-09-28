@@ -135,6 +135,29 @@ class TestApproveAgent:
         assert "choice, not a permission prompt" in evidence[0]
         keys.assert_not_called()
 
+    # gemini 0.46 (live): "1" here would pick a sign-in method, not allow a tool.
+    GEMINI_AUTH_PICKER = (
+        "╭──────────────────────────────────────────────────────────╮\n"
+        "│ ? Get started                                            │\n"
+        "│   How would you like to authenticate for this project?   │\n"
+        "│   ● 1. Sign in with Google                               │\n"
+        "│     2. Use Gemini API Key                                │\n"
+        "│     3. Vertex AI                                         │\n"
+        "│   No authentication method selected.                     │\n"
+        "│   (Use Enter to select)                                  │\n"
+        "╰──────────────────────────────────────────────────────────╯\n"
+    )
+
+    async def test_gemini_sign_in_picker_is_not_approved(self):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value=self.GEMINI_AUTH_PICKER),
+            patch(f"{_BASE}.send_keys") as keys,
+        ):
+            outcome, _ = await approve_agent("gm", runtime="gemini", settle_seconds=0)
+        assert outcome == "not_permission"
+        keys.assert_not_called()
+
     async def test_idle_prompt_is_never_typed_into(self):
         with (
             patch(f"{_MOD}.session_exists", return_value=True),
