@@ -321,6 +321,20 @@ class ClaudeCode(Runtime):
         r"[·✢✳✶✻✽*] \S+ for \d+[hms](?: \d+[hms])*(?: · done \S+(?: [AP]M)?)?"
     )
 
+    def provider_failure(self, pane_content: str) -> str | None:
+        # 2.1.283 draws its input box at the bottom of the pane and pads the
+        # space above it with blank lines: after /clear or at a fresh start a
+        # banner sits outside the shared window. One blank line of each run is
+        # kept, so separate blocks stay separate.
+        lines = pane_content.splitlines()
+        kept = [
+            raw
+            for index, raw in enumerate(lines)
+            if sanitize_pane_content(raw).strip()
+            or (index and sanitize_pane_content(lines[index - 1]).strip())
+        ]
+        return super().provider_failure("\n".join(kept))
+
     def _is_status_chrome_line(self, line: str) -> bool:
         return super()._is_status_chrome_line(line) or bool(
             self._TURN_DONE_RE.fullmatch(line.strip())

@@ -257,3 +257,11 @@ def test_claude_earlier_provider_banner_is_blocked():
 def test_claude_reply_quoting_a_provider_banner_is_not_blocked():
     reply = "\x1b[38;5;231m⏺\x1b[39m API Error: 529 Overloaded means the API is busy."
     assert infer_state_from_pane(_claude_turn(reply), "claude").state == AgentState.IDLE
+
+
+def test_claude_reply_after_a_provider_banner_clears_it():
+    banner = _warning("⏺") + " " + _warning("API Error: Repeated 529 Overloaded errors.")
+    pane = _claude_turn(banner).replace(
+        _CLAUDE_INPUT, "❯ hello again\n\n\x1b[38;5;231m⏺\x1b[39m stub reply\n" + _CLAUDE_INPUT
+    )
+    assert infer_state_from_pane(pane, "claude").state == AgentState.IDLE
