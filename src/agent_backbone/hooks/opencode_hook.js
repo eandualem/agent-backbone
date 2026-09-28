@@ -10,6 +10,9 @@
 //
 // Writes the same <state_dir>/<agent>.json the Python hooks write. Only the
 // root session counts: sessions with a parentID are OpenCode's own subagents.
+// The running model is the one a completed reply names (`message.updated`,
+// provider/model as `--model` takes it), never a request's: title generation
+// asks the small model.
 //
 // What the backbone offers a working agent (a steer, a high-priority batch;
 // <state_dir>/context/, see backbone_state.py) is taken after each tool call
@@ -144,6 +147,9 @@ function appendAction(t, action) {
   );
 }
 
+// sessionID -> the model its last completed reply came from, in this process.
+const models = new Map();
+
 function record(t, event, state, reason, extra = {}) {
   const current = readCurrent(t);
   const now = Date.now() / 1000;
@@ -159,6 +165,7 @@ function record(t, event, state, reason, extra = {}) {
     ...extra,
   };
   if (current.session_id && !out.session_id) out.session_id = current.session_id;
+  if (models.has(out.session_id)) out.model = models.get(out.session_id);
   if (current.last_message !== undefined && out.last_message === undefined) {
     out.last_message = current.last_message;
   }
@@ -286,6 +293,13 @@ export const AgentBackbone = async ({ client, directory } = {}) => {
         case "session.idle": {
           if (isChild(p.sessionID)) return;
           if (pending.size === 0) endTurn(event.type, p.sessionID);
+          return;
+        }
+        case "message.updated": {
+          const info = p.info ?? {};
+          if (isChild(info.sessionID) || info.role !== "assistant") return;
+          if (!info.time?.completed || info.error || !info.providerID || !info.modelID) return;
+          models.set(info.sessionID, `${info.providerID}/${info.modelID}`);
           return;
         }
         case "session.error": {
