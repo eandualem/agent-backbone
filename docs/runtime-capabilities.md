@@ -49,7 +49,7 @@ claims support that the adapter's code does not declare.
 | Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ `--approve-for-me` | ❌ #293 | ❌ #293 | ❌ #293 | ❌ #293 | n/a |
 | Shared skills linked | ✅ | ✅ | ✅ live-checked: it lists the linked skills (0.46) | ✅ | ✅ | ❌ #282 | n/a |
 | Token usage recorded | ✅ | ✅ | ❌ #283 | ✅ | ❌ #283 | ❌ #283 | n/a |
-| agent output from the runtime's own record | ✅ | ✅ | ❌ #284 | ✅ | ❌ #284 | ❌ #284 | n/a |
+| agent output from the runtime's own record | ✅ | ✅ | ✅ | ✅ | ❌ #284 | ❌ #284 | n/a |
 | Provider capacity or rate-limit failure detected (blocked) | ✅ | ✅ | ❌ #295 | ✅ | ✅ | ❌ #295 | n/a |
 | Running model observed (status) | ✅ | ✅ | ✅ | ✅ | ❌ #275 no hook state | ❌ #275 no hook state | n/a |
 | Request errors and model changes recorded (diagnostics) | ❌ #304 | ✅ | ❌ #304 | ❌ #304 | ❌ #304 | ❌ #304 | n/a |

@@ -15,7 +15,7 @@ from agent_backbone.services.agents.transcript import (
     read_messages,
 )
 from agent_backbone.services.runtimes import get_runtime
-from tests.support import opencode_db
+from tests.support import gemini_session, opencode_db
 
 _MOD = "agent_backbone.services.agents.transcript"
 _CLAUDE = "agent_backbone.services.runtimes.claude.ClaudeCode.usage_paths"
@@ -79,7 +79,24 @@ def _opencode_transcript(tmp_path, count: int):
     return opencode_db(tmp_path / "opencode.db", messages)
 
 
-_TRANSCRIPTS = {"claude": _transcript, "codex": _codex_transcript, "opencode": _opencode_transcript}
+def _gemini_transcript(tmp_path, count: int, *, name="session.jsonl", session="s1"):
+    """Replies each recorded again, under the same id, once its tool call
+    finished (as Gemini CLI 0.46 does), after the tool's output."""
+    records = []
+    for i in range(count):
+        reply = {"id": f"g{i}", "type": "gemini", "content": f"reply {i}"}
+        records.append(reply)
+        records.append({"id": f"u{i}", "type": "user", "content": [{"text": "x" * 200}]})
+        records.append({**reply, "toolCalls": [{"id": f"c{i}", "name": "run_shell_command"}]})
+    return gemini_session(tmp_path / name, session, records)
+
+
+_TRANSCRIPTS = {
+    "claude": _transcript,
+    "codex": _codex_transcript,
+    "gemini": _gemini_transcript,
+    "opencode": _opencode_transcript,
+}
 
 
 def _texts(messages):
@@ -87,7 +104,7 @@ def _texts(messages):
 
 
 class TestReadMessages:
-    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "gemini", "opencode"])
     def test_last_page_then_back_then_forward_loses_nothing(self, tmp_path, runtime):
         path = _TRANSCRIPTS[runtime](tmp_path, 7)
         rt = get_runtime(runtime)
@@ -205,6 +222,35 @@ class TestOutputPage:
         page = await output_page(config, "ike")
         assert page.source == "screen"
         assert page.evidence == ["transcript unreadable: DatabaseError"]
+
+    async def test_gemini_reads_the_hooks_session_from_its_file(
+        self, config, tmp_path, live, monkeypatch
+    ):
+        live[1].return_value = "gemini"
+        monkeypatch.setenv("GEMINI_CLI_HOME", str(tmp_path))
+        session = "abcdef12-0000-4000-8000-000000000001"
+        chats = tmp_path / ".gemini/tmp/proj/chats"
+        path = _gemini_transcript(
+            chats, 3, name="session-2026-09-28T10-00-abcdef12.jsonl", session=session
+        )
+        # Another session whose id starts with the same eight characters.
+        other = gemini_session(
+            chats / "session-2026-09-28T11-00-abcdef12.jsonl",
+            session[:8] + "-other",
+            [{"id": "o", "type": "gemini", "content": "other"}],
+        )
+        write_state_file(
+            config.state_dir, "ike", {"state": "idle", "session_id": session, "runtime": "gemini"}
+        )
+        page = await output_page(config, "ike", limit=2)
+        assert page.source == "transcript" and page.runtime == "gemini"
+        assert _texts(page.messages) == ["reply 1", "reply 2"]
+        assert page.more_before is True and page.more_after is False
+        assert page.evidence == [f"transcript {path}"]
+        path.unlink()
+        page = await output_page(config, "ike")
+        assert page.source == "screen" and other.exists()
+        assert page.evidence == [f"no transcript file found for session {session}"]
 
     async def test_a_candidate_that_vanishes_is_skipped(self, config, tmp_path, live):
         path = _transcript(tmp_path, 3, name="abc.jsonl")

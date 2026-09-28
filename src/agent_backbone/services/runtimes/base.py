@@ -837,7 +837,8 @@ class Runtime:
     transcript_supported = False
     """The runtime keeps its own conversation record that ``usage_paths``
     locates and ``transcript_entries`` (a JSONL file) or ``transcript_page``
-    (a database) can read (``backbone agent output``)."""
+    (a database, or a log that repeats a message when it changes) can read
+    (``backbone agent output``)."""
 
     def transcript_entries(self, records: list[dict]) -> list[TranscriptEntry]:
         """The agent's user-facing messages out of parsed JSONL records, oldest
@@ -856,10 +857,11 @@ class Runtime:
         before: int | None = None,
         end: int | None = None,
     ) -> tuple[list[TranscriptEntry], bool, bool] | None:
-        """A page of messages out of a record that is not a JSONL file, as
-        ``(messages, more_before, more_after)``, navigated by the record's own
-        positions the way ``read_messages`` navigates byte offsets. ``None``:
-        the record is JSONL, read with ``transcript_entries``."""
+        """A page of messages out of a record that cannot be read a chunk at
+        a time, as ``(messages, more_before, more_after)``, navigated by the
+        record's own positions the way ``read_messages`` navigates byte
+        offsets. ``None``: the record is JSONL, read with
+        ``transcript_entries``."""
         return None
 
     def usage_children(

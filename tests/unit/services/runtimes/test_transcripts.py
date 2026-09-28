@@ -7,7 +7,7 @@ import sqlite3
 
 from agent_backbone.services.runtimes import get_runtime
 from agent_backbone.services.runtimes.base import transcript_clock
-from tests.support import opencode_db
+from tests.support import gemini_session, opencode_db
 
 LONG = "A" * 5000 + "\nsecond paragraph " + "B" * 3000
 
@@ -206,8 +206,48 @@ def test_opencode_positions_survive_an_undo_that_frees_rowids(tmp_path):
     assert more_before is True and more_after is False
 
 
+def _gemini_reply(identity, text, second=5, **extra):
+    stamp = f"2026-09-28T10:00:{second:02d}.000Z"
+    return {"id": identity, "timestamp": stamp, "type": "gemini", "content": text, **extra}
+
+
+def test_gemini_keeps_each_reply_once_complete_at_its_first_record(tmp_path):
+    call = [{"id": "c1", "name": "run_shell_command", "args": {"command": "pytest -q"}}]
+    records = [
+        {"$set": {"messages": [_gemini_reply("old", "replayed history")]}},
+        {"id": "u1", "type": "user", "content": [{"text": "Fix the bug"}]},
+        _gemini_reply("g1", "Looking at it now.", thoughts=[{"subject": "private"}]),
+        {"$set": {"lastUpdated": "2026-09-28T10:00:05.001Z"}},
+        _gemini_reply("g1", "Looking at it now.", toolCalls=call),  # the call finished
+        {"id": "u2", "type": "user", "content": [{"functionResponse": {"id": "c1"}}]},
+        {"id": "i1", "type": "info", "content": "Request cancelled."},
+        _gemini_reply("g2", "", toolCalls=call),  # a call with no text
+        _gemini_reply("g3", LONG, second=12),
+        {"$rewindTo": "g3"},  # a rewind does not unsay a reply
+        _gemini_reply("g4", [{"text": "synthetic"}]),  # history replayed as parts
+        "not json",
+        _gemini_reply("g5", " \n"),
+        '{"id":"g6","type":"gemini","content":"partly writ',  # still being appended
+    ]
+    path = gemini_session(tmp_path / "session.jsonl", "s", records)
+    lines = path.read_bytes().splitlines(keepends=True)
+    offsets = [sum(map(len, lines[:i])) for i in range(len(lines) + 1)]
+    rt = get_runtime("gemini")
+    entries, more_before, more_after = rt.transcript_page(path, "s", limit=10)
+    assert [(e.time, e.role, e.start, e.end) for e in entries] == [
+        ("10:00:05", "assistant", offsets[3], offsets[4]),
+        ("10:00:12", "assistant", offsets[9], offsets[10]),
+    ]
+    assert entries[0].text == "Looking at it now."
+    assert entries[1].text == LONG  # never shortened
+    assert more_before is False and more_after is False
+    # Continuing past the first reply does not show it again at its repeat.
+    later, more_before, more_after = rt.transcript_page(path, "s", limit=10, since=entries[0].end)
+    assert [e.text for e in later] == [LONG] and more_before is True and more_after is False
+
+
 def test_other_runtimes_keep_no_readable_transcript():
-    for runtime in ("gemini", "aider", "shell"):
+    for runtime in ("aider", "shell"):
         rt = get_runtime(runtime)
         assert rt.transcript_supported is False
         assert rt.transcript_entries([{"type": "assistant", "message": {"content": "x"}}]) == []
