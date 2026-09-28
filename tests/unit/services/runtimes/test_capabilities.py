@@ -67,6 +67,13 @@ INITIAL_BASELINE = {
     ("deep-review", "opencode", 288),
 }
 
+# Required-set cells recorded as n/a: the capability cannot exist there. A new one
+# is listed here deliberately, so it cannot pass as n/a unseen.
+REQUIRED_NOT_APPLICABLE = {
+    ("trust", "opencode"),
+    ("cli-memory", "opencode"),
+}
+
 
 def test_the_baseline_never_grows():
     assert REQUIRED_BASELINE <= INITIAL_BASELINE
@@ -76,8 +83,9 @@ def test_the_required_set_lacks_nothing_outside_the_shipped_baseline():
     for cap in CAPABILITIES:
         for runtime_id in REQUIRED:
             cell = cap.cells[runtime_id]
-            # n/a: nothing to provide there (OpenCode shows no trust dialog).
-            if cell.status not in ("supported", "exception", "n/a"):
+            if cell.status == "n/a":
+                assert (cap.id, runtime_id) in REQUIRED_NOT_APPLICABLE, f"{cap.id}/{runtime_id}"
+            elif cell.status not in ("supported", "exception"):
                 assert (cap.id, runtime_id, cell.issue) in REQUIRED_BASELINE, (
                     f"{cap.id}/{runtime_id}: Claude Code, Codex and OpenCode must all support it"
                 )
