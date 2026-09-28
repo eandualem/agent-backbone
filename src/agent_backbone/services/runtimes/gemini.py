@@ -10,7 +10,14 @@ from pathlib import Path
 
 from agent_backbone.hooks.install import save_settings
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
-from agent_backbone.services.runtimes.base import Runtime, agent_home, has_text, read_brief
+from agent_backbone.services.runtimes.base import (
+    Runtime,
+    TranscriptEntry,
+    agent_home,
+    has_text,
+    read_brief,
+    transcript_clock,
+)
 
 log = logging.getLogger(__name__)
 
@@ -228,6 +235,75 @@ class Gemini(Runtime):
             "session, and its default prompt has the model write them (no setting "
             "turns this off)"
         )
+
+    def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
+        # 0.46 names the file after the session's start and the first eight
+        # characters of its id; only its header line carries the whole id.
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session_id):
+            return []
+        home = Path(
+            env.get("GEMINI_CLI_HOME") or os.environ.get("GEMINI_CLI_HOME") or agent_home(env)
+        ).expanduser()
+        found = []
+        for path in sorted(home.glob(f".gemini/tmp/*/chats/session-*-{session_id[:8]}.jsonl")):
+            try:
+                with path.open("rb") as stream:
+                    header = json.loads(stream.readline())
+            except (OSError, ValueError):
+                continue
+            if isinstance(header, dict) and header.get("sessionId") == session_id:
+                found.append(path)
+        return found
+
+    transcript_supported = True
+
+    def transcript_page(
+        self,
+        path: Path,
+        session_id: str,
+        *,
+        limit: int,
+        since: int | None = None,
+        before: int | None = None,
+        end: int | None = None,
+    ) -> tuple[list[TranscriptEntry], bool, bool]:
+        """The session's replies, each at the byte offsets of its first
+        record. A reply is a ``gemini`` record whose ``content`` is a string,
+        written whole when its stream ends. 0.46 appends a message again
+        under the same ``id`` whenever it changes (its tool call finishing
+        after an approval, say), so a reply counts once, at its first record,
+        which takes the whole file. User records, ``info`` notices, thoughts,
+        tool calls and the ``$set``/``$rewindTo`` bookkeeping are not
+        messages; a reply a later rewind removed was still said."""
+        messages: list[TranscriptEntry] = []
+        seen: set[str] = set()
+        offset = 0
+        with path.open("rb") as stream:
+            for line in stream:
+                start, offset = offset, offset + len(line)
+                if b'"type":"gemini"' not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(record, dict) or record.get("type") != "gemini":
+                    continue
+                identity, text = record.get("id"), record.get("content")
+                if not isinstance(identity, str) or identity in seen:
+                    continue
+                if not isinstance(text, str) or not text.strip():
+                    continue
+                seen.add(identity)
+                clock = transcript_clock(record.get("timestamp"))
+                messages.append(TranscriptEntry(clock, "assistant", text, start, offset))
+        if since is not None:
+            after = [m for m in messages if m.start >= since and (end is None or m.start < end)]
+            more_before = any(m.start < since for m in messages)
+            return after[:limit], more_before, len(after) > limit
+        upto = [m for m in messages if before is None or m.start < before]
+        more_after = before is not None and any(m.start >= before for m in messages)
+        return upto[-limit:], len(upto) > limit, more_after
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         args: list[str] = []

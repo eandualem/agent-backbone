@@ -50,3 +50,14 @@ def opencode_db(path: Path, messages: list[tuple[str, dict, list[dict]]]) -> Pat
                 )
     conn.close()
     return path
+
+
+def gemini_session(path: Path, session_id: str, records: list[dict | str]) -> Path:
+    """A Gemini CLI session file (0.46): the header line with the session id,
+    then each record as the compact JSON line Gemini appends (a string is
+    written as it is, for a malformed line)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = {"sessionId": session_id, "projectHash": "0" * 64, "kind": "main"}
+    lines = [r if isinstance(r, str) else json.dumps(r, separators=(",", ":")) for r in records]
+    path.write_text("\n".join([json.dumps(header, separators=(",", ":")), *lines]) + "\n")
+    return path
