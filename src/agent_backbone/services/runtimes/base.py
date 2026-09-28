@@ -723,9 +723,18 @@ class Runtime:
     def _dialog_block(pane_content: str) -> tuple[list[str], list[str]]:
         """``(above, options)`` of the dialog on screen: the lines leading up
         to its numbered options (at most eight) and the options themselves.
-        Anything earlier in the pane is not the dialog."""
-        lines = [ln.strip() for ln in sanitize_pane_content(pane_content).strip().splitlines()]
-        lines = [ln for ln in lines[-24:] if ln and not is_box_line(ln)]
+        Anything earlier in the pane is not the dialog, nor is anything above
+        the frame a dialog is drawn in (Gemini CLI: ``╭─╮``, ``│ … │`` sides)."""
+        lines: list[str] = []
+        for raw in sanitize_pane_content(pane_content).strip().splitlines()[-24:]:
+            line = raw.strip()
+            if line.startswith("╭"):
+                lines.clear()
+                continue
+            while line[:1] == "│" or line[-1:] == "│":
+                line = line.strip("│").strip()
+            if line and not is_box_line(line.strip("╭╮╰╯")):
+                lines.append(line)
         first = next((i for i, ln in enumerate(lines) if DIALOG_OPTION_RE.match(ln)), None)
         if first is None:
             return [], []

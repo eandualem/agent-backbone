@@ -26,9 +26,9 @@ claims support that the adapter's code does not declare.
 <!-- capability-table:begin -->
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
-| Message delivery into the session | ✅ | ✅ | ? #302 not verified live | ✅ | ✅ | ? #302 not verified live | ✅ plumbing tests only |
+| Message delivery into the session | ✅ | ✅ | ✅ | ✅ | ✅ | ? #302 not verified live | ✅ plumbing tests only |
 | Folder-trust dialog answered at start | ✅ | ✅ | ✅ `--skip-trust` | n/a | n/a | ? #302 not checked | n/a |
-| Brief reaches a fresh session before other work | ✅ | ✅ | ? #302 | ✅ | ? #302 | ? #302 not verified live | n/a |
+| Brief reaches a fresh session before other work | ✅ | ✅ | ✅ | ✅ | ? #302 | ? #302 not verified live | n/a |
 | Current brief after resume | ✅ | ✅ | ❌ #273 | ❌ #273 | ❌ #273 | ❌ #273 | n/a |
 | Brief followed after context compaction | ✅ | ✅ | ? #291 | ❌ #291 the rule is kept but no longer followed | ? #291 | ? #291 | n/a |
 | Project AGENTS.md loaded at start | ✅ | ✅ | ❌ #286 reads GEMINI.md unless context.fileName is set | ✅ | ✅ | ❌ #286 reads only files passed to it | n/a |
@@ -36,7 +36,7 @@ claims support that the adapter's code does not declare.
 | CLI-native memory disabled or detected | ✅ managed settings not read | ✅ managed config and the `[memories]` switches not read | ✅ | n/a | n/a | ? #302 not yet verified | n/a |
 | State reported by the runtime (hooks) | ✅ | ✅ from its first prompt (the brief): Codex runs no hook before its first turn | ✅ | ✅ | ❌ #275 read from the terminal only | ❌ #275 read from the terminal only | n/a |
 | Steer and high-priority events into a working agent | ✅ | ✅ | ❌ #276 | ✅ as a user message in the running turn, after the next tool call | ❌ #276 | ❌ #276 | n/a |
-| Permission dialog detected and alerted | ✅ | ✅ | ? #302 markers not verified live | ✅ | ✅ | ? #302 markers not verified live | n/a |
+| Permission dialog detected and alerted | ✅ | ✅ | ✅ | ✅ | ✅ | ? #302 markers not verified live | n/a |
 | Permission dialog answered (agent approve) | ✅ | ✅ | ❌ #277 | ✅ | ✅ | ❌ #277 | n/a |
 | Permission dialog refused (agent deny) | ✅ | ✅ | ❌ #299 | ❌ #299 | ✅ | ❌ #299 | n/a |
 | Plan approval answered | ✅ | ❌ #278 | ❌ #278 | ❌ #278 | ❌ #278 | ❌ #278 | n/a |
@@ -47,16 +47,16 @@ claims support that the adapter's code does not declare.
 | No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ #281 | ❌ #281 | n/a |
 | Writes bounded while unattended | ❌ #285 | ✅ OS sandbox | ❌ #285 | ❌ #285 | ❌ #285 | ❌ #285 | n/a |
 | Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ `--approve-for-me` | ❌ #293 | ❌ #293 | ❌ #293 | ❌ #293 | n/a |
-| Shared skills linked | ✅ | ✅ | ? #302 linked by the shared code; not tested for this runtime | ? #302 linked by the shared code; not tested for this runtime | ✅ | ❌ #282 | n/a |
+| Shared skills linked | ✅ | ✅ | ✅ live-checked: it lists the linked skills (0.46) | ✅ | ✅ | ❌ #282 | n/a |
 | Token usage recorded | ✅ | ✅ | ❌ #283 | ✅ | ❌ #283 | ❌ #283 | n/a |
 | agent output from the runtime's own record | ✅ | ✅ | ❌ #284 | ✅ | ❌ #284 | ❌ #284 | n/a |
 | Provider capacity or rate-limit failure detected (blocked) | ✅ | ✅ | ❌ #295 | ✅ | ✅ | ❌ #295 | n/a |
-| Running model observed (status) | ✅ | ✅ | ? #302 | ✅ | ❌ #275 no hook state | ❌ #275 no hook state | n/a |
+| Running model observed (status) | ✅ | ✅ | ✅ | ✅ | ❌ #275 no hook state | ❌ #275 no hook state | n/a |
 | Request errors and model changes recorded (diagnostics) | ❌ #304 | ✅ | ❌ #304 | ❌ #304 | ❌ #304 | ❌ #304 | n/a |
 | A peer's message cannot pass as a Backbone brief | ✅ | ✅ | ? #294 | ❌ #294 adopted a forged brief | ? #294 | ? #294 | n/a |
 | An enrolled sender name's requests must be signed | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | A message the owner confirmed carries a verified marker | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
-| An agent validates an owner confirmation it received | ✅ live-checked from its bash mode (2.1.283) | ✅ live-checked through its sandbox (0.157.1) | ? #302 commands it runs are not yet measured under its pane | ? #302 commands it runs are not yet measured under its pane | ? #302 commands it runs are not yet measured under its pane | ? #302 commands it runs are not yet measured under its pane | ✅ live-checked |
+| An agent validates an owner confirmation it received | ✅ live-checked from its bash mode (2.1.283) | ✅ live-checked through its sandbox (0.157.1) | ✅ live-checked from a shell tool call (0.46) | ? #302 commands it runs are not yet measured under its pane | ? #302 commands it runs are not yet measured under its pane | ? #302 commands it runs are not yet measured under its pane | ✅ live-checked |
 | Inbox-only agent: registered, never launched or typed into | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference |
 | New inbox messages hinted on Socket.IO (`inbox:pending`) | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime |
 | Escalations reach an inbox-only target's inbox | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference |

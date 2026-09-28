@@ -39,7 +39,7 @@ class Gemini(Runtime):
     aliases = ("gemini-cli",)
     binary = "gemini"
     brief_mode = "initial_prompt"
-    declared_capabilities = frozenset({"trust"})
+    declared_capabilities = frozenset({"observed-model", "trust"})
 
     hook_events = (
         ("SessionStart", None),
@@ -58,8 +58,10 @@ class Gemini(Runtime):
         "gemini code assist",
         "[insert]",
         "press 'esc' for normal mode",
+        "type your message or @path/to/file",
     )
-    placeholder_fragments = ("press 'esc' for normal mode",)
+    # The empty input's placeholder, in grey rather than dim (0.46, live).
+    placeholder_fragments = ("press 'esc' for normal mode", "type your message or @path/to/file")
     status_fragments = (
         "[insert]",
         "shift+tab to accept edits",
