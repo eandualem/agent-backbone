@@ -222,7 +222,9 @@ async def output_page(
     live_runtime = await query_environment_var(name, "BACKBONE_RUNTIME") if online else None
     evidence: list[str] = []
     if not screen:
-        path, rt, session_id, why = locate_transcript(config, name, live_runtime)
+        path, rt, session_id, why = await asyncio.to_thread(
+            locate_transcript, config, name, live_runtime
+        )
         evidence.extend(why)
         if path is not None:
             try:
