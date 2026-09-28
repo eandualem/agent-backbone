@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 from agent_backbone.hooks.install import save_settings
+from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes.base import Runtime, agent_home, has_text, read_brief
 
 log = logging.getLogger(__name__)
@@ -71,6 +72,9 @@ class Gemini(Runtime):
     busy_markers = ("esc to cancel",)
     prompt_markers = (
         "allow execution",
+        # A file edit and a web fetch ask these instead (live, 0.46).
+        "apply this change?",
+        "do you want to proceed?",
         "yes, allow once",
         "yes, allow always",
         "do you trust the files in this folder",
@@ -90,6 +94,24 @@ class Gemini(Runtime):
     # "--approval-mode yolo  auto-approve all tools" (gemini-cli --help). No
     # OS sandbox behind it: trust on the machine.
     unattended_args = ("--approval-mode", "yolo")
+
+    @staticmethod
+    def _dialog_block(pane_content: str) -> tuple[list[str], list[str]]:
+        # The "Gemini CLI update available!" box can be drawn below a dialog
+        # (live, 0.46); it is not the dialog, so it must not end the dialog's
+        # frame.
+        kept: list[str] = []
+        box: list[str] = []
+        for line in sanitize_pane_content(pane_content).splitlines():
+            if not box and not line.lstrip().startswith("╭"):
+                kept.append(line)
+                continue
+            box.append(line)
+            if line.lstrip().startswith("╰"):
+                if not any("update available!" in row.lower() for row in box):
+                    kept.extend(box)
+                box = []
+        return Runtime._dialog_block("\n".join([*kept, *box]))
 
     def hook_settings_path(self, project_dir: Path | None) -> Path:
         if project_dir is not None:

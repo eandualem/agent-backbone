@@ -105,6 +105,26 @@ GEMINI_PERMISSION_DIALOG = (
     "╰──────────────────────────────────────╯\n"
 )
 
+# A file edit asks "Apply this change?"; on a session's first dialog the
+# update notice can be drawn below it (live, 0.46).
+GEMINI_EDIT_DIALOG = (
+    "╭──────────────────────────────────────╮\n"
+    "│ ? WriteFile  Writing to new.txt      │\n"
+    "│ ╭──────────────────────────────────╮ │\n"
+    "│ │ 1 written                        │ │\n"
+    "│ ╰──────────────────────────────────╯ │\n"
+    "│ Apply this change?                   │\n"
+    "│                                      │\n"
+    "│ ● 1. Allow once                      │\n"
+    "│   2. Allow for this session          │\n"
+    "│   3. Modify with external editor     │\n"
+    "│   4. No, suggest changes (esc)       │\n"
+    "╰──────────────────────────────────────╯\n"
+    "╭──────────────────────────────────────╮\n"
+    "│ Gemini CLI update available!         │\n"
+    "╰──────────────────────────────────────╯\n"
+)
+
 # The same dialog declined with Esc: the tool box stays, the input is back.
 GEMINI_DIALOG_DECLINED = (
     "╭──────────────────────────────────────╮\n"
@@ -211,6 +231,15 @@ class TestGeminiAdapter:
         # The frame's sides and whatever is above it are not the dialog.
         assert self.adapter.dialog_summary(GEMINI_PERMISSION_DIALOG) == (
             "? Shell  touch probe.txt touch probe.txt Allow execution of [Shell]?"
+        )
+
+    def test_edit_dialog_detected_and_summarised_above_the_update_notice(self):
+        snapshot = infer_state_from_pane(GEMINI_EDIT_DIALOG, "gemini")
+        assert snapshot.state == AgentState.WAITING_FOR_HUMAN
+        assert snapshot.reason == "permission"
+        assert self.adapter.detect_active_dialog(GEMINI_EDIT_DIALOG)
+        assert self.adapter.dialog_summary(GEMINI_EDIT_DIALOG) == (
+            "? WriteFile  Writing to new.txt 1 written Apply this change?"
         )
 
     def test_declined_dialog_is_idle(self):

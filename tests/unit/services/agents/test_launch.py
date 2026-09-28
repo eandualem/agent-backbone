@@ -93,6 +93,27 @@ class TestApproveAgent:
     GEMINI_DIALOG_ON_NO = GEMINI_DIALOG.replace("│ ● 1. Allow", "│   1. Allow").replace(
         "│   3. No", "│ ● 3. No"
     )
+    # A file edit and a web fetch ask their own questions (live).
+    GEMINI_EDIT_DIALOG = (
+        "╭──────────────────────────────────────╮\n"
+        "│ ? WriteFile  Writing to new.txt      │\n"
+        "│ ╭──────────────────────────────────╮ │\n"
+        "│ │ 1 written                        │ │\n"
+        "│ ╰──────────────────────────────────╯ │\n"
+        "│ Apply this change?                   │\n"
+        "│                                      │\n"
+        "│ ● 1. Allow once                      │\n"
+        "│   2. Allow for this session          │\n"
+        "│   3. Modify with external editor     │\n"
+        "│   4. No, suggest changes (esc)       │\n"
+        "╰──────────────────────────────────────╯\n"
+        "╭──────────────────────────────────────╮\n"
+        "│ Gemini CLI update available!         │\n"
+        "╰──────────────────────────────────────╯\n"
+    )
+    GEMINI_FETCH_DIALOG = GEMINI_DIALOG.replace(
+        "? Shell  touch probe.txt ", "?  WebFetch https://ex.com/"
+    ).replace("Allow execution of [Shell]?", "Do you want to proceed?    ")
     GEMINI_IDLE = (
         "                                                   ? for shortcuts\n"
         "────────────────────────────────────────────────────────────────\n"
@@ -102,7 +123,11 @@ class TestApproveAgent:
         "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
     )
 
-    @pytest.mark.parametrize("dialog", [GEMINI_DIALOG, GEMINI_DIALOG_ON_NO])
+    @pytest.mark.parametrize(
+        "dialog",
+        [GEMINI_DIALOG, GEMINI_DIALOG_ON_NO, GEMINI_EDIT_DIALOG, GEMINI_FETCH_DIALOG],
+        ids=["shell", "cursor-on-no", "edit", "fetch"],
+    )
     async def test_gemini_is_answered_with_allow_once(self, dialog):
         with (
             patch(f"{_MOD}.session_exists", return_value=True),
@@ -148,10 +173,21 @@ class TestApproveAgent:
         "╰──────────────────────────────────────────────────────────╯\n"
     )
 
-    async def test_gemini_sign_in_picker_is_not_approved(self):
+    # Failed sign-in, with the update box drawn below the picker.
+    GEMINI_AUTH_PICKER_FAILED = (
+        GEMINI_AUTH_PICKER.replace(
+            "No authentication method selected.", "Failed to sign in.                "
+        )
+        + GEMINI_DIALOG.split("╰──────────────────────────────────────╯\n", 1)[1]
+    )
+
+    @pytest.mark.parametrize(
+        "picker", [GEMINI_AUTH_PICKER, GEMINI_AUTH_PICKER_FAILED], ids=["ok", "failed"]
+    )
+    async def test_gemini_sign_in_picker_is_not_approved(self, picker):
         with (
             patch(f"{_MOD}.session_exists", return_value=True),
-            patch(f"{_MOD}.capture_pane", return_value=self.GEMINI_AUTH_PICKER),
+            patch(f"{_MOD}.capture_pane", return_value=picker),
             patch(f"{_BASE}.send_keys") as keys,
         ):
             outcome, _ = await approve_agent("gm", runtime="gemini", settle_seconds=0)
