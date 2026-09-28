@@ -163,7 +163,10 @@ reported, not failed. It also names each user-level instruction file an
 installed CLI adds to its sessions, such as a non-empty `~/.codex/AGENTS.md`
 or `~/.claude/CLAUDE.md`, so its content never reaches agents unnoticed; `agent
 start` lists them for the agent it starts, with the agent's own environment
-applied. These are notes, not failures. `doctor` resolves `CODEX_HOME`,
+applied. Both also name a CLI's own memory across sessions while its
+settings leave it on, such as Claude Code's auto-memory, with the setting
+that turns it off; Backbone does not change it. These are notes, not
+failures. `doctor` resolves `CODEX_HOME`,
 `CLAUDE_CONFIG_DIR` and similar variables from the shell it runs in; the
 running backbone uses its own environment, which can differ when it runs as a
 login service.

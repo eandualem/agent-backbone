@@ -24,6 +24,18 @@ from agent_backbone.usage import UsageEvent, timestamp
 log = logging.getLogger(__name__)
 
 
+def _json_object(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _truthy(value: object) -> bool:
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def pre_accept_bypass(*, claude_config: Path | None = None) -> bool:
     """Record the owner's explicit unattended choice; never enable bypass mode.
 
@@ -277,6 +289,38 @@ class ClaudeCode(Runtime):
         # once the session reads a matching file, so it may reach it too.
         candidates = [home / "CLAUDE.md", *sorted((home / "rules").rglob("*.md"))]
         return [path for path in candidates if has_text(path)]
+
+    def native_memory(self, env, project=None):
+        home = Path(
+            env.get("CLAUDE_CONFIG_DIR")
+            or os.environ.get("CLAUDE_CONFIG_DIR")
+            or agent_home(env) / ".claude"
+        ).expanduser()
+        layers = [home / "settings.json"]
+        if project is not None:
+            layers += [
+                Path(project) / ".claude" / name
+                for name in ("settings.json", "settings.local.json")
+            ]
+        # 2.1.283: a settings file's `env` applies over the process environment,
+        # and the variables decide before `autoMemoryEnabled` (a later layer wins).
+        variables, enabled = {**os.environ, **env}, True
+        for path in layers:
+            settings = _json_object(path)
+            if isinstance(settings.get("env"), dict):
+                variables.update({k: str(v) for k, v in settings["env"].items()})
+            if isinstance(settings.get("autoMemoryEnabled"), bool):
+                enabled = settings["autoMemoryEnabled"]
+        switch = str(variables.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "")).strip().lower()
+        if _truthy(variables.get("CLAUDE_CODE_SAFE_MODE")) or _truthy(switch):
+            return None
+        forced = switch in ("0", "false", "no", "off")  # a falsy value forces it on
+        if not forced and (_truthy(variables.get("CLAUDE_CODE_SIMPLE")) or not enabled):
+            return None
+        return (
+            "auto-memory is on (off: `autoMemoryEnabled: false` in its settings, "
+            "or CLAUDE_CODE_DISABLE_AUTO_MEMORY=1)"
+        )
 
     usage_supported = True
 

@@ -176,7 +176,7 @@ class TestStartAgent:
         data = resp.json()
         assert data["ok"] is True and data["runtime"] == "claude"
         assert data["working_directory"].endswith("/ike")
-        assert data["ready"] == "ready" and data["evidence"] == ["hook reported idle"]
+        assert data["ready"] == "ready" and data["evidence"][-1] == "hook reported idle"
         launch.start_session.assert_awaited_once()
         kwargs = launch.start_session.await_args.kwargs
         assert kwargs["command"] == ["/usr/bin/claude"]

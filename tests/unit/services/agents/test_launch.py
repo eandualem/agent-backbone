@@ -532,6 +532,18 @@ class TestStartAgentBrief:
             result = await start_agent(spec, config, db=AsyncMock())
         assert f"user-level instructions: {agents}" in result.evidence
 
+    async def test_native_memory_that_is_on_is_named_at_start(self, tmp_path):
+        """#292, with the agent's own environment applied."""
+        config = bootstrap_config(tmp_path / "data")
+        home = tmp_path / "codex-home"
+        home.mkdir()
+        (home / "config.toml").write_text("[features]\nmemories = true\n")
+        spec = replace(self._spec(tmp_path, "codex"), env={"CODEX_HOME": str(home)})
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start, _cmd, _trust, _wait:
+            result = await start_agent(spec, config, db=AsyncMock())
+        assert any(line.startswith("native memory: memories are on") for line in result.evidence)
+
     async def test_unknown_runtime_is_refused(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
         with patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False):
@@ -804,9 +816,9 @@ class TestResumeBySessionId:
             result = await start_agent(spec, config, wait=False)
         command = start.await_args.kwargs["command"]
         assert "--resume" not in command and "--continue" not in command
-        assert result.evidence == (
+        assert result.evidence[0] == (
             "fresh conversation; the previous one (1d old) is still available: "
-            "backbone agent resume ike",
+            "backbone agent resume ike"
         )
 
     async def test_a_plain_start_without_history_says_nothing_about_resuming(self, tmp_path):

@@ -130,6 +130,22 @@ class Gemini(Runtime):
         names = dict.fromkeys([*(name.strip() for name in configured or ()), "GEMINI.md"])
         return [gemini / name for name in names if name and has_text(gemini / name)]
 
+    def native_memory(self, env, project=None):
+        # 0.46: part of its default system prompt, which a GEMINI_SYSTEM_MD
+        # file replaces and GEMINI_PROMPT_OPERATIONALGUIDELINES=0 cuts along
+        # with the rest of that section. No setting removes only the memory.
+        def value(name):
+            return str(env.get(name) or os.environ.get(name) or "").strip().lower()
+
+        if value("GEMINI_SYSTEM_MD") not in ("", "0", "false"):
+            return None
+        if value("GEMINI_PROMPT_OPERATIONALGUIDELINES") in ("0", "false"):
+            return None
+        return (
+            "its system prompt has the model keep memory in GEMINI.md files and a "
+            "private MEMORY.md (no setting turns off only this)"
+        )
+
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         args: list[str] = []
         if model:

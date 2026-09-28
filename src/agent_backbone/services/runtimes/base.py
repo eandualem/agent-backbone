@@ -320,6 +320,13 @@ class Runtime:
         directory the session starts in."""
         return []
 
+    def native_memory(self, env: dict[str, str], project: Path | None = None) -> str | None:
+        """The CLI's own memory across sessions, when the settings Backbone can
+        read leave it on for an agent (#292): what it is and how to turn it
+        off. ``None`` when it is off or the CLI keeps none. ``env`` and
+        ``project`` as for ``user_instructions``."""
+        return None
+
     def pre_trust(self, directory: Path | str) -> None:
         """Answer the runtime's folder-trust dialog ahead of launch, if it has one."""
 

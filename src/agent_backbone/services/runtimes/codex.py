@@ -61,6 +61,27 @@ def pre_trust_codex_directory(directory: Path | str, *, codex_config: Path | Non
         return False
 
 
+def _toml_object(path: Path) -> dict:
+    try:
+        return tomllib.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _main_checkout(root: Path) -> Path | None:
+    """The main checkout of a git worktree at ``root`` (its ``.git`` is a file
+    naming the worktree's git directory, whose ``commondir`` leads back)."""
+    try:
+        line = (root / ".git").read_text().strip()
+        if not line.startswith("gitdir:"):
+            return None
+        gitdir = root / line.removeprefix("gitdir:").strip()
+        common = gitdir / (gitdir / "commondir").read_text().strip()
+    except (OSError, ValueError):
+        return None
+    return common.resolve().parent
+
+
 def _toml_string(value: str) -> str:
     # A JSON string is a valid TOML basic string for the escapes json emits.
     return json.dumps(value)
@@ -360,6 +381,35 @@ class Codex(Runtime):
             if has_text(path):
                 return [path]
         return []
+
+    def native_memory(self, env, project=None):
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
+        ).expanduser()
+        user = _toml_object(home / "config.toml")
+        layers = [user]
+        if project is not None:
+            # 0.157.1: `.codex/config.toml` from the project root (the nearest
+            # directory with `.git`) down to the session's directory, the nearer
+            # one winning, and only when that root (or a worktree's main
+            # checkout) is trusted.
+            here = Path(project).expanduser().resolve()
+            chain = [here, *here.parents]
+            root = next((d for d in chain if (d / ".git").exists()), here)
+            projects = user.get("projects")
+            projects = projects if isinstance(projects, dict) else {}
+            entries = [projects.get(str(key)) for key in (root, _main_checkout(root)) if key]
+            if any(isinstance(e, dict) and e.get("trust_level") == "trusted" for e in entries):
+                below = chain[: chain.index(root) + 1]
+                layers += [_toml_object(d / ".codex/config.toml") for d in reversed(below)]
+        enabled = False  # off by default (`codex features list`)
+        for layer in layers:
+            features = layer.get("features")
+            if isinstance(features, dict) and isinstance(features.get("memories"), bool):
+                enabled = features["memories"]
+        if not enabled:
+            return None
+        return "memories are on (off: `memories = false` under `[features]` in config.toml)"
 
     usage_supported = True
     transcript_supported = True

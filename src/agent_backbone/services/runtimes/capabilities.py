@@ -42,8 +42,6 @@ REQUIRED: tuple[str, ...] = ("claude", "codex")
 
 REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
     {
-        ("cli-memory", "claude", 292),
-        ("cli-memory", "codex", 292),
         ("plan-approval", "codex", 278),
         ("refusal-alert", "codex", 279),
         ("browser-group-name", "codex", 270),
@@ -137,6 +135,7 @@ _RESUME = "live: #273 post-fix probe (resume and compaction)"
 _LAUNCH = "tests/unit/services/runtimes/test_launch_commands.py"
 _NO_MODEL = "a plain shell runs no model"
 _USER_FILES = "tests/unit/services/runtimes/test_user_instructions.py"
+_MEMORY = "tests/unit/services/runtimes/test_native_memory.py"
 _SIGNED = "tests/unit/api/routes/test_api_signing.py"
 _API_BOUNDARY = "checked at the API, the same for every runtime"
 _CONFIRMED = "tests/unit/api/routes/test_api_confirmations.py"
@@ -253,13 +252,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         "CLI-native memory disabled or detected",
         "src/agent_backbone/services/runtimes",
         fallback="Turn the CLI's own memory off in its settings.",
-        implemented=_declared("cli-memory"),
-        claude=_gap(292, "auto-memory is on"),
-        codex=_unverified(292),
-        gemini=_unverified(292),
-        opencode=_unverified(292),
-        deepcode=_unverified(292),
-        aider=_unverified(292),
+        implemented=lambda rt: type(rt).native_memory is not Runtime.native_memory,
+        claude=_ok(_MEMORY, "managed settings not read"),
+        codex=_ok(_MEMORY, "managed config and the `[memories]` switches not read"),
+        gemini=_ok(_MEMORY),
+        opencode=_na("keeps no memory of its own (1.18: no memory tool or file)"),
+        deepcode=_na("keeps no memory of its own (0.3.1)"),
+        aider=_unverified(302, "not yet verified"),
         shell=_na("a plain shell keeps no memory"),
     ),
     _row(
