@@ -376,8 +376,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Subscribe an agent to events from a source, matched by a filter written in the "
             "source's own query language (gmail: Gmail search syntax such as "
-            "'from:upwork.com subject:job'). High priority reaches a working agent at once; "
-            "normal waits for its prompt, batched."
+            "'from:alerts@example.com subject:outage'). High priority reaches a working agent "
+            "at once; normal waits for its prompt, batched."
         ),
     )
     psub.add_argument("targets", nargs="+", metavar="[NAME] SOURCE FILTER")

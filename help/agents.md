@@ -170,8 +170,8 @@ until you are ready and then comes first), `normal` waits for your prompt and
 arrives as one batch:
 
 ```bash
-backbone agent subscribe gmail "from:upwork.com subject:job" --priority high
-backbone agent subscribe gmail "from:linkedin.com"
+backbone agent subscribe gmail "from:alerts@example.com subject:outage" --priority high
+backbone agent subscribe gmail "from:example.com"
 backbone agent inspect $BACKBONE_AGENT      # lists subscriptions with ids
 backbone agent unsubscribe ID
 ```

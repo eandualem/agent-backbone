@@ -29,15 +29,22 @@ async def _agent(db, name="desk"):
 class TestAgentSubscriptions:
     async def test_add_list_and_remove(self, db):
         await _agent(db)
-        first = await db.agents.add_subscription("desk", "gmail", "from:upwork.com", "high")
-        second = await db.agents.add_subscription("desk", "gmail", "from:linkedin.com", "normal")
+        first = await db.agents.add_subscription("desk", "gmail", "from:alerts@example.com", "high")
+        second = await db.agents.add_subscription("desk", "gmail", "from:example.com", "normal")
         # The same filter again only changes its priority; no second row.
-        again = await db.agents.add_subscription("desk", "gmail", "from:upwork.com", "normal")
+        again = await db.agents.add_subscription(
+            "desk", "gmail", "from:alerts@example.com", "normal"
+        )
         assert again == first
         rows = {row["name"]: row for row in await db.agents.list()}
         assert rows["desk"]["subscriptions"] == [
-            {"id": first, "source": "gmail", "filter": "from:upwork.com", "priority": "normal"},
-            {"id": second, "source": "gmail", "filter": "from:linkedin.com", "priority": "normal"},
+            {
+                "id": first,
+                "source": "gmail",
+                "filter": "from:alerts@example.com",
+                "priority": "normal",
+            },
+            {"id": second, "source": "gmail", "filter": "from:example.com", "priority": "normal"},
         ]
         assert await db.agents.remove_subscription("desk", first) is True
         assert await db.agents.remove_subscription("desk", first) is False
@@ -47,7 +54,7 @@ class TestAgentSubscriptions:
 
     async def test_forget_removes_subscriptions(self, db):
         await _agent(db)
-        await db.agents.add_subscription("desk", "gmail", "from:upwork.com", "high")
+        await db.agents.add_subscription("desk", "gmail", "from:alerts@example.com", "high")
         await db.agents.delete("desk")
         async with db.engine.begin() as conn:
             count = await conn.execute(text("SELECT COUNT(*) FROM agent_subscriptions"))
