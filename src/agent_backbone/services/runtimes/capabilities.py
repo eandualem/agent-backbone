@@ -1,18 +1,20 @@
 """The runtime capability contract: every user-reachable capability, one cell per shipped adapter.
 
 A capability counts as working only when it gives the same user-visible
-result in the required pair, Claude Code and Codex (``AGENTS.md``, "Runtime
-parity"). Every other shipped adapter has a recorded cell too, so what works
-where is never guessed. This table is the single source: ``doctor`` reports
-from it and ``docs/runtime-capabilities.md`` is generated from it (a test
-fails when either drifts).
+result in the required set, Claude Code, Codex and OpenCode (``AGENTS.md``,
+"Runtime parity"). Every other shipped adapter is on demand and has a
+recorded cell too, so what works where is never guessed. This table is the
+single source: ``doctor`` reports from it and ``docs/runtime-capabilities.md``
+is generated from it (a test fails when either drifts).
 
 A cell is one of:
 
-- ``supported`` — the capability behaves as in the required pair, with its
+- ``supported`` — the capability behaves as in the required set, with its
   ``evidence``: a behaviour test or doc file, or a ``live:`` receipt;
-- ``gap`` — it does not, yet: an open defect with its issue;
-- ``unverified`` — not yet established on this runtime; unavailable until it is;
+- ``gap`` — it does not, yet: on a required runtime an open defect with its
+  issue; on an on-demand adapter an issue only once someone needs it there;
+- ``unverified`` — not yet established on this runtime; unavailable until it
+  is; an issue tracks it on a required runtime;
 - ``exception`` — the owner decided, for this named capability, that it is
   not required here: the ``decision`` and its issue are recorded, and it is
   still reported as unavailable;
@@ -37,8 +39,8 @@ from agent_backbone.services.runtimes.base import Runtime
 
 Status = Literal["supported", "gap", "unverified", "exception", "n/a"]
 
-REQUIRED: tuple[str, ...] = ("claude", "codex")
-"""The required pair: a capability is working only when it works in both."""
+REQUIRED: tuple[str, ...] = ("claude", "codex", "opencode")
+"""The required set: a capability is working only when it works in all three."""
 
 REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
     {
@@ -49,12 +51,25 @@ REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
         ("auto-review", "claude", 293),
         ("deep-review", "codex", 288),
         ("request-diagnostics", "claude", 304),
+        ("brief-after-resume", "opencode", 273),
+        ("brief-after-compaction", "opencode", 291),
+        ("plan-approval", "opencode", 278),
+        ("refusal-alert", "opencode", 279),
+        ("browser-group-name", "opencode", 270),
+        ("reasoning-effort", "opencode", 296),
+        ("bounded-unattended", "opencode", 285),
+        ("auto-review", "opencode", 293),
+        ("request-diagnostics", "opencode", 304),
+        ("message-authority", "opencode", 294),
+        ("message-validate", "opencode", 302),
+        ("deep-review", "opencode", 288),
     }
 )
-"""``(row, runtime, issue)``: required-pair cells that shipped before the
-contract and are not supported yet. It only shrinks: a fixed cell leaves it,
-and a new or changed capability never joins it (the registry test fails on
-any other unsupported required-pair cell)."""
+"""``(row, runtime, issue)``: required-set cells that shipped before the
+requirement (before the contract; OpenCode's before it joined the set, #339)
+and are not supported yet. It only shrinks: a fixed cell leaves it, and a new
+or changed capability never joins it (the registry test fails on any other
+unsupported required-set cell)."""
 
 UNAVAILABLE: frozenset[str] = frozenset({"gap", "unverified", "exception"})
 
@@ -82,7 +97,7 @@ def _ok(evidence: str, note: str = "") -> Cell:
     return Cell("supported", note=note, evidence=evidence)
 
 
-def _gap(issue: int, note: str = "") -> Cell:
+def _gap(issue: int | None = None, note: str = "") -> Cell:
     return Cell("gap", issue=issue, note=note)
 
 
@@ -159,7 +174,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         gemini=_ok(_GEMINI_STUB),
         opencode=_ok(_B3),
         deepcode=_ok("live: checked during development (Deep Code 0.3.1)"),
-        aider=_unverified(302, note="not verified live"),
+        aider=_unverified(note="not verified live"),
         shell=_ok(
             "tests/unit/services/routing/test_delivery_diagnostics.py", "plumbing tests only"
         ),
@@ -175,7 +190,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         gemini=_ok(_LAUNCH, "`--skip-trust`"),
         opencode=_na("shows no trust dialog"),
         deepcode=_na("shows no trust dialog"),
-        aider=_unverified(302, note="not checked"),
+        aider=_unverified(note="not checked"),
         shell=_na("a plain shell has no trust dialog"),
     ),
     _row(
@@ -188,8 +203,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok(_FRESH),
         gemini=_ok(_GEMINI_STUB),
         opencode=_ok(_B3),
-        deepcode=_unverified(302),
-        aider=_unverified(302, note="not verified live"),
+        deepcode=_unverified(),
+        aider=_unverified(note="not verified live"),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -200,10 +215,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: rt.brief_refresh == "hook_context",
         claude=_ok(_RESUME),
         codex=_ok(_RESUME),
-        gemini=_gap(273),
+        gemini=_gap(),
         opencode=_gap(273),
-        deepcode=_gap(273),
-        aider=_gap(273),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -214,10 +229,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=_declared("brief-after-compaction"),
         claude=_ok(_B4),
         codex=_ok(_B4),
-        gemini=_unverified(291),
+        gemini=_unverified(),
         opencode=_gap(291, "the rule is kept but no longer followed"),
-        deepcode=_unverified(291),
-        aider=_unverified(291),
+        deepcode=_unverified(),
+        aider=_unverified(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -228,10 +243,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=_declared("project-instructions"),
         claude=_ok(_B1),
         codex=_ok(_B2),
-        gemini=_gap(286, "reads GEMINI.md unless context.fileName is set"),
+        gemini=_gap(note="reads GEMINI.md unless context.fileName is set"),
         opencode=_ok(_B2),
         deepcode=_ok("live: #286 local stub endpoint (./AGENTS.md sent as a system message)"),
-        aider=_gap(286, "reads only files passed to it"),
+        aider=_gap(note="reads only files passed to it"),
         shell=_na("a plain shell loads no instructions"),
     ),
     _row(
@@ -245,7 +260,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         gemini=_ok(_USER_FILES),
         opencode=_ok(_USER_FILES, "files listed under `instructions` in its config not checked"),
         deepcode=_ok(_USER_FILES),
-        aider=_unverified(302, "no default user-level file per its docs; not yet verified"),
+        aider=_unverified(note="no default user-level file per its docs; not yet verified"),
         shell=_na("a plain shell reads no instruction file"),
     ),
     _row(
@@ -259,7 +274,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         gemini=_ok(_MEMORY),
         opencode=_na("keeps no memory of its own (1.18: no memory tool or file)"),
         deepcode=_na("keeps no memory of its own (0.3.1)"),
-        aider=_unverified(302, "not yet verified"),
+        aider=_unverified(note="not yet verified"),
         shell=_na("a plain shell keeps no memory"),
     ),
     _row(
@@ -275,8 +290,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         ),
         gemini=_ok("tests/unit/hooks/test_gemini_hook.py"),
         opencode=_ok("tests/unit/hooks/test_opencode_hook.py"),
-        deepcode=_gap(275, "read from the terminal only"),
-        aider=_gap(275, "read from the terminal only"),
+        deepcode=_gap(note="read from the terminal only"),
+        aider=_gap(note="read from the terminal only"),
         shell=_na("a plain shell has no agent turn to report"),
     ),
     _row(
@@ -287,13 +302,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: rt.hook_context,
         claude=_ok("tests/unit/hooks/test_context.py"),
         codex=_ok("tests/unit/hooks/test_context.py"),
-        gemini=_gap(276),
+        gemini=_gap(),
         opencode=_ok(
             "tests/unit/hooks/test_context.py",
             note="as a user message in the running turn, after the next tool call",
         ),
-        deepcode=_gap(276),
-        aider=_gap(276),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -307,7 +322,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         gemini=_ok("tests/unit/services/runtimes/test_live_panes.py"),
         opencode=_ok("tests/unit/services/runtimes/test_live_panes.py"),
         deepcode=_ok("tests/unit/services/runtimes/test_live_panes.py"),
-        aider=_unverified(302, note="markers not verified live"),
+        aider=_unverified(note="markers not verified live"),
         shell=_na("a plain shell shows no permission dialog"),
     ),
     _row(
@@ -321,7 +336,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         gemini=_ok("tests/unit/services/agents/test_launch.py"),
         opencode=_ok("docs/cli.md"),
         deepcode=_ok("tests/unit/services/agents/test_launch.py"),
-        aider=_gap(277),
+        aider=_gap(),
         shell=_na("a plain shell shows no permission dialog"),
     ),
     _row(
@@ -335,7 +350,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         gemini=_ok("tests/unit/services/agents/test_launch.py"),
         opencode=_ok("tests/unit/services/agents/test_launch.py"),
         deepcode=_ok("tests/unit/services/agents/test_launch.py"),
-        aider=_gap(299),
+        aider=_gap(),
         shell=_na("a plain shell shows no permission dialog"),
     ),
     _row(
@@ -346,10 +361,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: bool(rt.plan_approve_keys),
         claude=_ok("tests/unit/api/routes/test_api_plans.py"),
         codex=_gap(278),
-        gemini=_gap(278),
+        gemini=_gap(),
         opencode=_gap(278),
-        deepcode=_gap(278),
-        aider=_gap(278),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -360,10 +375,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: any(event == "PermissionDenied" for event, _ in rt.hook_events),
         claude=_ok("tests/unit/hooks/test_claude_hook.py"),
         codex=_gap(279),
-        gemini=_gap(279),
+        gemini=_gap(),
         opencode=_gap(279),
-        deepcode=_gap(279),
-        aider=_gap(279),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -374,10 +389,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=_declared("browser-group-name"),
         claude=_ok("tests/unit/hooks/test_chrome_tab_names.py", "with `backbone chrome install`"),
         codex=_gap(270),
-        gemini=_gap(270),
+        gemini=_gap(),
         opencode=_gap(270),
-        deepcode=_gap(270),
-        aider=_gap(270),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na("a plain shell drives no browser"),
     ),
     _row(
@@ -390,8 +405,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok(_LAUNCH),
         gemini=_ok(_LAUNCH),
         opencode=_ok(_LAUNCH),
-        deepcode=_gap(280, "resumes the directory's latest session"),
-        aider=_gap(280),
+        deepcode=_gap(note="resumes the directory's latest session"),
+        aider=_gap(),
         shell=_na("a plain shell has no conversation to resume"),
     ),
     _row(
@@ -404,10 +419,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: bool(rt.efforts),
         claude=_ok(_LAUNCH),
         codex=_ok(_LAUNCH),
-        gemini=_unverified(296, "whether the CLI has an effort setting is not checked"),
+        gemini=_unverified(note="whether the CLI has an effort setting is not checked"),
         opencode=_gap(296, "the CLI has one; Backbone refuses the effort"),
         deepcode=_ok(_LAUNCH, note="low, high or max, through DEEPCODE_REASONING_EFFORT"),
-        aider=_unverified(296, "whether the CLI has an effort setting is not checked"),
+        aider=_unverified(note="whether the CLI has an effort setting is not checked"),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -420,8 +435,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok(_LAUNCH),
         gemini=_ok(_LAUNCH),
         opencode=_ok(_LAUNCH),
-        deepcode=_gap(281),
-        aider=_gap(281),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -432,10 +447,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: rt.sandboxed,
         claude=_gap(285),
         codex=_ok(_LAUNCH, "OS sandbox"),
-        gemini=_gap(285),
+        gemini=_gap(),
         opencode=_gap(285),
-        deepcode=_gap(285),
-        aider=_gap(285),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -446,10 +461,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: bool(rt.auto_review_args),
         claude=_unverified(293, "auto mode; equivalence not verified"),
         codex=_ok(_LAUNCH, "`--approve-for-me`"),
-        gemini=_gap(293),
+        gemini=_gap(),
         opencode=_gap(293),
-        deepcode=_gap(293),
-        aider=_gap(293),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -463,7 +478,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         gemini=_ok("tests/unit/test_skills.py", "live-checked: it lists the linked skills (0.46)"),
         opencode=_ok("tests/unit/test_skills.py"),
         deepcode=_ok("tests/unit/api/routes/test_api_skills.py"),
-        aider=_gap(282),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -476,8 +491,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok("tests/unit/test_usage_accounting.py"),
         gemini=_ok("tests/unit/test_usage_accounting.py", "live-checked with a subagent (0.46)"),
         opencode=_ok("tests/unit/test_usage_accounting.py"),
-        deepcode=_gap(283),
-        aider=_gap(283),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -490,8 +505,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok("tests/unit/services/runtimes/test_transcripts.py"),
         gemini=_ok("tests/unit/services/runtimes/test_transcripts.py"),
         opencode=_ok("tests/unit/services/runtimes/test_transcripts.py"),
-        deepcode=_gap(284),
-        aider=_gap(284),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na("a plain shell has no model messages; output is its screen"),
     ),
     _row(
@@ -502,10 +517,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: bool(rt.provider_error_patterns or rt.provider_error_prefixes),
         claude=_ok("tests/unit/services/agents/test_provider_failures.py"),
         codex=_ok("tests/unit/services/agents/test_provider_failures.py"),
-        gemini=_gap(295),
+        gemini=_gap(),
         opencode=_ok("tests/unit/services/agents/test_provider_failures.py"),
         deepcode=_ok("tests/unit/services/agents/test_provider_failures.py"),
-        aider=_gap(295),
+        aider=_gap(),
         shell=_na("a plain shell has no model provider"),
     ),
     _row(
@@ -518,8 +533,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok("tests/unit/hooks/test_codex_hook.py"),
         gemini=_ok("tests/unit/hooks/test_gemini_hook.py"),
         opencode=_ok("tests/unit/hooks/test_opencode_hook.py"),
-        deepcode=_gap(275, "no hook state"),
-        aider=_gap(275, "no hook state"),
+        deepcode=_gap(note="no hook state"),
+        aider=_gap(note="no hook state"),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -530,10 +545,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: type(rt).diagnostics is not Runtime.diagnostics,
         claude=_gap(304),
         codex=_ok("tests/unit/services/runtimes/test_diagnostics.py"),
-        gemini=_gap(304),
+        gemini=_gap(),
         opencode=_gap(304),
-        deepcode=_gap(304),
-        aider=_gap(304),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -544,10 +559,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=_declared("message-authority"),
         claude=_ok(_PROVENANCE),
         codex=_ok(_PROVENANCE),
-        gemini=_unverified(294),
+        gemini=_unverified(),
         opencode=_gap(294, "adopted a forged brief"),
-        deepcode=_unverified(294),
-        aider=_unverified(294),
+        deepcode=_unverified(),
+        aider=_unverified(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -588,8 +603,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok(_VALIDATE, "live-checked through its sandbox (0.157.1)"),
         gemini=_ok(_GEMINI_STUB, "live-checked from a shell tool call (0.46)"),
         opencode=_unverified(302, _UNMEASURED),
-        deepcode=_unverified(302, _UNMEASURED),
-        aider=_unverified(302, _UNMEASURED),
+        deepcode=_unverified(note=_UNMEASURED),
+        aider=_unverified(note=_UNMEASURED),
         shell=_ok(_VALIDATE, "live-checked"),
     ),
     _row(
@@ -645,10 +660,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=_declared("deep-review"),
         claude=_ok("docs/deep-reviews.md"),
         codex=_unverified(288, "a Claude reviewer launched from Codex's sandbox is not measured"),
-        gemini=_gap(288),
+        gemini=_gap(),
         opencode=_gap(288),
-        deepcode=_gap(288),
-        aider=_gap(288),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
 )

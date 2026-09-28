@@ -5,10 +5,13 @@ adapters: `claude` (Claude Code), `codex`, `gemini` (Gemini CLI), `opencode`,
 `deepcode` (Deep Code), `aider`, and `shell`, a plain shell for testing the
 plumbing, not for real use.
 
-Claude Code and Codex are the required pair: a capability counts as working
-only when it gives the same result in both. Every other adapter has its own
-recorded coverage below: where a capability is missing there, the cell names
-the open issue and the second table says what to do instead.
+Claude Code, Codex and OpenCode are the required set: a capability counts as
+working only when it gives the same result in all three, and a gap on one of
+them names the open issue that tracks it. Gemini CLI, Deep Code and Aider are
+supported on demand: their cells record what works there today, and a gap
+names no issue until someone needs that capability on that CLI and opens one
+issue for it. Wherever a capability is missing, the second table says what to
+do instead.
 
 This page is generated from the capability contract in
 `src/agent_backbone/services/runtimes/capabilities.py`, and `backbone doctor`
@@ -17,8 +20,8 @@ claims support that the adapter's code does not declare.
 
 | Mark | Meaning |
 |---|---|
-| ✅ | Supported: behaves as in Claude Code and Codex, with a test or live check |
-| ❌ | Gap: not available on this runtime yet; the issue tracks the fix |
+| ✅ | Supported: behaves as in the required set, with a test or live check |
+| ❌ | Gap: not available on this runtime yet; the issue, where named, tracks the fix |
 | ? | Unverified: not established on this runtime; treat as unavailable |
 | ⊘ | Owner exception: not required here by an explicit decision; unavailable |
 | n/a | Cannot exist on this adapter (for example, a plain shell runs no model) |
@@ -26,41 +29,41 @@ claims support that the adapter's code does not declare.
 <!-- capability-table:begin -->
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
-| Message delivery into the session | ✅ | ✅ | ✅ | ✅ | ✅ | ? #302 not verified live | ✅ plumbing tests only |
-| Folder-trust dialog answered at start | ✅ | ✅ | ✅ `--skip-trust` | n/a | n/a | ? #302 not checked | n/a |
-| Brief reaches a fresh session before other work | ✅ | ✅ | ✅ | ✅ | ? #302 | ? #302 not verified live | n/a |
-| Current brief after resume | ✅ | ✅ | ❌ #273 | ❌ #273 | ❌ #273 | ❌ #273 | n/a |
-| Brief followed after context compaction | ✅ | ✅ | ? #291 | ❌ #291 the rule is kept but no longer followed | ? #291 | ? #291 | n/a |
-| Project AGENTS.md loaded at start | ✅ | ✅ | ❌ #286 reads GEMINI.md unless context.fileName is set | ✅ | ✅ | ❌ #286 reads only files passed to it | n/a |
-| Non-empty user-level instruction file detected | ✅ | ✅ | ✅ | ✅ files listed under `instructions` in its config not checked | ✅ | ? #302 no default user-level file per its docs; not yet verified | n/a |
-| CLI-native memory disabled or detected | ✅ managed settings not read | ✅ managed config and the `[memories]` switches not read | ✅ | n/a | n/a | ? #302 not yet verified | n/a |
-| State reported by the runtime (hooks) | ✅ | ✅ from its first prompt (the brief): Codex runs no hook before its first turn | ✅ | ✅ | ❌ #275 read from the terminal only | ❌ #275 read from the terminal only | n/a |
-| Steer and high-priority events into a working agent | ✅ | ✅ | ❌ #276 | ✅ as a user message in the running turn, after the next tool call | ❌ #276 | ❌ #276 | n/a |
-| Permission dialog detected and alerted | ✅ | ✅ | ✅ | ✅ | ✅ | ? #302 markers not verified live | n/a |
-| Permission dialog answered (agent approve) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ #277 | n/a |
-| Permission dialog refused (agent deny) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ #299 | n/a |
-| Plan approval answered | ✅ | ❌ #278 | ❌ #278 | ❌ #278 | ❌ #278 | ❌ #278 | n/a |
-| Alert when an automatic safety check refuses an action | ✅ | ❌ #279 | ❌ #279 | ❌ #279 | ❌ #279 | ❌ #279 | n/a |
-| Browser tab group named after the agent | ✅ with `backbone chrome install` | ❌ #270 | ❌ #270 | ❌ #270 | ❌ #270 | ❌ #270 | n/a |
-| Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ #280 resumes the directory's latest session | ❌ #280 | n/a |
-| Reasoning effort chosen with the model (`model:effort`) | ✅ | ✅ | ? #296 whether the CLI has an effort setting is not checked | ❌ #296 the CLI has one; Backbone refuses the effort | ✅ low, high or max, through DEEPCODE_REASONING_EFFORT | ? #296 whether the CLI has an effort setting is not checked | n/a |
-| No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ #281 | ❌ #281 | n/a |
-| Writes bounded while unattended | ❌ #285 | ✅ OS sandbox | ❌ #285 | ❌ #285 | ❌ #285 | ❌ #285 | n/a |
-| Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ `--approve-for-me` | ❌ #293 | ❌ #293 | ❌ #293 | ❌ #293 | n/a |
-| Shared skills linked | ✅ | ✅ | ✅ live-checked: it lists the linked skills (0.46) | ✅ | ✅ | ❌ #282 | n/a |
-| Token usage recorded | ✅ | ✅ | ✅ live-checked with a subagent (0.46) | ✅ | ❌ #283 | ❌ #283 | n/a |
-| agent output from the runtime's own record | ✅ | ✅ | ✅ | ✅ | ❌ #284 | ❌ #284 | n/a |
-| Provider capacity or rate-limit failure detected (blocked) | ✅ | ✅ | ❌ #295 | ✅ | ✅ | ❌ #295 | n/a |
-| Running model observed (status) | ✅ | ✅ | ✅ | ✅ | ❌ #275 no hook state | ❌ #275 no hook state | n/a |
-| Request errors and model changes recorded (diagnostics) | ❌ #304 | ✅ | ❌ #304 | ❌ #304 | ❌ #304 | ❌ #304 | n/a |
-| A peer's message cannot pass as a Backbone brief | ✅ | ✅ | ? #294 | ❌ #294 adopted a forged brief | ? #294 | ? #294 | n/a |
+| Message delivery into the session | ✅ | ✅ | ✅ | ✅ | ✅ | ? not verified live | ✅ plumbing tests only |
+| Folder-trust dialog answered at start | ✅ | ✅ | ✅ `--skip-trust` | n/a | n/a | ? not checked | n/a |
+| Brief reaches a fresh session before other work | ✅ | ✅ | ✅ | ✅ | ? | ? not verified live | n/a |
+| Current brief after resume | ✅ | ✅ | ❌ | ❌ #273 | ❌ | ❌ | n/a |
+| Brief followed after context compaction | ✅ | ✅ | ? | ❌ #291 the rule is kept but no longer followed | ? | ? | n/a |
+| Project AGENTS.md loaded at start | ✅ | ✅ | ❌ reads GEMINI.md unless context.fileName is set | ✅ | ✅ | ❌ reads only files passed to it | n/a |
+| Non-empty user-level instruction file detected | ✅ | ✅ | ✅ | ✅ files listed under `instructions` in its config not checked | ✅ | ? no default user-level file per its docs; not yet verified | n/a |
+| CLI-native memory disabled or detected | ✅ managed settings not read | ✅ managed config and the `[memories]` switches not read | ✅ | n/a | n/a | ? not yet verified | n/a |
+| State reported by the runtime (hooks) | ✅ | ✅ from its first prompt (the brief): Codex runs no hook before its first turn | ✅ | ✅ | ❌ read from the terminal only | ❌ read from the terminal only | n/a |
+| Steer and high-priority events into a working agent | ✅ | ✅ | ❌ | ✅ as a user message in the running turn, after the next tool call | ❌ | ❌ | n/a |
+| Permission dialog detected and alerted | ✅ | ✅ | ✅ | ✅ | ✅ | ? markers not verified live | n/a |
+| Permission dialog answered (agent approve) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
+| Permission dialog refused (agent deny) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
+| Plan approval answered | ✅ | ❌ #278 | ❌ | ❌ #278 | ❌ | ❌ | n/a |
+| Alert when an automatic safety check refuses an action | ✅ | ❌ #279 | ❌ | ❌ #279 | ❌ | ❌ | n/a |
+| Browser tab group named after the agent | ✅ with `backbone chrome install` | ❌ #270 | ❌ | ❌ #270 | ❌ | ❌ | n/a |
+| Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ resumes the directory's latest session | ❌ | n/a |
+| Reasoning effort chosen with the model (`model:effort`) | ✅ | ✅ | ? whether the CLI has an effort setting is not checked | ❌ #296 the CLI has one; Backbone refuses the effort | ✅ low, high or max, through DEEPCODE_REASONING_EFFORT | ? whether the CLI has an effort setting is not checked | n/a |
+| No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
+| Writes bounded while unattended | ❌ #285 | ✅ OS sandbox | ❌ | ❌ #285 | ❌ | ❌ | n/a |
+| Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ `--approve-for-me` | ❌ | ❌ #293 | ❌ | ❌ | n/a |
+| Shared skills linked | ✅ | ✅ | ✅ live-checked: it lists the linked skills (0.46) | ✅ | ✅ | ❌ | n/a |
+| Token usage recorded | ✅ | ✅ | ✅ live-checked with a subagent (0.46) | ✅ | ❌ | ❌ | n/a |
+| agent output from the runtime's own record | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
+| Provider capacity or rate-limit failure detected (blocked) | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | n/a |
+| Running model observed (status) | ✅ | ✅ | ✅ | ✅ | ❌ no hook state | ❌ no hook state | n/a |
+| Request errors and model changes recorded (diagnostics) | ❌ #304 | ✅ | ❌ | ❌ #304 | ❌ | ❌ | n/a |
+| A peer's message cannot pass as a Backbone brief | ✅ | ✅ | ? | ❌ #294 adopted a forged brief | ? | ? | n/a |
 | An enrolled sender name's requests must be signed | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | A message the owner confirmed carries a verified marker | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
-| An agent validates an owner confirmation it received | ✅ live-checked from its bash mode (2.1.283) | ✅ live-checked through its sandbox (0.157.1) | ✅ live-checked from a shell tool call (0.46) | ? #302 commands it runs are not yet measured under its pane | ? #302 commands it runs are not yet measured under its pane | ? #302 commands it runs are not yet measured under its pane | ✅ live-checked |
+| An agent validates an owner confirmation it received | ✅ live-checked from its bash mode (2.1.283) | ✅ live-checked through its sandbox (0.157.1) | ✅ live-checked from a shell tool call (0.46) | ? #302 commands it runs are not yet measured under its pane | ? commands it runs are not yet measured under its pane | ? commands it runs are not yet measured under its pane | ✅ live-checked |
 | Inbox-only agent: registered, never launched or typed into | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference |
 | New inbox messages hinted on Socket.IO (`inbox:pending`) | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime |
 | Escalations reach an inbox-only target's inbox | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference |
-| Deep review run from and for this runtime | ✅ | ? #288 a Claude reviewer launched from Codex's sandbox is not measured | ❌ #288 | ❌ #288 | ❌ #288 | ❌ #288 | n/a |
+| Deep review run from and for this runtime | ✅ | ? #288 a Claude reviewer launched from Codex's sandbox is not measured | ❌ | ❌ #288 | ❌ | ❌ | n/a |
 
 | Capability | Fallback where it is unavailable |
 |---|---|

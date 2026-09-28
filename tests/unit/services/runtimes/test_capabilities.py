@@ -33,12 +33,13 @@ def test_every_shipped_adapter_has_a_cell_in_every_row():
         assert set(cap.cells) == set(RUNTIMES), cap.id
 
 
-def test_the_required_pair_is_shipped():
+def test_the_required_set_is_shipped():
     assert set(REQUIRED) <= set(RUNTIMES)
 
 
-# The baseline as the contract shipped it. Entries are only ever removed: a new
-# required-pair gap needs the owner's explicit exception (the ``exception`` status),
+# The baseline as the contract shipped it, plus OpenCode's cells from when the owner
+# added it to the required set (#339). Entries are only ever removed: a new
+# required-set gap needs the owner's explicit exception (the ``exception`` status),
 # never a baseline entry.
 INITIAL_BASELINE = {
     ("global-instructions-detected", "claude", 274),
@@ -52,6 +53,18 @@ INITIAL_BASELINE = {
     ("auto-review", "claude", 293),
     ("deep-review", "codex", 288),
     ("request-diagnostics", "claude", 304),
+    ("brief-after-resume", "opencode", 273),
+    ("brief-after-compaction", "opencode", 291),
+    ("plan-approval", "opencode", 278),
+    ("refusal-alert", "opencode", 279),
+    ("browser-group-name", "opencode", 270),
+    ("reasoning-effort", "opencode", 296),
+    ("bounded-unattended", "opencode", 285),
+    ("auto-review", "opencode", 293),
+    ("request-diagnostics", "opencode", 304),
+    ("message-authority", "opencode", 294),
+    ("message-validate", "opencode", 302),
+    ("deep-review", "opencode", 288),
 }
 
 
@@ -59,13 +72,14 @@ def test_the_baseline_never_grows():
     assert REQUIRED_BASELINE <= INITIAL_BASELINE
 
 
-def test_the_required_pair_lacks_nothing_outside_the_shipped_baseline():
+def test_the_required_set_lacks_nothing_outside_the_shipped_baseline():
     for cap in CAPABILITIES:
         for runtime_id in REQUIRED:
             cell = cap.cells[runtime_id]
-            if cell.status not in ("supported", "exception"):
+            # n/a: nothing to provide there (OpenCode shows no trust dialog).
+            if cell.status not in ("supported", "exception", "n/a"):
                 assert (cap.id, runtime_id, cell.issue) in REQUIRED_BASELINE, (
-                    f"{cap.id}/{runtime_id}: Claude Code and Codex must both support it"
+                    f"{cap.id}/{runtime_id}: Claude Code, Codex and OpenCode must all support it"
                 )
 
 
@@ -99,14 +113,15 @@ def test_every_row_names_its_implementation_and_fallback(cap):
 def test_cells_carry_what_their_status_requires(cap):
     for runtime_id, cell in cap.cells.items():
         where = f"{cap.id}/{runtime_id}"
-        if cell.status == "gap":
+        # An on-demand adapter's gap names an issue only once someone needs it there.
+        if cell.status == "gap" and runtime_id in REQUIRED:
             assert cell.issue is not None, f"{where}: a gap names its issue"
         if cell.status == "exception":
             assert cell.issue is not None and cell.decision, f"{where}: owner decision and issue"
         if cell.status == "n/a":
             assert cell.note, f"{where}: not applicable says why"
             assert cell.issue is None, f"{where}: an open issue means a gap, not n/a"
-        if cell.status == "unverified":
+        if cell.status == "unverified" and runtime_id in REQUIRED:
             assert cell.issue is not None, f"{where}: an issue tracks the verification"
 
 

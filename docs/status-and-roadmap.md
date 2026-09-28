@@ -60,7 +60,7 @@ every later CLI version or account.
 
 Seven adapters are shipped: `claude`, `codex`, `gemini`, `opencode`,
 `deepcode`, `aider` and `shell`. Which capabilities work on each, and the issue
-tracking each gap, is in [runtime capabilities](runtime-capabilities.md),
+tracking each gap where one exists, is in [runtime capabilities](runtime-capabilities.md),
 generated from the capability contract; `backbone doctor` reports from the
 same source. Use `backbone runtimes` to see which CLIs are installed locally.
 
