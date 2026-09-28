@@ -278,16 +278,17 @@ configuration view with `subscriptions: [{id, source, filter, priority}]`;
 
 A page of a registered agent's user-facing messages, reads only. `source` is
 `transcript` when the runtime keeps a record the backbone can read (Claude
-Code, Codex; located from the session id the hook recorded, only when that
-record's runtime is the live one) and `screen` otherwise (`screen=true`, no
-transcript, an unsupported runtime): the visible terminal with ANSI stripped
-in `lines`.
+Code, Codex, OpenCode; located from the session id the hook recorded, only
+when that record's runtime is the live one) and `screen` otherwise
+(`screen=true`, no transcript, an unsupported runtime): the visible terminal
+with ANSI stripped in `lines`.
 
 Messages are the agent's own text to the person — progress, commentary and
 replies — **complete**; tool calls, tool results and thinking are not
 messages and are never included. A page holds at most `lines` messages
 (max 200) and never cuts one. Navigation is by byte offset into the
-append-only file: by default the last `lines` messages; `before=OFFSET`
+append-only file (OpenCode: the message's row in its database, an integer
+used the same way): by default the last `lines` messages; `before=OFFSET`
 the messages ending at or before it (earlier pages); `since=OFFSET` the
 messages starting at or after it (later pages), with `end=OFFSET` bounding a
 range. `range_start`/`range_end` are the page's offsets, `more_before` /

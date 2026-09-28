@@ -14,9 +14,11 @@ from agent_backbone.services.agents.transcript import (
     read_messages,
 )
 from agent_backbone.services.runtimes import get_runtime
+from tests.support import opencode_db
 
 _MOD = "agent_backbone.services.agents.transcript"
 _CLAUDE = "agent_backbone.services.runtimes.claude.ClaudeCode.usage_paths"
+_OPENCODE = "agent_backbone.services.runtimes.opencode.OpenCode.usage_paths"
 
 
 def _assistant(index: int, text: str) -> str:
@@ -49,35 +51,68 @@ def _transcript(tmp_path, count: int, *, name="s1.jsonl", noise: int = 200, text
     return path
 
 
+def _codex_transcript(tmp_path, count: int):
+    path = tmp_path / "rollout-s1.jsonl"
+    lines = []
+    for i in range(count):
+        noise = {"type": "function_call_output", "output": "x" * 200}
+        lines.append(json.dumps({"type": "response_item", "payload": noise}))
+        message = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": f"reply {i}"}],
+        }
+        lines.append(json.dumps({"type": "response_item", "payload": message}))
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def _opencode_transcript(tmp_path, count: int):
+    """Session ``s1``'s replies, each after a tool part and followed by
+    another session's text, which is never this agent's message."""
+    messages = []
+    for i in range(count):
+        reply = {"type": "text", "text": f"reply {i}", "time": {"start": 1, "end": 2}}
+        tool = {"type": "tool", "tool": "bash", "state": {"output": "x" * 200}}
+        messages.append(("s1", {"role": "assistant"}, [tool, reply]))
+        messages.append(("other", {"role": "assistant"}, [{**reply, "text": "other"}]))
+    return opencode_db(tmp_path / "opencode.db", messages)
+
+
+_TRANSCRIPTS = {"claude": _transcript, "codex": _codex_transcript, "opencode": _opencode_transcript}
+
+
 def _texts(messages):
     return [m.text for m in messages]
 
 
 class TestReadMessages:
-    def test_last_page_then_back_then_forward_loses_nothing(self, tmp_path):
-        path = _transcript(tmp_path, 7)
-        rt = get_runtime("claude")
-        last, more_before, more_after, _ = read_messages(path, rt, limit=3)
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    def test_last_page_then_back_then_forward_loses_nothing(self, tmp_path, runtime):
+        path = _TRANSCRIPTS[runtime](tmp_path, 7)
+        rt = get_runtime(runtime)
+
+        def read(**kwargs):
+            return read_messages(path, rt, session_id="s1", **kwargs)
+
+        last, more_before, more_after, _ = read(limit=3)
         assert _texts(last) == ["reply 4", "reply 5", "reply 6"]
         assert more_before is True and more_after is False
-        assert last[-1].end == path.stat().st_size
 
-        earlier, more_before, more_after, _ = read_messages(path, rt, limit=3, before=last[0].start)
+        earlier, more_before, more_after, _ = read(limit=3, before=last[0].start)
         assert _texts(earlier) == ["reply 1", "reply 2", "reply 3"]
         assert more_before is True and more_after is True
 
-        first, more_before, _, _ = read_messages(path, rt, limit=3, before=earlier[0].start)
+        first, more_before, _, _ = read(limit=3, before=earlier[0].start)
         assert _texts(first) == ["reply 0"] and more_before is False
 
-        forward, more_before, more_after, _ = read_messages(path, rt, limit=2, since=first[-1].end)
+        forward, more_before, more_after, _ = read(limit=2, since=first[-1].end)
         assert _texts(forward) == ["reply 1", "reply 2"]
         assert more_before is True and more_after is True
         # A start/end range, and continuing from a cursor that has nothing after it.
-        ranged, _, more_after, _ = read_messages(
-            path, rt, limit=10, since=earlier[0].start, end=earlier[-1].end
-        )
+        ranged, _, more_after, _ = read(limit=10, since=earlier[0].start, end=earlier[-1].end)
         assert _texts(ranged) == ["reply 1", "reply 2", "reply 3"] and more_after is False
-        assert read_messages(path, rt, limit=5, since=last[-1].end)[0] == []
+        assert read(limit=5, since=last[-1].end)[0] == []
 
     def test_a_long_message_is_returned_whole(self, tmp_path):
         long = "L" * 300_000 + "\n" + "M" * 300_000
@@ -144,6 +179,25 @@ class TestOutputPage:
         assert page.more_before is True and page.more_after is False
         assert page.evidence == [f"transcript {path}"]
         live[2].assert_not_awaited()
+
+    async def test_opencode_reads_the_hooks_session_from_its_database(self, config, tmp_path, live):
+        live[1].return_value = "opencode"
+        path = _opencode_transcript(tmp_path, 3)
+        write_state_file(
+            config.state_dir, "ike", {"state": "idle", "session_id": "s1", "runtime": "opencode"}
+        )
+        with patch(_OPENCODE, return_value=[path]):
+            page = await output_page(config, "ike", limit=2)
+        assert page.source == "transcript" and page.runtime == "opencode"
+        assert _texts(page.messages) == ["reply 1", "reply 2"]
+        assert page.more_before is True and page.more_after is False
+        assert page.evidence == [f"transcript {path}"]
+
+        (tmp_path / "broken.db").write_text("not a database")
+        with patch(_OPENCODE, return_value=[tmp_path / "broken.db"]):
+            page = await output_page(config, "ike")
+        assert page.source == "screen"
+        assert page.evidence[-1].startswith("transcript unreadable: OpenCode database:")
 
     async def test_a_candidate_that_vanishes_is_skipped(self, config, tmp_path, live):
         path = _transcript(tmp_path, 3, name="abc.jsonl")

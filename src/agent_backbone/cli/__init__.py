@@ -301,7 +301,7 @@ def build_parser() -> argparse.ArgumentParser:
         "output",
         help="what the agent has said: its messages in full, else its screen",
         description=(
-            "Reads only. Claude Code and Codex keep a transcript; the backbone shows the "
+            "Reads only. Claude Code, Codex and OpenCode keep a transcript; the backbone shows the "
             "agent's user-facing messages from it, complete, a page at a time: the last "
             "--lines by default, earlier ones with --before OFFSET, later ones with --since "
             "OFFSET (--end OFFSET bounds a range). Each page prints the offsets to continue "

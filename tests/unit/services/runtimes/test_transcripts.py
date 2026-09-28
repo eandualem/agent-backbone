@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from agent_backbone.services.runtimes import get_runtime
 from agent_backbone.services.runtimes.base import transcript_clock
+from tests.support import opencode_db
 
 LONG = "A" * 5000 + "\nsecond paragraph " + "B" * 3000
 
@@ -132,8 +133,51 @@ def test_codex_keeps_assistant_messages_complete_and_nothing_else():
     assert entries[1].text == LONG
 
 
+def test_opencode_keeps_completed_assistant_text_complete_by_part_rowid(tmp_path):
+    def text(body, ended):
+        return {"type": "text", "text": body, "time": {"start": ended - 900, "end": ended}}
+
+    assistant = {"role": "assistant"}
+    path = opencode_db(
+        tmp_path / "opencode.db",
+        [
+            ("s", {"role": "user"}, [{"type": "text", "text": "Fix the bug"}]),  # rowid 1
+            (
+                "s",
+                assistant,
+                [
+                    {"type": "step-start"},
+                    text("Looking at it now.", 1790071205000),  # rowid 3
+                    {"type": "tool", "tool": "bash", "state": {"output": "3 passed"}},
+                    {"type": "step-finish"},
+                ],
+            ),
+            (
+                "s",
+                assistant,
+                [
+                    {"type": "reasoning", "text": "private"},
+                    text(LONG, 1790071212000),  # rowid 7
+                    text(" \n", 1790071212000),
+                ],
+            ),
+            ("s", {"role": "assistant", "summary": True}, [text("compaction", 1790071213000)]),
+            ("child", assistant, [text("sub-agent", 1790071214000)]),
+            ("s", assistant, [{"type": "text", "text": "", "time": {"start": 1790071215000}}]),
+        ],
+    )
+    entries, more_before, more_after = get_runtime("opencode").transcript_page(path, "s", limit=10)
+    assert [(e.time, e.role, e.start, e.end) for e in entries] == [
+        ("10:00:05", "assistant", 3, 4),
+        ("10:00:12", "assistant", 7, 8),
+    ]
+    assert entries[0].text == "Looking at it now."
+    assert entries[1].text == LONG  # never shortened
+    assert more_before is False and more_after is False
+
+
 def test_other_runtimes_keep_no_readable_transcript():
-    for runtime in ("gemini", "opencode", "aider", "shell"):
+    for runtime in ("gemini", "aider", "shell"):
         rt = get_runtime(runtime)
         assert rt.transcript_supported is False
         assert rt.transcript_entries([{"type": "assistant", "message": {"content": "x"}}]) == []

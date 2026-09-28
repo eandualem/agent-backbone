@@ -15,7 +15,14 @@ from pathlib import Path
 
 from agent_backbone.hooks import install as hooks
 from agent_backbone.services.runtimes._usage import UsageBatch, count
-from agent_backbone.services.runtimes.base import Runtime, agent_home, has_text, read_brief
+from agent_backbone.services.runtimes.base import (
+    Runtime,
+    TranscriptEntry,
+    agent_home,
+    has_text,
+    read_brief,
+    transcript_clock,
+)
 from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
@@ -179,6 +186,73 @@ class OpenCode(Runtime):
             if isinstance(exc, (ValueError, KeyError, TypeError)):
                 state["partial"] = True
         return batch
+
+    transcript_supported = True
+
+    def transcript_page(
+        self,
+        path: Path,
+        session_id: str,
+        *,
+        limit: int,
+        since: int | None = None,
+        before: int | None = None,
+        end: int | None = None,
+    ) -> tuple[list[TranscriptEntry], bool, bool]:
+        """The session's assistant text parts, by part rowid. Rowids grow in
+        insertion order and a part is updated in place, so a rowid is as
+        stable as a byte offset. A streaming part is stored empty until it
+        ends (``time.end``, set on an interrupted one too); the compaction
+        summary is bookkeeping, not a message. Child sessions are not this
+        session."""
+        messages = (
+            "FROM part p JOIN message m ON m.id = p.message_id WHERE p.session_id = ? "
+            "AND json_extract(p.data, '$.type') = 'text' "
+            "AND json_extract(p.data, '$.time.end') IS NOT NULL "
+            "AND trim(json_extract(p.data, '$.text'), ' ' || char(9, 10, 13)) != '' "
+            "AND json_extract(m.data, '$.role') = 'assistant' "
+            "AND json_extract(m.data, '$.summary') IS NOT 1 "
+        )
+        try:
+            with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+
+                def exists(clause: str, value: int) -> bool:
+                    query = f"SELECT EXISTS(SELECT 1 {messages} AND {clause})"
+                    return bool(conn.execute(query, (session_id, value)).fetchone()[0])
+
+                if since is not None:
+                    bound, params = "", [session_id, since]
+                    if end is not None:
+                        bound, params = "AND p.rowid < ? ", [*params, end]
+                    rows = conn.execute(
+                        f"SELECT p.rowid, p.data {messages} AND p.rowid >= ? {bound}"
+                        "ORDER BY p.rowid LIMIT ?",
+                        (*params, limit + 1),
+                    ).fetchall()
+                    more_before, more_after = exists("p.rowid < ?", since), len(rows) > limit
+                    rows = rows[:limit]
+                else:
+                    bound, params = "", [session_id]
+                    if before is not None:
+                        bound, params = "AND p.rowid < ? ", [*params, before]
+                    rows = conn.execute(
+                        f"SELECT p.rowid, p.data {messages} {bound}ORDER BY p.rowid DESC LIMIT ?",
+                        (*params, limit + 1),
+                    ).fetchall()
+                    more_before = len(rows) > limit
+                    more_after = before is not None and exists("p.rowid >= ?", before)
+                    rows = rows[:limit][::-1]
+        except sqlite3.Error as exc:
+            raise ValueError(f"OpenCode database: {exc}") from exc
+        entries = []
+        for rowid, encoded in rows:
+            part = json.loads(encoded)
+            ended = part["time"]["end"]
+            clock = (
+                transcript_clock(timestamp(ended / 1000)) if isinstance(ended, (int, float)) else ""
+            )
+            entries.append(TranscriptEntry(clock, "assistant", part["text"], rowid, rowid + 1))
+        return entries, more_before, more_after
 
 
 RUNTIME = OpenCode()
