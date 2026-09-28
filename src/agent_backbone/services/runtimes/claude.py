@@ -58,10 +58,12 @@ _MODEL_SET = re.compile(
 )
 
 
-def _runs(raw: str) -> list[tuple[tuple[int, ...] | None, str]]:
-    """Visible text runs of one captured line, each with its foreground colour."""
+def _runs(
+    raw: str, foreground: tuple[int, ...] | None = None
+) -> tuple[list[tuple[tuple[int, ...] | None, str]], tuple[int, ...] | None]:
+    """Visible text runs of one captured line, each with its foreground colour,
+    and the colour in effect at its end: tmux carries it onto the next line."""
     runs: list[tuple[tuple[int, ...] | None, str]] = []
-    foreground = None
     for part in re.split(r"(\x1b\[[0-9;]*m)", raw):
         if not part.startswith("\x1b["):
             if part.strip():
@@ -72,7 +74,7 @@ def _runs(raw: str) -> list[tuple[tuple[int, ...] | None, str]]:
                 foreground = None
             elif attribute[0] == 38 or 30 <= attribute[0] <= 37 or 90 <= attribute[0] <= 97:
                 foreground = attribute
-    return runs
+    return runs, foreground
 
 
 def pre_accept_bypass(*, claude_config: Path | None = None) -> bool:
@@ -275,13 +277,14 @@ class ClaudeCode(Runtime):
             line = sanitize_pane_content(raw).strip()
             # A narrow pane wraps a banner or a confirmation onto lines indented
             # to its text; a right-aligned status line below it is not one.
-            runs = _runs(raw)
+            runs, foreground = _runs(raw)
             for more in lines[index + 1 : index + 4]:
                 text = sanitize_pane_content(more)
                 if not text.strip() or len(text) - len(text.lstrip(" ")) != head.end():
                     break
                 line += " " + text.strip()
-                runs += _runs(more)
+                more_runs, foreground = _runs(more, foreground)
+                runs += more_runs
             colour = runs[0][0]
             if line.startswith("⏺") and colour and all(other == colour for other, _ in runs):
                 if error := _REQUEST_ERROR.match(line):

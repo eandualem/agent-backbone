@@ -181,6 +181,13 @@ def test_claude_records_an_unavailable_model_when_the_banner_wraps():
         )
 
 
+def test_claude_banner_colour_carries_onto_a_wrapped_line():
+    # tmux does not repeat a colour that continues onto the next row.
+    pane = "\x1b[38;5;220m⏺ API Error: Request rejected\n  (429) · slow down\x1b[39m\n❯ \n"
+    (signal,) = RUNTIMES["claude"].diagnostics(pane)
+    assert (signal.code, signal.http_status) == ("request_error", 429)
+
+
 @pytest.mark.parametrize(
     ("line", "model", "effort"),
     [
