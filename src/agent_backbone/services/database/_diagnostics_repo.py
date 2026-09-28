@@ -18,6 +18,8 @@ from agent_backbone.services.database.models import DeliveryORM, DiagnosticORM, 
 
 log = logging.getLogger(__name__)
 _TOKEN = re.compile(r"[A-Za-z0-9_./:@+\-]*\Z")
+# A runtime may announce a display name ("Opus 5.5 (1M context)"), not an identifier.
+_DISPLAY_NAME = re.compile(r"[A-Za-z0-9_./:@+\-() ]*\Z")
 _TOKEN_DETAILS = frozenset(
     {
         "stage",
@@ -48,7 +50,7 @@ def diagnostic_details(value: object) -> dict:
     clean: dict = {}
     for key, item in value.items():
         if key in _TOKEN_DETAILS and isinstance(item, str) and len(item) <= 160:
-            if _TOKEN.fullmatch(item):
+            if (_DISPLAY_NAME if key == "observed_model" else _TOKEN).fullmatch(item):
                 clean[key] = item
         elif (key in _BOOL_DETAILS and isinstance(item, bool)) or (
             key in _INT_DETAILS and type(item) is int and 0 <= item <= 2**63 - 1

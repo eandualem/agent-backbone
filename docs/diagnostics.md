@@ -179,9 +179,12 @@ Agent configuration APIs and most diagnostic records use `model` for configurati
 or the model requested at launch (`model_source: configured`). Session views can
 label a model `observed` when the hook reads it from a complete assistant record's
 model metadata; nested tool arguments and response content do not supply that evidence. Runtime
-observations retain the displayed identifier separately as `observed_model`.
+observations retain the displayed identifier separately as `observed_model`,
+which may be a display name of up to 160 characters with spaces and
+parentheses, such as Claude Code's "Opus 5.5 (1M context)".
 During startup, a runtime record also uses that observed identifier as its
-`model` and labels it `model_source: terminal`; `requested_model` retains
+`model` (a display name stays only in `observed_model`) and labels it
+`model_source: terminal`; `requested_model` retains
 the launch selection. Configured selections and terminal observations do not prove
 which model generated a response. The backbone does not infer provider identity from conversation
 text. Capturing a runtime error does not select another model or change a
