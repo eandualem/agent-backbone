@@ -660,9 +660,11 @@ class Runtime:
 
         The interrupt line must head the latest output above the prompt, with
         nothing working and no dialog on screen: a newer turn below it is
-        history. A block's head starts at most two columns in; a line indented
-        further continues the block above it (a narrow pane's wrap, joined to
-        the head) or is a notice drawn at the right edge (skipped).
+        history. A block's head starts at most two columns in. Below it may
+        follow only its own wrap (indented to its text, joined before
+        matching) and notices that end two columns short of the input box's
+        border, as Claude Code draws them (live captures, 80 to 202 columns).
+        Any other line is newer output.
         """
         if not self.interrupt_patterns or not self.detect_idle(pane_content):
             return False
@@ -673,8 +675,10 @@ class Runtime:
             (i for i, line in enumerate(lines) if line.lstrip().startswith(self.prompt_prefixes)),
             default=None,
         )
+        above = lines[:prompt]
+        border = next((len(line) for line in reversed(above) if is_box_line(line.strip())), None)
         below: list[str] = []
-        for line in reversed(lines[:prompt]):
+        for line in reversed(above):
             text = line.strip()
             if is_box_line(text) or self._is_status_chrome_line(text):
                 continue
@@ -684,10 +688,14 @@ class Runtime:
                 continue
             head = re.match(r"\s*\S+\s+", line)
             column = head.end() if head else indent
+            notices = False
             for more in below:
-                if len(more) - len(more.lstrip(" ")) != column:
-                    break
-                text += " " + more.strip()
+                if border is not None and len(more) == border - 2:
+                    notices = True
+                elif notices or len(more) - len(more.lstrip(" ")) != column:
+                    return False
+                else:
+                    text += " " + more.strip()
             return any(re.match(pattern, text) for pattern in self.interrupt_patterns)
         return False
 

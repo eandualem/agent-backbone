@@ -21,12 +21,18 @@ from tests.unit.hooks.test_context import _opencode, _run
 _INF = "agent_backbone.services.agents._inference"
 _BOX = "─" * 60
 
+
+def _notice(text: str, width: int = 60) -> str:
+    """A notice as Claude Code draws it: ending two columns short of the input box."""
+    return text.rjust(width - 2) + "\n"
+
+
 CLAUDE_INTERRUPTED = (
     "⏺ line 0\n"
     "  line 1\n"
     "  ⎿ \u00a0Interrupted · What should Claude do instead?\n"
-    "                              tmux focus-events off · add 'set -g focus-events on'\n"
-    f"{_BOX}\n"
+    + _notice("tmux focus-events off · add 'set -g focus-events on'")
+    + f"{_BOX}\n"
     "❯ \n"
     f"{_BOX}\n"
     "  ⏸ manual mode on · ? for shortcuts · ← for agents\n"
@@ -37,8 +43,8 @@ CLAUDE_REFUSED = (
     "  Ran 1 shell command\n"
     "  ⎿ \u00a0Interrupted · What should Claude do instead?\n"
     "✻ Churned for 2s · done 10:42 PM\n"
-    "                                      ✔ Update installed · Restart to update\n"
-    f"{_BOX}\n"
+    + _notice("✔ Update installed · Restart to update")
+    + f"{_BOX}\n"
     "❯ \n"
     f"{_BOX}\n"
     "  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents\n"
@@ -113,15 +119,15 @@ async def test_an_interrupted_turn_reads_idle(tmp_path, runtime, refused_dialog)
 
 
 # A tall pane pads the space above the input box; a narrow one wraps the
-# line to its text column and draws a notice with little indentation.
+# line to its text column, where a notice may start too.
 CLAUDE_PADDED = CLAUDE_INTERRUPTED.replace(f"{_BOX}\n", "\n" * 50 + f"{_BOX}\n", 1)
 CLAUDE_NARROW = (
     "  ⎿ \u00a0Interrupted · What should Claude do\n"
     "     instead?\n"
-    "      tmux focus-events off · add 'set -g focus-events on'\n"
-    f"{_BOX[:40]}\n"
+    + _notice("✔ Update installed · Restart to update", width=45)
+    + f"{_BOX[:45]}\n"
     "❯ \n"
-    f"{_BOX[:40]}\n"
+    f"{_BOX[:45]}\n"
     "  ⏸ manual mode on · ? for shortcuts\n"
 )
 
@@ -143,11 +149,13 @@ def test_claude_code_shows_the_interrupt_as_its_latest_output(pane):
         "❯ next task\n✳ Harmonizing… (3s · ↓ 10 tokens)\n",
         # A dialog of that newer turn.
         " Do you want to proceed?\n ❯ 1. Yes\n   2. No\n Esc to cancel · Tab to amend\n",
+        # Indented output that is neither the interrupt's wrap nor a notice.
+        "    newer output\n",
     ],
-    ids=["finished", "running", "dialog"],
+    ids=["finished", "running", "dialog", "indented"],
 )
 def test_an_older_interrupt_is_history(after):
-    old = CLAUDE_REFUSED.split(_BOX, 1)[0]
+    old = CLAUDE_REFUSED.split("✻", 1)[0]
     pane = f"{old}{after}{_BOX}\n❯ \n{_BOX}\n  ⏸ manual mode on · ? for shortcuts\n"
     assert not get_runtime("claude").detect_interrupted(pane)
 
