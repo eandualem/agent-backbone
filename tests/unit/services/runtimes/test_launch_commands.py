@@ -311,12 +311,28 @@ class TestDeepCode:
         assert resumed == ["/bin/deepcode", "--last"]
 
     def test_model_travels_in_the_environment(self):
-        # deepcode has no --model flag; MODEL in the environment selects it.
+        # deepcode has no --model flag; DEEPCODE_MODEL in the environment selects it.
         with _resolve("/bin/deepcode"):
             assert RUNTIMES["deepcode"].build_command(model="deepseek-v4-pro") == ["/bin/deepcode"]
-        assert RUNTIMES["deepcode"].launch_env("deepseek-v4-pro") == {"MODEL": "deepseek-v4-pro"}
+        assert RUNTIMES["deepcode"].launch_env("deepseek-v4-pro") == {
+            "DEEPCODE_MODEL": "deepseek-v4-pro"
+        }
         assert RUNTIMES["deepcode"].launch_env(None) == {}
         assert RUNTIMES["codex"].launch_env("x") == {}
+
+    def test_effort_travels_in_the_environment(self):
+        # DEEPCODE_REASONING_EFFORT, sent only in thinking mode, which the effort turns on.
+        with _resolve("/bin/deepcode"):
+            assert RUNTIMES["deepcode"].build_command(model="deepseek-v4-pro:high") == [
+                "/bin/deepcode"
+            ]
+            with pytest.raises(RuntimeError, match="no effort 'medium'"):
+                RUNTIMES["deepcode"].build_command(model="deepseek-v4-pro:medium")
+        assert RUNTIMES["deepcode"].launch_env("deepseek-v4-pro", "high") == {
+            "DEEPCODE_MODEL": "deepseek-v4-pro",
+            "DEEPCODE_REASONING_EFFORT": "high",
+            "DEEPCODE_THINKING_ENABLED": "true",
+        }
 
 
 class TestEffort:

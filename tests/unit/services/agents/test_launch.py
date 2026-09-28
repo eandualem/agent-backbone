@@ -934,7 +934,7 @@ class TestLaunchEnvFromRuntime:
             assert (await start_agent(spec, config, wait=False)).ok
         command = start.await_args.kwargs["command"]
         assert command[command.index("--model") + 1] == spec.model
-        env.assert_called_once_with(spec.model)
+        env.assert_called_once_with(spec.model, None)  # the tag is no effort
 
     async def test_runtime_environment_reaches_the_session(self, tmp_path):
         project = tmp_path / "project"
@@ -948,13 +948,36 @@ class TestLaunchEnvFromRuntime:
         ):
             assert (await start_agent(spec, config, wait=False)).ok
         env = start.await_args.kwargs["environment"]
-        assert env["MODEL"] == "deepseek-v4-pro" and env["BACKBONE_RUNTIME"] == "deepcode"
+        assert env["DEEPCODE_MODEL"] == "deepseek-v4-pro" and env["BACKBONE_RUNTIME"] == "deepcode"
+
+    async def test_an_effort_reaches_deepcode_through_its_environment(self, tmp_path):
+        project = tmp_path / "project"
+        project.mkdir()
+        spec = AgentSpec(
+            name="ike", dir=str(project), runtime="deepcode", model="deepseek-v4-pro:low"
+        )
+        config = bootstrap_config(tmp_path / "data")
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value="/bin/deepcode"),
+        ):
+            assert (await start_agent(spec, config, wait=False)).ok
+        env = start.await_args.kwargs["environment"]
+        assert (env["DEEPCODE_MODEL"], env["DEEPCODE_REASONING_EFFORT"]) == (
+            "deepseek-v4-pro",
+            "low",
+        )
+        assert "low" not in start.await_args.kwargs["command"]  # no flag carries it
 
     async def test_the_selected_model_beats_a_model_in_the_agents_env(self, tmp_path):
         project = tmp_path / "project"
         project.mkdir()
         spec = AgentSpec(
-            name="ike", dir=str(project), runtime="deepcode", env={"MODEL": "deepseek-v4-flash"}
+            name="ike",
+            dir=str(project),
+            runtime="deepcode",
+            env={"DEEPCODE_MODEL": "deepseek-v4-flash"},
         )
         config = bootstrap_config(tmp_path / "data")
         with (
@@ -963,7 +986,7 @@ class TestLaunchEnvFromRuntime:
             patch(f"{_BASE}.resolve_command", return_value="/bin/deepcode"),
         ):
             await start_agent(spec, config, model="deepseek-v4-pro", wait=False)
-        assert start.await_args.kwargs["environment"]["MODEL"] == "deepseek-v4-pro"
+        assert start.await_args.kwargs["environment"]["DEEPCODE_MODEL"] == "deepseek-v4-pro"
 
 
 @pytest.mark.parametrize("unattended", [False, True])

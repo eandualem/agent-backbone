@@ -325,8 +325,9 @@ class Runtime:
     def prepare_unattended(self) -> None:
         """Record any consent needed for an explicitly unattended launch."""
 
-    def launch_env(self, model: str | None) -> dict[str, str]:
-        """Extra environment the session needs (runtimes that take the model from a variable)."""
+    def launch_env(self, model: str | None, effort: str | None = None) -> dict[str, str]:
+        """Extra environment the session needs (runtimes that take the model or
+        the effort from a variable)."""
         return {}
 
     def split_model(self, spec: str | None) -> tuple[str | None, str | None]:

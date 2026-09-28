@@ -249,7 +249,8 @@ member; the runtime's own model picker is the authority.
 
 Each line also prints the reasoning-effort levels that runtime accepts —
 `low, medium, high, xhigh, max` for Claude Code, the same plus `ultra`
-for Codex, `-` for a CLI with no effort setting. Unlike model ids, these
+for Codex, `low, high, max` for Deep Code, `-` for a CLI with no effort
+setting. Unlike model ids, these
 are checked: a level the runtime does not have is refused at start.
 
 OpenCode and Aider use literal colon tags in model IDs. Their model values,

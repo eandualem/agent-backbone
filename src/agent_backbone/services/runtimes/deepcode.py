@@ -5,12 +5,14 @@ Markers captured live from deepcode 0.3.1: the banner box (``>_ Deep Code
 its ``Type your message...`` placeholder, the ``enter send · … ctrl+d
 exit`` bar, and while it works a spinner line ``status: processing ·
 <model> <effort>`` with ``press esc to interrupt`` in the footer (a failed
-turn leaves ``status: failed · …``). The model is not a CLI flag: it comes
-from ``MODEL`` in the environment or ``~/.deepcode/settings.json`` (under
-``env``). A permission dialog (live, 0.3.1) replaces the input box: the
-spinner line reads ``status: ask_permission`` above a box with ``Permission
-required 1/1``, the tool and its command, ``Do you want to proceed?`` and
-``> 1. Yes`` / ``2. No``.
+turn leaves ``status: failed · …``). The model and the effort are not CLI
+flags: Deep Code reads them from ``DEEPCODE_``-prefixed variables in its
+environment (``DEEPCODE_MODEL``, ``DEEPCODE_REASONING_EFFORT``), which win
+over ``~/.deepcode/settings.json``; an unprefixed ``MODEL`` counts only
+inside that file's ``env`` block (0.3.1). A permission dialog (live, 0.3.1)
+replaces the input box: the spinner line reads ``status: ask_permission``
+above a box with ``Permission required 1/1``, the tool and its command,
+``Do you want to proceed?`` and ``> 1. Yes`` / ``2. No``.
 """
 
 from __future__ import annotations
@@ -37,6 +39,8 @@ class DeepCode(Runtime):
     # listed by /skills and in the model's skill catalog (0.3.1).
     skill_dirs = (".agents/skills",)
     models = ("deepseek-v4-flash", "deepseek-v4-pro")
+    # The levels its /model picker offers as "Thinking mode [max|high|low]" (0.3.1).
+    efforts = ("low", "high", "max")
 
     prompt_prefixes = (">",)
     runtime_markers = ("deep code", "type your message...", "/raw - toggle display mode")
@@ -77,8 +81,16 @@ class DeepCode(Runtime):
         lowered = sanitize_pane_content(pane_content).lower()
         return next((f for f in self.placeholder_fragments if f in lowered), None)
 
-    def launch_env(self, model: str | None) -> dict[str, str]:
-        return {"MODEL": model} if model else {}
+    def effort_args(self, effort: str | None) -> list[str]:
+        return []  # no flag: the effort travels in the environment (launch_env)
+
+    def launch_env(self, model: str | None, effort: str | None = None) -> dict[str, str]:
+        env = {"DEEPCODE_MODEL": model} if model else {}
+        if effort:
+            # The effort is sent only in thinking mode, as the picker's
+            # "Thinking mode [<effort>]" turns it on.
+            env.update(DEEPCODE_REASONING_EFFORT=effort, DEEPCODE_THINKING_ENABLED="true")
+        return env
 
     def user_instructions(self, env, project=None):
         # Read when the project has neither ./.deepcode/AGENTS.md nor ./AGENTS.md (0.3.1).
