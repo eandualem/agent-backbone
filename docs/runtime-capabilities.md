@@ -38,6 +38,7 @@ claims support that the adapter's code does not declare.
 | Non-empty user-level instruction file detected | ✅ | ✅ | ✅ | ✅ files listed under `instructions` in its config not checked | ✅ | ? no default user-level file per its docs; not yet verified | n/a |
 | CLI-native memory disabled or detected | ✅ managed settings not read | ✅ managed config and the `[memories]` switches not read | ✅ | n/a | n/a | ? not yet verified | n/a |
 | State reported by the runtime (hooks) | ✅ | ✅ from its first prompt (the brief): Codex runs no hook before its first turn | ✅ | ✅ | ❌ read from the terminal only | ❌ read from the terminal only | n/a |
+| Interrupted turn reads idle (Escape, refused dialog) | ✅ from the terminal: Claude Code runs no hook on an interrupt | ✅ | ❌ a declined dialog runs no hook | ✅ | ? read from the terminal only | ? not verified live | n/a |
 | Steer and high-priority events into a working agent | ✅ | ✅ | ❌ | ✅ as a user message in the running turn, after the next tool call | ❌ | ❌ | n/a |
 | Permission dialog detected and alerted | ✅ | ✅ | ✅ | ✅ | ✅ | ? markers not verified live | n/a |
 | Permission dialog answered (agent approve) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
@@ -76,6 +77,7 @@ claims support that the adapter's code does not declare.
 | Non-empty user-level instruction file detected | Check the CLI's user-level instruction file by hand. |
 | CLI-native memory disabled or detected | Turn the CLI's own memory off in its settings. |
 | State reported by the runtime (hooks) | State is read from the terminal, which is slower and less certain. |
+| Interrupted turn reads idle (Escape, refused dialog) | An interrupted agent may keep reading busy or waiting; check the session (`agent attach`). |
 | Steer and high-priority events into a working agent | Send an ordinary message; it waits until the agent is at its prompt. |
 | Permission dialog detected and alerted | Watch the session (`agent attach`) for dialogs. |
 | Permission dialog answered (agent approve) | Answer the dialog in the session (`agent attach`). |

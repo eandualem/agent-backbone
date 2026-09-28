@@ -101,6 +101,20 @@ for (const step of JSON.parse(steps)) {
     await status("old", step === "old-busy" ? "busy" : "idle");
   } else if (step === "pause") {
     await new Promise((resolve) => setTimeout(resolve, 20));
+  } else if (step === "interrupt") {
+    // Escape in the TUI (live, 1.18.32): the reply is aborted, then the turn ends.
+    await hook.event({ event: { type: "session.error",
+      properties: { sessionID: "s", error: { name: "MessageAbortedError" } } } });
+    await status("s", "idle");
+    await hook.event({ event: { type: "session.idle", properties: { sessionID: "s" } } });
+  } else if (step === "ask" || step === "reject") {
+    // A permission dialog, then Reject (live, 1.18.32): the turn ends.
+    const type = step === "ask" ? "permission.asked" : "permission.replied";
+    await hook.event({ event: { type, properties: { sessionID: "s", id: "p", requestID: "p" } } });
+    if (step === "reject") {
+      await status("s", "idle");
+      await hook.event({ event: { type: "session.idle", properties: { sessionID: "s" } } });
+    }
   } else if (step === "failed-subtask") {
     await hook["tool.execute.after"]({ tool: "task", sessionID: "s", callID: "c" }, undefined);
   } else {
@@ -122,7 +136,8 @@ def _opencode(tmp_path, steps: list[str], *, reply: str = "ok") -> dict:
     """Drive the shipped OpenCode plugin with Node and a stand-in OpenCode client:
     ``busy`` (the agent's session works), ``request`` (and a model request of
     its turn), ``tool`` / ``mcp-tool`` (a tool call ends), ``failed-subtask`` (a
-    call ends without a result), ``idle`` (the turn ends), or ``child-tool`` /
+    call ends without a result), ``idle`` (the turn ends), ``interrupt`` (Escape
+    ends it), ``ask`` / ``reject`` (a permission dialog, refused), or ``child-tool`` /
     ``child-idle`` for a resumed subagent, ``old-busy`` / ``old-idle`` for the
     agent's own session resumed while its parent lookup is pending. ``marks``
     and ``states`` are the state record's ``prompted_at`` and state after each step."""

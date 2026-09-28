@@ -160,6 +160,7 @@ SessionEnd record expires; stale permission requests are not revived:
 | `PreToolUse AskUserQuestion` | `waiting_for_human` / `question` |
 | `PostToolUse` of either | `busy` |
 | `PermissionDenied` | no state change; a `permission_denied` record in the action log (see the refusal alert in [Telegram](telegram.md)) |
+| none on an interrupted turn (Escape, or a refused dialog) | read from the terminal instead (below) |
 | `SessionEnd` | `unknown` |
 
 | Codex event | State written |
@@ -220,6 +221,16 @@ drawn by the runtime itself: Claude
 Code fires `SessionStart` with its resume picker still on screen, so a
 fresh `idle` is checked against the terminal and a dialog there wins
 (`waiting_for_human` / `question`, with the evidence saying so).
+
+Claude Code runs no hook when a person interrupts its turn: Escape while it
+works, or Escape or "No" at a permission dialog, which is the key `agent deny`
+sends (measured on 2.1.284). Its `busy` or `waiting_for_human` record would
+stand until it goes stale. So once that record is a few seconds old, a Claude
+Code terminal whose latest output is `⎿  Interrupted · What should Claude do
+instead?`, with nothing working and no dialog on screen, reads `idle`, and the
+evidence says the interrupt on screen beats the hook's record. Codex (its
+`Interrupt` hook) and OpenCode (`session.idle`) report an interrupted turn
+themselves.
 
 Runtime-specific capacity, quota and rate-limit banners produce `blocked`
 with `reason: provider`, preserving the error and retry/reset detail. This

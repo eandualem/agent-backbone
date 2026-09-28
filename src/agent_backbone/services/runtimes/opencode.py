@@ -36,8 +36,10 @@ class OpenCode(Runtime):
     aliases = ("open-code", "open_code")
     binary = "opencode"
     brief_mode = "initial_prompt"
+    # An interrupted turn, or a rejected permission, ends in session.status
+    # idle and session.idle (live, 1.18.32): its plugin reports it.
     declared_capabilities = frozenset(
-        {"observed-model", "project-instructions", "request-diagnostics"}
+        {"observed-model", "project-instructions", "request-diagnostics", "interrupted-turn"}
     )
     model_tags = True
 

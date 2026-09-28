@@ -280,6 +280,13 @@ class Runtime:
     """Anchored error-banner patterns for provider capacity, quota or rate limits."""
     provider_error_prefixes: tuple[str, ...] = ()
     """Runtime error glyphs distinguish banners from ordinary response text."""
+    interrupt_patterns: tuple[str, ...] = ()
+    """Anchored patterns for the line a runtime leaves when a person interrupts
+    its turn and no hook reports it. Empty: the hooks report interrupts, and
+    the terminal is not read for one while a hook state is fresh."""
+    notice_fragments: tuple[str, ...] = ()
+    """Fragments of the notices a runtime draws at the right edge above its
+    input box, which may follow an interrupt line (lowercase)."""
     prompt_markers: tuple[str, ...] = ()
     """Fragments shown when the runtime is asking the human a yes/no question."""
     approve_keys: tuple[str, ...] = ()
@@ -650,6 +657,54 @@ class Runtime:
             # A later response/tool output means the earlier error is history.
             return None
         return None
+
+    def detect_interrupted(self, pane_content: str) -> bool:
+        """Whether the prompt is back because a person interrupted the turn.
+
+        The interrupt line must head the latest output above the prompt, with
+        nothing working and no dialog on screen: a newer turn below it is
+        history. A block's head starts at most two columns in. Below it may
+        follow only its own wrap (indented to its text, joined before
+        matching) and known notices (``notice_fragments``) ending two columns
+        short of the input box's border, as Claude Code draws them (live
+        captures, 80 to 202 columns). Any other line is newer output.
+        """
+        if not self.interrupt_patterns or not self.detect_idle(pane_content):
+            return False
+        lines = [sanitize_pane_content(raw).rstrip() for raw in pane_content.splitlines()]
+        # Blank padding may fill the pane above the input box.
+        lines = [line for line in lines if line.strip()][-40:]
+        prompt = max(
+            (i for i, line in enumerate(lines) if line.lstrip().startswith(self.prompt_prefixes)),
+            default=None,
+        )
+        above = lines[:prompt]
+        border = next((len(line) for line in reversed(above) if is_box_line(line.strip())), None)
+        below: list[str] = []
+        for line in reversed(above):
+            text = line.strip()
+            if is_box_line(text) or self._is_status_chrome_line(text):
+                continue
+            indent = len(line) - len(line.lstrip(" "))
+            if indent > 2:
+                below.insert(0, line)
+                continue
+            head = re.match(r"\s*\S+\s+", line)
+            column = head.end() if head else indent
+            notices = False
+            for more in below:
+                if (
+                    border is not None
+                    and len(more) == border - 2
+                    and any(fragment in more.lower() for fragment in self.notice_fragments)
+                ):
+                    notices = True
+                elif notices or len(more) - len(more.lstrip(" ")) != column:
+                    return False
+                else:
+                    text += " " + more.strip()
+            return any(re.match(pattern, text) for pattern in self.interrupt_patterns)
+        return False
 
     def diagnostics(self, pane_content: str) -> tuple[RuntimeDiagnostic, ...]:
         """Recognized terminal observations; they never make a delivery/state decision."""
