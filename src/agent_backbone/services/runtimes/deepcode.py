@@ -75,23 +75,26 @@ class DeepCode(Runtime):
     def provider_failure(self, pane_content: str) -> str | None:
         """The failure Deep Code's own status line reports above the input box.
 
-        The line starts at the left edge and wraps onto unindented lines in a
-        narrow pane; replies and echoed prompts are indented, so a reply
-        quoting an error never matches. The next turn replaces the line
-        (``status: processing``, then ``status: completed``).
+        The line starts at the left edge; replies and echoed prompts are
+        indented, so a reply quoting an error never matches, and the next
+        turn replaces the line (``status: processing``, then ``status:
+        completed``). It wraps down to the separator: at a space in a narrow
+        pane, or mid-word where the pane is narrower than the text.
         """
-        status, wrapping = "", False
-        for line in sanitize_pane_content(pane_content).splitlines()[-25:]:
+        parts: list[str] = []
+        wrapping = False
+        for line in sanitize_pane_content(pane_content).rstrip().splitlines()[-25:]:
             text = line.strip()
             if line.startswith("status: "):
-                status, wrapping = text, True
-            elif wrapping and text and not line[0].isspace() and not is_box_line(text):
-                status += " " + text
+                parts, wrapping = [text], True
+            elif wrapping and text and not is_box_line(text):
+                parts.append(text)
             else:
                 wrapping = False
-        for pattern in self.provider_error_patterns:
-            if match := re.match(pattern, status):
-                return match.group(1)[:500]
+        for status in (" ".join(parts), "".join(parts)):
+            for pattern in self.provider_error_patterns:
+                if match := re.match(pattern, status):
+                    return match.group(1)[:500]
         return None
 
     def detect_prompt(self, pane_content: str) -> str | None:

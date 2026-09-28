@@ -149,21 +149,30 @@ def _deepcode_pane(status: str, reply: str = "") -> str:
 def test_deepcode_status_line_failure_is_blocked(error):
     reply = f" ✦ Request failed: {error} [type: invalid_request_error]\n"
     status = f"status: failed · deepseek-v4-flash max · fail: {error} [type: invalid_request_error]"
-    snapshot = infer_state_from_pane(_deepcode_pane(status, reply), "deepcode")
+    # A tall pane leaves blank rows below Deep Code's footer.
+    snapshot = infer_state_from_pane(_deepcode_pane(status, reply) + "\n" * 40, "deepcode")
     assert snapshot.state == AgentState.BLOCKED and snapshot.reason == "provider"
     assert snapshot.detail == f"{error} [type: invalid_request_error]"
 
 
-def test_deepcode_status_line_wrapped_in_a_narrow_pane():
-    status = (
-        "status: failed · deepseek-v4-flash max · fail: HTTP 429: Rate Limit Reached\n"
-        "[type: invalid_request_error, request ID: req-0123, trace ID:\n"
-        "0123456789abcdef]"
-    )
-    assert RUNTIMES["deepcode"].provider_failure(_deepcode_pane(status)) == (
-        "HTTP 429: Rate Limit Reached [type: invalid_request_error, request ID: req-0123, "
-        "trace ID: 0123456789abcdef]"
-    )
+@pytest.mark.parametrize(
+    "status,detail",
+    [
+        (  # 80 columns: Deep Code wraps at spaces
+            "status: failed · deepseek-v4-flash max · fail: HTTP 429: Rate Limit Reached\n"
+            "[type: invalid_request_error, request ID: req-0123, trace ID:\n"
+            "0123456789abcdef]",
+            "HTTP 429: Rate Limit Reached [type: invalid_request_error, request ID: req-0123, "
+            "trace ID: 0123456789abcdef]",
+        ),
+        (  # 50 columns: the terminal splits a word
+            "status: failed · deepseek-v4-flash max · fail: HTT\nP 429: Rate Limit Reached",
+            "HTTP 429: Rate Limit Reached",
+        ),
+    ],
+)
+def test_deepcode_status_line_wrapped_in_a_narrow_pane(status, detail):
+    assert RUNTIMES["deepcode"].provider_failure(_deepcode_pane(status)) == detail
 
 
 @pytest.mark.parametrize(
