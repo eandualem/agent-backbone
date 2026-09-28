@@ -272,7 +272,12 @@ async def _get_agent_state(
             if runtime.interrupt_patterns:
                 if pane_content is None:
                     pane_content = await capture_pane(session)
+                latest = None
                 if pane_content and runtime.detect_interrupted(pane_content):
+                    # A turn that began while the pane was read keeps its
+                    # record: its hook writes before the runtime redraws.
+                    latest = read_state_file(state_dir, session)
+                if latest is not None and latest.timestamp == push.timestamp:
                     interrupted = replace(
                         push,
                         state=AgentState.IDLE,

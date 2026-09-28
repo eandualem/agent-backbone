@@ -176,6 +176,18 @@ async def test_the_interrupt_waits_for_a_newly_submitted_prompt_to_be_drawn(tmp_
     assert snapshot.state == AgentState.BUSY
 
 
+async def test_a_turn_that_starts_while_the_pane_is_read_keeps_its_record(tmp_path):
+    _busy(tmp_path, 10)
+
+    async def new_turn_meanwhile(session):
+        _busy(tmp_path, 0)  # its hook records the prompt before the screen redraws
+        return CLAUDE_INTERRUPTED
+
+    with patch(f"{_INF}.capture_pane", new_turn_meanwhile):
+        snapshot = await get_agent_state(tmp_path, "desk", runtime_hint="claude")
+    assert snapshot.state == AgentState.BUSY
+
+
 async def test_the_runtime_named_by_the_hook_record_is_enough(tmp_path):
     _busy(tmp_path, 10, runtime="claude")
     with patch(f"{_INF}.capture_pane", AsyncMock(return_value=CLAUDE_INTERRUPTED)):
