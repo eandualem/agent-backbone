@@ -147,7 +147,8 @@ function appendAction(t, action) {
   );
 }
 
-// sessionID -> the model its last completed reply came from, in this process.
+// sessionID -> the model its last completed reply came from, in this process;
+// a session resumed by a new process keeps the one its state file holds.
 const models = new Map();
 
 function record(t, event, state, reason, extra = {}) {
@@ -166,6 +167,7 @@ function record(t, event, state, reason, extra = {}) {
   };
   if (current.session_id && !out.session_id) out.session_id = current.session_id;
   if (models.has(out.session_id)) out.model = models.get(out.session_id);
+  else if (current.model && current.session_id === out.session_id) out.model = current.model;
   if (current.last_message !== undefined && out.last_message === undefined) {
     out.last_message = current.last_message;
   }

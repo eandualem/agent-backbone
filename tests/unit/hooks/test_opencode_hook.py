@@ -70,6 +70,37 @@ await hook.event({event: {type: "session.idle", properties: {sessionID: "root"}}
     assert (state["runtime"], state["model"]) == ("opencode", "acme/large")
 
 
+def test_a_resumed_opencode_session_keeps_its_observed_model(tmp_path):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to exercise the JavaScript plugin")
+    plugin = tmp_path / "hook.mjs"
+    plugin.write_text(hook_source("opencode_hook.js").read_text())
+    state = tmp_path / "app.json"
+    saved = {"runtime": "opencode", "session_id": "root", "model": "acme/large"}
+    state.write_text(json.dumps(saved))
+    script = """
+const { AgentBackbone } = await import(process.argv[1]);
+const hook = await AgentBackbone();
+await hook.event({event: {type: "session.status", properties: {
+    sessionID: process.argv[2], status: {type: "busy"}
+}}});
+"""
+    env = {**os.environ, "BACKBONE_AGENT": "app", "BACKBONE_STATE_DIR": str(tmp_path)}
+    for session in ("root", "another"):
+        subprocess.run(
+            [node, "--input-type=module", "-e", script, plugin.as_uri(), session],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if session == "root":
+            assert json.loads(state.read_text())["model"] == "acme/large"
+    assert "model" not in json.loads(state.read_text())
+
+
 def test_plugin_uses_shared_parser_and_acknowledges_only_success(tmp_path):
     node = shutil.which("node")
     if node is None:
