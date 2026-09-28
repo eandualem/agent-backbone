@@ -298,6 +298,7 @@ class Gemini(Runtime):
             output_tokens=count(tokens, "output") + thoughts,
             reasoning_tokens=thoughts,
             context_tokens=count(tokens, "input"),
+            coverage="partial" if state.get("partial") else "measured",
         )
 
     transcript_supported = True

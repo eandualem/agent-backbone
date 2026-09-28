@@ -333,6 +333,13 @@ async def test_gemini_response_counts_once_with_its_subagents(tmp_path, db, monk
     assert parent["coverage"] == "measured"
 
 
+def test_gemini_usage_after_an_unreadable_record_is_partial(tmp_path):
+    path = tmp_path / "session.jsonl"
+    append(path, gemini("g1"), dict(gemini("g2"), tokens="invalid"), gemini("g3"))
+    batch = read_usage_jsonl(path, 0, {}, RUNTIMES["gemini"].parse_usage)
+    assert [e.coverage for e in batch.events] == ["measured", "partial"]
+
+
 async def test_persistence_after_restart_and_partial_correction(tmp_path):
     from agent_backbone.services.database import BackboneDB
 
