@@ -132,6 +132,7 @@ _B4 = "live: #271 batch 4 (scratch probe)"
 _PROVENANCE = "live: #273 post-fix round 3 (forged briefs declined)"
 _FRESH = "live: #290 post-fix probe (stale brief retired, current brief first)"
 _RESUME = "live: #273 post-fix probe (resume and compaction)"
+_GEMINI_STUB = "live: #302 (Gemini CLI 0.46 against a local API stub)"
 _LAUNCH = "tests/unit/services/runtimes/test_launch_commands.py"
 _NO_MODEL = "a plain shell runs no model"
 _USER_FILES = "tests/unit/services/runtimes/test_user_instructions.py"
@@ -155,7 +156,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: True,
         claude=_ok(_B3),
         codex=_ok(_B3),
-        gemini=_unverified(302, note="not verified live"),
+        gemini=_ok(_GEMINI_STUB),
         opencode=_ok(_B3),
         deepcode=_ok("live: checked during development (Deep Code 0.3.1)"),
         aider=_unverified(302, note="not verified live"),
@@ -185,7 +186,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: rt.brief_mode != "none",
         claude=_ok(_B3),
         codex=_ok(_FRESH),
-        gemini=_unverified(302),
+        gemini=_ok(_GEMINI_STUB),
         opencode=_ok(_B3),
         deepcode=_unverified(302),
         aider=_unverified(302, note="not verified live"),
@@ -303,7 +304,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: bool(rt.prompt_markers),
         claude=_ok("tests/unit/services/runtimes/test_live_panes.py"),
         codex=_ok("tests/unit/services/runtimes/test_live_panes.py"),
-        gemini=_unverified(302, note="markers not verified live"),
+        gemini=_ok("tests/unit/services/runtimes/test_live_panes.py"),
         opencode=_ok("tests/unit/services/runtimes/test_live_panes.py"),
         deepcode=_ok("tests/unit/services/runtimes/test_live_panes.py"),
         aider=_unverified(302, note="markers not verified live"),
@@ -459,8 +460,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: bool(rt.skill_dirs),
         claude=_ok("tests/unit/test_skills.py"),
         codex=_ok("tests/unit/api/routes/test_api_skills.py"),
-        gemini=_unverified(302, note="linked by the shared code; not tested for this runtime"),
-        opencode=_unverified(302, note="linked by the shared code; not tested for this runtime"),
+        gemini=_ok("tests/unit/test_skills.py", "live-checked: it lists the linked skills (0.46)"),
+        opencode=_ok("tests/unit/test_skills.py"),
         deepcode=_ok("tests/unit/api/routes/test_api_skills.py"),
         aider=_gap(282),
         shell=_na(_NO_MODEL),
@@ -515,7 +516,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=_declared("observed-model"),
         claude=_ok("tests/unit/hooks/test_claude_hook.py"),
         codex=_ok("tests/unit/hooks/test_codex_hook.py"),
-        gemini=_unverified(302),
+        gemini=_ok("tests/unit/hooks/test_gemini_hook.py"),
         opencode=_ok("tests/unit/hooks/test_opencode_hook.py"),
         deepcode=_gap(275, "no hook state"),
         aider=_gap(275, "no hook state"),
@@ -585,7 +586,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: True,
         claude=_ok(_VALIDATE, "live-checked from its bash mode (2.1.283)"),
         codex=_ok(_VALIDATE, "live-checked through its sandbox (0.157.1)"),
-        gemini=_unverified(302, _UNMEASURED),
+        gemini=_ok(_GEMINI_STUB, "live-checked from a shell tool call (0.46)"),
         opencode=_unverified(302, _UNMEASURED),
         deepcode=_unverified(302, _UNMEASURED),
         aider=_unverified(302, _UNMEASURED),

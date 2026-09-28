@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from agent_backbone import skills
+from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.skills import (
     EXCLUDE_BEGIN,
     EXCLUDE_END,
@@ -373,6 +374,17 @@ class TestMaterialize:
             EXCLUDE_END,
         ]
         assert manifest.is_file()
+
+    @pytest.mark.parametrize("runtime", ["gemini", "opencode"])
+    def test_links_into_the_runtimes_own_directory(self, tmp_path, runtime):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        manifest = manifest_path(tmp_path / "data", "app")
+        selected = select_skills(read_store(store), (), "app")
+        result = materialize(store, repo, RUNTIMES[runtime].skill_dirs, selected, manifest)
+        assert result.ok and result.linked == [".agents/skills/a"]
+        assert (repo / ".agents" / "skills" / "a" / "SKILL.md").is_file()
 
     def test_a_changed_directory_releases_links_in_the_recorded_checkout(self, tmp_path):
         """`agent set NAME dir=…`: the checkout the agent left keeps only others' links."""

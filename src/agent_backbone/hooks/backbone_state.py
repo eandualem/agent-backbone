@@ -426,16 +426,16 @@ def observed_model(payload: dict, current: dict | None, event: str) -> str | Non
     """The model the runtime is actually answering with, when it can be known.
 
     No CLI puts the model in its hook payload today (Claude Code 2.1.267
-    measured 2026-09-10), but Claude Code names the transcript, and every
-    assistant entry there carries ``"model": "…"``. The tail of that file is
-    read on the events that follow a reply; other events carry the last
-    observation forward. A payload ``model`` field, if one appears, wins.
+    measured 2026-09-10), but Claude Code and Gemini CLI name the transcript,
+    and every reply entry there carries ``"model": "…"``. The tail of that
+    file is read on the events that follow a reply; other events carry the
+    last observation forward. A payload ``model`` field, if one appears, wins.
     """
     current = current or {}
     direct = payload.get("model")
     if isinstance(direct, str) and direct.strip() and not direct.startswith("<"):
         return direct.strip()
-    if event in ("Stop", "SessionStart", "UserPromptSubmit"):
+    if event in ("Stop", "SessionStart", "UserPromptSubmit", "AfterAgent"):
         transcript = payload.get("transcript_path")
         if isinstance(transcript, str) and transcript:
             found = _model_from_transcript(Path(transcript))
@@ -445,7 +445,8 @@ def observed_model(payload: dict, current: dict | None, event: str) -> str | Non
 
 
 def _model_from_transcript(path: Path) -> str | None:
-    """The last Claude assistant record's model, never a nested tool argument."""
+    """The last reply record's model, never a nested tool argument: Claude
+    Code's ``assistant`` message, or Gemini CLI's ``gemini`` record (0.46)."""
     try:
         with path.open("rb") as stream:
             stream.seek(0, os.SEEK_END)
@@ -462,10 +463,15 @@ def _model_from_transcript(path: Path) -> str | None:
             record = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(record, dict) or record.get("type") != "assistant":
+        if not isinstance(record, dict):
             continue
-        message = record.get("message")
-        model = message.get("model") if isinstance(message, dict) else None
+        if record.get("type") == "assistant":
+            message = record.get("message")
+            model = message.get("model") if isinstance(message, dict) else None
+        elif record.get("type") == "gemini":
+            model = record.get("model")
+        else:
+            continue
         if isinstance(model, str) and 0 < len(model) <= 120 and not any(c in model for c in "<>"):
             return model
     return None

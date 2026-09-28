@@ -278,13 +278,13 @@ without its owner; `--details` includes full model/repository names, tags,
 replies and activity times.
 
 Model is the model the agent is **actually answering with** when its runtime's
-hook could observe it (Claude Code: read from the transcript after each reply;
-shown bold), otherwise the saved selection, otherwise `default` — the CLI's own
-choice, which the backbone has not seen. `--details` names the source. Tags are
-the group tags that select policies and skills (`backbone agent tag`); swarm
-identity tags are implied by the grouping. Work shows the current issue,
-repository, configured description or, failing those, the directory name; an
-offline agent's saved issue is labelled `Last:`.
+hook could observe it (Claude Code and Gemini CLI: read from the transcript
+after each reply; shown bold), otherwise the saved selection, otherwise
+`default` — the CLI's own choice, which the backbone has not seen. `--details`
+names the source. Tags are the group tags that select policies and skills
+(`backbone agent tag`); swarm identity tags are implied by the grouping. Work
+shows the current issue, repository, configured description or, failing those,
+the directory name; an offline agent's saved issue is labelled `Last:`.
 
 Agents needing attention appear first, then busy, starting and idle agents.
 A divider separates offline agents. States have colors as well as text labels;
