@@ -297,7 +297,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         "interrupted-turn",
         "Interrupted turn reads idle (Escape, refused dialog)",
         "src/agent_backbone/services/agents/_inference.py",
-        fallback="The state is corrected when the hook state goes stale (5 minutes).",
+        fallback="An interrupted agent may keep reading busy or waiting; "
+        "check the session (`agent attach`).",
         implemented=lambda rt: (
             bool(rt.interrupt_patterns) or "interrupted-turn" in rt.declared_capabilities
         ),

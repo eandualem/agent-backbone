@@ -77,7 +77,7 @@ claims support that the adapter's code does not declare.
 | Non-empty user-level instruction file detected | Check the CLI's user-level instruction file by hand. |
 | CLI-native memory disabled or detected | Turn the CLI's own memory off in its settings. |
 | State reported by the runtime (hooks) | State is read from the terminal, which is slower and less certain. |
-| Interrupted turn reads idle (Escape, refused dialog) | The state is corrected when the hook state goes stale (5 minutes). |
+| Interrupted turn reads idle (Escape, refused dialog) | An interrupted agent may keep reading busy or waiting; check the session (`agent attach`). |
 | Steer and high-priority events into a working agent | Send an ordinary message; it waits until the agent is at its prompt. |
 | Permission dialog detected and alerted | Watch the session (`agent attach`) for dialogs. |
 | Permission dialog answered (agent approve) | Answer the dialog in the session (`agent attach`). |

@@ -658,24 +658,36 @@ class Runtime:
     def detect_interrupted(self, pane_content: str) -> bool:
         """Whether the prompt is back because a person interrupted the turn.
 
-        The interrupt line must be the latest output above the prompt, with
-        nothing working and no dialog on screen: an interrupt with a newer turn
-        below it is history. Right-aligned notices drawn above the input box
-        are skipped.
+        The interrupt line must head the latest output above the prompt, with
+        nothing working and no dialog on screen: a newer turn below it is
+        history. A block's head starts at most two columns in; a line indented
+        further continues the block above it (a narrow pane's wrap, joined to
+        the head) or is a notice drawn at the right edge (skipped).
         """
         if not self.interrupt_patterns or not self.detect_idle(pane_content):
             return False
-        lines = [sanitize_pane_content(raw).rstrip() for raw in pane_content.splitlines()[-40:]]
+        lines = [sanitize_pane_content(raw).rstrip() for raw in pane_content.splitlines()]
+        # Blank padding may fill the pane above the input box.
+        lines = [line for line in lines if line.strip()][-40:]
         prompt = max(
             (i for i, line in enumerate(lines) if line.lstrip().startswith(self.prompt_prefixes)),
             default=None,
         )
+        below: list[str] = []
         for line in reversed(lines[:prompt]):
             text = line.strip()
-            if not text or is_box_line(text) or self._is_status_chrome_line(text):
+            if is_box_line(text) or self._is_status_chrome_line(text):
                 continue
-            if len(line) - len(line.lstrip(" ")) >= 20:
+            indent = len(line) - len(line.lstrip(" "))
+            if indent > 2:
+                below.insert(0, line)
                 continue
+            head = re.match(r"\s*\S+\s+", line)
+            column = head.end() if head else indent
+            for more in below:
+                if len(more) - len(more.lstrip(" ")) != column:
+                    break
+                text += " " + more.strip()
             return any(re.match(pattern, text) for pattern in self.interrupt_patterns)
         return False
 

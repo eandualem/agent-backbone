@@ -112,7 +112,25 @@ async def test_an_interrupted_turn_reads_idle(tmp_path, runtime, refused_dialog)
     assert snapshot.reason is None
 
 
-@pytest.mark.parametrize("pane", [CLAUDE_INTERRUPTED, CLAUDE_REFUSED], ids=["escape", "refused"])
+# A tall pane pads the space above the input box; a narrow one wraps the
+# line to its text column and draws a notice with little indentation.
+CLAUDE_PADDED = CLAUDE_INTERRUPTED.replace(f"{_BOX}\n", "\n" * 50 + f"{_BOX}\n", 1)
+CLAUDE_NARROW = (
+    "  ⎿ \u00a0Interrupted · What should Claude do\n"
+    "     instead?\n"
+    "      tmux focus-events off · add 'set -g focus-events on'\n"
+    f"{_BOX[:40]}\n"
+    "❯ \n"
+    f"{_BOX[:40]}\n"
+    "  ⏸ manual mode on · ? for shortcuts\n"
+)
+
+
+@pytest.mark.parametrize(
+    "pane",
+    [CLAUDE_INTERRUPTED, CLAUDE_REFUSED, CLAUDE_PADDED, CLAUDE_NARROW],
+    ids=["escape", "refused", "padded", "narrow"],
+)
 def test_claude_code_shows_the_interrupt_as_its_latest_output(pane):
     assert get_runtime("claude").detect_interrupted(pane)
 
