@@ -503,7 +503,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok("tests/unit/services/agents/test_provider_failures.py"),
         gemini=_gap(295),
         opencode=_ok("tests/unit/services/agents/test_provider_failures.py"),
-        deepcode=_gap(295),
+        deepcode=_ok("tests/unit/services/agents/test_provider_failures.py"),
         aider=_gap(295),
         shell=_na("a plain shell has no model provider"),
     ),

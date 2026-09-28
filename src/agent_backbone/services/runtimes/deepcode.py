@@ -17,6 +17,7 @@ above a box with ``Permission required 1/1``, the tool and its command,
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from agent_backbone.services.runtimes._pane import (
@@ -54,6 +55,11 @@ class DeepCode(Runtime):
         "status: failed",
     )
     busy_markers = ("status: processing", "press esc to interrupt")
+    # A failed request leaves "status: failed · deepseek-v4-flash max · fail:
+    # HTTP 429: Rate Limit Reached [type: …]" (live, 0.3.1, local error
+    # endpoint). DeepSeek documents 402 Insufficient Balance, 429 Rate Limit
+    # Reached and 503 Server Overloaded.
+    provider_error_patterns = (r"^status: failed · .*?· fail: (HTTP (?:402|429|503)\b.*)",)
     prompt_markers = ("permission required", "do you want to proceed?")
     # "1" picks Yes wherever the cursor is (live, 0.3.1); Enter would pick the
     # highlighted option, which a person may have moved to No.
@@ -65,6 +71,28 @@ class DeepCode(Runtime):
     def _is_status_chrome_line(self, line: str) -> bool:
         # The footer wraps at narrow widths and leaves "exit" alone on a line.
         return super()._is_status_chrome_line(line) or line.strip().lower() == "exit"
+
+    def provider_failure(self, pane_content: str) -> str | None:
+        """The failure Deep Code's own status line reports above the input box.
+
+        The line starts at the left edge and wraps onto unindented lines in a
+        narrow pane; replies and echoed prompts are indented, so a reply
+        quoting an error never matches. The next turn replaces the line
+        (``status: processing``, then ``status: completed``).
+        """
+        status, wrapping = "", False
+        for line in sanitize_pane_content(pane_content).splitlines()[-25:]:
+            text = line.strip()
+            if line.startswith("status: "):
+                status, wrapping = text, True
+            elif wrapping and text and not line[0].isspace() and not is_box_line(text):
+                status += " " + text
+            else:
+                wrapping = False
+        for pattern in self.provider_error_patterns:
+            if match := re.match(pattern, status):
+                return match.group(1)[:500]
+        return None
 
     def detect_prompt(self, pane_content: str) -> str | None:
         """Like the base scan, but the input box wraps: continuation lines are

@@ -224,7 +224,9 @@ fresh `idle` is checked against the terminal and a dialog there wins
 Runtime-specific capacity, quota and rate-limit banners produce `blocked`
 with `reason: provider`, preserving the error and retry/reset detail. This
 requires an error banner glyph or red error foreground, so ordinary response
-text repeating the provider's words does not block delivery. This
+text repeating the provider's words does not block delivery. Deep Code reports
+a failed request on its own status line instead (`status: failed · … · fail:
+HTTP 429: …`), which counts for HTTP 402, 429 and 503. This
 overrides an idle hook or stale terminal fallback; fresh busy hooks remain
 authoritative. Later response/tool output clears terminal-only failure evidence.
 Messages stay queued, including priority messages. The monitor alerts humans,
