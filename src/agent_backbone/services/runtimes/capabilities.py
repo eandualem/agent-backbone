@@ -159,6 +159,7 @@ _INBOX_ONLY = "tests/unit/services/test_inbox_only_agents.py"
 _NO_CLI = "runs no CLI; the recorded runtime makes no difference"
 _HINT = "tests/unit/api/routes/test_api_messages.py"
 _QUEUE_ONLY = "read from the queue, the same for every runtime"
+_INTERRUPTED = "tests/unit/services/agents/test_interrupted_turn.py"
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
@@ -291,6 +292,22 @@ CAPABILITIES: tuple[Capability, ...] = (
         deepcode=_gap(note="read from the terminal only"),
         aider=_gap(note="read from the terminal only"),
         shell=_na("a plain shell has no agent turn to report"),
+    ),
+    _row(
+        "interrupted-turn",
+        "Interrupted turn reads idle (Escape, refused dialog)",
+        "src/agent_backbone/services/agents/_inference.py",
+        fallback="The state is corrected when the hook state goes stale (5 minutes).",
+        implemented=lambda rt: (
+            bool(rt.interrupt_patterns) or "interrupted-turn" in rt.declared_capabilities
+        ),
+        claude=_ok(_INTERRUPTED, "from the terminal: Claude Code runs no hook on an interrupt"),
+        codex=_ok(_INTERRUPTED),
+        gemini=_gap(note="a declined dialog runs no hook"),
+        opencode=_ok(_INTERRUPTED),
+        deepcode=_unverified(note="read from the terminal only"),
+        aider=_unverified(note="not verified live"),
+        shell=_na("a plain shell has no agent turn to interrupt"),
     ),
     _row(
         "steer",

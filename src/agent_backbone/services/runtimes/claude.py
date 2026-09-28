@@ -196,6 +196,10 @@ class ClaudeCode(Runtime):
         r"^(?:error:\s*)?(?:credit balance is too low|rate limit (?:reached|exceeded))\b",
     )
     provider_error_prefixes = ("⎿", "✕")
+    # Escape while a turn runs, or refusing its permission dialog, ends the
+    # turn with no hook event (2.1.284: no Stop, StopFailure,
+    # PostToolUseFailure or Notification) and leaves this line (live captures).
+    interrupt_patterns = (r"⎿\s+Interrupted · What should Claude do instead\?$",)
     prompt_markers = (
         "do you want to proceed?",
         "do you want to make this edit",

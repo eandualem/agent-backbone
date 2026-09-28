@@ -280,6 +280,10 @@ class Runtime:
     """Anchored error-banner patterns for provider capacity, quota or rate limits."""
     provider_error_prefixes: tuple[str, ...] = ()
     """Runtime error glyphs distinguish banners from ordinary response text."""
+    interrupt_patterns: tuple[str, ...] = ()
+    """Anchored patterns for the line a runtime leaves when a person interrupts
+    its turn and no hook reports it. Empty: the hooks report interrupts, and
+    the terminal is not read for one while a hook state is fresh."""
     prompt_markers: tuple[str, ...] = ()
     """Fragments shown when the runtime is asking the human a yes/no question."""
     approve_keys: tuple[str, ...] = ()
@@ -650,6 +654,30 @@ class Runtime:
             # A later response/tool output means the earlier error is history.
             return None
         return None
+
+    def detect_interrupted(self, pane_content: str) -> bool:
+        """Whether the prompt is back because a person interrupted the turn.
+
+        The interrupt line must be the latest output above the prompt, with
+        nothing working and no dialog on screen: an interrupt with a newer turn
+        below it is history. Right-aligned notices drawn above the input box
+        are skipped.
+        """
+        if not self.interrupt_patterns or not self.detect_idle(pane_content):
+            return False
+        lines = [sanitize_pane_content(raw).rstrip() for raw in pane_content.splitlines()[-40:]]
+        prompt = max(
+            (i for i, line in enumerate(lines) if line.lstrip().startswith(self.prompt_prefixes)),
+            default=None,
+        )
+        for line in reversed(lines[:prompt]):
+            text = line.strip()
+            if not text or is_box_line(text) or self._is_status_chrome_line(text):
+                continue
+            if len(line) - len(line.lstrip(" ")) >= 20:
+                continue
+            return any(re.match(pattern, text) for pattern in self.interrupt_patterns)
+        return False
 
     def diagnostics(self, pane_content: str) -> tuple[RuntimeDiagnostic, ...]:
         """Recognized terminal observations; they never make a delivery/state decision."""

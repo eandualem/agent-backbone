@@ -45,6 +45,13 @@ the five minutes a hook state is trusted for.
 """
 
 
+INTERRUPT_SETTLE_SECONDS = 3.0
+"""How old a ``busy`` or ``waiting_for_human`` hook state must be before an
+interrupt on screen may overrule it. A runtime may redraw after its hook has
+recorded a new prompt; until then an earlier interrupt is still the latest
+line on screen."""
+
+
 def _fresh_window(snapshot: StateSnapshot, stale_threshold: float) -> float:
     if snapshot.state == AgentState.STARTING:
         return min(stale_threshold, STARTING_TRUST_SECONDS)
@@ -255,6 +262,34 @@ async def _get_agent_state(
         ]
         if push.reason:
             push.evidence.append(f"reason: {push.reason}")
+        if push.state in (AgentState.BUSY, AgentState.WAITING_FOR_HUMAN) and (
+            push_age >= INTERRUPT_SETTLE_SECONDS
+        ):
+            # A runtime whose hooks miss an interrupted turn (Claude Code:
+            # Escape, or a refused dialog) is back at its prompt: the screen
+            # says so, and the record would stand until it goes stale.
+            runtime = get_runtime(runtime_hint or push.runtime)
+            if runtime.interrupt_patterns:
+                if pane_content is None:
+                    pane_content = await capture_pane(session)
+                if pane_content and runtime.detect_interrupted(pane_content):
+                    interrupted = replace(
+                        push,
+                        state=AgentState.IDLE,
+                        reason=None,
+                        detail=None,
+                        prompt_ref=None,
+                        plan_file=None,
+                        plan_title=None,
+                        source="pull",
+                        timestamp=time.time(),
+                        evidence=[
+                            *push.evidence,
+                            f"terminal shows the turn was interrupted ({runtime.id})",
+                            f"the interrupt on screen beats the hook's '{push.state.value}'",
+                        ],
+                    )
+                    return _with_diagnostics(interrupted, pane_content, runtime_hint)
         if push.state == AgentState.IDLE:
             # The one thing a hook cannot see: a dialog drawn by the runtime
             # itself (Claude Code's resume picker arrives after SessionStart

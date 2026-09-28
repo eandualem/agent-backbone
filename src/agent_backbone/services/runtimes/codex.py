@@ -132,6 +132,9 @@ class Codex(Runtime):
             "deep-review",
             "message-authority",
             "observed-model",
+            # Escape, while working or at an approval dialog, runs its
+            # Interrupt hook (live, codex-cli 0.157.1).
+            "interrupted-turn",
         }
     )
     models = ("gpt-5.6-sol", "gpt-6-astra")  # as shown by codex's own status line (live capture)
