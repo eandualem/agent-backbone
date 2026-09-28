@@ -23,6 +23,7 @@ LSOF = (
 TREES = {
     "claude": {900: 810, 810: 500, 500: 1},  # backbone <- zsh <- claude (pane) <- tmux
     "codex": {900: 820, 820: 815, 815: 500, 500: 1},  # <- shell <- helper <- codex (pane)
+    "opencode": {900: 500, 500: 1},  # backbone <- opencode (pane), from its bash tool
     "shell": {900: 500, 500: 1},  # a command typed at the pane's own shell
 }
 

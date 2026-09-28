@@ -59,7 +59,6 @@ REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
         ("bounded-unattended", "opencode", 285),
         ("auto-review", "opencode", 293),
         ("message-authority", "opencode", 294),
-        ("message-validate", "opencode", 302),
         ("deep-review", "opencode", 288),
     }
 )
@@ -621,7 +620,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok(_VALIDATE, "live-checked from its bash mode (2.1.283)"),
         codex=_ok(_VALIDATE, "live-checked through its sandbox (0.157.1)"),
         gemini=_ok(_GEMINI_STUB, "live-checked from a shell tool call (0.46)"),
-        opencode=_unverified(302, _UNMEASURED),
+        opencode=_ok(_VALIDATE, "live-checked from a bash tool call (1.18.32)"),
         deepcode=_unverified(note=_UNMEASURED),
         aider=_unverified(note=_UNMEASURED),
         shell=_ok(_VALIDATE, "live-checked"),
