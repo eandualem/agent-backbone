@@ -3,8 +3,10 @@ rejected with the runtime's own keys, on every required runtime (#278).
 
 Claude Code's hook sees its ``ExitPlanMode`` call. Codex's ``Stop`` hook reads
 the turn's ``<proposed_plan>`` from its rollout, and Codex asks "Implement this
-plan?" in a dialog of its own. The Codex screens are trimmed live captures
-(codex-cli 0.157.1); Claude Code's plan is its hook's, so no screen is read.
+plan?" in a dialog of its own. OpenCode's plugin sees ``plan_exit`` ask whether
+to build (with ``OPENCODE_EXPERIMENTAL_PLAN_MODE``). The screens are trimmed
+live captures (codex-cli 0.157.1, OpenCode 1.18.32); Claude Code's plan is its
+hook's, so no screen is read.
 """
 
 import json
@@ -16,7 +18,7 @@ from agent_backbone.hooks import claude_hook, codex_hook
 from agent_backbone.services.agents import AgentState, get_agent_state, plan_control, read_plan
 from agent_backbone.services.runtimes import get_runtime
 from tests.unit.hooks.test_codex_hook import PLAN, codex_rollout
-from tests.unit.hooks.test_context import _run
+from tests.unit.hooks.test_context import _opencode, _run
 from tests.unit.services.runtimes.test_live_panes import CODEX_PERMISSION_DIALOG
 
 _LAUNCH = "agent_backbone.services.agents.launch"
@@ -55,11 +57,28 @@ CODEX_STILL_PLANNING = (
     "  stub-model medium · /tmp/work                                  Plan mode\n"
 )
 
-SCREENS = {"claude": "", "codex": CODEX_PLAN_DIALOG}
+OPENCODE_PLAN_DIALOG = (
+    "     ⚙ plan_exit\n"
+    "\n"
+    "     ▣  Plan · Stub main\n"
+    "  ┃\n"
+    "  ┃  Plan at .opencode/plans/1790649185339-quiet-nebula.md is complete. Would you\n"
+    "  ┃  like to switch to the build agent and start implementing?\n"
+    "  ┃\n"
+    "  ┃  1. Yes\n"
+    "  ┃     Switch to build agent and start implementing the plan\n"
+    "  ┃  2. No\n"
+    "  ┃     Stay with plan agent to continue refining the plan\n"
+    "  ┃\n"
+    "  ┃  ↑↓ select  enter submit  esc dismiss\n"
+)
+
+SCREENS = {"claude": "", "codex": CODEX_PLAN_DIALOG, "opencode": OPENCODE_PLAN_DIALOG}
 
 KEYS = {
     "claude": {"approve": ("Escape", "[Z"), "reject": ("Escape",)},
     "codex": {"approve": ("1",), "reject": ("3",)},
+    "opencode": {"approve": ("1",), "reject": ("2",)},
 }
 
 RUNTIMES = tuple(KEYS)
@@ -77,6 +96,10 @@ def _present_plan(runtime, tmp_path):
     if runtime == "claude":
         payload = {"tool_name": "ExitPlanMode", "tool_input": {"plan": PLAN}}
         _run(claude_hook, tmp_path, {"hook_event_name": "PreToolUse", "session_id": "s", **payload})
+        return
+    if runtime == "opencode":
+        (tmp_path / "proposed.md").write_text(PLAN)
+        _opencode(tmp_path, ["busy", "plan"])
         return
     reply = f"Here is the plan.\n\n<proposed_plan>\n{PLAN}\n</proposed_plan>\n"
     for event, extra in (
@@ -164,3 +187,17 @@ def test_codex_tells_its_plan_dialog_from_a_permission_prompt():
     assert codex.detect_plan_dialog(CODEX_PLAN_DIALOG)
     assert not codex.detect_plan_dialog(CODEX_PERMISSION_DIALOG)
     assert not codex.detect_plan_dialog(CODEX_STILL_PLANNING)
+
+
+@pytest.mark.parametrize(
+    ("answer", "state"), [("plan-yes", AgentState.BUSY), ("plan-no", AgentState.IDLE)]
+)
+async def test_an_opencode_plan_answered_in_the_terminal_is_no_longer_pending(
+    tmp_path, answer, state
+):
+    (tmp_path / "proposed.md").write_text(PLAN)
+    assert _opencode(tmp_path, ["busy", "plan", answer])["states"][-1] == state.value
+
+
+def test_another_opencode_question_is_not_a_plan(tmp_path):
+    assert _opencode(tmp_path, ["busy", "question"])["states"][-1] == AgentState.BUSY.value

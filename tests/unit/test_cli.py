@@ -167,6 +167,37 @@ class TestDoctor:
         assert code == 1
         assert "FAIL setting skills.store" in out and "backbone config set skills.store" in out
 
+    def test_names_each_opencode_agent_whose_plans_ask_for_no_approval(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """#278: OpenCode asks to approve a plan only with its experimental flag."""
+        for flag in ("OPENCODE_EXPERIMENTAL_PLAN_MODE", "OPENCODE_EXPERIMENTAL"):
+            monkeypatch.delenv(flag, raising=False)
+        assert _run(["init"]) == 0
+        with (
+            patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
+            patch(
+                "agent_backbone.services.agents.launch.start_agent",
+                new_callable=AsyncMock,
+                return_value=StartResult(ok=True, ready="ready", evidence=()),
+            ),
+            patch(_DETECT_REPO, new_callable=AsyncMock, return_value=None),
+        ):
+            for name in ("planner", "builder"):
+                (tmp_path / name).mkdir()
+                argv = ["agent", "start", name, "--dir", str(tmp_path / name)]
+                assert _run([*argv, "--runtime", "opencode"]) == 0
+        env = '{"OPENCODE_EXPERIMENTAL_PLAN_MODE": "1"}'
+        assert _run(["agent", "set", "planner", f"env={env}"]) == 0
+        capsys.readouterr()
+        with patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"):
+            _run(["doctor"])
+        out = " ".join(capsys.readouterr().out.split())  # a long note wraps
+        assert (
+            "'builder': plan approval is unavailable until OPENCODE_EXPERIMENTAL_PLAN_MODE" in out
+        )
+        assert "'planner': plan approval" not in out
+
 
 class TestAgentCommands:
     @pytest.fixture(autouse=True)

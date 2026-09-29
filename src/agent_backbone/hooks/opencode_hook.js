@@ -6,7 +6,10 @@
 // OpenCode 1.18 in its TUI: `session.status` carries {type: "busy" | "idle"},
 // `session.idle` ends a turn, `permission.asked` / `permission.replied`
 // bracket a permission dialog. (`opencode run` exits before plugin handlers
-// finish; the backbone only starts the TUI.)
+// finish; the backbone only starts the TUI.) With OPENCODE_EXPERIMENTAL_PLAN_MODE
+// the plan agent ends a plan with `plan_exit`, which asks "Plan at <file> is
+// complete. Would you like to switch to the build agent…?" (`question.asked`,
+// answered by `question.replied` / `question.rejected`; 1.18.32).
 //
 // Writes the same <state_dir>/<agent>.json the Python hooks write. Only the
 // root session counts: sessions with a parentID are OpenCode's own subagents.
@@ -34,6 +37,7 @@ const STATE_IDLE = "idle";
 const STATE_BUSY = "busy";
 const STATE_WAITING = "waiting_for_human";
 const REASON_PERMISSION = "permission";
+const REASON_PLAN = "plan";
 async function shellActions(command, cwd, phase) {
   // Reuse the shipped stdlib parser; never interpret quoted examples as commands.
   try {
@@ -143,6 +147,21 @@ function writeState(t, record) {
   }
 }
 
+// The plan `plan_exit` asks about: the file its question names, relative to the
+// worktree, saved where the backbone reads plans (<state_dir>/plans/).
+function savePlan(t, question, root) {
+  const match = /^Plan at (.+?) is complete\./.exec(question ?? "");
+  let text = "";
+  try {
+    if (match) text = fs.readFileSync(path.resolve(root, match[1]), "utf8");
+  } catch { /* shown untitled; the question still waits for an answer */ }
+  const title = text.split("\n").map((line) => line.trim().replace(/^#+/, "").trim()).find(Boolean);
+  const file = path.join(t.dir, "plans", `${t.agent}.md`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+  return { plan_file: file, plan_title: (title ?? "Untitled plan").slice(0, 120) };
+}
+
 function appendAction(t, action) {
   fs.mkdirSync(t.dir, { recursive: true });
   fs.appendFileSync(
@@ -198,11 +217,12 @@ function record(t, event, state, reason, extra = {}) {
   writeState(t, out);
 }
 
-export const AgentBackbone = async ({ client, directory } = {}) => {
+export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
   const t = target();
   if (!t) return {};
   const children = new Set(); // subagent sessions, never the agent's own state
-  const pending = new Set(); // permission requests waiting for an answer
+  const pending = new Set(); // permission and plan requests waiting for an answer
+  const planCalls = new Set(); // plan_exit calls whose question is still to come
   const turns = new Map(); // sessionID -> what drives its turn: agent, model, ...
   const roots = new Set(); // sessions known to have no parent
   const working = new Set(); // sessions busy in a turn right now
@@ -356,12 +376,28 @@ export const AgentBackbone = async ({ client, directory } = {}) => {
           if (pending.size === 0) record(t, event.type, STATE_BUSY, null, { session_id: p.sessionID });
           return;
         }
+        case "question.asked": {
+          // Only plan_exit's question is a plan decision; the agent's own session asked it.
+          if (!planCalls.delete(p.tool?.callID)) return;
+          pending.add(p.id);
+          const plan = savePlan(t, p.questions?.[0]?.question, worktree ?? directory ?? process.cwd());
+          record(t, event.type, STATE_WAITING, REASON_PLAN, { session_id: p.sessionID, ...plan });
+          return;
+        }
+        case "question.replied":
+        case "question.rejected": {
+          if (!pending.delete(p.requestID)) return;
+          if (pending.size === 0) record(t, event.type, STATE_BUSY, null, { session_id: p.sessionID });
+          return;
+        }
         default:
           return;
       }
     },
     "tool.execute.before": async (input, output) => {
-      if (isChild(input?.sessionID) || input?.tool !== "bash") return;
+      if (isChild(input?.sessionID)) return;
+      if (input?.tool === "plan_exit") planCalls.add(input.callID);
+      if (input?.tool !== "bash") return;
       const command = output?.args?.command;
       if (typeof command !== "string") return;
       for (const action of await shellActions(command, directory ?? process.cwd(), "intent")) appendAction(t, action);

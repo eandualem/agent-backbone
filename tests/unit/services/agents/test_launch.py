@@ -369,7 +369,7 @@ class TestDenyAgent:
         assert outcome == "rejected"
         assert [c.args for c in keys.await_args_list] == [("ike", "Escape")]
 
-    @pytest.mark.parametrize("runtime", ["opencode", "gemini", "deepcode", "aider", "shell"])
+    @pytest.mark.parametrize("runtime", ["gemini", "deepcode", "aider", "shell"])
     async def test_other_runtimes_get_no_keys_at_all(self, runtime):
         with (
             patch(f"{_MOD}.session_exists", return_value=True),

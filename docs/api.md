@@ -557,8 +557,9 @@ agent — `POST /api/plans/{name}/approve`, `/reject {"feedback"}`,
 `/respond {"input"}`.
 
 Approve and reject send the agent's **runtime's own** plan keys
-(`Runtime.plan_approve_keys` / `plan_reject_keys`; Claude Code, and Codex in
-Plan mode). A
+(`Runtime.plan_approve_keys` / `plan_reject_keys`: Claude Code, Codex in
+Plan mode, and OpenCode's plan agent when `OPENCODE_EXPERIMENTAL_PLAN_MODE` is
+set in the agent's environment). A
 runtime without a plan mode the backbone can drive answers **409** and
 nothing is typed. The response text (`/respond`) is a `plan_response`
 delivery through `safe_deliver`: it goes in only while the agent is
@@ -567,7 +568,7 @@ number at an idle prompt would be a new instruction), is recorded like
 every other delivery, and is never queued — a 409 names the outcome.
 `not_waiting` occurs only here, never on `POST /api/messages`. Rejection
 feedback is not a plan response: it is sent *after* the plan is declined
-(Claude Code leaves plan mode; Codex stays in Plan mode and revises the
+(Claude Code leaves plan mode; Codex and OpenCode stay in it and revise the
 plan), as an ordinary `direct_message` (enveloped, queued if the agent is busy); the
 reply's `feedback` field is its outcome.
 

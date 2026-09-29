@@ -306,7 +306,7 @@ class Runtime:
     drive, and every plan action is refused as unsupported — nothing is typed."""
     plan_reject_keys: tuple[str, ...] = ()
     """tmux key names that decline the plan so feedback can follow as a message
-    (Claude Code leaves plan mode; Codex stays in it and revises the plan)."""
+    (Claude Code leaves plan mode; Codex and OpenCode stay in it)."""
     plan_markers: tuple[str, ...] = ()
     """Fragments of the dialog in which the runtime asks to approve its plan,
     all of them present (lowercase). Such a dialog is a plan decision, not a
@@ -972,6 +972,12 @@ class Runtime:
             if not await send_keys(session_name, key):
                 return False
         return True
+
+    def plan_approval_needs(self, env: dict[str, str]) -> str | None:
+        """What an agent's environment (its ``env``, then the backbone's) lacks
+        before its plans ask for approval, when the runtime's plan step is
+        optional; None when nothing is missing."""
+        return None
 
     @property
     def supports_plan_control(self) -> bool:
