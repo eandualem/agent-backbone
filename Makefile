@@ -22,8 +22,8 @@ clean: ## Remove generated artifacts
 # ─── Run ─────────────────────────────────────────────────
 
 dev: ## Run the backbone with auto-reload on its own tmux server
-	mkdir -p $(DEV_TMUX_TMPDIR)
-	env -u TMUX -u TMUX_PANE TMUX_TMPDIR=$(DEV_TMUX_TMPDIR) uv run backbone up --reload
+	mkdir -p "$(DEV_TMUX_TMPDIR)"
+	env -u TMUX -u TMUX_PANE "TMUX_TMPDIR=$(DEV_TMUX_TMPDIR)" uv run backbone up --reload
 
 up: ## Run the backbone detached in a tmux session
 	uv run backbone up --detach
