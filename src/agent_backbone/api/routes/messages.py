@@ -270,7 +270,8 @@ async def steer(
     if report.outcome == "offered":
         detail = (
             f"Offered to {report.session}'s current turn; its hook hands it over on the next "
-            f"tool call, or it is recorded as not_taken when the turn ends or after "
+            f"tool call (on Codex, when a long-running command exits), or it is recorded "
+            f"as not_taken when the turn ends or after "
             f"{STEER_TTL_SECONDS}s "
             f"(delivery {report.delivery_id})."
         )

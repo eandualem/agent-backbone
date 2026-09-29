@@ -317,7 +317,8 @@ hook as a transient offer — never a queue row, never a paste. Accepted only
 when the registered agent is `agent_working` on a runtime whose hook can add
 context (Claude Code, Codex, OpenCode) in a session the backbone started; the offer is
 written for that session only (`<state_dir>/context/<agent>/<launch_id>/`)
-and the hook returns it as `additionalContext` on the next tool call (OpenCode's
+and the hook returns it as `additionalContext` on the next tool call, or on Codex
+when a long-running command exits (OpenCode's
 plugin adds it to the running turn as a user message after that call), with the
 envelope `[via:backbone from:<from_entity>] (steer for your current task) …`.
 

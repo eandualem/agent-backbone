@@ -100,10 +100,12 @@ conversation, and are retired only when delivered.
 2. An agent that is **working** never gets a paste into its busy terminal —
    that invariant stands. Instead the batch is queued *and* offered to the
    agent through its runtime's hook: Claude Code and Codex run the backbone's
-   hook on every tool call, and the hook returns the batch as
+   hook after each tool call (Codex after a command only once it has exited),
+   and the hook returns the batch as
    `additionalContext`; OpenCode's plugin adds it to the running turn as a user
    message after each tool call. Either way the event reaches the model on its
-   next tool call (seconds, mid-task) without touching the terminal. The next queue drain
+   next tool call (seconds, mid-task; on Codex, when a long-running command
+   exits) without touching the terminal. The next queue drain
    sees that the hook took it, records the delivery with source
    `hook-context`, and pastes nothing. If the agent reaches its prompt first,
    the drain withdraws the offer and pastes normally. Whoever renames the
