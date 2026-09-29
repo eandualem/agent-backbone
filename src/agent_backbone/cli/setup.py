@@ -239,7 +239,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     from agent_backbone.config import invalid_settings
     from agent_backbone.services.database.engine import redact_url
     from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
-    from agent_backbone.services.runtimes import agent_clis, install_hint, unavailable
+    from agent_backbone.services.runtimes import (
+        agent_clis,
+        install_hint,
+        unavailable,
+        verified_versions,
+    )
 
     ok = True
 
@@ -331,6 +336,19 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             if gaps:
                 print_table(
                     "Unavailable on installed runtimes", ("CLI", "Capability (issue)"), gaps
+                )
+            # What depends on the CLI's own dialogs, keys or hooks, and the version it was
+            # verified on: a newer CLI may have changed it (#356).
+            verified = [
+                (runtime_id, version, ", ".join(ids))
+                for runtime_id in found
+                for version, ids in verified_versions(runtime_id).items()
+            ]
+            if verified:
+                print_table(
+                    "Verified on a CLI version (check again after upgrading)",
+                    ("CLI", "Verified on", "Capability"),
+                    verified,
                 )
             note("    details: `backbone docs runtime-capabilities`")
 

@@ -121,6 +121,19 @@ class TestDoctor:
         assert code == 0
         assert "All good" in capsys.readouterr().out
 
+    def test_lists_the_cli_version_capabilities_were_verified_on(self, monkeypatch, capsys):
+        """#356: a CLI release can change the dialog, key or hook a capability relies on."""
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        assert _run(["init"]) == 0
+        with (
+            patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"),
+            patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
+        ):
+            assert _run(["doctor"]) == 0
+        out = capsys.readouterr().out
+        assert "Verified on a CLI version" in out
+        assert "2.1.284" in out and "plan-approval" in out and "not recorded" in out
+
     def test_no_agent_cli_is_a_problem_that_names_them(self, tmp_path, monkeypatch, capsys):
         """A newcomer must not read "All good." and then fail at `agent start` (#260)."""
         monkeypatch.setenv("BACKBONE_API_KEY", "k")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -12,8 +13,10 @@ from agent_backbone.services.runtimes.capabilities import (
     REQUIRED,
     REQUIRED_BASELINE,
     UNAVAILABLE,
+    VERSION_NOT_RECORDED,
     markdown_table,
     unavailable,
+    verified_versions,
 )
 
 _ROOT = Path(__file__).parents[4]
@@ -161,6 +164,45 @@ def test_every_supported_cell_cites_evidence_for_that_runtime(cap):
         assert path.exists(), f"{where}: {cell.evidence}"
         if path.parts[len(_ROOT.parts)] == "tests":
             assert runtime_id in path.read_text(), f"{where}: {cell.evidence} never names it"
+
+
+# Supported cells on CLI-dependent rows whose verification noted no CLI version when
+# versions were first recorded (#356). Entries are only ever removed, by checking
+# the cell again and recording the version.
+INITIAL_VERSION_NOT_RECORDED = {
+    ("browser-group-name", "claude"),
+    ("provider-failure", "codex"),
+    ("provider-failure", "opencode"),
+    ("trust", "gemini"),
+}
+
+
+def test_the_unrecorded_versions_never_grow():
+    assert VERSION_NOT_RECORDED <= INITIAL_VERSION_NOT_RECORDED
+
+
+@_ROWS
+def test_a_cli_dependent_cell_names_the_cli_version_it_was_verified_on(cap):
+    for runtime_id, cell in cap.cells.items():
+        where = f"{cap.id}/{runtime_id}"
+        unrecorded = (cap.id, runtime_id) in VERSION_NOT_RECORDED
+        # A plain shell has no CLI whose release could change it.
+        versioned = RUNTIMES[runtime_id].binary is not None
+        if cap.cli_dependent and cell.status == "supported" and versioned:
+            assert bool(cell.verified_on) != unrecorded, (
+                f"{where}: name the CLI version it was verified on (only)"
+            )
+            if cell.verified_on:
+                assert re.fullmatch(r"\d+\.\d+(\.\d+)?", cell.verified_on), where
+        else:
+            assert not cell.verified_on and not unrecorded, f"{where}: no version applies"
+
+
+def test_verified_versions_groups_a_runtimes_cells_by_version():
+    claude = verified_versions("claude")
+    assert "plan-approval" in claude["2.1.284"] and "browser-group-name" in claude["not recorded"]
+    assert list(claude)[0] == "2.1.284" and list(claude)[-1] == "not recorded"  # newest first
+    assert verified_versions("shell") == {}
 
 
 def test_unavailable_lists_gaps_unverified_cells_and_exceptions():
