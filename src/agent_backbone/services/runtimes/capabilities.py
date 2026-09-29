@@ -362,7 +362,14 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: rt.hook_context,
         cli_dependent=True,
         claude=_ok("tests/unit/hooks/test_context.py", verified_on="2.1.284"),
-        codex=_ok("tests/unit/hooks/test_context.py", verified_on="0.157.1"),
+        codex=_ok(
+            "tests/unit/hooks/test_context.py",
+            note=(
+                "a command still running when its call returns hands it over "
+                "when it exits (0.157.1)"
+            ),
+            verified_on="0.157.1",
+        ),
         gemini=_gap(),
         opencode=_ok(
             "tests/unit/hooks/test_context.py",

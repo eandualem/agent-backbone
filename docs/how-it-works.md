@@ -324,7 +324,7 @@ sequenceDiagram
   both do so as hook context, never as a paste. A steer is written for the
   live session only (`<state_dir>/context/<agent>/<launch_id>/`), is never
   queued for a later prompt, and is recorded as `handed_off`, `not_taken`
-  (the turn ended, or 300 s without another tool call) or `cancelled` (the session was replaced).
+  (the turn ended first, or nothing took it within 300 s, checked every 15 s) or `cancelled` (the session was replaced).
 - **Comments**, including those on the current issue, wait while the agent is
   starting, busy, blocked, or waiting for a human. They are queued and delivered
   when the agent is ready; priority does not bypass these conditions.
@@ -443,7 +443,7 @@ reference per message — id, sender, subject, time, link — never the body.
 Normal batches grow in the queue while the agent is busy and never expire;
 a high batch for a working Claude Code, Codex or OpenCode agent is offered
 through the runtime's hook (PostToolUse; OpenCode's plugin) and arrives on the
-agent's next tool call.
+agent's next tool call, or on Codex when a long-running command exits.
 
 ## 5. Background monitoring
 

@@ -200,7 +200,11 @@ async def steer_agent(
         delivery_id,
         operation_id,
         launch_id,
-        [*evidence, f"offered to launch {launch_id}; the hook hands it over on the next tool call"],
+        [
+            *evidence,
+            f"offered to launch {launch_id}; the hook hands it over on the next tool call "
+            "(on Codex, when a long-running command exits)",
+        ],
     )
 
 

@@ -317,7 +317,8 @@ hook as a transient offer — never a queue row, never a paste. Accepted only
 when the registered agent is `agent_working` on a runtime whose hook can add
 context (Claude Code, Codex, OpenCode) in a session the backbone started; the offer is
 written for that session only (`<state_dir>/context/<agent>/<launch_id>/`)
-and the hook returns it as `additionalContext` on the next tool call (OpenCode's
+and the hook returns it as `additionalContext` on the next tool call, or on Codex
+when a long-running command exits (OpenCode's
 plugin adds it to the running turn as a user message after that call), with the
 envelope `[via:backbone from:<from_entity>] (steer for your current task) …`.
 
@@ -331,7 +332,7 @@ envelope `[via:backbone from:<from_entity>] (steer for your current task) …`.
 `failed` (the offer could not be written). Status lives in the delivery log
 (`kind` `steer`, `GET /api/deliveries?kind=steer&session=app`, `agent inspect`):
 `offered` → `handed_off` once the hook took it, `not_taken` when the turn
-ended first or no further tool call took it within 300 s (the offer is removed), or `cancelled` when the
+ended first or nothing took it within 300 s, checked every 15 s (the offer is removed), or `cancelled` when the
 session was replaced first. At-most-once handoff; a handoff is not
 incorporation. `404` for an unregistered agent; `422` for a sender that does
 not fit the envelope.
