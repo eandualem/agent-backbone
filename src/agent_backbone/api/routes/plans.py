@@ -20,7 +20,6 @@ from agent_backbone.api.models import (
     ListEnvelope,
     PlanDetail,
     PlanRejectRequest,
-    PlanRespondRequest,
 )
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import agent_state, listable_sessions, plan_control, read_plan
@@ -163,7 +162,7 @@ async def reject_plan(
 
 
 @router.post("/plans/{session}/respond", deprecated=True)
-async def respond_to_plan(session: str, body: PlanRespondRequest):
+async def respond_to_plan(session: str):
     """Deprecated (#357): answers 409 and types nothing.
 
     No shipped runtime's plan dialog takes a typed answer: Claude Code,

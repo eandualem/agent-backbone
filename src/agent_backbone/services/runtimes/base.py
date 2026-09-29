@@ -819,12 +819,25 @@ class Runtime:
         return any(marker in text for marker in self.choice_markers)
 
     def detect_plan_dialog(self, pane_content: str) -> bool:
-        """Whether the active dialog asks to approve a plan (see ``plan_markers``),
-        read from the dialog's own text as ``detect_choice_dialog`` reads it."""
+        """Whether the active dialog asks to approve a plan (see ``plan_markers``).
+
+        Only the latest dialog counts: the options around the last selection
+        cursor and the few lines introducing them. Plan text further up the
+        pane (an earlier plan dialog) must never turn a permission prompt
+        into a plan, whose approve key would then allow it."""
         if not self.plan_markers or not self.detect_active_dialog(pane_content):
             return False
-        above, options = self._dialog_block(pane_content)
-        text = " ".join([*above[-4:], *options]).lower()
+        lines = [ln.strip() for ln in sanitize_pane_content(pane_content).splitlines()]
+        lines = [ln for ln in lines[-24:] if ln and not is_box_line(ln)]
+        cursors = [i for i, line in enumerate(lines) if DIALOG_CURSOR_RE.match(line)]
+        if not cursors:
+            return False
+        first = last = cursors[-1]
+        while first > 0 and DIALOG_OPTION_RE.match(lines[first - 1]):
+            first -= 1
+        while last + 1 < len(lines) and DIALOG_OPTION_RE.match(lines[last + 1]):
+            last += 1
+        text = " ".join(lines[max(0, first - 4) : last + 1]).lower()
         return all(marker in text for marker in self.plan_markers)
 
     def dialog_summary(self, pane_content: str, *, limit: int = 300) -> str:

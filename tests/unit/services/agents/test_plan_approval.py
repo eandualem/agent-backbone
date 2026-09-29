@@ -18,7 +18,10 @@ from agent_backbone.services.agents import AgentState, get_agent_state, plan_con
 from agent_backbone.services.runtimes import get_runtime
 from tests.unit.hooks.test_codex_hook import PLAN, codex_rollout
 from tests.unit.hooks.test_context import _opencode, _run
-from tests.unit.services.runtimes.test_live_panes import CODEX_PERMISSION_DIALOG
+from tests.unit.services.runtimes.test_live_panes import (
+    CLAUDE_PERMISSION_DIALOG,
+    CODEX_PERMISSION_DIALOG,
+)
 
 _LAUNCH = "agent_backbone.services.agents.launch"
 
@@ -253,11 +256,20 @@ async def test_codex_plan_keys_wait_for_the_dialog_on_screen():
     keys.assert_not_awaited()
 
 
-def test_codex_tells_its_plan_dialog_from_a_permission_prompt():
-    codex = get_runtime("codex")
-    assert codex.detect_plan_dialog(CODEX_PLAN_DIALOG)
-    assert not codex.detect_plan_dialog(CODEX_PERMISSION_DIALOG)
-    assert not codex.detect_plan_dialog(CODEX_STILL_PLANNING)
+@pytest.mark.parametrize(
+    ("runtime", "plan", "permission", "answered"),
+    [
+        ("claude", CLAUDE_PLAN_DIALOG, CLAUDE_PERMISSION_DIALOG, CLAUDE_REJECTED),
+        ("codex", CODEX_PLAN_DIALOG, CODEX_PERMISSION_DIALOG, CODEX_STILL_PLANNING),
+    ],
+)
+def test_a_plan_dialog_is_told_from_a_permission_prompt(runtime, plan, permission, answered):
+    rt = get_runtime(runtime)
+    assert rt.detect_plan_dialog(plan)
+    assert not rt.detect_plan_dialog(permission)
+    assert not rt.detect_plan_dialog(answered)
+    # An earlier plan dialog above the prompt must not make approve allow it.
+    assert not rt.detect_plan_dialog(plan + permission)
 
 
 @pytest.mark.parametrize(
