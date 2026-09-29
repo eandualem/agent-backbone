@@ -348,52 +348,85 @@ class TestDenyAgent:
 
     """Plan approve/reject go through the runtime's own keys, or nowhere."""
 
-    async def test_claude_approve_sends_shift_tab(self):
-        with (
-            patch(f"{_MOD}.session_exists", return_value=True),
-            patch(f"{_MOD}.capture_pane", return_value="❯ \n"),
-            patch(f"{_BASE}.send_keys", return_value=True) as keys,
-        ):
-            outcome, evidence = await plan_control("ike", "approve", runtime="claude")
-        assert outcome == "approved"
-        assert [c.args for c in keys.await_args_list] == [("ike", "Escape"), ("ike", "[Z")]
-        assert evidence == ["sent Escape [Z to claude"]
+    # Claude Code 2.1.284's plan dialog (live capture, trimmed).
+    CLAUDE_PLAN = (
+        "   Exit plan mode?\n"
+        "    Claude wants to exit plan mode\n"
+        "    ❯ 1. Yes, and switch to default (ask each time) for this session\n"
+        "      2. No\n"
+    )
 
-    async def test_claude_reject_only_leaves_plan_mode(self):
+    async def test_claude_approve_chooses_yes(self):
         with (
             patch(f"{_MOD}.session_exists", return_value=True),
-            patch(f"{_MOD}.capture_pane", return_value="❯ \n"),
+            patch(f"{_MOD}.capture_pane", return_value=self.CLAUDE_PLAN),
             patch(f"{_BASE}.send_keys", return_value=True) as keys,
         ):
-            outcome, _ = await plan_control("ike", "reject", runtime="claude")
+            outcome, evidence = await plan_control(
+                "ike", "approve", runtime="claude", settle_seconds=0
+            )
+        assert outcome == "approved"
+        assert [c.args for c in keys.await_args_list] == [("ike", "1")]
+        assert evidence == ["sent 1 to claude; plan dialog still visible"]
+
+    async def test_claude_reject_declines_the_plan(self):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", side_effect=[self.CLAUDE_PLAN, "❯ \n"]),
+            patch(f"{_BASE}.send_keys", return_value=True) as keys,
+        ):
+            outcome, evidence = await plan_control(
+                "ike", "reject", runtime="claude", settle_seconds=0
+            )
         assert outcome == "rejected"
         assert [c.args for c in keys.await_args_list] == [("ike", "Escape")]
+        assert evidence == ["sent Escape to claude; plan dialog cleared"]
 
-    @pytest.mark.parametrize(
-        "runtime", ["codex", "opencode", "gemini", "deepcode", "aider", "shell"]
-    )
+    @pytest.mark.parametrize("runtime", ["gemini", "deepcode", "aider", "shell"])
     async def test_other_runtimes_get_no_keys_at_all(self, runtime):
         with (
             patch(f"{_MOD}.session_exists", return_value=True),
             patch(f"{_MOD}.capture_pane", return_value="› \n"),
             patch(f"{_BASE}.send_keys") as keys,
         ):
-            outcome, evidence = await plan_control("ike", "approve", runtime=runtime)
+            outcome, evidence = await plan_control(
+                "ike", "approve", runtime=runtime, settle_seconds=0
+            )
         assert outcome == "unsupported"
         assert "nothing was sent" in evidence[0]
         keys.assert_not_called()
 
-    async def test_partial_sequence_is_reported_not_hidden(self):
-        # Escape goes in, "[Z" is refused: plan mode was left without approval.
+    async def test_the_dialog_is_given_time_to_go_before_the_feedback(self):
+        """#355: a rejection's feedback reads the state right after the keys."""
         with (
             patch(f"{_MOD}.session_exists", return_value=True),
-            patch(f"{_MOD}.capture_pane", return_value="❯ \n"),
-            patch(f"{_BASE}.send_keys", side_effect=[True, False]),
+            patch(f"{_MOD}.capture_pane", side_effect=[self.CLAUDE_PLAN, "❯ \n"]),
+            patch(f"{_BASE}.send_keys", return_value=True),
+            patch(f"{_MOD}.asyncio.sleep", new_callable=AsyncMock) as sleep,
         ):
-            outcome, evidence = await plan_control("ike", "approve", runtime="claude")
+            await plan_control("ike", "reject", runtime="claude")
+        sleep.assert_awaited_once_with(1.0)
+
+    async def test_an_unreadable_screen_confirms_nothing(self):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", side_effect=[self.CLAUDE_PLAN, ""]),
+            patch(f"{_BASE}.send_keys", return_value=True),
+        ):
+            _, evidence = await plan_control("ike", "approve", runtime="claude", settle_seconds=0)
+        assert evidence == ["sent 1 to claude; the screen could not be read to confirm"]
+
+    async def test_a_refused_key_is_reported_not_hidden(self):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value=self.CLAUDE_PLAN),
+            patch(f"{_BASE}.send_keys", return_value=False),
+        ):
+            outcome, evidence = await plan_control(
+                "ike", "approve", runtime="claude", settle_seconds=0
+            )
         assert outcome == "failed"
-        assert "sent Escape but tmux refused [Z" in evidence[0]
-        assert "may have left plan mode" in evidence[0]
+        assert "tmux refused 1 after 0 of 1 keys" in evidence[0]
 
     async def test_offline_and_bad_action(self):
         with patch(f"{_MOD}.session_exists", return_value=False):

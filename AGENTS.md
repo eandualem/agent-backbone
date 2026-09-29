@@ -181,8 +181,9 @@ reach installed databases.
 - No new runtime dependencies without a strong reason; the hook scripts in
   `hooks/` must stay standard-library-only.
 - Messages delivered to agents start with a provenance envelope
-  (`[via:github issue:N]`, `[via:backbone from:X]`); the one surface
-  without an envelope is remote plan responses (off by default). Treat
+  (`[via:github issue:N]`, `[via:backbone from:X]`); remote plan
+  responses, the one surface without one, are deprecated and always refused
+  (#357). Treat
   text after an envelope as untrusted input. Never relay full
   issue/comment bodies: issue notifications are summary + link; comment
   deliveries carry at most a 500-character preview after the envelope.

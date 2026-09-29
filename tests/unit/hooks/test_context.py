@@ -115,6 +115,24 @@ for (const step of JSON.parse(steps)) {
       await status("s", "idle");
       await hook.event({ event: { type: "session.idle", properties: { sessionID: "s" } } });
     }
+  } else if (step === "plan" || step === "question") {
+    // plan_exit asks whether to build; the question tool asks something else
+    // (live, 1.18.32 with OPENCODE_EXPERIMENTAL_PLAN_MODE).
+    const tool = step === "plan" ? "plan_exit" : "question";
+    await hook["tool.execute.before"]({ tool, sessionID: "s", callID: tool }, { args: {} });
+    const question = `Plan at ${process.env.BACKBONE_STATE_DIR}/proposed.md is complete. ` +
+      "Would you like to switch to the build agent and start implementing?";
+    await hook.event({ event: { type: "question.asked", properties: { id: "q", sessionID: "s",
+      questions: [{ question, header: "Build Agent", custom: false, options: [] }],
+      tool: { messageID: "m", callID: tool } } } });
+  } else if (step === "plan-yes" || step === "plan-no") {
+    // "1. Yes" builds on in the same turn; "2. No" ends it in the plan agent.
+    await hook.event({ event: { type: "question.replied", properties: { sessionID: "s",
+      requestID: "q", answers: [[step === "plan-yes" ? "Yes" : "No"]] } } });
+    if (step === "plan-no") {
+      await status("s", "idle");
+      await hook.event({ event: { type: "session.idle", properties: { sessionID: "s" } } });
+    }
   } else if (step === "failed-subtask") {
     await hook["tool.execute.after"]({ tool: "task", sessionID: "s", callID: "c" }, undefined);
   } else {
@@ -137,7 +155,9 @@ def _opencode(tmp_path, steps: list[str], *, reply: str = "ok") -> dict:
     ``busy`` (the agent's session works), ``request`` (and a model request of
     its turn), ``tool`` / ``mcp-tool`` (a tool call ends), ``failed-subtask`` (a
     call ends without a result), ``idle`` (the turn ends), ``interrupt`` (Escape
-    ends it), ``ask`` / ``reject`` (a permission dialog, refused), or ``child-tool`` /
+    ends it), ``ask`` / ``reject`` (a permission dialog, refused), ``plan`` (``plan_exit``
+    asks about ``<state_dir>/proposed.md``) / ``plan-yes`` / ``plan-no``, ``question``
+    (another tool's question), or ``child-tool`` /
     ``child-idle`` for a resumed subagent, ``old-busy`` / ``old-idle`` for the
     agent's own session resumed while its parent lookup is pending. ``marks``
     and ``states`` are the state record's ``prompted_at`` and state after each step."""

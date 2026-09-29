@@ -28,7 +28,7 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import suppress
 from pathlib import Path
 
@@ -444,9 +444,9 @@ def observed_model(payload: dict, current: dict | None, event: str) -> str | Non
     return current.get("model") or None
 
 
-def _model_from_transcript(path: Path) -> str | None:
-    """The last reply record's model, never a nested tool argument: Claude
-    Code's ``assistant`` message, or Gemini CLI's ``gemini`` record (0.46)."""
+def transcript_records(path: Path) -> Iterator[dict]:
+    """The JSON records at the end of a JSONL transcript, newest first
+    (the last ``TRANSCRIPT_TAIL_BYTES``; nothing when it cannot be read)."""
     try:
         with path.open("rb") as stream:
             stream.seek(0, os.SEEK_END)
@@ -455,7 +455,7 @@ def _model_from_transcript(path: Path) -> str | None:
             stream.seek(start)
             tail = stream.read().decode("utf-8", "replace")
     except OSError:
-        return None
+        return
     if start:
         tail = tail.partition("\n")[2]  # the first record may be truncated
     for line in reversed(tail.splitlines()):
@@ -463,8 +463,14 @@ def _model_from_transcript(path: Path) -> str | None:
             record = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(record, dict):
-            continue
+        if isinstance(record, dict):
+            yield record
+
+
+def _model_from_transcript(path: Path) -> str | None:
+    """The last reply record's model, never a nested tool argument: Claude
+    Code's ``assistant`` message, or Gemini CLI's ``gemini`` record (0.46)."""
+    for record in transcript_records(path):
         if record.get("type") == "assistant":
             message = record.get("message")
             model = message.get("model") if isinstance(message, dict) else None

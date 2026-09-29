@@ -67,6 +67,40 @@ def _trust_stale_push(snapshot: StateSnapshot) -> bool:
     return False
 
 
+def _plan_by_dialog(
+    push: StateSnapshot, pane_content: str, runtime, *, settling: bool
+) -> StateSnapshot:
+    """A plan its runtime asks about in a dialog of its own (``plan_markers``:
+    Codex) is pending only while that dialog is on screen: a reply can quote
+    the plan's tag in ordinary output, and a person who answers in the terminal
+    and stays in plan mode runs no hook. Until the screen shows it answered
+    (the turn has just ended, or nothing conclusive is on screen) nothing may
+    be typed, and there is no plan to answer."""
+    if runtime.detect_plan_dialog(pane_content):
+        # The hook's timestamp stays the plan's identity (alerts, buttons).
+        return replace(
+            push, evidence=[*push.evidence, f"terminal shows the plan dialog ({runtime.id})"]
+        )
+    pull = infer_state_from_pane(pane_content, runtime.id)
+    if settling or pull.state == AgentState.UNKNOWN:
+        pull = StateSnapshot(
+            state=AgentState.BUSY,
+            evidence=[*pull.evidence, "the plan dialog may still be open: nothing is typed"],
+        )
+    return replace(
+        push,
+        state=pull.state,
+        reason=pull.reason,
+        detail=pull.detail,
+        prompt_ref=pull.prompt_ref,
+        plan_file=None,
+        plan_title=None,
+        source="pull",
+        timestamp=time.time(),
+        evidence=[*push.evidence, f"terminal shows no plan dialog ({runtime.id})", *pull.evidence],
+    )
+
+
 def infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) -> StateSnapshot:
     """Infer the agent state from visible terminal output (with evidence)."""
     return _with_diagnostics(
@@ -143,10 +177,12 @@ def _infer_state_from_pane(pane_content: str, runtime_hint: str | None = None) -
 
 
 def _dialog_snapshot(runtime, pane_content: str, prefix: list[str] | None = None) -> StateSnapshot:
-    """``waiting_for_human`` as read from the terminal: a known permission
-    prompt, or any dialog recognised by its numbered options."""
+    """``waiting_for_human`` as read from the terminal: a plan approval, a known
+    permission prompt, or any dialog recognised by its numbered options."""
     known = runtime.detect_permission_prompt(pane_content)
-    if runtime.detect_choice_dialog(pane_content):
+    if runtime.detect_plan_dialog(pane_content):
+        reason, seen = REASON_PLAN, "a plan approval dialog"
+    elif runtime.detect_choice_dialog(pane_content):
         reason, seen = REASON_QUESTION, "a choice dialog (Enter would pick, not allow)"
     elif known:
         reason, seen = REASON_PERMISSION, "a permission prompt"
@@ -295,6 +331,14 @@ async def _get_agent_state(
                         ],
                     )
                     return _with_diagnostics(interrupted, pane_content, runtime_hint)
+        if push.is_plan_waiting:
+            runtime = get_runtime(runtime_hint or push.runtime)
+            if runtime.plan_markers:
+                if pane_content is None:
+                    pane_content = await capture_pane(session)
+                settling = push_age < INTERRUPT_SETTLE_SECONDS
+                plan = _plan_by_dialog(push, pane_content or "", runtime, settling=settling)
+                return _with_diagnostics(plan, pane_content, runtime_hint)
         if push.state == AgentState.IDLE:
             # The one thing a hook cannot see: a dialog drawn by the runtime
             # itself (Claude Code's resume picker arrives after SessionStart
@@ -320,7 +364,8 @@ async def _get_agent_state(
                 return _with_diagnostics(blocked, pane_content, runtime_hint)
             if pane_content and runtime.detect_active_dialog(pane_content):
                 dialog = _dialog_snapshot(runtime, pane_content, prefix=push.evidence)
-                dialog.timestamp = time.time()
+                # A plan's identity (alerts, buttons) must not move at every read.
+                dialog.timestamp = push.timestamp if dialog.is_plan_waiting else time.time()
                 dialog.current_issue = push.current_issue
                 dialog.current_repo = push.current_repo
                 dialog.session_id = push.session_id
@@ -353,6 +398,15 @@ async def _get_agent_state(
                 return _with_diagnostics(dialog, pane_content, runtime_hint)
         return _with_diagnostics(push, pane_content, runtime_hint)
 
+    if push and push.is_plan_waiting:
+        runtime = get_runtime(runtime_hint or push.runtime)
+        if runtime.plan_markers:
+            if pane_content is None:
+                pane_content = await capture_pane(session)
+            push.evidence = [f"hook state '{push.state.value}' is stale ({push_age:.0f}s)"]
+            plan = _plan_by_dialog(push, pane_content or "", runtime, settling=False)
+            return _with_diagnostics(plan, pane_content, runtime_hint)
+
     if pane_content is None:
         pane_content = await capture_pane(session)
     if pane_content:
@@ -365,6 +419,8 @@ async def _get_agent_state(
             pull.runtime = push.runtime
             pull.model = push.model
             pull.diagnostics = _joined(push.diagnostics, pull.diagnostics)
+            if pull.is_plan_waiting:
+                pull.timestamp = push.timestamp  # the plan's identity (alerts, buttons)
             pull.evidence.insert(
                 0, f"hook state '{push.state.value}' is stale ({push_age:.0f}s) — reading terminal"
             )

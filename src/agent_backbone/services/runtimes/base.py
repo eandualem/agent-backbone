@@ -302,10 +302,15 @@ class Runtime:
     question and never approved: ``Enter`` there would choose, not permit."""
     plan_approve_keys: tuple[str, ...] = ()
     """tmux key names that accept the plan the runtime is presenting (Claude
-    Code: Shift+Tab). Empty: the runtime has no plan mode the backbone can
+    Code, Codex: "1"). Empty: the runtime has no plan mode the backbone can
     drive, and every plan action is refused as unsupported — nothing is typed."""
     plan_reject_keys: tuple[str, ...] = ()
-    """tmux key names that leave plan mode so feedback can follow as a message."""
+    """tmux key names that decline the plan so feedback can follow as a message
+    (the runtime stays in plan mode and revises the plan)."""
+    plan_markers: tuple[str, ...] = ()
+    """Fragments of the dialog in which the runtime asks to approve its plan,
+    all of them present (lowercase). Such a dialog is a plan decision, not a
+    question. Empty: the runtime's hooks alone report a plan (OpenCode's plugin)."""
 
     # --- state hooks ---------------------------------------------------------
     hook_script: str | None = None
@@ -813,6 +818,28 @@ class Runtime:
         text = " ".join([*above[-4:], *options]).lower()
         return any(marker in text for marker in self.choice_markers)
 
+    def detect_plan_dialog(self, pane_content: str) -> bool:
+        """Whether the active dialog asks to approve a plan (see ``plan_markers``).
+
+        Only the latest dialog counts: the options around the last selection
+        cursor and the few lines introducing them. Plan text further up the
+        pane (an earlier plan dialog) must never turn a permission prompt
+        into a plan, whose approve key would then allow it."""
+        if not self.plan_markers or not self.detect_active_dialog(pane_content):
+            return False
+        lines = [ln.strip() for ln in sanitize_pane_content(pane_content).splitlines()]
+        lines = [ln for ln in lines[-24:] if ln and not is_box_line(ln)]
+        cursors = [i for i, line in enumerate(lines) if DIALOG_CURSOR_RE.match(line)]
+        if not cursors:
+            return False
+        first = last = cursors[-1]
+        while first > 0 and DIALOG_OPTION_RE.match(lines[first - 1]):
+            first -= 1
+        while last + 1 < len(lines) and DIALOG_OPTION_RE.match(lines[last + 1]):
+            last += 1
+        text = " ".join(lines[max(0, first - 4) : last + 1]).lower()
+        return all(marker in text for marker in self.plan_markers)
+
     def dialog_summary(self, pane_content: str, *, limit: int = 300) -> str:
         """What the dialog on screen asks, for a person who cannot see it.
 
@@ -959,6 +986,12 @@ class Runtime:
                 return False
         return True
 
+    def plan_approval_needs(self, env: dict[str, str]) -> str | None:
+        """What an agent's environment (its ``env``, then the backbone's) lacks
+        before its plans ask for approval, when the runtime's plan step is
+        optional; None when nothing is missing."""
+        return None
+
     @property
     def supports_plan_control(self) -> bool:
         """Whether the backbone can approve or reject this runtime's plans."""
@@ -981,7 +1014,7 @@ class Runtime:
         return await self._send_all(session_name, self.plan_approve_keys)
 
     async def reject_plan(self, session_name: str) -> int:
-        """Leave plan mode so feedback can follow as a message; see ``approve_plan``."""
+        """Decline the plan so feedback can follow as a message; see ``approve_plan``."""
         return await self._send_all(session_name, self.plan_reject_keys)
 
     async def deliver_message(self, session_name: str, message: str) -> bool:

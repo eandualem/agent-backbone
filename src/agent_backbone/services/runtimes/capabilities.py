@@ -44,7 +44,6 @@ REQUIRED: tuple[str, ...] = ("claude", "codex", "opencode")
 
 REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
     {
-        ("plan-approval", "codex", 278),
         ("refusal-alert", "codex", 279),
         ("browser-group-name", "codex", 270),
         ("bounded-unattended", "claude", 285),
@@ -159,6 +158,7 @@ _NO_CLI = "runs no CLI; the recorded runtime makes no difference"
 _HINT = "tests/unit/api/routes/test_api_messages.py"
 _QUEUE_ONLY = "read from the queue, the same for every runtime"
 _INTERRUPTED = "tests/unit/services/agents/test_interrupted_turn.py"
+_PLAN = "tests/unit/services/agents/test_plan_approval.py"
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
@@ -374,10 +374,17 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/services/agents/launch.py",
         fallback="Answer the plan in the session (`agent attach`).",
         implemented=lambda rt: bool(rt.plan_approve_keys),
-        claude=_ok("tests/unit/api/routes/test_api_plans.py"),
-        codex=_gap(278),
+        claude=_ok(_PLAN),
+        codex=_ok(_PLAN, "in Plan mode (`/plan`)"),
         gemini=_gap(),
-        opencode=_gap(278),
+        # Implemented, but OpenCode asks for no approval unless its own
+        # off-by-default flag is set, and such a flag is not support. Revisit
+        # when an OpenCode release enables plan mode by default or drops the flag.
+        opencode=_gap(
+            278,
+            "works when OPENCODE_EXPERIMENTAL_PLAN_MODE is set in the agent's environment "
+            "(off by default; `doctor` names each agent without it)",
+        ),
         deepcode=_gap(),
         aider=_gap(),
         shell=_na(_NO_MODEL),

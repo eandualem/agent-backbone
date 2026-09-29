@@ -118,14 +118,10 @@ class TestPlanControl:
             resp = await api_client.post("/api/plans/stray/approve", headers=auth_headers)
             assert resp.status_code == 404
             assert "not a registered agent" in resp.json()["detail"]
-            resp = await api_client.post(
-                "/api/plans/stray/respond", json={"input": "1"}, headers=auth_headers
-            )
-            assert resp.status_code == 404
         control.assert_not_awaited()
 
     async def test_approve_requires_a_waiting_plan(self, api_client, auth_headers, api_app):
-        # An idle Claude agent must never receive Shift+Tab: it would toggle its mode.
+        # An idle agent must never receive plan keys: they would land in its prompt.
         _enable_plan_control(api_app)
         with patch(f"{_PLANS}.plan_control", new_callable=AsyncMock) as control:
             resp = await api_client.post("/api/plans/ike/approve", headers=auth_headers)
@@ -140,7 +136,7 @@ class TestPlanControl:
         with patch(
             f"{_PLANS}.plan_control",
             new_callable=AsyncMock,
-            return_value=("approved", ["sent Escape [Z to claude"]),
+            return_value=("approved", ["sent 1 to claude"]),
         ) as control:
             resp = await api_client.post("/api/plans/ike/approve", headers=auth_headers)
         assert resp.json()["action"] == "plan_approved"
@@ -194,35 +190,27 @@ class TestPlanControl:
         )
         assert resp.status_code == 409
 
-    async def test_respond_goes_through_safe_deliver(
+    async def test_respond_is_deprecated_and_types_nothing(
         self, api_client, auth_headers, api_app, state_svc
     ):
+        """#357: no plan dialog takes a typed answer; a pasted "2" approved a Claude Code plan."""
         _enable_plan_control(api_app)
         state_svc.get_state.return_value = _plan_snapshot()
-        with patch(
-            f"{_PLANS}.safe_deliver",
-            new_callable=AsyncMock,
-            return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
-        ) as deliver:
-            resp = await api_client.post(
-                "/api/plans/ike/respond", json={"input": "2"}, headers=auth_headers
-            )
-        assert resp.json()["action"] == "plan_response_sent"
-        assert deliver.await_args.args[:2] == ("ike", "2")  # verbatim: no envelope on a plan prompt
-        assert deliver.await_args.kwargs["delivery_kind"] == "plan_response"
-
-    async def test_undelivered_response_is_reported_not_queued(
-        self, api_client, auth_headers, api_app, state_svc
-    ):
-        _enable_plan_control(api_app)
-        state_svc.get_state.return_value = _plan_snapshot()
-        with patch(
-            f"{_PLANS}.safe_deliver",
-            new_callable=AsyncMock,
-            return_value=DeliveryReport(DeliveryOutcome.AGENT_WORKING),
-        ):
+        with patch(f"{_PLANS}.safe_deliver", new_callable=AsyncMock) as deliver:
             resp = await api_client.post(
                 "/api/plans/ike/respond", json={"input": "2"}, headers=auth_headers
             )
         assert resp.status_code == 409
-        assert "agent_working" in resp.json()["detail"]
+        assert resp.json()["detail"].startswith("Deprecated")
+        deliver.assert_not_awaited()
+
+    async def test_a_plan_answered_meanwhile_is_a_conflict(
+        self, api_client, auth_headers, api_app, state_svc
+    ):
+        _enable_plan_control(api_app)
+        state_svc.get_state.return_value = _plan_snapshot()
+        refusal = ("not_waiting", ["no Codex plan dialog on screen; nothing was sent"])
+        with patch(f"{_PLANS}.plan_control", new_callable=AsyncMock, return_value=refusal):
+            resp = await api_client.post("/api/plans/ike/approve", headers=auth_headers)
+        assert resp.status_code == 409
+        assert "no Codex plan dialog on screen" in resp.json()["detail"]

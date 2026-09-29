@@ -5,9 +5,8 @@ endpoints are disabled unless the ``security.allow_remote_plan_control``
 setting is on (``backbone config set security.allow_remote_plan_control true``).
 The keys are the runtime's own (``Runtime.plan_approve_keys`` /
 ``plan_reject_keys``): a runtime without a plan mode the backbone can drive
-answers 409 and nothing is typed. Feedback and responses are
-``plan_response`` deliveries through ``safe_deliver`` — gated, recorded,
-never queued.
+answers 409 and nothing is typed. A rejection's feedback is an ordinary
+message through ``safe_deliver``; ``respond`` is deprecated (#357).
 """
 
 from __future__ import annotations
@@ -21,10 +20,8 @@ from agent_backbone.api.models import (
     ListEnvelope,
     PlanDetail,
     PlanRejectRequest,
-    PlanRespondRequest,
 )
 from agent_backbone.config import BackboneConfig
-from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import agent_state, listable_sessions, plan_control, read_plan
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.terminal import list_sessions
@@ -68,31 +65,16 @@ async def _run_plan_control(config: BackboneConfig, session: str, action: str) -
             status_code=409,
             detail=f"Plan control is not available for '{session}': {evidence[0]}",
         )
+    if outcome == "not_waiting":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Session '{session}' is not waiting for plan approval: {evidence[0]}",
+        )
     if outcome == "offline":
         raise HTTPException(status_code=404, detail=f"Session '{session}' not found")
     if outcome == "failed":
         raise HTTPException(status_code=500, detail=f"Could not send the plan keys: {evidence[0]}")
     return evidence
-
-
-async def _deliver_plan_response(config, db, session: str, message: str) -> DeliveryOutcome:
-    """Type an answer into the plan prompt — only while it is on screen, never queued."""
-    outcome = (
-        await safe_deliver(
-            session,
-            message,
-            config,
-            db=db,
-            source="api-plans",
-            delivery_kind="plan_response",
-        )
-    ).outcome
-    if outcome != DeliveryOutcome.DELIVERED:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Plan response not delivered to '{session}': {outcome.value}",
-        )
-    return outcome
 
 
 @router.get("/plans", response_model=ListEnvelope[PlanDetail])
@@ -149,9 +131,9 @@ async def reject_plan(
     config: BackboneConfig = Depends(get_config),
     db=Depends(get_db),
 ):
-    """Reject a pending plan: leave plan mode, then send the feedback as a message.
+    """Reject a pending plan: decline it, then send the feedback as a message.
 
-    Once plan mode is left the agent is back at an ordinary prompt, so the
+    Once the plan is declined the agent is back at an ordinary prompt, so the
     feedback is an ordinary direct message: enveloped, gated, queued if the
     agent is not ready yet.
     """
@@ -179,18 +161,17 @@ async def reject_plan(
     }
 
 
-@router.post("/plans/{session}/respond")
-async def respond_to_plan(
-    session: str,
-    body: PlanRespondRequest,
-    config: BackboneConfig = Depends(get_config),
-    db=Depends(get_db),
-):
-    """Send input to a plan-waiting session (option selection or free text)."""
-    _require_plan_control(config)
-    registered_agent_or_404(config, session)
-    await _require_plan_waiting(config, session)
-    await _deliver_plan_response(config, db, session, body.input)
+@router.post("/plans/{session}/respond", deprecated=True)
+async def respond_to_plan(session: str):
+    """Deprecated (#357): answers 409 and types nothing.
 
-    log.info("Plan response sent to %s: %s", session, body.input[:80])
-    return {"ok": True, "session": session, "action": "plan_response_sent"}
+    No shipped runtime's plan dialog takes a typed answer: Claude Code,
+    Codex and OpenCode choose with keys only, where a pasted answer is no
+    choice and its Enter picks the highlighted option. Approve, or reject
+    with feedback. Removed at the next breaking release.
+    """
+    raise HTTPException(
+        status_code=409,
+        detail="Deprecated: plan dialogs choose with keys only, so nothing was sent. "
+        "Approve, or reject with feedback.",
+    )

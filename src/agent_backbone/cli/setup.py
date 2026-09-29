@@ -294,6 +294,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             check(f"'{spec.name}' dir exists: {spec.path}", spec.path.is_dir())
             installed = spec.runtime in REGISTRY and REGISTRY[spec.runtime].available()
             check(f"'{spec.name}' runtime '{spec.runtime}' installed", installed)
+            if spec.runtime in REGISTRY and (
+                needs := REGISTRY[spec.runtime].plan_approval_needs(spec.env)
+            ):
+                note(f"  ! '{spec.name}': {needs}")
             if not spec.repo:
                 note(f"  ! '{spec.name}' has no GitHub remote — issue routing is off for it")
 

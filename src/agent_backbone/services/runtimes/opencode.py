@@ -27,6 +27,15 @@ from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
 
+# OpenCode's boolean flags, as it reads them (1.18: case-sensitive).
+_TRUE = ("true", "yes", "on", "1", "y")
+_FALSE = ("false", "no", "off", "0", "n")
+
+
+def _setting(env: dict[str, str], key: str) -> str:
+    """An environment value for the agent: its own ``env``, then the backbone's."""
+    return env.get(key) or os.environ.get(key) or ""
+
 
 class OpenCode(Runtime):
     supports_exact_resume = True
@@ -59,6 +68,11 @@ class OpenCode(Runtime):
     # Escape rejects the tool call wherever the cursor is and ends the turn
     # ("The user rejected permission to use this specific tool call", live, 1.18).
     deny_keys = ("Escape",)
+    # plan_exit's question: "1. Yes" (switch to the build agent and start
+    # implementing), "2. No" (stay with the plan agent); a digit answers at
+    # once, and No ends the turn in the plan agent (live, 1.18.32).
+    plan_approve_keys = ("1",)
+    plan_reject_keys = ("2",)
     # "--auto  auto-approve permissions that are not explicitly denied"
     # (opencode 1.18 TUI); a `permission` deny in the user's config still
     # holds. OpenCode has no OS sandbox: this is trust on the machine.
@@ -86,20 +100,30 @@ class OpenCode(Runtime):
         ]
 
     def user_instructions(self, env, project=None):
-        def value(key: str) -> str:
-            return env.get(key) or os.environ.get(key) or ""
-
         home = agent_home(env)
-        config = Path(value("XDG_CONFIG_HOME") or home / ".config").expanduser()
+        config = Path(_setting(env, "XDG_CONFIG_HOME") or home / ".config").expanduser()
         candidates = [config / "opencode" / "AGENTS.md"]
         # Claude Code's user memory stands in unless disabled (1.18: either flag,
         # true as its boolean config reads it, case-sensitive).
         flags = ("OPENCODE_DISABLE_CLAUDE_CODE", "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT")
-        if not any(value(f) in ("true", "yes", "on", "1", "y") for f in flags):
+        if not any(_setting(env, f) in _TRUE for f in flags):
             candidates.append(home / ".claude" / "CLAUDE.md")
         # The first file that exists is the one read, even an empty one.
         first = next((path for path in candidates if path.exists()), None)
         return [first] if first is not None and has_text(first) else []
+
+    def plan_approval_needs(self, env):
+        # plan_exit, the step that asks to approve a plan, exists only with
+        # this flag, which falls back to OPENCODE_EXPERIMENTAL (1.18.32).
+        flag = _setting(env, "OPENCODE_EXPERIMENTAL_PLAN_MODE")
+        if flag not in (*_TRUE, *_FALSE):
+            flag = _setting(env, "OPENCODE_EXPERIMENTAL")
+        if flag in _TRUE:
+            return None
+        return (
+            "plan approval is unavailable until OPENCODE_EXPERIMENTAL_PLAN_MODE=1 is set "
+            "in its environment: without it OpenCode's plan agent asks for no approval"
+        )
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         args: list[str] = []

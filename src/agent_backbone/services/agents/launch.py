@@ -703,17 +703,22 @@ async def deny_agent(
 
 
 async def plan_control(
-    name: str, action: str, *, runtime: str | None = None
+    name: str, action: str, *, runtime: str | None = None, settle_seconds: float = 1.0
 ) -> tuple[str, list[str]]:
     """Approve or reject the plan an agent is presenting, through its runtime.
 
     ``action`` is ``approve`` or ``reject``. Returns ``(outcome, evidence)``:
     ``approved`` / ``rejected`` (the runtime's keys were sent), ``unsupported``
     (the runtime has no plan mode the backbone can drive — nothing is typed,
-    so Claude Code's key sequence can never reach a Codex or OpenCode
-    terminal), ``offline`` or ``failed``. Rejecting only leaves plan mode;
-    the feedback itself is a ``plan_response`` delivery through
-    ``safe_deliver``. Callers gate on ``security.allow_remote_plan_control``
+    so one runtime's key sequence can never reach another runtime's
+    terminal), ``not_waiting`` (the runtime's plan dialog is not on screen:
+    answered meanwhile, so its keys would land in the prompt), ``offline`` or
+    ``failed``. Rejecting only declines the plan;
+    the feedback itself is an ordinary message through ``safe_deliver``.
+    After the keys it waits ``settle_seconds`` for the
+    runtime to take its dialog down, so what follows (a rejection's feedback)
+    reads the answered state and goes in at once. Callers gate on
+    ``security.allow_remote_plan_control``
     and on the agent actually waiting for a plan decision.
     """
     if action not in ("approve", "reject"):
@@ -726,20 +731,27 @@ async def plan_control(
         return "unsupported", [
             f"{rt.display_name} has no plan mode the backbone can drive; nothing was sent"
         ]
+    if rt.plan_markers and not rt.detect_plan_dialog(pane):
+        return "not_waiting", [f"no {rt.display_name} plan dialog on screen; nothing was sent"]
     keys = rt.plan_approve_keys if action == "approve" else rt.plan_reject_keys
     sent = await (rt.approve_plan(name) if action == "approve" else rt.reject_plan(name))
-    if sent == 0:
-        return "failed", ["tmux refused the keys; nothing was sent"]
     if sent < len(keys):
-        # Part of the sequence went in (Claude: Escape without "[Z" leaves
-        # plan mode without accepting) — say exactly what happened.
         return "failed", [
-            f"sent {' '.join(keys[:sent])} but tmux refused {keys[sent]}; "
-            f"the {rt.id} session may have left plan mode — check it before retrying"
+            f"tmux refused {keys[sent]} after {sent} of {len(keys)} keys; "
+            f"check the {rt.id} session before retrying"
         ]
     outcome = "approved" if action == "approve" else "rejected"
     log.info("Plan %s on '%s' via %s", outcome, name, rt.id)
-    return outcome, [f"sent {' '.join(keys)} to {rt.id}"]
+    evidence = f"sent {' '.join(keys)} to {rt.id}"
+    await asyncio.sleep(settle_seconds)
+    if rt.plan_markers:
+        after = await capture_pane(name, lines=60)
+        if not after:
+            evidence += "; the screen could not be read to confirm"
+        else:
+            cleared = "still visible" if rt.detect_plan_dialog(after) else "cleared"
+            evidence += f"; plan dialog {cleared}"
+    return outcome, [evidence]
 
 
 async def stop_agent(name: str) -> bool:
