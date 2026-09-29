@@ -710,8 +710,8 @@ async def plan_control(
     ``action`` is ``approve`` or ``reject``. Returns ``(outcome, evidence)``:
     ``approved`` / ``rejected`` (the runtime's keys were sent), ``unsupported``
     (the runtime has no plan mode the backbone can drive — nothing is typed,
-    so Claude Code's key sequence can never reach a Codex or OpenCode
-    terminal), ``offline`` or ``failed``. Rejecting only leaves plan mode;
+    so one runtime's key sequence can never reach another runtime's
+    terminal), ``offline`` or ``failed``. Rejecting only declines the plan;
     the feedback itself is a ``plan_response`` delivery through
     ``safe_deliver``. Callers gate on ``security.allow_remote_plan_control``
     and on the agent actually waiting for a plan decision.

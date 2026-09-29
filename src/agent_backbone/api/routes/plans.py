@@ -149,9 +149,9 @@ async def reject_plan(
     config: BackboneConfig = Depends(get_config),
     db=Depends(get_db),
 ):
-    """Reject a pending plan: leave plan mode, then send the feedback as a message.
+    """Reject a pending plan: decline it, then send the feedback as a message.
 
-    Once plan mode is left the agent is back at an ordinary prompt, so the
+    Once the plan is declined the agent is back at an ordinary prompt, so the
     feedback is an ordinary direct message: enveloped, gated, queued if the
     agent is not ready yet.
     """

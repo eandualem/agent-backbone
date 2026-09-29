@@ -214,6 +214,16 @@ class Codex(Runtime):
     # preselected (live capture, 0.153): Enter changes the model, Escape
     # ("go back") keeps it.
     choice_markers = ("keep current model", "switch to gpt-")
+    # After a Plan-mode turn ends with a proposed plan: "Implement this plan?"
+    # "› 1. Yes, implement this plan", "2. Yes, clear context and implement",
+    # "3. No, stay in Plan mode", "enter select · esc back" (live, 0.157.1).
+    # "1" switches to Default mode and submits "Implement the plan."; "3"
+    # closes the dialog and stays in Plan mode, where the feedback follows as
+    # a message. A digit, not Enter or Escape: once a person has answered,
+    # it cannot choose another option or interrupt the turn that follows.
+    plan_markers = ("implement this plan?", "no, stay in plan mode")
+    plan_approve_keys = ("1",)
+    plan_reject_keys = ("3",)
 
     def diagnostics(self, pane_content: str) -> tuple[RuntimeDiagnostic, ...]:
         """Observe typed error banners, including one still visible after a model change.

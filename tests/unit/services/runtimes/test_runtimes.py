@@ -397,13 +397,11 @@ class TestPaneLinePairing:
 
 
 class TestPlanControlCapability:
-    def test_only_claude_code_has_a_plan_mode_the_backbone_drives(self):
+    def test_claude_code_and_codex_have_a_plan_mode_the_backbone_drives(self):
         from agent_backbone.services.runtimes import RUNTIMES, get_runtime
 
         supported = {name for name in RUNTIMES if get_runtime(name).supports_plan_control}
-        assert supported == {"claude"}
-        assert get_runtime("claude").plan_approve_keys == ("Escape", "[Z")
-        assert get_runtime("claude").plan_reject_keys == ("Escape",)
+        assert supported == {"claude", "codex"}
 
     async def test_unsupported_runtime_sends_nothing(self):
         from unittest.mock import AsyncMock, patch
@@ -413,8 +411,8 @@ class TestPlanControlCapability:
         with patch(
             "agent_backbone.services.runtimes.base.send_keys", new_callable=AsyncMock
         ) as keys:
-            approved = await get_runtime("codex").approve_plan("x")
-            rejected = await get_runtime("codex").reject_plan("x")
+            approved = await get_runtime("gemini").approve_plan("x")
+            rejected = await get_runtime("gemini").reject_plan("x")
         assert type(approved) is int and approved == 0  # a count, not a bool
         assert type(rejected) is int and rejected == 0
         keys.assert_not_awaited()

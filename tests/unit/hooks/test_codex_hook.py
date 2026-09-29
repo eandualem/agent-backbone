@@ -132,3 +132,61 @@ class TestActionsAreLoggedBeforeAndAfter:
         )
         record, actions = hook.derive(payload, None)
         assert record is None and actions and actions[0]["issue"] == 5
+
+
+PLAN = "# Add the probe file\n\n1. Create probe-278.txt.\n2. Check that it exists."
+
+
+def codex_rollout(path, reply: str, *, turn: str = "t1"):
+    """A Codex rollout as codex-cli 0.157.1 writes a Plan-mode turn: the reply is
+    kept whole, while the turn's own summary lost its ``<proposed_plan>`` block."""
+    records = [
+        {"type": "response_item", "payload": {"type": "message", "role": "user",
+                                              "content": [{"type": "input_text", "text": "plan"}]}},
+        {"type": "response_item", "payload": {
+            "type": "message", "role": "assistant",
+            "content": [{"type": "output_text", "text": reply}],
+            "internal_chat_message_metadata_passthrough": {"turn_id": turn},
+        }},
+        {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": turn,
+                                          "last_agent_message": "Here is the plan.\n\n"}},
+    ]  # fmt: skip
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+    return str(path)
+
+
+class TestAProposedPlanWaitsForADecision:
+    def _stop(self, transcript, turn="t1"):
+        payload = _payload(
+            "Stop",
+            turn_id=turn,
+            last_assistant_message="Here is the plan.\n\n",
+            transcript_path=transcript,
+        )
+        record, _ = hook.derive(payload, None)
+        return record
+
+    def test_the_plan_is_read_from_the_turns_reply_in_the_rollout(self, tmp_path):
+        reply = f"Here is the plan.\n\n<proposed_plan>\n{PLAN}\n</proposed_plan>\n"
+        record = self._stop(codex_rollout(tmp_path / "rollout.jsonl", reply))
+        assert (record["state"], record["reason"]) == (bb.STATE_WAITING, bb.REASON_PLAN)
+        assert record["plan_title"] == "Add the probe file"
+        assert record["plan_text"] == PLAN
+        assert record["last_message"] == "Here is the plan."
+
+    @pytest.mark.parametrize(
+        ("reply", "turn"),
+        [
+            ("Done.", "t1"),  # a turn without a plan
+            (f"<proposed_plan>\n{PLAN}\n</proposed_plan>", "t0"),  # an earlier turn's plan
+        ],
+        ids=["no-plan", "earlier-turn"],
+    )
+    def test_a_turn_that_proposed_no_plan_ends_idle(self, tmp_path, reply, turn):
+        record = self._stop(codex_rollout(tmp_path / "rollout.jsonl", reply, turn=turn))
+        assert (record["state"], record["reason"]) == (bb.STATE_IDLE, None)
+        assert "plan_title" not in record
+
+    def test_an_unreadable_rollout_ends_idle(self, tmp_path):
+        record = self._stop(str(tmp_path / "missing.jsonl"))
+        assert (record["state"], record["reason"]) == (bb.STATE_IDLE, None)

@@ -305,7 +305,12 @@ class Runtime:
     Code: Shift+Tab). Empty: the runtime has no plan mode the backbone can
     drive, and every plan action is refused as unsupported — nothing is typed."""
     plan_reject_keys: tuple[str, ...] = ()
-    """tmux key names that leave plan mode so feedback can follow as a message."""
+    """tmux key names that decline the plan so feedback can follow as a message
+    (Claude Code leaves plan mode; Codex stays in it and revises the plan)."""
+    plan_markers: tuple[str, ...] = ()
+    """Fragments of the dialog in which the runtime asks to approve its plan,
+    all of them present (lowercase). Such a dialog is a plan decision, not a
+    question. Empty: the runtime's hooks alone report a plan (Claude Code)."""
 
     # --- state hooks ---------------------------------------------------------
     hook_script: str | None = None
@@ -813,6 +818,15 @@ class Runtime:
         text = " ".join([*above[-4:], *options]).lower()
         return any(marker in text for marker in self.choice_markers)
 
+    def detect_plan_dialog(self, pane_content: str) -> bool:
+        """Whether the active dialog asks to approve a plan (see ``plan_markers``),
+        read from the dialog's own text as ``detect_choice_dialog`` reads it."""
+        if not self.plan_markers or not self.detect_active_dialog(pane_content):
+            return False
+        above, options = self._dialog_block(pane_content)
+        text = " ".join([*above[-4:], *options]).lower()
+        return all(marker in text for marker in self.plan_markers)
+
     def dialog_summary(self, pane_content: str, *, limit: int = 300) -> str:
         """What the dialog on screen asks, for a person who cannot see it.
 
@@ -981,7 +995,7 @@ class Runtime:
         return await self._send_all(session_name, self.plan_approve_keys)
 
     async def reject_plan(self, session_name: str) -> int:
-        """Leave plan mode so feedback can follow as a message; see ``approve_plan``."""
+        """Decline the plan so feedback can follow as a message; see ``approve_plan``."""
         return await self._send_all(session_name, self.plan_reject_keys)
 
     async def deliver_message(self, session_name: str, message: str) -> bool:

@@ -6,7 +6,7 @@ Wired at launch with ``-c hooks.<Event>=…`` overrides (and
 every hook it did not see before; these are the backbone's own). Verified
 against codex-cli 0.152: ``SessionStart``, ``UserPromptSubmit`` and
 ``Stop`` arrive with ``session_id``, ``turn_id`` and, on ``Stop``,
-``last_assistant_message``.
+``last_assistant_message`` and ``transcript_path``.
 
 Standard library only — it must run under any ``python3``.
 """
@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 try:
     from agent_backbone.hooks import backbone_state as bb
@@ -48,6 +49,42 @@ def tool_succeeded(payload: dict) -> bool:
     return bb.response_succeeded(response)
 
 
+PROPOSED_PLAN = re.compile(r"<proposed_plan>\s*(.*?)\s*</proposed_plan>", re.DOTALL)
+
+
+def proposed_plan(payload: dict) -> str | None:
+    """The plan this turn proposed: the ``<proposed_plan>`` block of its reply.
+
+    In Plan mode Codex ends a finished plan with that block and then asks
+    "Implement this plan?". It takes the block out of the ``Stop`` payload's
+    ``last_assistant_message`` (codex-cli 0.157.1), so the reply is read from
+    the session's rollout, where it is kept whole. A reply of an earlier turn
+    is not this turn's plan.
+    """
+    transcript = payload.get("transcript_path")
+    if not isinstance(transcript, str) or not transcript:
+        return None
+    for record in bb.transcript_records(Path(transcript)):
+        item = record.get("payload")
+        if record.get("type") != "response_item" or not isinstance(item, dict):
+            continue
+        if item.get("type") != "message" or item.get("role") != "assistant":
+            continue
+        meta = item.get("internal_chat_message_metadata_passthrough")
+        turn = meta.get("turn_id") if isinstance(meta, dict) else None
+        if turn and payload.get("turn_id") and turn != payload["turn_id"]:
+            return None
+        parts = item.get("content") if isinstance(item.get("content"), list) else []
+        text = "".join(
+            part.get("text") or ""
+            for part in parts
+            if isinstance(part, dict) and part.get("type") == "output_text"
+        )
+        match = PROPOSED_PLAN.search(text)
+        return match.group(1) if match and match.group(1) else None
+    return None
+
+
 def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | None]:
     """Map a Codex hook payload to (new_state_record, action_record)."""
     event = payload.get("hook_event_name", "")
@@ -74,9 +111,16 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
         )
         return None, actions
     if event in ("Stop", "Interrupt"):
-        return state(
-            bb.STATE_IDLE, last_message=bb.clip_message(payload.get("last_assistant_message"))
-        ), None
+        last_message = bb.clip_message(payload.get("last_assistant_message"))
+        if event == "Stop" and (plan := proposed_plan(payload)):
+            return state(
+                bb.STATE_WAITING,
+                bb.REASON_PLAN,
+                last_message=last_message,
+                plan_title=bb.plan_title(plan),
+                plan_text=plan,
+            ), None
+        return state(bb.STATE_IDLE, last_message=last_message), None
     return None, None
 
 
