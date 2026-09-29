@@ -553,27 +553,25 @@ proof that its original cause recovered.
 (with the plan text — read only from `<state_dir>/plans/`, never from an
 arbitrary path the state record names), and — only when
 `security.allow_remote_plan_control` is on and `{name}` is a registered
-agent — `POST /api/plans/{name}/approve`, `/reject {"feedback"}`,
-`/respond {"input"}`.
+agent — `POST /api/plans/{name}/approve` and `/reject {"feedback"}`.
 
 Approve and reject send the agent's **runtime's own** plan keys
 (`Runtime.plan_approve_keys` / `plan_reject_keys`: Claude Code, Codex in
 Plan mode, and OpenCode's plan agent when `OPENCODE_EXPERIMENTAL_PLAN_MODE` is
-set in the agent's environment). A
-runtime without a plan mode the backbone can drive answers **409** and
-nothing is typed. The response text (`/respond`) answers **409** for every
-shipped runtime and nothing is typed: Claude Code's, Codex's and OpenCode's
-plan dialogs choose with keys only, where a pasted answer is no choice and
-its Enter would pick the highlighted option. It is a `plan_response`
-delivery through `safe_deliver`: it goes in only while the agent is
-waiting for a plan decision (`not_waiting` otherwise — a bare option
-number at an idle prompt would be a new instruction), is recorded like
-every other delivery, and is never queued — a 409 names the outcome.
-`not_waiting` occurs only here, never on `POST /api/messages`. Rejection
-feedback is not a plan response: it is sent *after* the plan is declined
-(Claude Code leaves plan mode; Codex and OpenCode stay in it and revise the
-plan), as an ordinary `direct_message` (enveloped, queued if the agent is busy); the
-reply's `feedback` field is its outcome.
+set in the agent's environment). A runtime without a plan mode the backbone
+can drive answers **409** and nothing is typed. Claude Code and Codex ask in a
+dialog of their own: their keys go in only while it is on screen (otherwise
+**409**, not waiting), and then wait a moment for it to go. Rejection
+feedback is sent *after* the plan is declined, as an ordinary
+`direct_message` (enveloped, queued if the agent is busy); the reply's
+`feedback` field is its outcome. All three runtimes stay in plan mode after a
+rejection, so the feedback asks for a revised plan.
+
+`POST /api/plans/{name}/respond {"input"}` is **deprecated** (#357): it
+answers **409** and types nothing, and it is removed at the next breaking
+release. No shipped runtime's plan dialog takes a typed answer: Claude Code,
+Codex and OpenCode choose with keys only, where a pasted answer is no choice
+and its Enter picks the highlighted option. Approve, or reject with feedback.
 
 ## Status
 

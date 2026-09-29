@@ -714,8 +714,8 @@ async def plan_control(
     terminal), ``not_waiting`` (the runtime's plan dialog is not on screen:
     answered meanwhile, so its keys would land in the prompt), ``offline`` or
     ``failed``. Rejecting only declines the plan;
-    the feedback itself is a ``plan_response`` delivery through
-    ``safe_deliver``. After the keys it waits ``settle_seconds`` for the
+    the feedback itself is an ordinary message through ``safe_deliver``.
+    After the keys it waits ``settle_seconds`` for the
     runtime to take its dialog down, so what follows (a rejection's feedback)
     reads the answered state and goes in at once. Callers gate on
     ``security.allow_remote_plan_control``
@@ -746,8 +746,11 @@ async def plan_control(
     await asyncio.sleep(settle_seconds)
     if rt.plan_markers:
         after = await capture_pane(name, lines=60)
-        cleared = "still visible" if rt.detect_plan_dialog(after) else "cleared"
-        evidence += f"; plan dialog {cleared}"
+        if not after:
+            evidence += "; the screen could not be read to confirm"
+        else:
+            cleared = "still visible" if rt.detect_plan_dialog(after) else "cleared"
+            evidence += f"; plan dialog {cleared}"
     return outcome, [evidence]
 
 

@@ -226,13 +226,14 @@ async def test_a_stale_codex_plan_still_on_screen_keeps_its_plan_and_identity(tm
     assert reads[0].timestamp == reads[1].timestamp  # one alert, buttons bound to it
 
 
-async def test_a_codex_plan_dialog_without_its_plan_text_is_still_a_plan(tmp_path):
+@pytest.mark.parametrize("age", [10, 400], ids=["fresh", "stale"])
+async def test_a_codex_plan_dialog_without_its_plan_text_is_still_a_plan(tmp_path, age):
     """The rollout could not be read, so the hook said idle: the dialog on screen decides."""
     _run(codex_hook, tmp_path, {"hook_event_name": "Stop", "session_id": "s"})
-    _age(tmp_path, 10)
+    _age(tmp_path, age)
     reads = [
         await get_agent_state(
-            tmp_path, "desk", runtime_hint="codex", pane_content=CODEX_PLAN_DIALOG
+            tmp_path, "desk", 300, runtime_hint="codex", pane_content=CODEX_PLAN_DIALOG
         )
         for _ in range(2)
     ]

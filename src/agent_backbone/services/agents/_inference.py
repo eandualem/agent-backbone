@@ -419,6 +419,8 @@ async def _get_agent_state(
             pull.runtime = push.runtime
             pull.model = push.model
             pull.diagnostics = _joined(push.diagnostics, pull.diagnostics)
+            if pull.is_plan_waiting:
+                pull.timestamp = push.timestamp  # the plan's identity (alerts, buttons)
             pull.evidence.insert(
                 0, f"hook state '{push.state.value}' is stale ({push_age:.0f}s) — reading terminal"
             )

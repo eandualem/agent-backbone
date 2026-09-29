@@ -306,17 +306,11 @@ class Runtime:
     drive, and every plan action is refused as unsupported — nothing is typed."""
     plan_reject_keys: tuple[str, ...] = ()
     """tmux key names that decline the plan so feedback can follow as a message
-    (Claude Code leaves plan mode; Codex and OpenCode stay in it)."""
-    plan_takes_text: bool = False
-    """Whether an answer typed into the plan prompt (an option number or free
-    text, ``POST /api/plans/{name}/respond``) reaches it. None of the shipped
-    runtimes: Claude Code (2.1.284), Codex and OpenCode choose with keys only,
-    where a pasted answer is not a choice and its Enter picks the highlighted
-    option (live: a pasted "2" approved a Claude Code plan)."""
+    (the runtime stays in plan mode and revises the plan)."""
     plan_markers: tuple[str, ...] = ()
     """Fragments of the dialog in which the runtime asks to approve its plan,
     all of them present (lowercase). Such a dialog is a plan decision, not a
-    question. Empty: the runtime's hooks alone report a plan (Claude Code)."""
+    question. Empty: the runtime's hooks alone report a plan (OpenCode's plugin)."""
 
     # --- state hooks ---------------------------------------------------------
     hook_script: str | None = None

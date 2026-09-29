@@ -407,6 +407,15 @@ class TestDenyAgent:
             await plan_control("ike", "reject", runtime="claude")
         sleep.assert_awaited_once_with(1.0)
 
+    async def test_an_unreadable_screen_confirms_nothing(self):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", side_effect=[self.CLAUDE_PLAN, ""]),
+            patch(f"{_BASE}.send_keys", return_value=True),
+        ):
+            _, evidence = await plan_control("ike", "approve", runtime="claude", settle_seconds=0)
+        assert evidence == ["sent 1 to claude; the screen could not be read to confirm"]
+
     async def test_a_refused_key_is_reported_not_hidden(self):
         with (
             patch(f"{_MOD}.session_exists", return_value=True),
