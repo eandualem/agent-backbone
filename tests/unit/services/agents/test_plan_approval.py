@@ -5,8 +5,7 @@ Claude Code's hook sees its ``ExitPlanMode`` call. Codex's ``Stop`` hook reads
 the turn's ``<proposed_plan>`` from its rollout, and Codex asks "Implement this
 plan?" in a dialog of its own. OpenCode's plugin sees ``plan_exit`` ask whether
 to build (with ``OPENCODE_EXPERIMENTAL_PLAN_MODE``). The screens are trimmed
-live captures (codex-cli 0.157.1, OpenCode 1.18.32); Claude Code's plan is its
-hook's, so no screen is read.
+live captures (Claude Code 2.1.284, codex-cli 0.157.1, OpenCode 1.18.32).
 """
 
 import json
@@ -73,10 +72,40 @@ OPENCODE_PLAN_DIALOG = (
     "  ┃  ↑↓ select  enter submit  esc dismiss\n"
 )
 
-SCREENS = {"claude": "", "codex": CODEX_PLAN_DIALOG, "opencode": OPENCODE_PLAN_DIALOG}
+CLAUDE_PLAN_DIALOG = (
+    "❯ [exitplan] plan a probe file\n"
+    "  ────────────────────────────────────────────────────────────\n"
+    "   Exit plan mode?\n"
+    "\n"
+    "    Claude wants to exit plan mode\n"
+    "\n"
+    "    ❯ 1. Yes, and switch to default (ask each time) for this session\n"
+    "      2. No\n"
+)
+
+# After Escape: rejected, still in plan mode, and no hook ran.
+CLAUDE_REJECTED = (
+    "❯ [exitplan] plan a probe file\n"
+    "  ⎿  User rejected Claude's plan:\n"
+    "     ╭──────────────────────────╮\n"
+    "     │ Add the probe file       │\n"
+    "     ╰──────────────────────────╯\n"
+    "✻ Sautéed for 0s · done 5:55 AM\n"
+    "────────────────────────────────────────────────────────────\n"
+    "❯ \n"
+    "────────────────────────────────────────────────────────────\n"
+    "  ⏸ plan mode on (shift+tab to cycle) · ← for agents\n"
+)
+
+SCREENS = {
+    "claude": CLAUDE_PLAN_DIALOG,
+    "codex": CODEX_PLAN_DIALOG,
+    "opencode": OPENCODE_PLAN_DIALOG,
+}
+ANSWERED = {"claude": CLAUDE_REJECTED, "codex": CODEX_STILL_PLANNING}
 
 KEYS = {
-    "claude": {"approve": ("Escape", "[Z"), "reject": ("Escape",)},
+    "claude": {"approve": ("1",), "reject": ("Escape",)},
     "codex": {"approve": ("1",), "reject": ("3",)},
     "opencode": {"approve": ("1",), "reject": ("2",)},
 }
@@ -142,22 +171,24 @@ async def test_the_decision_is_sent_with_the_runtimes_own_keys(runtime, action):
         patch(f"{_LAUNCH}.capture_pane", AsyncMock(return_value=SCREENS[runtime])),
         patch("agent_backbone.services.runtimes.base.send_keys", send_keys),
     ):
-        outcome, _ = await plan_control("desk", action, runtime=runtime)
+        outcome, _ = await plan_control("desk", action, runtime=runtime, settle_seconds=0)
     assert outcome == {"approve": "approved", "reject": "rejected"}[action]
     assert tuple(sent) == KEYS[runtime][action]
 
 
-async def test_a_codex_plan_without_its_dialog_on_screen_is_not_pending(tmp_path):
-    """A person answered it in the terminal ("3" or Escape run no hook), or a
-    reply merely quoted the tag: back at the prompt, the agent is idle."""
-    _present_plan("codex", tmp_path)
+@pytest.mark.parametrize("runtime", list(ANSWERED))
+async def test_a_plan_without_its_dialog_on_screen_is_not_pending(tmp_path, runtime):
+    """A person answered it in the terminal (Claude Code's Escape, Codex's "3"
+    or Escape run no hook), or a Codex reply merely quoted the tag: back at the
+    prompt, the agent is idle, and a message goes in at once."""
+    _present_plan(runtime, tmp_path)
     _age(tmp_path, 10)
     snapshot = await get_agent_state(
-        tmp_path, "desk", runtime_hint="codex", pane_content=CODEX_STILL_PLANNING
+        tmp_path, "desk", runtime_hint=runtime, pane_content=ANSWERED[runtime]
     )
     assert (snapshot.state, snapshot.reason) == (AgentState.IDLE, None)
     assert snapshot.plan_title is None and snapshot.plan_file is None
-    assert "terminal shows no plan dialog (codex)" in snapshot.evidence
+    assert f"terminal shows no plan dialog ({runtime})" in snapshot.evidence
 
 
 async def test_a_codex_plan_reads_busy_until_its_dialog_is_drawn(tmp_path):

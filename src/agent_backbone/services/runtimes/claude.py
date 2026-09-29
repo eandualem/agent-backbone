@@ -223,11 +223,14 @@ class ClaudeCode(Runtime):
     # its footer says "Esc to cancel".
     approve_keys = ("Enter",)
     deny_keys = ("Escape",)
-    # Plan mode: Shift+Tab (sent as Escape then "[Z") accepts the plan;
-    # Escape leaves plan mode so feedback can follow as a message.
-    plan_approve_keys = ("Escape", "[Z")
+    # Plan mode (live, 2.1.284): the ExitPlanMode hook reports the plan, then
+    # "Exit plan mode? … ❯ 1. Yes, and switch to default (ask each time) for
+    # this session / 2. No". "1" approves. Escape rejects ("User rejected
+    # Claude's plan", plan mode stays on) and runs no hook, so the plan is
+    # pending, and its keys go in, only while the dialog is on screen.
+    plan_markers = ("exit plan mode?",)
+    plan_approve_keys = ("1",)
     plan_reject_keys = ("Escape",)
-    plan_takes_text = True
 
     def pre_trust(self, directory: Path | str) -> None:
         pre_trust_directory(directory)

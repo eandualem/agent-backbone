@@ -377,6 +377,9 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok(_PLAN),
         codex=_ok(_PLAN, "in Plan mode (`/plan`)"),
         gemini=_gap(),
+        # Implemented, but OpenCode asks for no approval unless its own
+        # off-by-default flag is set, and such a flag is not support. Revisit
+        # when an OpenCode release enables plan mode by default or drops the flag.
         opencode=_gap(
             278,
             "works when OPENCODE_EXPERIMENTAL_PLAN_MODE is set in the agent's environment "

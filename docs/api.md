@@ -561,9 +561,10 @@ Approve and reject send the agent's **runtime's own** plan keys
 Plan mode, and OpenCode's plan agent when `OPENCODE_EXPERIMENTAL_PLAN_MODE` is
 set in the agent's environment). A
 runtime without a plan mode the backbone can drive answers **409** and
-nothing is typed. The response text (`/respond`) is for Claude Code: Codex's
-and OpenCode's plan dialogs choose with keys only, so for them it answers
-**409** and nothing is typed. It is a `plan_response`
+nothing is typed. The response text (`/respond`) answers **409** for every
+shipped runtime and nothing is typed: Claude Code's, Codex's and OpenCode's
+plan dialogs choose with keys only, where a pasted answer is no choice and
+its Enter would pick the highlighted option. It is a `plan_response`
 delivery through `safe_deliver`: it goes in only while the agent is
 waiting for a plan decision (`not_waiting` otherwise — a bare option
 number at an idle prompt would be a new instruction), is recorded like

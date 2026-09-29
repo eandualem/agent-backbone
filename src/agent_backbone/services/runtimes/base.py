@@ -302,16 +302,17 @@ class Runtime:
     question and never approved: ``Enter`` there would choose, not permit."""
     plan_approve_keys: tuple[str, ...] = ()
     """tmux key names that accept the plan the runtime is presenting (Claude
-    Code: Shift+Tab). Empty: the runtime has no plan mode the backbone can
+    Code, Codex: "1"). Empty: the runtime has no plan mode the backbone can
     drive, and every plan action is refused as unsupported — nothing is typed."""
     plan_reject_keys: tuple[str, ...] = ()
     """tmux key names that decline the plan so feedback can follow as a message
     (Claude Code leaves plan mode; Codex and OpenCode stay in it)."""
     plan_takes_text: bool = False
     """Whether an answer typed into the plan prompt (an option number or free
-    text, ``POST /api/plans/{name}/respond``) reaches it: Claude Code. Codex's
-    and OpenCode's plan dialogs choose with keys only, where a pasted answer is
-    not a choice and its Enter would pick the highlighted option."""
+    text, ``POST /api/plans/{name}/respond``) reaches it. None of the shipped
+    runtimes: Claude Code (2.1.284), Codex and OpenCode choose with keys only,
+    where a pasted answer is not a choice and its Enter picks the highlighted
+    option (live: a pasted "2" approved a Claude Code plan)."""
     plan_markers: tuple[str, ...] = ()
     """Fragments of the dialog in which the runtime asks to approve its plan,
     all of them present (lowercase). Such a dialog is a plan decision, not a

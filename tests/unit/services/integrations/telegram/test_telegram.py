@@ -720,7 +720,7 @@ class TestPlans:
             patch(
                 f"{_CMD}.plan_control",
                 new_callable=AsyncMock,
-                return_value=("approved", ["sent Escape [Z to claude"]),
+                return_value=("approved", ["sent 1 to claude"]),
             ) as approve,
         ):
             await bot.cmd_approve(update, _context(["ike"]))
