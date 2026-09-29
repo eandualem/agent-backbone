@@ -53,7 +53,7 @@ _FALLBACK_DIRS = (
 )
 
 # A version as a word of its own: ``v2.1.284`` is 2.1.284, never 1.284.
-_VERSION = re.compile(r"(?<![\w.])v?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.]+)?)(?![\w.])")
+_VERSION = re.compile(r"(?<![\w.])v?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?)(?![\w.-])")
 
 BriefMode = Literal["system_prompt", "initial_prompt", "message", "none"]
 

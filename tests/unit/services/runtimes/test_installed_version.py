@@ -39,10 +39,11 @@ def test_reads_the_version_each_cli_prints(bin_dir, runtime):
     ("body", "version"),
     [
         ("echo 'codex-cli 0.157.1-alpha.1'", "0.157.1-alpha.1"),
+        ("echo 'codex-cli 0.157.1-alpha-1'", "0.157.1-alpha-1"),
         ("echo 'codex-cli v0.157.1'", "0.157.1"),
         ("printf '\\377' >&2; echo 'codex-cli 0.157.1'", "0.157.1"),
     ],
-    ids=["prerelease kept", "leading v", "undecodable stderr"],
+    ids=["prerelease kept", "hyphenated prerelease kept", "leading v", "undecodable stderr"],
 )
 def test_reads_a_version_in_other_forms(bin_dir, body, version):
     _cli(bin_dir, "codex", body)
