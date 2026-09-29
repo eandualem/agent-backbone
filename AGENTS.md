@@ -198,15 +198,15 @@ installation through it: unset `TMUX` and `TMUX_PANE` (tmux follows `$TMUX`
 before `TMUX_TMPDIR`, so scratch sessions would start on the real server) and
 every `BACKBONE_*` variable (hooks write to `BACKBONE_STATE_DIR` first), and
 give the scratch run its own `TMUX_TMPDIR` and `HOME` (Claude Code's trust
-step writes to the server's `HOME`). The test suite and
-`make smoke` do this themselves. Shell-runtime agents are the
-safe way to observe deliveries. After any change under `services/terminal`,
-run `make smoke` and send one real `backbone tell` to a live agent before
-merging. The smoke command checks paste, keys, capture and display in a
-real tmux session on its own private server, then removes it; it needs tmux
-but no backbone service or model. Unit tests mock tmux and cannot see target-syntax mistakes (see the
-shared-memory note on the 2026-09-05 tmux incident). Label test issues clearly
-and close them.
+step writes to the server's `HOME`). The test suite clears these variables
+itself, and `make smoke` runs on its own tmux server. Shell-runtime agents are
+the safe way to observe deliveries. After any change under
+`services/terminal`, run `make smoke` and send one real `backbone tell` to a
+live agent before merging. The smoke command checks paste, keys, capture and
+display in a real tmux session on its own private server, then removes it; it
+needs tmux but no backbone service or model. Unit tests mock tmux and cannot
+see target-syntax mistakes (see the shared-memory note on the 2026-09-05 tmux
+incident). Label test issues clearly and close them.
 
 The installed `backbone` CLI on the owner's machine is an editable install
 of this checkout, and the running backbone restarts itself when the
