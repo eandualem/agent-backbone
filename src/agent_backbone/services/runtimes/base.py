@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import shutil
+import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
@@ -343,6 +344,22 @@ class Runtime:
     def available(self) -> bool:
         """Whether the binary is installed (a shell always is)."""
         return self.binary is None or resolve_command(self.binary) is not None
+
+    def installed_version(self) -> str | None:
+        """The installed CLI's version, the first ``N.N[.N]`` that ``--version``
+        prints; ``None`` when it cannot be read (#359). A CLI that prints it
+        differently overrides this in its own module."""
+        path = resolve_command(self.binary) if self.binary else None
+        if path is None:
+            return None
+        try:
+            done = subprocess.run(
+                [path, "--version"], capture_output=True, text=True, timeout=10, check=False
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        match = re.search(r"\b\d+\.\d+(?:\.\d+)?\b", done.stdout) if done.returncode == 0 else None
+        return match.group() if match else None
 
     def user_instructions(self, env: dict[str, str], project: Path | None = None) -> list[Path]:
         """The user-level instruction files this CLI adds to its sessions, as it

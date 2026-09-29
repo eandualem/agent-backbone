@@ -12,6 +12,7 @@ from agent_backbone.cli import setup
 from agent_backbone.services.agents import AgentState, StartResult, StateSnapshot
 
 _DETECT_REPO = "agent_backbone.services.agents.store.detect_repo"
+_INSTALLED_VERSION = "agent_backbone.services.runtimes.base.Runtime.installed_version"
 
 
 def _run(argv: list[str]) -> int:
@@ -101,6 +102,12 @@ class TestConfig:
 
 
 class TestDoctor:
+    @pytest.fixture(autouse=True)
+    def _no_cli_runs(self):
+        # doctor reads each installed CLI's version; no real CLI runs under test.
+        with patch(_INSTALLED_VERSION, return_value=None):
+            yield
+
     def test_reports_missing_pieces(self, tmp_path, capsys):
         assert _run(["init"]) == 0
         assert _run(["agent", "set", "ghost", "dir=/nope"]) == 1  # unknown agent
@@ -133,6 +140,31 @@ class TestDoctor:
         out = capsys.readouterr().out
         assert "Verified on a CLI version" in out
         assert "2.1.284" in out and "plan-approval" in out and "not recorded" in out
+
+    def test_advises_checking_again_where_the_installed_cli_differs(self, monkeypatch, capsys):
+        """#359: a mismatch is advice, not a failure; an unreadable version is named."""
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        assert _run(["init"]) == 0
+        recorded = {
+            "claude": {"2.1.284": ["steer"], "2.1.283": ["provider-failure"], "not recorded": []},
+            "codex": {"0.157.1": ["delivery"]},
+            "gemini": {"0.46.0": ["delivery"]},
+        }
+        installed = {"claude": "2.1.284", "codex": None, "gemini": "0.46.0"}
+        with (
+            patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"),
+            patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
+            patch(
+                "agent_backbone.services.runtimes.verified_versions",
+                side_effect=lambda runtime_id: recorded.get(runtime_id, {}),
+            ),
+            patch(_INSTALLED_VERSION, new=lambda rt: installed[rt.id]),
+        ):
+            assert _run(["doctor"]) == 0
+        out = " ".join(capsys.readouterr().out.split())  # a long note wraps
+        assert "! claude: installed 2.1.284, verified on 2.1.283: check those capabilities" in out
+        assert "! codex: installed version unreadable (codex --version)" in out
+        assert "! gemini:" not in out
 
     def test_no_agent_cli_is_a_problem_that_names_them(self, tmp_path, monkeypatch, capsys):
         """A newcomer must not read "All good." and then fail at `agent start` (#260)."""
