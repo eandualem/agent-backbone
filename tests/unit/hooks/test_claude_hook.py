@@ -128,6 +128,17 @@ class TestDerive:
         assert (record["state"], record["reason"]) == (state, reason)
         assert banner in (record["detail"] if reason else record["last_message"])
 
+    def test_a_provider_failure_outlasts_the_idle_notification(self):
+        """Claude Code says it waits for input a minute after a failed turn too."""
+        failed, _ = hook.derive(
+            _payload("StopFailure", error="server_error", last_assistant_message="API Error: 500"),
+            None,
+        )
+        waiting = _payload("Notification", message="Claude is waiting for your input")
+        assert hook.derive(waiting, failed) == (None, None)
+        record, _ = hook.derive(_payload("UserPromptSubmit", prompt="again"), failed)
+        assert record["state"] == "busy"
+
     def test_started_at_is_stable(self):
         first, _ = hook.derive(_payload("SessionStart"), None)
         later, _ = hook.derive(_payload("Stop"), first)

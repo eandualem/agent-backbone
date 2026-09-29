@@ -326,7 +326,7 @@ ECHOED = {
     ),
     "codex": _codex_turn(
         "\x1b[2m• \x1b[0mThe stub answered:\n"
-        "  Selected model is at capacity. Please try a different model."
+        "  ■ Selected model is at capacity. Please try a different model."
     ),
     "opencode": _opencode_turn(f"     {_OC_TEXT}Rate limit exceeded\n\n"),
 }
@@ -416,3 +416,22 @@ async def test_a_turn_that_starts_while_the_pane_is_read_keeps_its_busy_record(t
     with patch("agent_backbone.services.agents._inference.capture_pane", new_turn_meanwhile):
         snapshot = await get_agent_state(tmp_path, "desk", runtime_hint="codex")
     assert snapshot.state == AgentState.BUSY
+
+
+def test_codex_input_is_never_output():
+    # Only the input line and a pasted banner below it: nothing above is output.
+    pane = "› explain\n■ Selected model is at capacity. Please try a different model.\n"
+    assert RUNTIMES["codex"].provider_failure(pane) is None
+
+
+async def test_a_record_written_while_the_pane_is_read_decides(tmp_path):
+    write_state_file(tmp_path, "desk", {"state": "busy", "ts": time.time() - 10})
+
+    async def dialog_meanwhile(session):
+        record = {"state": "waiting_for_human", "reason": "permission", "ts": time.time()}
+        write_state_file(tmp_path, "desk", record)
+        return FAILED["codex"]
+
+    with patch("agent_backbone.services.agents._inference.capture_pane", dialog_meanwhile):
+        snapshot = await get_agent_state(tmp_path, "desk", runtime_hint="codex")
+    assert snapshot.state == AgentState.WAITING_FOR_HUMAN

@@ -241,7 +241,13 @@ class Codex(Runtime):
             ),
             default=None,
         )
-        return super().provider_failure("\n".join(lines[:last]) if last else pane_content)
+        above = pane_content if last is None else "\n".join(lines[:last])
+        return super().provider_failure(above)
+
+    def _opens_with_error_glyph(self, raw: str) -> bool:
+        # Codex draws its banners at the left edge and indents every line of a
+        # reply, so an indented glyph is output quoting one.
+        return sanitize_pane_content(raw).startswith(self.provider_error_prefixes)
 
     def diagnostics(self, pane_content: str) -> tuple[RuntimeDiagnostic, ...]:
         """Observe typed error banners, including one still visible after a model change.

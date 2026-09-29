@@ -342,9 +342,19 @@ async def _get_agent_state(
                 if pane_content is None:
                     pane_content = await capture_pane(session)
                 detail = runtime.provider_failure(pane_content) if pane_content else None
-                # A turn that began while the pane was read keeps its record.
+                # A record written while the pane was read (a new turn, a
+                # dialog) is newer than the screen: it decides.
                 latest = read_state_file(state_dir, session) if detail else None
-                if latest is not None and latest.timestamp == push.timestamp:
+                if latest is not None and latest.timestamp != push.timestamp:
+                    return await _get_agent_state(
+                        state_dir,
+                        session,
+                        stale_threshold,
+                        runtime_hint=runtime_hint,
+                        pane_content=pane_content,
+                        since=since,
+                    )
+                if latest is not None:
                     blocked = replace(
                         push,
                         state=AgentState.BLOCKED,

@@ -95,6 +95,10 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
         if "permission" in lowered:
             return state(STATE_WAITING, REASON_PERMISSION), None
         if "waiting for your input" in lowered:
+            # Sent a minute after any turn ends, a failed one too: a provider
+            # failure stands until the next prompt (#360).
+            if current.get("reason") == bb.REASON_PROVIDER:
+                return None, None
             return state(STATE_IDLE), None
         return None, None
     if event == "PreToolUse":

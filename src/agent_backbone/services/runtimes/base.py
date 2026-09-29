@@ -682,7 +682,7 @@ class Runtime:
             ):
                 # The words alone may be a final answer quoting an error. Require
                 # the runtime's banner glyph or red error foreground as well.
-                if not line.startswith(self.provider_error_prefixes) and not _error_foreground(raw):
+                if not self._opens_with_error_glyph(raw) and not _error_foreground(raw):
                     return None
                 return "\n".join([text, *reversed(detail)])[:500]
             if re.match(
@@ -693,6 +693,10 @@ class Runtime:
             # A later response/tool output means the earlier error is history.
             return None
         return None
+
+    def _opens_with_error_glyph(self, raw: str) -> bool:
+        """Whether a line opens with one of this runtime's error-banner glyphs."""
+        return sanitize_pane_content(raw).strip().startswith(self.provider_error_prefixes)
 
     def detect_interrupted(self, pane_content: str) -> bool:
         """Whether the prompt is back because a person interrupted the turn.
