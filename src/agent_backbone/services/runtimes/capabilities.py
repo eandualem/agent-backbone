@@ -51,6 +51,7 @@ REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
         ("deep-review", "codex", 288),
         ("brief-after-resume", "opencode", 273),
         ("brief-after-compaction", "opencode", 291),
+        ("plan-approval", "opencode", 278),
         ("refusal-alert", "opencode", 279),
         ("browser-group-name", "opencode", 270),
         ("reasoning-effort", "opencode", 296),
@@ -376,10 +377,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok(_PLAN),
         codex=_ok(_PLAN, "in Plan mode (`/plan`)"),
         gemini=_gap(),
-        opencode=_ok(
-            _PLAN,
-            "when OPENCODE_EXPERIMENTAL_PLAN_MODE is set in the agent's environment "
-            "(`doctor` names each agent without it)",
+        opencode=_gap(
+            278,
+            "works when OPENCODE_EXPERIMENTAL_PLAN_MODE is set in the agent's environment "
+            "(off by default; `doctor` names each agent without it)",
         ),
         deepcode=_gap(),
         aider=_gap(),

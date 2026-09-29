@@ -227,6 +227,7 @@ class ClaudeCode(Runtime):
     # Escape leaves plan mode so feedback can follow as a message.
     plan_approve_keys = ("Escape", "[Z")
     plan_reject_keys = ("Escape",)
+    plan_takes_text = True
 
     def pre_trust(self, directory: Path | str) -> None:
         pre_trust_directory(directory)

@@ -43,7 +43,7 @@ claims support that the adapter's code does not declare.
 | Permission dialog detected and alerted | ✅ | ✅ | ✅ | ✅ | ✅ | ? markers not verified live | n/a |
 | Permission dialog answered (agent approve) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
 | Permission dialog refused (agent deny) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | n/a |
-| Plan approval answered | ✅ | ✅ in Plan mode (`/plan`) | ❌ | ✅ when OPENCODE_EXPERIMENTAL_PLAN_MODE is set in the agent's environment (`doctor` names each agent without it) | ❌ | ❌ | n/a |
+| Plan approval answered | ✅ | ✅ in Plan mode (`/plan`) | ❌ | ❌ #278 works when OPENCODE_EXPERIMENTAL_PLAN_MODE is set in the agent's environment (off by default; `doctor` names each agent without it) | ❌ | ❌ | n/a |
 | Alert when an automatic safety check refuses an action | ✅ | ❌ #279 | ❌ | ❌ #279 | ❌ | ❌ | n/a |
 | Browser tab group named after the agent | ✅ with `backbone chrome install` | ❌ #270 | ❌ | ❌ #270 | ❌ | ❌ | n/a |
 | Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ resumes the directory's latest session | ❌ | n/a |

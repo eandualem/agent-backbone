@@ -307,6 +307,11 @@ class Runtime:
     plan_reject_keys: tuple[str, ...] = ()
     """tmux key names that decline the plan so feedback can follow as a message
     (Claude Code leaves plan mode; Codex and OpenCode stay in it)."""
+    plan_takes_text: bool = False
+    """Whether an answer typed into the plan prompt (an option number or free
+    text, ``POST /api/plans/{name}/respond``) reaches it: Claude Code. Codex's
+    and OpenCode's plan dialogs choose with keys only, where a pasted answer is
+    not a choice and its Enter would pick the highlighted option."""
     plan_markers: tuple[str, ...] = ()
     """Fragments of the dialog in which the runtime asks to approve its plan,
     all of them present (lowercase). Such a dialog is a plan decision, not a

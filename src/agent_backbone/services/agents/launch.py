@@ -711,7 +711,9 @@ async def plan_control(
     ``approved`` / ``rejected`` (the runtime's keys were sent), ``unsupported``
     (the runtime has no plan mode the backbone can drive — nothing is typed,
     so one runtime's key sequence can never reach another runtime's
-    terminal), ``offline`` or ``failed``. Rejecting only declines the plan;
+    terminal), ``not_waiting`` (the runtime's plan dialog is not on screen:
+    answered meanwhile, so its keys would land in the prompt), ``offline`` or
+    ``failed``. Rejecting only declines the plan;
     the feedback itself is a ``plan_response`` delivery through
     ``safe_deliver``. Callers gate on ``security.allow_remote_plan_control``
     and on the agent actually waiting for a plan decision.
@@ -726,6 +728,8 @@ async def plan_control(
         return "unsupported", [
             f"{rt.display_name} has no plan mode the backbone can drive; nothing was sent"
         ]
+    if rt.plan_markers and not rt.detect_plan_dialog(pane):
+        return "not_waiting", [f"no {rt.display_name} plan dialog on screen; nothing was sent"]
     keys = rt.plan_approve_keys if action == "approve" else rt.plan_reject_keys
     sent = await (rt.approve_plan(name) if action == "approve" else rt.reject_plan(name))
     if sent == 0:

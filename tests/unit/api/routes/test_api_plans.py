@@ -211,6 +211,36 @@ class TestPlanControl:
         assert deliver.await_args.args[:2] == ("ike", "2")  # verbatim: no envelope on a plan prompt
         assert deliver.await_args.kwargs["delivery_kind"] == "plan_response"
 
+    @pytest.mark.parametrize("runtime", ["codex", "opencode"])
+    async def test_a_plan_dialog_that_takes_keys_only_is_not_typed_into(
+        self, api_client, auth_headers, api_app, state_svc, runtime
+    ):
+        """#278: a pasted "2" is no choice there, and its Enter would pick the highlighted Yes."""
+        _enable_plan_control(api_app)
+        config = api_app.state.config
+        spec = replace(config.agents.get("ike"), runtime=runtime)
+        agents = replace(config.agents, specs={**config.agents.specs, "ike": spec})
+        api_app.state.config = replace(config, agents=agents)
+        state_svc.get_state.return_value = _plan_snapshot()
+        with patch(f"{_PLANS}.safe_deliver", new_callable=AsyncMock) as deliver:
+            resp = await api_client.post(
+                "/api/plans/ike/respond", json={"input": "2"}, headers=auth_headers
+            )
+        assert resp.status_code == 409
+        assert "approve or reject only" in resp.json()["detail"]
+        deliver.assert_not_awaited()
+
+    async def test_a_plan_answered_meanwhile_is_a_conflict(
+        self, api_client, auth_headers, api_app, state_svc
+    ):
+        _enable_plan_control(api_app)
+        state_svc.get_state.return_value = _plan_snapshot()
+        refusal = ("not_waiting", ["no Codex plan dialog on screen; nothing was sent"])
+        with patch(f"{_PLANS}.plan_control", new_callable=AsyncMock, return_value=refusal):
+            resp = await api_client.post("/api/plans/ike/approve", headers=auth_headers)
+        assert resp.status_code == 409
+        assert "no Codex plan dialog on screen" in resp.json()["detail"]
+
     async def test_undelivered_response_is_reported_not_queued(
         self, api_client, auth_headers, api_app, state_svc
     ):

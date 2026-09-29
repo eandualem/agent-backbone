@@ -27,6 +27,7 @@ from agent_backbone.config import BackboneConfig
 from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import agent_state, listable_sessions, plan_control, read_plan
 from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.runtimes import get_runtime
 from agent_backbone.services.terminal import list_sessions
 
 log = logging.getLogger(__name__)
@@ -67,6 +68,11 @@ async def _run_plan_control(config: BackboneConfig, session: str, action: str) -
         raise HTTPException(
             status_code=409,
             detail=f"Plan control is not available for '{session}': {evidence[0]}",
+        )
+    if outcome == "not_waiting":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Session '{session}' is not waiting for plan approval: {evidence[0]}",
         )
     if outcome == "offline":
         raise HTTPException(status_code=404, detail=f"Session '{session}' not found")
@@ -188,7 +194,14 @@ async def respond_to_plan(
 ):
     """Send input to a plan-waiting session (option selection or free text)."""
     _require_plan_control(config)
-    registered_agent_or_404(config, session)
+    spec = registered_agent_or_404(config, session)
+    runtime = get_runtime(spec.runtime)
+    if not runtime.plan_takes_text:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{runtime.display_name} answers a plan with approve or reject only; "
+            "nothing was sent",
+        )
     await _require_plan_waiting(config, session)
     await _deliver_plan_response(config, db, session, body.input)
 

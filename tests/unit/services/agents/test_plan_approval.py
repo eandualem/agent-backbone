@@ -169,17 +169,56 @@ async def test_a_codex_plan_reads_busy_until_its_dialog_is_drawn(tmp_path):
     assert not snapshot.is_plan_waiting
 
 
-@pytest.mark.parametrize(
-    ("pane", "pending"), [(CODEX_PLAN_DIALOG, True), ("", False)], ids=["dialog", "no-screen"]
-)
-async def test_a_stale_codex_plan_stands_only_while_its_dialog_shows(tmp_path, pane, pending):
+@pytest.mark.parametrize("age", [10, 400], ids=["fresh", "stale"])
+@pytest.mark.parametrize("pane", ["", "  compiling…\n"], ids=["no-capture", "inconclusive"])
+async def test_a_codex_plan_the_screen_cannot_confirm_reads_busy(tmp_path, age, pane):
+    """Nothing is typed into a dialog that may be open, and no plan is answered."""
+    _present_plan("codex", tmp_path)
+    _age(tmp_path, age)
+    snapshot = await get_agent_state(tmp_path, "desk", 300, runtime_hint="codex", pane_content=pane)
+    assert snapshot.state == AgentState.BUSY, snapshot.evidence
+    assert not snapshot.is_plan_waiting
+
+
+async def test_a_stale_codex_plan_still_on_screen_keeps_its_plan_and_identity(tmp_path):
     _present_plan("codex", tmp_path)
     _age(tmp_path, 400)
-    snapshot = await get_agent_state(tmp_path, "desk", 300, runtime_hint="codex", pane_content=pane)
-    assert snapshot.is_plan_waiting is pending, snapshot.evidence
-    if pending:
-        assert snapshot.plan_title == "Add the probe file"
-        assert read_plan(tmp_path, snapshot) == PLAN
+    reads = [
+        await get_agent_state(
+            tmp_path, "desk", 300, runtime_hint="codex", pane_content=CODEX_PLAN_DIALOG
+        )
+        for _ in range(2)
+    ]
+    assert all(snapshot.is_plan_waiting for snapshot in reads), reads[0].evidence
+    assert reads[0].plan_title == "Add the probe file"
+    assert read_plan(tmp_path, reads[0]) == PLAN
+    assert reads[0].timestamp == reads[1].timestamp  # one alert, buttons bound to it
+
+
+async def test_a_codex_plan_dialog_without_its_plan_text_is_still_a_plan(tmp_path):
+    """The rollout could not be read, so the hook said idle: the dialog on screen decides."""
+    _run(codex_hook, tmp_path, {"hook_event_name": "Stop", "session_id": "s"})
+    _age(tmp_path, 10)
+    reads = [
+        await get_agent_state(
+            tmp_path, "desk", runtime_hint="codex", pane_content=CODEX_PLAN_DIALOG
+        )
+        for _ in range(2)
+    ]
+    assert all(snapshot.is_plan_waiting for snapshot in reads), reads[0].evidence
+    assert reads[0].timestamp == reads[1].timestamp
+
+
+async def test_codex_plan_keys_wait_for_the_dialog_on_screen():
+    """A person may have answered between the state read and the keys."""
+    with (
+        patch(f"{_LAUNCH}.session_exists", AsyncMock(return_value=True)),
+        patch(f"{_LAUNCH}.capture_pane", AsyncMock(return_value=CODEX_STILL_PLANNING)),
+        patch("agent_backbone.services.runtimes.base.send_keys", AsyncMock()) as keys,
+    ):
+        outcome, _ = await plan_control("desk", "approve", runtime="codex")
+    assert outcome == "not_waiting"
+    keys.assert_not_awaited()
 
 
 def test_codex_tells_its_plan_dialog_from_a_permission_prompt():
