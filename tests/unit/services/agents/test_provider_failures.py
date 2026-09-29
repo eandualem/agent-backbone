@@ -435,3 +435,16 @@ async def test_a_record_written_while_the_pane_is_read_decides(tmp_path):
     with patch("agent_backbone.services.agents._inference.capture_pane", dialog_meanwhile):
         snapshot = await get_agent_state(tmp_path, "desk", runtime_hint="codex")
     assert snapshot.state == AgentState.WAITING_FOR_HUMAN
+
+
+async def test_a_newer_record_is_read_against_a_new_screen(tmp_path):
+    write_state_file(tmp_path, "desk", {"state": "busy", "ts": time.time() - 10})
+    screens = [FAILED["codex"], _codex_turn("\x1b[2m• \x1b[0mstub reply")]
+
+    async def turn_ends_meanwhile(session):
+        write_state_file(tmp_path, "desk", {"state": "idle", "ts": time.time()})
+        return screens.pop(0)
+
+    with patch("agent_backbone.services.agents._inference.capture_pane", turn_ends_meanwhile):
+        snapshot = await get_agent_state(tmp_path, "desk", runtime_hint="codex")
+    assert snapshot.state == AgentState.IDLE
