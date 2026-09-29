@@ -108,6 +108,11 @@ make check
 BACKBONE_DATA_DIR=/tmp/backbone-dev make dev
 ```
 
+`make dev` runs on its own tmux server, so its agents stay apart from your own
+tmux sessions and from a real backbone's agents. Open one from a terminal
+outside tmux with
+`TMUX_TMPDIR=/tmp/backbone-dev-tmux uv run backbone agent attach NAME`.
+
 See [Contributing](CONTRIBUTING.md) for branches, checks and releases.
 
 ## License
