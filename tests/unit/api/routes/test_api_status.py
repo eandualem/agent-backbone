@@ -164,7 +164,7 @@ async def test_slow_github_does_not_block_local_status(api_client, auth_headers,
 
     async def slow(**kwargs):
         try:
-            # Expire the real timeout once the remote request is in flight.
+            # Expire the substituted deadline once the remote request is in flight.
             deadline.reschedule(asyncio.get_running_loop().time())
             await asyncio.Event().wait()
         finally:
@@ -176,14 +176,13 @@ async def test_slow_github_does_not_block_local_status(api_client, auth_headers,
     try:
         with (
             _live(["worker"]),
-            patch(
-                "agent_backbone.api.routes.status.asyncio.timeout", return_value=deadline
-            ) as timeout,
+            patch("agent_backbone.api.routes.status.asyncio", wraps=asyncio) as status_asyncio,
         ):
+            status_asyncio.timeout.return_value = deadline
             response = await asyncio.wait_for(
                 api_client.get("/api/status", headers=auth_headers), timeout=4
             )
-        timeout.assert_called_once_with(2.0)
+        status_asyncio.timeout.assert_called_once_with(2.0)
         assert response.status_code == 200
         assert response.json()["pending_issues"] is None
         assert response.json()["active_sessions"] == ["worker"]

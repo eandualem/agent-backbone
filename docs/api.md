@@ -569,7 +569,7 @@ feedback is sent *after* the plan is declined, as an ordinary
 `feedback` field is its outcome. All three runtimes stay in plan mode after a
 rejection, so the feedback asks for a revised plan.
 
-`POST /api/plans/{name}/respond {"input"}` is **deprecated** (#357): it
+`POST /api/plans/{name}/respond` is **deprecated** (#357): it
 answers **409** and types nothing, and it is removed at the next breaking
 release. No shipped runtime's plan dialog takes a typed answer: Claude Code,
 Codex and OpenCode choose with keys only, where a pasted answer is no choice
