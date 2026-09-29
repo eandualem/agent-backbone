@@ -409,7 +409,8 @@ after a sequence number, oldest first, across every key epoch:
   records `delivered_at` when that delivery completes, and `status` stays
   `revoked`.
 - `status` is `admitted`, or `revoked` once a reset of its key revoked it
-  before delivery; `revoked_at` says when. Every other field never changes.
+  before delivery; `revoked_at` says when. Apart from these and `delivered_at`,
+  set once, no field ever changes.
 - Sequence numbers are shared by all senders, so one sender's are increasing
   but not consecutive. `pruned_through` is the highest sequence number that
   retention removed for this sender (0 when none). `gap` is true when
