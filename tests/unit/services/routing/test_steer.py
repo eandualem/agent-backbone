@@ -78,6 +78,26 @@ async def test_refusals_queue_nothing(config, db, working, intel, runtime, reaso
         assert "send an ordinary message" in report.evidence[-1]
 
 
+@pytest.mark.parametrize(("reason", "outcome"), [("provider", "refused"), ("quota", "offered")])
+async def test_a_turn_that_failed_at_the_provider_takes_no_steer(
+    config, db, working, reason, outcome
+):
+    """Blocked by the provider, the turn is over; blocked by a usage limit, it resumes."""
+    working[0].return_value = SessionProfile(
+        "app",
+        SessionIntelligence.AGENT_WORKING,
+        runtime="claude",
+        agent_state=AgentState.BLOCKED,
+        reason=reason,
+        evidence=["e"],
+    )
+    report = await steer_agent("app", "x", config, db=db, sender="peer")
+    assert report.outcome == outcome
+    if outcome == "refused":
+        assert report.reason == "not_working" and "ordinary message" in report.evidence[-1]
+        assert await db.deliveries.query(session_name="app") == []
+
+
 def _hook(hook, config, payload: dict, agent: str = "ike") -> None:
     with (
         patch.object(hook.sys, "stdin", io.StringIO(json.dumps(payload))),

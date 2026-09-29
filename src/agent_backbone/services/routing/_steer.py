@@ -104,6 +104,18 @@ async def steer_agent(
                 "send an ordinary message instead",
             ],
         )
+    if profile.agent_state == AgentState.BLOCKED and profile.reason == "provider":
+        # Blocked reads as working, but a turn that failed at the provider is
+        # over; a usage limit only pauses it.
+        return SteerReport(
+            "refused",
+            session_name,
+            "not_working",
+            evidence=[
+                *evidence,
+                "its turn failed at the provider; send an ordinary message instead",
+            ],
+        )
     runtime = get_runtime(profile.runtime)
     if not runtime.hook_context:
         return SteerReport(

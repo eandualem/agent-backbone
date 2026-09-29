@@ -330,8 +330,9 @@ sequenceDiagram
   the turn ends with no hook event (Escape on Claude Code, a provider failure
   on Codex): a newer prompt, a new conversation (`/clear`) or a `blocked` /
   `provider` state leaves it `not_taken`. An offer that names no turn (the
-  hook had recorded no prompt yet, or an earlier version wrote it) is handed
-  over on the next tool call, as before.
+  hook had recorded no prompt yet, or an earlier version wrote it) cannot be
+  compared: as before, the next tool call takes it unless the turn's end was
+  seen first.
 - **Comments**, including those on the current issue, wait while the agent is
   starting, busy, blocked, or waiting for a human. They are queued and delivered
   when the agent is ready; priority does not bypass these conditions.
