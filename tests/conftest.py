@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -118,6 +119,20 @@ def isolated_user_instructions(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
     for key in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "XDG_CONFIG_HOME"):
         monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def isolated_backbone_environment(monkeypatch):
+    """The suite never inherits a running backbone's session environment.
+
+    Run from an agent's own session, ``BACKBONE_STATE_DIR`` and
+    ``BACKBONE_DATA_DIR`` name the real directories and ``TMUX`` the real
+    server; hooks and config prefer them over a test's own values (#351).
+    A test that needs one sets it itself.
+    """
+    for key in list(os.environ):
+        if key.startswith("BACKBONE_") or key in ("TMUX", "TMUX_PANE"):
+            monkeypatch.delenv(key)
 
 
 @pytest.fixture(autouse=True)

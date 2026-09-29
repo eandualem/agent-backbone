@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import tempfile
 import uuid
@@ -34,15 +35,25 @@ async def main() -> None:
         "    print('received:' + line.strip(), flush=True)\n"
     )
     with tempfile.TemporaryDirectory(prefix="backbone-smoke-") as directory:
+        # A private server, never the one the caller's own session runs in (#351).
+        os.environ.pop("TMUX", None)
+        os.environ.pop("TMUX_PANE", None)
+        os.environ["TMUX_TMPDIR"] = directory
         try:
             if not await start_session(
                 session, working_dir=directory, command=[sys.executable, "-u", "-c", program]
             ):
                 raise RuntimeError("could not start the smoke session")
             await wait_for_output(session, "smoke-ready")
-            fields = await query_format_vars(session, "session_name=#{session_name}")
+            fields = await query_format_vars(
+                session, "session_name=#{session_name}\nsocket_path=#{socket_path}"
+            )
             if fields.get("session_name") != session:
                 raise RuntimeError(f"display-message targeted the wrong session: {fields!r}")
+            if not os.path.realpath(fields.get("socket_path", "")).startswith(
+                os.path.realpath(directory)
+            ):
+                raise RuntimeError(f"refusing to run on a server outside {directory}: {fields!r}")
             if not await paste_message(session, marker):
                 raise RuntimeError("paste_message failed")
             if not await send_keys(session, "Enter"):
