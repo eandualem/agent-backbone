@@ -930,7 +930,11 @@ class TestReply:
 
 
 class TestDown:
-    async def test_failed_stop_is_reported(self, tmp_path, capsys):
+    @pytest.mark.parametrize(
+        ("closed", "exit_code", "message"),
+        [(False, 1, "failed to stop"), (True, 0, "backbone stopped")],
+    )
+    async def test_stop_result(self, tmp_path, capsys, closed, exit_code, message):
         from agent_backbone.cli import server
         from agent_backbone.config import bootstrap_config
 
@@ -944,31 +948,11 @@ class TestDown:
             patch(
                 "agent_backbone.services.terminal.graceful_close",
                 new_callable=AsyncMock,
-                return_value=False,
+                return_value=closed,
             ),
         ):
-            assert await server._down(config) == 1
-        assert "failed to stop" in capsys.readouterr().out
-
-    async def test_clean_stop(self, tmp_path, capsys):
-        from agent_backbone.cli import server
-        from agent_backbone.config import bootstrap_config
-
-        config = bootstrap_config(tmp_path / "data")
-        with (
-            patch(
-                "agent_backbone.services.terminal.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.services.terminal.graceful_close",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-        ):
-            assert await server._down(config) == 0
-        assert "backbone stopped" in capsys.readouterr().out
+            assert await server._down(config) == exit_code
+        assert message in capsys.readouterr().out
 
 
 class TestHooks:

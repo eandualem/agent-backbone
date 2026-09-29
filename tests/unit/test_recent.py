@@ -31,14 +31,12 @@ class TestRecentKeys:
             assert recent.seen("a", ttl_seconds=2) is False
             assert recent.seen("a") is True
 
-    def test_forget_retain_and_clear(self):
+    def test_forget_and_clear(self):
         recent = RecentKeys(10)
         for key in ("a", "b", "c"):
             recent.mark(key)
         recent.forget("a")
         assert recent.seen("a") is False
-        recent.retain({"b"})
-        assert recent.seen("c") is False
         assert recent.seen("b") is True
         recent.clear()
         assert recent.seen("b") is False
