@@ -579,7 +579,8 @@ was submitted.
 task and not queue-jumping. It goes through `POST /api/steer` as a transient
 offer to the agent's runtime hook, never as a queue row and never as a paste:
 Claude Code and Codex hand it to the model as context on the agent's next tool
-call, and OpenCode's plugin adds it to the running turn as a user message after
+call (on Codex, a command still running when its call returns hands it over
+when it exits), and OpenCode's plugin adds it to the running turn as a user message after
 that call, so it cannot overwrite a draft or answer a dialog. It is accepted only
 while the agent is `agent_working` on one of those runtimes in a session the
 backbone started; otherwise it is **refused with the reason** (`not_working`,
