@@ -42,7 +42,7 @@ async def main() -> None:
         os.environ.pop("TMUX", None)
         os.environ.pop("TMUX_PANE", None)
         os.environ["TMUX_TMPDIR"] = directory
-        socket = ""
+        socket = Path(directory) / f"tmux-{os.getuid()}" / "default"
         try:
             if not await start_session(
                 session, working_dir=directory, command=[sys.executable, "-u", "-c", program]
@@ -57,7 +57,6 @@ async def main() -> None:
             server = Path(fields.get("socket_path", "")).resolve()
             if not server.is_relative_to(Path(directory).resolve()):
                 raise RuntimeError(f"refusing to run on a server outside {directory}: {fields!r}")
-            socket = str(server)
             if not await paste_message(session, marker):
                 raise RuntimeError("paste_message failed")
             if not await send_keys(session, "Enter"):
@@ -65,9 +64,8 @@ async def main() -> None:
             await wait_for_output(session, f"received:{marker}")
         finally:
             removed = await stop_session(session)
-            if socket:
-                # A user configuration with ``exit-empty off`` keeps an empty server alive.
-                subprocess.run(["tmux", "-S", socket, "kill-server"], capture_output=True)
+            # A user configuration with ``exit-empty off`` keeps an empty server alive.
+            subprocess.run(["tmux", "-S", str(socket), "kill-server"], capture_output=True)
             if not removed:
                 raise RuntimeError(f"could not remove smoke session {session}")
     print("tmux smoke passed: paste, keys, capture, display and cleanup")
