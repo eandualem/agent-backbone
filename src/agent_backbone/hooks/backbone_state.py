@@ -42,6 +42,7 @@ REASON_PLAN = "plan"
 REASON_PERMISSION = "permission"
 REASON_QUESTION = "question"
 REASON_QUOTA = "quota"
+REASON_PROVIDER = "provider"
 
 LAST_MESSAGE_CHARS = 500
 

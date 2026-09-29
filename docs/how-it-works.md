@@ -154,6 +154,7 @@ SessionEnd record expires; stale permission requests are not revived:
 | `SessionStart` | `idle` (Claude is at its prompt) |
 | `UserPromptSubmit` | `busy` (captures `owner/name#N` or `#N` from the prompt as the current issue) |
 | `Stop` | `idle`, with `last_assistant_message` |
+| `StopFailure` (a turn that failed at the API) | `blocked` / `provider` for `rate_limit`, `server_error`, `billing_error` and `authentication_failed` (`detail` keeps the error banner); `idle` for any other error |
 | `Notification` "needs your permission…" | `waiting_for_human` / `permission` |
 | `Notification` `quota_auto_resume_*` | `blocked` / `quota` while Claude Code waits for its usage limit to reset (`detail` keeps its message); `busy` once it resumes |
 | `PreToolUse ExitPlanMode` | `waiting_for_human` / `plan`, plan text saved to `<data_dir>/state/plans/<agent>.md` |
@@ -170,6 +171,7 @@ SessionEnd record expires; stale permission requests are not revived:
 | `PermissionRequest` | `waiting_for_human` / `permission` |
 | `PreToolUse` | `busy` (the dialog is behind us) |
 | `Stop`, `Interrupt` | `idle`, with `last_assistant_message` |
+| none on a turn that failed at the provider | read from the terminal instead (below) |
 | `SessionEnd` | `unknown` |
 
 | Gemini CLI event | State written |
@@ -237,9 +239,14 @@ with `reason: provider`, preserving the error and retry/reset detail. This
 requires an error banner glyph or red error foreground, so ordinary response
 text repeating the provider's words does not block delivery. Deep Code reports
 a failed request on its own status line instead (`status: failed · … · fail:
-HTTP 429: …`), which counts for HTTP 402, 429 and 503. This
-overrides an idle hook or stale terminal fallback; fresh busy hooks remain
-authoritative. Later response/tool output clears terminal-only failure evidence.
+HTTP 429: …`), which counts for HTTP 402, 429 and 503. OpenCode 1.18 draws
+the failure as a block whose bar is red and whose text is grey. This
+overrides an idle hook or stale terminal fallback; a fresh busy hook stays
+authoritative, except on Codex, which runs no hook for a turn that failed at
+the provider (measured on 0.157.1). Once its `busy` record is a few seconds
+old, a Codex terminal whose latest output above the input line is such a
+banner reads `blocked`, unless the record changed while the terminal was read.
+Later response/tool output clears terminal-only failure evidence.
 Messages stay queued, including priority messages. The monitor alerts humans,
 the escalation target and active swarm coordinator/initiator, deduplicating
 each recipient and retrying failed notification delivery.

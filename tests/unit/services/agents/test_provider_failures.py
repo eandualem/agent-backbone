@@ -355,15 +355,16 @@ def test_opencode_output_without_a_red_bar_last_is_not_a_failure(last):
 
 def _record(runtime, tmp_path, failed: bool) -> None:
     """A turn, as each CLI's hooks report it. When it fails at the provider,
-    Claude Code runs Stop, OpenCode's plugin sees the session go idle and
-    Codex runs no hook at all."""
+    Claude Code runs StopFailure naming the error, OpenCode's plugin sees the
+    session go idle and Codex runs no hook at all (live, #360)."""
     if runtime == "opencode":
         _opencode(tmp_path, ["busy", "idle"] if failed else ["busy"])
     else:
         hook = {"claude": claude_hook, "codex": codex_hook}[runtime]
         _run(hook, tmp_path, {"hook_event_name": "UserPromptSubmit", "session_id": "s"})
         if failed and runtime == "claude":
-            _run(hook, tmp_path, {"hook_event_name": "Stop", "session_id": "s"})
+            failure = {"error": "server_error", "last_assistant_message": "API Error: 529"}
+            _run(hook, tmp_path, {"hook_event_name": "StopFailure", "session_id": "s", **failure})
     record = json.loads((tmp_path / "desk.json").read_text())
     record["ts"] -= 10  # read ten seconds later, well before the record goes stale
     (tmp_path / "desk.json").write_text(json.dumps(record))
