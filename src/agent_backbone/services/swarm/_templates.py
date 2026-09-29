@@ -6,7 +6,6 @@ from pathlib import Path
 
 from agent_backbone.templates import (
     TemplateDirs,
-    list_templates,
     read_template,
     render,
     template_path,
@@ -21,14 +20,6 @@ def template_paths(role: str, dirs: TemplateDirs | None) -> tuple[Path, Path]:
         source = template_source("swarm:worker", dirs)
     target = template_path(dirs, name) if dirs is not None else source
     return source, target
-
-
-def list_brief_templates(dirs: TemplateDirs) -> list[dict]:
-    return [
-        {"name": row["name"][6:], "source": row["source"], "override": row["path"]}
-        for row in list_templates(dirs)
-        if row["name"].startswith("swarm:")
-    ]
 
 
 def render_brief(role: str, facts: dict[str, str], *, dirs: TemplateDirs | None = None) -> str:

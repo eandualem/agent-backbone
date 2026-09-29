@@ -160,10 +160,13 @@ async def test_upgrade_hold_is_authenticated_scoped_and_refuses_late_requests(
 
 async def test_slow_github_does_not_block_local_status(api_client, auth_headers, api_app):
     cancelled = asyncio.Event()
+    deadline = asyncio.timeout(None)
 
     async def slow(**kwargs):
         try:
-            await asyncio.sleep(60)
+            # Expire the real timeout once the remote request is in flight.
+            deadline.reschedule(asyncio.get_running_loop().time())
+            await asyncio.Event().wait()
         finally:
             cancelled.set()
 
@@ -171,13 +174,19 @@ async def test_slow_github_does_not_block_local_status(api_client, auth_headers,
     gh.list_issues.side_effect = slow
     api_app.dependency_overrides[get_optional_github] = lambda: gh
     try:
-        with _live(["ike"]):
+        with (
+            _live(["worker"]),
+            patch(
+                "agent_backbone.api.routes.status.asyncio.timeout", return_value=deadline
+            ) as timeout,
+        ):
             response = await asyncio.wait_for(
                 api_client.get("/api/status", headers=auth_headers), timeout=4
             )
+        timeout.assert_called_once_with(2.0)
         assert response.status_code == 200
         assert response.json()["pending_issues"] is None
-        assert response.json()["active_sessions"] == ["ike"]
+        assert response.json()["active_sessions"] == ["worker"]
         assert cancelled.is_set()
     finally:
         api_app.dependency_overrides.clear()

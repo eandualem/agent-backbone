@@ -443,10 +443,6 @@ class PlanRejectRequest(BaseModel):
     feedback: str
 
 
-class PlanRespondRequest(BaseModel):
-    input: str
-
-
 # --- Messages ---
 
 
