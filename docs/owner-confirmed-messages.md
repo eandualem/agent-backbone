@@ -402,9 +402,15 @@ after a sequence number, oldest first, across every key epoch:
   message (a swarm's name to its coordinator), `recipient` is unchanged.
 - `delivered_at` is `null` until the message is delivered (for a steer, until
   the agent's hook takes it) and set once. It stays `null` for a message that
-  expired or was revoked, and for a steer that wasn't taken.
+  expired, for a steer that wasn't taken, and for a revoked message that was
+  never delivered. Revocation and delivery are separate facts: a reset does not
+  undo a delivery already under way. A paste still in the agent's input, a
+  message already read from its inbox, or a steer offered before the reset
+  records `delivered_at` when that delivery completes, and `status` stays
+  `revoked`.
 - `status` is `admitted`, or `revoked` once a reset of its key revoked it
-  before delivery; `revoked_at` says when. Every other field never changes.
+  before delivery; `revoked_at` says when. Apart from these and `delivered_at`,
+  set once, no field ever changes.
 - Sequence numbers are shared by all senders, so one sender's are increasing
   but not consecutive. `pruned_through` is the highest sequence number that
   retention removed for this sender (0 when none). `gap` is true when
