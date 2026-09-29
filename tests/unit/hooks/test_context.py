@@ -202,6 +202,16 @@ def _tool_call(runtime: str, tmp_path) -> str:
     return data["additionalContext"]
 
 
+def _prompt(runtime: str, tmp_path, at: float) -> dict:
+    """A prompt starts a turn on ``runtime`` (Claude Code, Codex) at ``at``:
+    the turn as the backbone names it in an offer."""
+    hook = {"claude": claude_hook, "codex": codex_hook}[runtime]
+    with patch.object(bb.time, "time", return_value=at):
+        _run(hook, tmp_path, {"hook_event_name": "UserPromptSubmit", "session_id": "s"})
+    record = bb.read_current(tmp_path, "desk")
+    return {"prompted_at": record["prompted_at"], "session_id": record["session_id"]}
+
+
 def _turn_end(runtime: str, tmp_path, event: str = "Stop") -> None:
     """The turn ends on ``runtime``; nothing can be handed over then."""
     if runtime == "opencode":
@@ -227,6 +237,7 @@ def test_clear_agent_context_drops_every_offer_left_for_a_previous_session(tmp_p
     (tmp_path / "context" / "desk" / "launch-1").mkdir()
     (tmp_path / "context" / "desk" / "launch-1" / "steer-1.md").write_text("old guidance")
     bb.offer_steer(tmp_path, "desk", "launch-1", "brief-refresh", "old brief")
+    bb.offer_steer(tmp_path, "desk", "launch-1", bb.steer_key(2), "old steer", {"prompted_at": 1.0})
     bb.clear_agent_context(tmp_path, "desk")
     assert list((tmp_path / "context" / "desk").iterdir()) == []
     assert bb.take_context(tmp_path, "desk", launch_id="launch-1") == []
@@ -283,7 +294,13 @@ def test_hooks_hand_launch_scoped_steers_over_after_a_tool_call(tmp_path, monkey
 
 @pytest.mark.parametrize(
     ("runtime", "end"),
-    [("claude", "Stop"), ("codex", "Stop"), ("codex", "Interrupt"), ("opencode", "idle")],
+    [
+        ("claude", "Stop"),
+        ("claude", "StopFailure"),
+        ("codex", "Stop"),
+        ("codex", "Interrupt"),
+        ("opencode", "idle"),
+    ],
 )
 def test_a_steer_left_when_the_turn_ends_never_reaches_the_next_task(
     tmp_path, monkeypatch, runtime, end
@@ -294,6 +311,78 @@ def test_a_steer_left_when_the_turn_ends_never_reaches_the_next_task(
     _turn_end(runtime, tmp_path, end)
     assert _tool_call(runtime, tmp_path) == ""
     assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(5, "missed")]
+
+
+@pytest.mark.parametrize("runtime", RUNTIMES)
+def test_a_steer_left_by_a_turn_that_ended_unseen_never_reaches_the_next_task(
+    tmp_path, monkeypatch, runtime
+):
+    """Claude Code runs no hook on Escape (#252), Codex none on a provider
+    failure (#360): the next prompt starts another turn, and the steer offered
+    to the old one is missed. OpenCode sees both ends (``session.idle``)."""
+    monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    if runtime == "opencode":
+        bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(5), "for the old task")
+        assert _opencode(tmp_path, ["request", "interrupt", "request", "tool"])["prompts"] == []
+    else:
+        turn = _prompt(runtime, tmp_path, at=1000.2)
+        bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(5), "for the old task", turn)
+        _prompt(runtime, tmp_path, at=1000.7)  # the old turn ended with no hook event
+        assert _tool_call(runtime, tmp_path) == ""
+    assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(5, "missed")]
+
+
+@pytest.mark.parametrize("runtime", ("claude", "codex"))
+def test_a_steer_is_handed_over_only_within_the_turn_it_was_offered_to(
+    tmp_path, monkeypatch, runtime
+):
+    """Half a second apart, either way round: the turn's prompt decides, not a clock."""
+    monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    first = _prompt(runtime, tmp_path, at=1000.2)
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(5), "for task one", first)
+    second = _prompt(runtime, tmp_path, at=1000.7)
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(6), "for task two", second)
+    assert _tool_call(runtime, tmp_path) == "for task two"
+    offers = sorted((i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path))
+    assert offers == [(5, "missed"), (6, "taken")]
+    for key in (5, 6):
+        bb.clear_steer(tmp_path, "desk", "launch-x", key)
+    assert list((tmp_path / "context" / "desk" / "launch-x").iterdir()) == []
+
+
+@pytest.mark.parametrize("runtime", ("claude", "codex"))
+@pytest.mark.parametrize(("session", "handed"), [("s", True), ("s-cleared", False)])
+def test_a_new_conversation_never_takes_a_steer_offered_to_the_old_one(
+    tmp_path, monkeypatch, runtime, session, handed
+):
+    """``/clear`` after a turn that ended unseen: the new conversation's
+    SessionStart hands context over, but not the old one's steer. Within the
+    same conversation (compaction) it still does."""
+    monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    turn = _prompt(runtime, tmp_path, at=1000.2)
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(5), "for the old task", turn)
+    hook = {"claude": claude_hook, "codex": codex_hook}[runtime]
+    out = _run(hook, tmp_path, {"hook_event_name": "SessionStart", "session_id": session})
+    assert ("for the old task" in out) is handed
+    state = "taken" if handed else "missed"
+    assert [(i, s) for _, _, i, s, _ in bb.steer_offers(tmp_path)] == [(5, state)]
+
+
+@pytest.mark.parametrize("runtime", ("claude", "codex"))
+def test_a_steer_not_tied_to_a_turn_is_handed_over_as_before(tmp_path, monkeypatch, runtime):
+    """No prompt recorded when it was offered, or none now (a record from
+    before ``prompted_at``): the next tool call takes it."""
+    monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(5), "untied")
+    _prompt(runtime, tmp_path, at=1000.2)
+    assert _tool_call(runtime, tmp_path) == "untied"
+    bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(6), "tied", {"prompted_at": 999.0})
+    (tmp_path / "desk.json").write_text(json.dumps({"state": "busy", "ts": 1000.3}))
+    assert _tool_call(runtime, tmp_path) == "tied"
 
 
 def test_opencode_hands_offers_over_as_a_message_in_the_running_turn(tmp_path, monkeypatch):

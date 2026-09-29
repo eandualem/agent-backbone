@@ -325,6 +325,13 @@ sequenceDiagram
   live session only (`<state_dir>/context/<agent>/<launch_id>/`), is never
   queued for a later prompt, and is recorded as `handed_off`, `not_taken`
   (the turn ended first, or nothing took it within 300 s, checked every 15 s) or `cancelled` (the session was replaced).
+  An offer names the turn it was offered to (its prompt and conversation, as
+  the hook recorded them) and is handed over only within that turn, also when
+  the turn ends with no hook event (Escape on Claude Code, a provider failure
+  on Codex): a newer prompt, a new conversation (`/clear`) or a `blocked` /
+  `provider` state leaves it `not_taken`. An offer that names no turn (the
+  hook had recorded no prompt yet, or an earlier version wrote it) is handed
+  over on the next tool call, as before.
 - **Comments**, including those on the current issue, wait while the agent is
   starting, busy, blocked, or waiting for a human. They are queued and delivered
   when the agent is ready; priority does not bypass these conditions.

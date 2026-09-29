@@ -19,7 +19,7 @@ from agent_backbone.hooks.backbone_state import (
     steer_offers,
     take_context,
 )
-from agent_backbone.services.agents import AgentState
+from agent_backbone.services.agents import AgentState, StateSnapshot
 from agent_backbone.services.routing import settle_steers, steer_agent
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 
@@ -78,22 +78,27 @@ async def test_refusals_queue_nothing(config, db, working, intel, runtime, reaso
         assert "send an ordinary message" in report.evidence[-1]
 
 
-def _hook(hook, config, payload: dict) -> None:
+def _hook(hook, config, payload: dict, agent: str = "ike") -> None:
     with (
         patch.object(hook.sys, "stdin", io.StringIO(json.dumps(payload))),
         patch("sys.stdout", new_callable=io.StringIO),
     ):
-        assert hook.main(["--state-dir", str(config.state_dir), "--agent", "ike"]) == 0
+        assert hook.main(["--state-dir", str(config.state_dir), "--agent", agent]) == 0
 
 
 @pytest.mark.parametrize(
-    ("hook", "event"),
-    [(claude_hook, "Stop"), (codex_hook, "Stop"), (codex_hook, "Interrupt")],
+    ("hook", "end"),
+    [
+        (claude_hook, {"hook_event_name": "Stop"}),
+        (claude_hook, {"hook_event_name": "StopFailure", "error": "server_error"}),
+        (codex_hook, {"hook_event_name": "Stop"}),
+        (codex_hook, {"hook_event_name": "Interrupt"}),
+    ],
 )
 @pytest.mark.parametrize("next_task", [False, True])
 @pytest.mark.parametrize("ends", ["before the offer is written", "just after"])
 async def test_a_turn_that_ends_while_the_offer_is_written_never_reaches_the_next_task(
-    config, db, working, monkeypatch, hook, event, next_task, ends
+    config, db, working, monkeypatch, hook, end, next_task, ends
 ):
     """The next task must not take an offer whose turn ended around its writing."""
     monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
@@ -103,7 +108,7 @@ async def test_a_turn_that_ends_while_the_offer_is_written_never_reaches_the_nex
 
     def offer_as_the_turn_ends(*args):
         placed = offer_steer(*args) if ends == "just after" else None
-        _hook(hook, config, {"hook_event_name": event, "session_id": "s"})
+        _hook(hook, config, {**end, "session_id": "s"})
         if next_task:
             _hook(hook, config, {**prompt, "prompt": "task two"})
         return placed if placed is not None else offer_steer(*args)
@@ -144,6 +149,23 @@ async def test_a_dialog_within_the_turn_keeps_the_steer_for_it(
     assert len(take_context(config.state_dir, "ike", launch_id="L1")) == 1
 
 
+async def test_an_offer_names_the_turn_whose_prompt_the_hook_recorded(
+    config, db, working, monkeypatch
+):
+    monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "L1")
+    untied = await steer_agent("app", "x", config, db=db, sender="peer")
+    assert "no prompt for this turn" in untied.evidence[-2]
+    prompt = {"hook_event_name": "UserPromptSubmit", "session_id": "s"}
+    _hook(claude_hook, config, prompt, agent="app")
+    tied = await steer_agent("app", "y", config, db=db, sender="peer")
+    assert not any("no prompt for this turn" in line for line in tied.evidence)
+    turn = config.state_dir / "context" / "app" / "L1" / f"{steer_key(tied.delivery_id)}.turn"
+    prompted_at = json.loads((config.state_dir / "app.json").read_text())["prompted_at"]
+    assert json.loads(turn.read_text()) == {"prompted_at": prompted_at, "session_id": "s"}
+    assert not turn.with_name(f"{steer_key(untied.delivery_id)}.turn").exists()
+
+
 async def test_an_old_idle_record_does_not_withdraw_a_steer_the_terminal_shows_working(
     config, db, working
 ):
@@ -172,6 +194,13 @@ async def test_an_unwritable_offer_fails_the_row(config, db, working):
 
 
 class TestSettle:
+    @pytest.fixture(autouse=True)
+    def state(self):
+        """The agent's state while its offers are open: a working turn."""
+        with patch(f"{_STEER}.agent_state", new_callable=AsyncMock) as state:
+            state.return_value = StateSnapshot(state=AgentState.BUSY)
+            yield state
+
     async def test_taken_offers_are_handed_off_and_cleared(self, config, db, working):
         report = await steer_agent("ike", "x", config, db=db, sender="leo")
         assert await settle_steers(config, db) == {}  # still offered, fresh
@@ -210,6 +239,51 @@ class TestSettle:
         rows = await db.deliveries.query(session_name="ike", kind="steer")
         assert rows[0]["outcome"] == "not_taken"
         assert steer_offers(config.state_dir) == []
+
+    @pytest.mark.parametrize(
+        ("reads", "reason", "settled"),
+        [
+            (AgentState.BLOCKED, "provider", {"not_taken": 1}),
+            (AgentState.BLOCKED, "quota", {}),  # paused within the turn; it resumes
+            (AgentState.BUSY, None, {}),
+        ],
+    )
+    async def test_an_offer_whose_turn_failed_at_the_provider_is_not_taken(
+        self, config, db, working, state, reads, reason, settled
+    ):
+        """No hook reports such a turn on some runtimes (Codex); its state does."""
+        await steer_agent("app", "x", config, db=db, sender="peer")
+        state.return_value = StateSnapshot(state=reads, reason=reason)
+        assert await settle_steers(config, db) == settled
+        taken = take_context(config.state_dir, "app", launch_id="L1")
+        assert len(taken) == (0 if settled else 1)
+
+    async def test_what_the_files_say_is_settled_before_a_state_is_read(
+        self, config, db, working, state
+    ):
+        """A state read that is slow or fails holds up no receipt, and changes nothing."""
+        taken = await steer_agent("app", "x", config, db=db, sender="peer")
+        take_context(config.state_dir, "app", launch_id="L1")
+        missed = await steer_agent("app", "y", config, db=db, sender="peer")
+        retire_steers(config.state_dir, "app", launch_id="L1")
+        await steer_agent("app", "z", config, db=db, sender="peer")  # still open
+        seen = {}
+
+        async def read_fails(config, agent):
+            rows = await db.deliveries.query(session_name="app", kind="steer")
+            seen.update({row["id"]: row["outcome"] for row in rows})
+            raise OSError("tmux")
+
+        state.side_effect = read_fails
+        assert await settle_steers(config, db) == {"handed_off": 1, "not_taken": 1}
+        assert (seen[taken.delivery_id], seen[missed.delivery_id]) == ("handed_off", "not_taken")
+        assert len(take_context(config.state_dir, "app", launch_id="L1")) == 1
+
+    async def test_a_caller_can_settle_without_reading_any_state(self, config, db, working, state):
+        await steer_agent("app", "x", config, db=db, sender="peer")
+        state.return_value = StateSnapshot(state=AgentState.BLOCKED, reason="provider")
+        assert await settle_steers(config, db, read_states=False) == {}
+        state.assert_not_awaited()
 
     async def test_an_offer_removed_by_a_restart_is_cancelled_after_a_grace(
         self, config, db, working

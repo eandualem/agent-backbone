@@ -693,11 +693,15 @@ def take_context(state_dir: Path, agent: str, launch_id: str | None = None) -> l
     scoped to this session (steers under ``<agent>/<launch_id>/``, see
     ``offer_steer``); ``launch_id`` defaults to the session's own
     ``BACKBONE_LAUNCH_ID``, so a steer written for another session of the
-    same agent is never taken here."""
+    same agent is never taken here. A steer offered to an earlier turn, or
+    to an earlier conversation of this session, is marked ``.missed``
+    instead (see ``offer_steer``)."""
     launch_id = launch_id or os.environ.get("BACKBONE_LAUNCH_ID", "").strip()
     directories = [_context_dir(state_dir, agent)]
+    current: dict = {}
     if launch_id:
         directories.append(_steer_dir(state_dir, agent, launch_id))
+        current = read_current(state_dir, agent) or {}
     texts: list[str] = []
     for directory in directories:
         try:
@@ -714,6 +718,12 @@ def take_context(state_dir: Path, agent: str, launch_id: str | None = None) -> l
         except OSError:
             continue
         for offer in offers:
+            if directory is not directories[0] and _for_an_earlier_turn(offer, current):
+                # That turn ended with no hook event (an interrupt, a provider
+                # failure): its steer is never the next task's.
+                with suppress(OSError):
+                    os.rename(offer, offer.with_suffix(".missed"))
+                continue
             taken = offer.with_suffix(".taken")
             try:
                 # Read before renaming: once it is ``.taken`` the backbone may
@@ -739,18 +749,55 @@ def steer_key(delivery_id: int) -> str:
     return f"{STEER_PREFIX}{delivery_id:08d}"
 
 
-def offer_steer(state_dir: Path, agent: str, launch_id: str, key: str, text: str) -> bool:
+def offer_steer(
+    state_dir: Path,
+    agent: str,
+    launch_id: str,
+    key: str,
+    text: str,
+    turn: dict | None = None,
+) -> bool:
     """Backbone side: offer a steer to one session of the agent. False when
-    that key was already taken."""
+    that key was already taken.
+
+    ``turn`` names the turn it is offered to: the hook record's
+    ``prompted_at`` and ``session_id``, read before the offer. They go to
+    ``<key>.turn`` before the offer exists, and the hook hands the offer over
+    only within that turn of that conversation. Without them, the session's
+    next tool call takes the offer, whichever turn that is."""
     directory = _steer_dir(state_dir, agent, launch_id)
     directory.mkdir(parents=True, exist_ok=True)
     if (directory / f"{key}.taken").exists():
         return False
+    marks = {name: value for name, value in (turn or {}).items() if value is not None}
+    if marks:
+        (directory / f"{key}.turn").write_text(json.dumps(marks), encoding="utf-8")
     target = directory / f"{key}.md"
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, target)
     return True
+
+
+def _for_an_earlier_turn(offer: Path, current: dict) -> bool:
+    """Whether a steer was offered to a turn before the current one: its
+    ``.turn`` file names that turn's prompt and conversation, and the current
+    record names another (a newer prompt, or a new conversation after
+    ``/clear``). The values are compared for equality, not ordered, so no
+    clock boundary can misplace an offer. A value missing on either side is
+    not compared; with none, the offer is handed over."""
+    try:
+        offered_to = json.loads(offer.with_suffix(".turn").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(offered_to, dict):
+        return False
+    return any(
+        offered_to.get(name) is not None
+        and current.get(name) is not None
+        and offered_to[name] != current[name]
+        for name in ("prompted_at", "session_id")
+    )
 
 
 def retire_steers(state_dir: Path, agent: str, launch_id: str | None = None) -> None:
@@ -825,7 +872,7 @@ def expire_steer(state_dir: Path, agent: str, launch_id: str, delivery_id: int) 
 
 def clear_steer(state_dir: Path, agent: str, launch_id: str, delivery_id: int) -> None:
     directory = _steer_dir(state_dir, agent, launch_id)
-    for suffix in ("md", "taken", "missed"):
+    for suffix in ("md", "taken", "missed", "turn"):
         (directory / f"{steer_key(delivery_id)}.{suffix}").unlink(missing_ok=True)
 
 

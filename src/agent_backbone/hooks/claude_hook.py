@@ -443,7 +443,7 @@ def main(argv: list[str] | None = None) -> int:
         derive,
         argv,
         context_events=CONTEXT_EVENTS,
-        turn_end_events=frozenset({"Stop"}),
+        turn_end_events=frozenset({"Stop", "StopFailure"}),
         observe=record_chrome_group,
     )
 
