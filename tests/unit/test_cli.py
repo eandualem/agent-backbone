@@ -10,6 +10,7 @@ import pytest
 from agent_backbone import cli
 from agent_backbone.cli import setup
 from agent_backbone.services.agents import AgentState, StartResult, StateSnapshot
+from agent_backbone.services.runtimes import RUNTIMES
 
 _DETECT_REPO = "agent_backbone.services.agents.store.detect_repo"
 _INSTALLED_VERSION = "agent_backbone.services.runtimes.base.Runtime.installed_version"
@@ -141,30 +142,35 @@ class TestDoctor:
         assert "Verified on a CLI version" in out
         assert "2.1.284" in out and "plan-approval" in out and "not recorded" in out
 
-    def test_advises_checking_again_where_the_installed_cli_differs(self, monkeypatch, capsys):
+    @pytest.mark.parametrize("runtime_id", ["claude", "codex", "opencode", "gemini", "deepcode"])
+    def test_advises_checking_again_where_the_installed_cli_differs(
+        self, runtime_id, monkeypatch, capsys
+    ):
         """#359: a mismatch is advice, not a failure; an unreadable version is named."""
         monkeypatch.setenv("BACKBONE_API_KEY", "k")
         assert _run(["init"]) == 0
-        recorded = {
-            "claude": {"2.1.284": ["steer"], "2.1.283": ["provider-failure"], "not recorded": []},
-            "codex": {"0.157.1": ["delivery"]},
-            "gemini": {"0.46.0": ["delivery"]},
-        }
-        installed = {"claude": "2.1.284", "codex": None, "gemini": "0.46.0"}
-        with (
-            patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"),
-            patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
-            patch(
-                "agent_backbone.services.runtimes.verified_versions",
-                side_effect=lambda runtime_id: recorded.get(runtime_id, {}),
-            ),
-            patch(_INSTALLED_VERSION, new=lambda rt: installed[rt.id]),
-        ):
-            assert _run(["doctor"]) == 0
-        out = " ".join(capsys.readouterr().out.split())  # a long note wraps
-        assert "! claude: installed 2.1.284, verified on 2.1.283: check those capabilities" in out
-        assert "! codex: installed version unreadable (codex --version)" in out
-        assert "! gemini:" not in out
+        capsys.readouterr()
+
+        def doctor(recorded, installed):
+            with (
+                patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"),
+                patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
+                patch(
+                    "agent_backbone.services.runtimes.verified_versions",
+                    side_effect=lambda rid: recorded if rid == runtime_id else {},
+                ),
+                patch(_INSTALLED_VERSION, new=lambda rt: installed),
+            ):
+                assert _run(["doctor"]) == 0
+            return " ".join(capsys.readouterr().out.split())  # a long note wraps
+
+        versions = {"2.0.0": ["steer"], "1.9.0": ["delivery"], "not recorded": ["trust"]}
+        out = doctor(versions, "2.0.0")
+        assert f"! {runtime_id}: installed 2.0.0, verified on 1.9.0: check those" in out
+        out = doctor(versions, None)
+        binary = RUNTIMES[runtime_id].binary
+        assert f"! {runtime_id}: installed version unreadable ({binary} --version)" in out
+        assert f"! {runtime_id}:" not in doctor({"2.0.0": ["steer"]}, "2.0.0")
 
     def test_no_agent_cli_is_a_problem_that_names_them(self, tmp_path, monkeypatch, capsys):
         """A newcomer must not read "All good." and then fail at `agent start` (#260)."""

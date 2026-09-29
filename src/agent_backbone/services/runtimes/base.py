@@ -52,6 +52,9 @@ _FALLBACK_DIRS = (
     Path.home() / ".npm-global" / "bin",
 )
 
+# A version as a word of its own: ``v2.1.284`` is 2.1.284, never 1.284.
+_VERSION = re.compile(r"(?<![\w.])v?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.]+)?)(?![\w.])")
+
 BriefMode = Literal["system_prompt", "initial_prompt", "message", "none"]
 
 
@@ -347,19 +350,25 @@ class Runtime:
 
     def installed_version(self) -> str | None:
         """The installed CLI's version, the first ``N.N[.N]`` that ``--version``
-        prints; ``None`` when it cannot be read (#359). A CLI that prints it
-        differently overrides this in its own module."""
+        prints as a word of its own, with any prerelease suffix (``0.157.1-alpha.1``);
+        ``None`` when it cannot be read (#359). A CLI that prints it differently
+        overrides this in its own module."""
         path = resolve_command(self.binary) if self.binary else None
         if path is None:
             return None
         try:
             done = subprocess.run(
-                [path, "--version"], capture_output=True, text=True, timeout=10, check=False
+                [path, "--version"],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+                check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
             return None
-        match = re.search(r"\b\d+\.\d+(?:\.\d+)?\b", done.stdout) if done.returncode == 0 else None
-        return match.group() if match else None
+        match = _VERSION.search(done.stdout) if done.returncode == 0 else None
+        return match.group(1) if match else None
 
     def user_instructions(self, env: dict[str, str], project: Path | None = None) -> list[Path]:
         """The user-level instruction files this CLI adds to its sessions, as it

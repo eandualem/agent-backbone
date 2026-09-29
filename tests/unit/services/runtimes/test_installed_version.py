@@ -36,9 +36,23 @@ def test_reads_the_version_each_cli_prints(bin_dir, runtime):
 
 
 @pytest.mark.parametrize(
+    ("body", "version"),
+    [
+        ("echo 'codex-cli 0.157.1-alpha.1'", "0.157.1-alpha.1"),
+        ("echo 'codex-cli v0.157.1'", "0.157.1"),
+        ("printf '\\377' >&2; echo 'codex-cli 0.157.1'", "0.157.1"),
+    ],
+    ids=["prerelease kept", "leading v", "undecodable stderr"],
+)
+def test_reads_a_version_in_other_forms(bin_dir, body, version):
+    _cli(bin_dir, "codex", body)
+    assert RUNTIMES["codex"].installed_version() == version
+
+
+@pytest.mark.parametrize(
     "body",
-    ["echo 'codex-cli 0.157.1'; exit 1", "echo 'unknown option --version'"],
-    ids=["failing call", "no version printed"],
+    ["echo 'codex-cli 0.157.1'; exit 1", "echo 'unknown option --version'", "echo 'build 1.2.3.4'"],
+    ids=["failing call", "no version printed", "not a version of its own"],
 )
 def test_a_version_that_cannot_be_read_is_none(bin_dir, body):
     _cli(bin_dir, "codex", body)
