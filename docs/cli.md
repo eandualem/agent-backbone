@@ -588,7 +588,8 @@ backbone started; otherwise it is **refused with the reason** (`not_working`,
 an ordinary message instead. The guarantee is at-most-once handoff, not
 incorporation: the delivery record (`kind` `steer`, in `agent inspect`) moves
 from `offered` to `handed_off` when the hook took it, `not_taken` when the turn
-ended first or no tool call took it within five minutes, or `cancelled` when the
+ended first or nothing took it within five minutes (checked every 15 seconds), or
+`cancelled` when the
 session was replaced first. Exit 0 when offered, 1 otherwise.
 
 ## `backbone reply TEXT… [--agent NAME]`

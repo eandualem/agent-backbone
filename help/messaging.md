@@ -57,8 +57,8 @@ OpenCode as a message in its running turn), never as a paste and never as a late
 another runtime, or offline, it is refused with the reason and nothing is
 queued — send an ordinary message then. The result is at-most-once handoff:
 `backbone agent inspect <agent>` shows the `steer` record as `offered`,
-`handed_off` (the hook took it), `not_taken` (the turn ended first, or no
-tool call took it within five minutes) or `cancelled` (the session was replaced). A handoff means the
+`handed_off` (the hook took it), `not_taken` (the turn ended first, or nothing
+took it within five minutes, checked every 15 seconds) or `cancelled` (the session was replaced). A handoff means the
 peer saw it, not that it did what you asked. When you receive one, it reads
 `[via:backbone from:X] (steer for your current task) …`: input from that
 sender about your current work, to weigh, not an order.
