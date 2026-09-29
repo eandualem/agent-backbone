@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from agent_backbone.hooks import claude_hook, codex_hook
 from agent_backbone.services.agents import (
     AgentState,
     get_agent_state,
@@ -15,6 +17,7 @@ from agent_backbone.services.agents import (
 )
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.runtimes import RUNTIMES
+from tests.unit.hooks.test_context import _opencode, _run
 
 CASES = [
     ("codex", "Selected model is at capacity. Please try again later.", "›"),
@@ -265,3 +268,150 @@ def test_claude_reply_after_a_provider_banner_clears_it():
         _CLAUDE_INPUT, "❯ hello again\n\n\x1b[38;5;231m⏺\x1b[39m stub reply\n" + _CLAUDE_INPUT
     )
     assert infer_state_from_pane(pane, "claude").state == AgentState.IDLE
+
+
+# Live captures of a failed turn (#360): codex-cli 0.157.1 against a stub answering
+# response.failed (server_is_overloaded), and OpenCode 1.18.32 against one answering
+# 429 until it stopped retrying. Colours as drawn; the directory made neutral.
+_CODEX_INPUT = (
+    "\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m\n\n"
+    "  \x1b[38;2;246;226;183mstub-model default\x1b[39m · \x1b[38;2;171;223;167m/tmp/work\x1b[39m"
+    "  ⚠ \x1b[38;2;196;167;103m5 warnings\x1b[39m · \x1b[1mf2\x1b[0m to view\n"
+)
+
+
+def _codex_turn(last: str) -> str:
+    return f"\x1b[1;2m› \x1b[0mgo\n\n\n{last}\n\n\n{_CODEX_INPUT}"
+
+
+_OC_BLUE, _OC_RED = "\x1b[38;2;92;156;245m", "\x1b[38;2;224;108;117m"
+_OC_GREY, _OC_TEXT, _OC_WHITE = (
+    "\x1b[38;2;128;128;128m",
+    "\x1b[38;2;238;238;238m",
+    "\x1b[38;2;255;255;255m",
+)
+
+
+def _opencode_block(bar: str, text: str, colour: str) -> str:
+    return f"  {bar}┃\n  {bar}┃{_OC_WHITE}  {colour}{text}\n  {bar}┃\n\n"
+
+
+def _opencode_turn(last: str) -> str:
+    footer = f"     {_OC_BLUE}▣ {_OC_WHITE} {_OC_TEXT}Build{_OC_GREY} · Stub main"
+    return (
+        f"     {_OC_TEXT}stub reply\n\n{footer} · 9.3s\n\n"
+        + _opencode_block(_OC_BLUE, "go", _OC_TEXT)
+        + last
+        + f"{footer}\n\n  {_OC_BLUE}┃\n"
+        f"  {_OC_BLUE}┃{_OC_WHITE}  {_OC_BLUE}Build {_OC_GREY}· "
+        f"{_OC_TEXT}Stub main {_OC_GREY}Local stub\n"
+        f"  {_OC_BLUE}╹\x1b[38;2;30;30;30m{'▀' * 60}\n"
+        f"   {_OC_GREY}/tmp/work {_OC_TEXT}ctrl+p {_OC_GREY}commands\n"
+    )
+
+
+FAILED = {
+    "claude": _claude_turn(
+        _warning("⏺") + " " + _warning("API Error: Repeated 529 Overloaded errors.")
+    ),
+    "codex": _codex_turn(
+        "\x1b[38;5;1m■ Selected model is at capacity. Please try a different model.\x1b[39m"
+    ),
+    "opencode": _opencode_turn(_opencode_block(_OC_RED, "Rate limit exceeded", _OC_GREY)),
+}
+# The same words in a reply: the model's own output, not the CLI's banner.
+ECHOED = {
+    "claude": _claude_turn(
+        "\x1b[38;5;231m⏺\x1b[39m API Error: 529 Overloaded means the API is busy."
+    ),
+    "codex": _codex_turn(
+        "\x1b[2m• \x1b[0mThe stub answered:\n"
+        "  Selected model is at capacity. Please try a different model."
+    ),
+    "opencode": _opencode_turn(f"     {_OC_TEXT}Rate limit exceeded\n\n"),
+}
+
+
+@pytest.mark.parametrize("runtime", ["codex", "opencode"])
+def test_the_current_failure_screen_is_blocked(runtime):
+    snapshot = infer_state_from_pane(FAILED[runtime], runtime)
+    assert snapshot.state == AgentState.BLOCKED and snapshot.reason == "provider"
+    assert snapshot.detail.split(".")[0] in {"Selected model is at capacity", "Rate limit exceeded"}
+
+
+@pytest.mark.parametrize(
+    "last",
+    [
+        _opencode_block(_OC_BLUE, "Rate limit exceeded", _OC_TEXT),
+        f"     {_OC_TEXT}Rate limit exceeded\n\n",
+        _opencode_block(_OC_RED, "Rate limit exceeded", _OC_GREY)
+        + f"     {_OC_TEXT}Done, it went through on retry.\n\n",
+    ],
+    ids=["own message", "reply", "reply after the failure"],
+)
+def test_opencode_output_without_a_red_bar_last_is_not_a_failure(last):
+    assert RUNTIMES["opencode"].provider_failure(_opencode_turn(last)) is None
+
+
+def _record(runtime, tmp_path, failed: bool) -> None:
+    """A turn, as each CLI's hooks report it. When it fails at the provider,
+    Claude Code runs Stop, OpenCode's plugin sees the session go idle and
+    Codex runs no hook at all."""
+    if runtime == "opencode":
+        _opencode(tmp_path, ["busy", "idle"] if failed else ["busy"])
+    else:
+        hook = {"claude": claude_hook, "codex": codex_hook}[runtime]
+        _run(hook, tmp_path, {"hook_event_name": "UserPromptSubmit", "session_id": "s"})
+        if failed and runtime == "claude":
+            _run(hook, tmp_path, {"hook_event_name": "Stop", "session_id": "s"})
+    record = json.loads((tmp_path / "desk.json").read_text())
+    record["ts"] -= 10  # read ten seconds later, well before the record goes stale
+    (tmp_path / "desk.json").write_text(json.dumps(record))
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_a_failed_turn_reads_blocked_while_its_record_is_fresh(tmp_path, runtime):
+    _record(runtime, tmp_path, failed=True)
+    snapshot = await get_agent_state(
+        tmp_path, "desk", runtime_hint=runtime, pane_content=FAILED[runtime]
+    )
+    assert snapshot.state == AgentState.BLOCKED, snapshot.evidence
+    assert snapshot.reason == "provider"
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_a_reply_echoing_the_error_leaves_a_fresh_busy_record(tmp_path, runtime):
+    _record(runtime, tmp_path, failed=False)
+    snapshot = await get_agent_state(
+        tmp_path, "desk", runtime_hint=runtime, pane_content=ECHOED[runtime]
+    )
+    assert snapshot.state == AgentState.BUSY, snapshot.evidence
+
+
+async def test_a_failure_waits_for_a_newly_submitted_prompt_to_be_drawn(tmp_path):
+    write_state_file(tmp_path, "desk", {"state": "busy", "ts": time.time() - 1})
+    snapshot = await get_agent_state(
+        tmp_path, "desk", runtime_hint="codex", pane_content=FAILED["codex"]
+    )
+    assert snapshot.state == AgentState.BUSY
+
+
+async def test_a_failure_above_a_working_turn_leaves_the_busy_record(tmp_path):
+    write_state_file(tmp_path, "desk", {"state": "busy", "ts": time.time() - 10})
+    working = FAILED["codex"].replace(
+        _CODEX_INPUT, "• Working (3s • esc to interrupt)\n\n" + _CODEX_INPUT
+    )
+    snapshot = await get_agent_state(tmp_path, "desk", runtime_hint="codex", pane_content=working)
+    assert snapshot.state == AgentState.BUSY
+
+
+async def test_a_turn_that_starts_while_the_pane_is_read_keeps_its_busy_record(tmp_path):
+    write_state_file(tmp_path, "desk", {"state": "busy", "ts": time.time() - 10})
+
+    async def new_turn_meanwhile(session):
+        write_state_file(tmp_path, "desk", {"state": "busy", "ts": time.time()})
+        return FAILED["codex"]
+
+    with patch("agent_backbone.services.agents._inference.capture_pane", new_turn_meanwhile):
+        snapshot = await get_agent_state(tmp_path, "desk", runtime_hint="codex")
+    assert snapshot.state == AgentState.BUSY

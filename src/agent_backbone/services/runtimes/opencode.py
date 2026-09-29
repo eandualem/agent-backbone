@@ -10,14 +10,17 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 from pathlib import Path
 
 from agent_backbone.hooks import install as hooks
+from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes._usage import UsageBatch, count
 from agent_backbone.services.runtimes.base import (
     Runtime,
     TranscriptEntry,
+    _error_foreground,
     agent_home,
     has_text,
     read_brief,
@@ -78,6 +81,35 @@ class OpenCode(Runtime):
     # holds. OpenCode has no OS sandbox: this is trust on the machine.
     unattended_args = ("--auto",)
     hook_context = True  # the plugin adds a user message to the running turn
+
+    def provider_failure(self, pane_content: str) -> str | None:
+        # 1.18.32 (live): a failure is a block of "┃" lines with a red bar and
+        # grey text, above the "▣  Build · <model>" line under each message,
+        # the input box (the "┃" lines down to its "╹▀" edge) and the footer
+        # below that box. A reply or a quoted error has no red bar.
+        lines = pane_content.splitlines()
+        clean = [sanitize_pane_content(raw).strip() for raw in lines]
+        edge = max((i for i, text in enumerate(clean) if text.startswith("╹")), default=None)
+        if edge is None:
+            return super().provider_failure(pane_content)
+        end = edge
+        while end and clean[end - 1].startswith("┃"):
+            end -= 1
+        block: list[str] = []
+        for raw, text in reversed(list(zip(lines[:end], clean[:end], strict=True))):
+            if text.startswith("┃"):
+                block.insert(0, raw)
+            elif block or (text and not text.startswith("▣")):
+                break
+        if not block or not all(
+            _error_foreground(raw.split("┃", 1)[0] + "┃", glyphs="┃") for raw in block
+        ):
+            return None
+        texts = (sanitize_pane_content(raw).strip().lstrip("┃").strip() for raw in block)
+        text = " ".join(line for line in texts if line)
+        if any(re.match(pattern, text, re.IGNORECASE) for pattern in self.provider_error_patterns):
+            return text[:500]
+        return None
 
     def hook_settings(self, data_dir, state_dir, *, python=None):
         raise RuntimeError("OpenCode state comes from a plugin, not a command hook")

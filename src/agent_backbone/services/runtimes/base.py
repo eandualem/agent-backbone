@@ -81,12 +81,13 @@ class RuntimeDiagnostic:
         return hashlib.sha256(encoded.encode()).hexdigest()
 
 
-def _error_foreground(raw: str) -> bool:
-    """Whether visible text has a red foreground (ANSI, palette or true color)."""
+def _error_foreground(raw: str, glyphs: str = "") -> bool:
+    """Whether visible text, or one of ``glyphs``, has a red foreground (ANSI,
+    palette or true color)."""
     red = False
     for part in re.split(r"(\x1b\[[0-9;]*m)", raw):
         if not part.startswith("\x1b["):
-            if red and any(ch.isalpha() for ch in part):
+            if red and any(ch.isalpha() or ch in glyphs for ch in part):
                 return True
             continue
         for attribute in sgr_attributes(part[2:-1]):
@@ -284,6 +285,10 @@ class Runtime:
     """Anchored error-banner patterns for provider capacity, quota or rate limits."""
     provider_error_prefixes: tuple[str, ...] = ()
     """Runtime error glyphs distinguish banners from ordinary response text."""
+    hooks_miss_failed_turns: bool = False
+    """Whether no hook reports a turn that failed at the provider, so a fresh
+    ``busy`` record outlives it. True: the terminal is read for a provider
+    failure while that record is fresh (#360)."""
     interrupt_patterns: tuple[str, ...] = ()
     """Anchored patterns for the line a runtime leaves when a person interrupts
     its turn and no hook reports it. Empty: the hooks report interrupts, and

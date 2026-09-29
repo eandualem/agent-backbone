@@ -331,6 +331,34 @@ async def _get_agent_state(
                         ],
                     )
                     return _with_diagnostics(interrupted, pane_content, runtime_hint)
+        if push.state == AgentState.BUSY and push_age >= INTERRUPT_SETTLE_SECONDS:
+            # A runtime whose hooks miss a turn that failed at the provider
+            # (Codex) is back at its prompt with the failure as its latest
+            # output, and the record would stand until it goes stale (#360).
+            # Anything drawn after the banner, a working line included, makes
+            # it history.
+            runtime = get_runtime(runtime_hint or push.runtime)
+            if runtime.hooks_miss_failed_turns:
+                if pane_content is None:
+                    pane_content = await capture_pane(session)
+                detail = runtime.provider_failure(pane_content) if pane_content else None
+                # A turn that began while the pane was read keeps its record.
+                latest = read_state_file(state_dir, session) if detail else None
+                if latest is not None and latest.timestamp == push.timestamp:
+                    blocked = replace(
+                        push,
+                        state=AgentState.BLOCKED,
+                        reason="provider",
+                        detail=detail,
+                        source="pull",
+                        timestamp=time.time(),
+                        evidence=[
+                            *push.evidence,
+                            f"terminal shows a provider failure ({runtime.id}): {detail}",
+                            "the failure on screen beats the hook's 'busy'",
+                        ],
+                    )
+                    return _with_diagnostics(blocked, pane_content, runtime_hint)
         if push.is_plan_waiting:
             runtime = get_runtime(runtime_hint or push.runtime)
             if runtime.plan_markers:
