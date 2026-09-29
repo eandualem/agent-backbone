@@ -169,6 +169,7 @@ _LAUNCH = "tests/unit/services/runtimes/test_launch_commands.py"
 _NO_MODEL = "a plain shell runs no model"
 _USER_FILES = "tests/unit/services/runtimes/test_user_instructions.py"
 _MEMORY = "tests/unit/services/runtimes/test_native_memory.py"
+_VERSION = "tests/unit/services/runtimes/test_installed_version.py"
 _SIGNED = "tests/unit/api/routes/test_api_signing.py"
 _API_BOUNDARY = "checked at the API, the same for every runtime"
 _CONFIRMED = "tests/unit/api/routes/test_api_confirmations.py"
@@ -299,6 +300,20 @@ CAPABILITIES: tuple[Capability, ...] = (
         deepcode=_na("keeps no memory of its own (0.3.1)"),
         aider=_unverified(note="not yet verified"),
         shell=_na("a plain shell keeps no memory"),
+    ),
+    _row(
+        "installed-version",
+        "Installed CLI version compared with the verified one (`doctor`)",
+        "src/agent_backbone/services/runtimes/base.py",
+        fallback="Compare `<cli> --version` with the versions in this table.",
+        implemented=lambda rt: rt.binary is not None,
+        claude=_ok(_VERSION),
+        codex=_ok(_VERSION),
+        gemini=_ok(_VERSION),
+        opencode=_ok(_VERSION),
+        deepcode=_ok(_VERSION),
+        aider=_unverified(note="not yet verified"),
+        shell=_na("a plain shell has no CLI version"),
     ),
     _row(
         "hook-state",

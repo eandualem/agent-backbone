@@ -32,7 +32,8 @@ verified on, for example ✅ (2.1.284). A later release of that CLI may change
 the behaviour without any change in Backbone, so check the capability again
 after upgrading past that version. "(version not recorded)" means the check
 that established it did not note the version. `backbone doctor` lists these
-versions for the CLIs installed on your machine.
+versions for the CLIs installed on your machine and notes where the installed
+version differs.
 
 <!-- capability-table:begin -->
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
@@ -45,6 +46,7 @@ versions for the CLIs installed on your machine.
 | Project AGENTS.md loaded at start | ✅ | ✅ | ❌ reads GEMINI.md unless context.fileName is set | ✅ | ✅ | ❌ reads only files passed to it | n/a |
 | Non-empty user-level instruction file detected | ✅ | ✅ | ✅ | ✅ files listed under `instructions` in its config not checked | ✅ | ? no default user-level file per its docs; not yet verified | n/a |
 | CLI-native memory disabled or detected | ✅ managed settings not read | ✅ managed config and the `[memories]` switches not read | ✅ | n/a | n/a | ? not yet verified | n/a |
+| Installed CLI version compared with the verified one (`doctor`) | ✅ | ✅ | ✅ | ✅ | ✅ | ? not yet verified | n/a |
 | State reported by the runtime (hooks) | ✅ (2.1.284) | ✅ (0.157.1) from its first prompt (the brief): Codex runs no hook before its first turn | ✅ (0.46.0) | ✅ (1.18.32) | ❌ read from the terminal only | ❌ read from the terminal only | n/a |
 | Interrupted turn reads idle (Escape, refused dialog) | ✅ (2.1.284) from the terminal: Claude Code runs no hook on an interrupt | ✅ (0.157.1) | ❌ a declined dialog runs no hook | ✅ (1.18.32) | ? read from the terminal only | ? not verified live | n/a |
 | Steer and high-priority events into a working agent | ✅ (2.1.284) | ✅ (0.157.1) | ❌ | ✅ (1.18.32) as a user message in the running turn, after the next tool call | ❌ | ❌ | n/a |
@@ -84,6 +86,7 @@ versions for the CLIs installed on your machine.
 | Project AGENTS.md loaded at start | Put the instructions in the file the CLI reads, or pass it explicitly. |
 | Non-empty user-level instruction file detected | Check the CLI's user-level instruction file by hand. |
 | CLI-native memory disabled or detected | Turn the CLI's own memory off in its settings. |
+| Installed CLI version compared with the verified one (`doctor`) | Compare `<cli> --version` with the versions in this table. |
 | State reported by the runtime (hooks) | State is read from the terminal, which is slower and less certain. |
 | Interrupted turn reads idle (Escape, refused dialog) | An interrupted agent may keep reading busy or waiting; check the session (`agent attach`). |
 | Steer and high-priority events into a working agent | Send an ordinary message; it waits until the agent is at its prompt. |

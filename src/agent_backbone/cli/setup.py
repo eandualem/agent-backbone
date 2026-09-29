@@ -350,6 +350,20 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                     ("CLI", "Verified on", "Capability"),
                     verified,
                 )
+            # The installed CLI against those versions: advice, never a failure (#359).
+            for runtime_id in found:
+                recorded = [v for v in verified_versions(runtime_id) if v != "not recorded"]
+                if not recorded:
+                    continue
+                runtime = REGISTRY[runtime_id]
+                if (installed := runtime.installed_version()) is None:
+                    unread = f"({runtime.binary} --version)"
+                    note(f"  ! {runtime_id}: installed version unreadable {unread}")
+                elif differ := [v for v in recorded if v != installed]:
+                    note(
+                        f"  ! {runtime_id}: installed {installed}, verified on "
+                        f"{', '.join(differ)}: check those capabilities again"
+                    )
             note("    details: `backbone docs runtime-capabilities`")
 
         note("Security")

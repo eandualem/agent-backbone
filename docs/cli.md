@@ -162,7 +162,9 @@ issue tracking each where one exists ([runtime capabilities](runtime-capabilitie
 reported, not failed. It also lists, for each installed agent CLI, the
 capabilities that depend on that CLI's dialogs, keys or hooks, with the CLI
 version each was verified on: after upgrading past that version, check them
-again. It also names each user-level instruction file an
+again. It reads the installed version from the CLI's `--version` and notes each
+recorded version that differs from it, or that it could not read it; notes,
+not failures. It also names each user-level instruction file an
 installed CLI adds to its sessions, such as a non-empty `~/.codex/AGENTS.md`
 or `~/.claude/CLAUDE.md`, so its content never reaches agents unnoticed; `agent
 start` lists them for the agent it starts, with the agent's own environment
