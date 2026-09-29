@@ -159,7 +159,10 @@ would fail next), API key, GitHub credentials and effective intake, Telegram
 allowlist, whether the API is up, and any stored setting the current rules reject (an older release may have accepted it; it is ignored in favour of the default until fixed). Exit code 1 if anything failed. For each
 installed agent CLI it also lists the capabilities that runtime lacks, with the
 issue tracking each where one exists ([runtime capabilities](runtime-capabilities.md)); these are
-reported, not failed. It also names each user-level instruction file an
+reported, not failed. It also lists, for each installed agent CLI, the
+capabilities that depend on that CLI's dialogs, keys or hooks, with the CLI
+version each was verified on: after upgrading past that version, check them
+again. It also names each user-level instruction file an
 installed CLI adds to its sessions, such as a non-empty `~/.codex/AGENTS.md`
 or `~/.claude/CLAUDE.md`, so its content never reaches agents unnoticed; `agent
 start` lists them for the agent it starts, with the agent's own environment

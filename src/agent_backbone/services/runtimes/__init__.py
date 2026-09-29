@@ -24,7 +24,11 @@ from agent_backbone.services.runtimes.base import (
     resolve_command,
     split_model_effort,
 )
-from agent_backbone.services.runtimes.capabilities import CAPABILITIES, unavailable
+from agent_backbone.services.runtimes.capabilities import (
+    CAPABILITIES,
+    unavailable,
+    verified_versions,
+)
 from agent_backbone.services.terminal import capture_pane, query_environment_var
 
 RUNTIME_ENV_KEY = "BACKBONE_RUNTIME"
@@ -137,4 +141,5 @@ __all__ = [
     "send_message",
     "split_model_effort",
     "unavailable",
+    "verified_versions",
 ]
