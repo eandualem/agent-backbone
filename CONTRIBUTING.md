@@ -20,9 +20,9 @@ Tests run against SQLite in memory and mock tmux; nothing external is needed.
   (`BACKBONE_DATA_DIR=/tmp/backbone-dev`) so your real one is untouched. It
   runs on its own tmux server, apart from your own tmux sessions. Run CLI
   commands for it from a terminal outside tmux with
-  `TMUX_TMPDIR=/tmp/backbone-dev-tmux` as well as the data directory set:
-  `agent attach`, and agent commands run while `make dev` is stopped, use
-  tmux directly.
+  `TMUX_TMPDIR=/tmp/backbone-dev-tmux-$(id -u)` as well as the data
+  directory set: `agent attach`, and agent commands run while `make dev` is
+  stopped, use tmux directly.
 - Schema changes: edit `services/database/models.py`, then regenerate the
   single initial migration (`make db-migrate MSG="initial schema"` after
   deleting the old one) — the project is pre-1.0 and ships one migration.

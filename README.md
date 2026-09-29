@@ -111,7 +111,7 @@ BACKBONE_DATA_DIR=/tmp/backbone-dev make dev
 `make dev` runs on its own tmux server, so its agents stay apart from your own
 tmux sessions and from a real backbone's agents. Run CLI commands for it from
 a terminal outside tmux with the same settings, for example
-`TMUX_TMPDIR=/tmp/backbone-dev-tmux BACKBONE_DATA_DIR=/tmp/backbone-dev uv run backbone agent attach NAME`.
+`TMUX_TMPDIR=/tmp/backbone-dev-tmux-$(id -u) BACKBONE_DATA_DIR=/tmp/backbone-dev uv run backbone agent attach NAME`.
 `agent attach`, and agent commands run while `make dev` is stopped, use tmux
 directly.
 
