@@ -107,6 +107,38 @@ class TestDerive:
         assert record["last_message"] == "Shipped."
         assert record["event"] == "Stop" and record["session_id"] == "abc"
 
+    @pytest.mark.parametrize(
+        ("error", "state", "reason"),
+        [
+            ("server_error", "blocked", "provider"),
+            ("rate_limit", "blocked", "provider"),
+            ("billing_error", "blocked", "provider"),
+            ("authentication_failed", "blocked", "provider"),
+            ("invalid_request", "idle", None),
+            ("max_output_tokens", "idle", None),
+            ("unknown", "idle", None),
+        ],
+    )
+    def test_a_turn_that_failed_at_the_api(self, error, state, reason):
+        """#360: 2.1.284 runs StopFailure, not Stop, naming the error (live payload)."""
+        banner = "API Error: Repeated 529 Overloaded errors. The API is at capacity"
+        record, _ = hook.derive(
+            _payload("StopFailure", error=error, last_assistant_message=banner), None
+        )
+        assert (record["state"], record["reason"]) == (state, reason)
+        assert banner in (record["detail"] if reason else record["last_message"])
+
+    def test_a_provider_failure_outlasts_the_idle_notification(self):
+        """Claude Code says it waits for input a minute after a failed turn too."""
+        failed, _ = hook.derive(
+            _payload("StopFailure", error="server_error", last_assistant_message="API Error: 500"),
+            None,
+        )
+        waiting = _payload("Notification", message="Claude is waiting for your input")
+        assert hook.derive(waiting, failed) == (None, None)
+        record, _ = hook.derive(_payload("UserPromptSubmit", prompt="again"), failed)
+        assert record["state"] == "busy"
+
     def test_started_at_is_stable(self):
         first, _ = hook.derive(_payload("SessionStart"), None)
         later, _ = hook.derive(_payload("Stop"), first)
@@ -440,6 +472,12 @@ def test_the_claude_runtime_listens_for_refusals():
     from agent_backbone.services.runtimes import RUNTIMES
 
     assert ("PermissionDenied", "") in RUNTIMES["claude"].hook_events
+
+
+def test_the_claude_runtime_listens_for_failed_turns():
+    from agent_backbone.services.runtimes import RUNTIMES
+
+    assert ("StopFailure", None) in RUNTIMES["claude"].hook_events
 
 
 @pytest.mark.parametrize(

@@ -64,7 +64,7 @@ version differs.
 | Shared skills linked | ✅ | ✅ | ✅ live-checked: it lists the linked skills (0.46) | ✅ | ✅ | ❌ | n/a |
 | Token usage recorded | ✅ | ✅ | ✅ live-checked with a subagent (0.46) | ✅ | ❌ | ❌ | n/a |
 | agent output from the runtime's own record | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
-| Provider capacity or rate-limit failure detected (blocked) | ✅ (2.1.283) | ✅ (version not recorded) live check failed on 0.157.1, see #360 | ❌ | ✅ (version not recorded) live check failed on 1.18.32, see #360 | ✅ (0.3.1) | ❌ | n/a |
+| Provider capacity or rate-limit failure detected (blocked) | ✅ (2.1.284) reported by its StopFailure hook | ✅ (0.157.1) from the terminal: Codex runs no hook for a failed turn | ❌ | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
 | Running model observed (status) | ✅ (2.1.267) | ✅ (0.156.1) | ✅ (0.46.0) | ✅ (1.18.32) | ❌ no hook state | ❌ no hook state | n/a |
 | Request errors and model changes recorded (diagnostics) | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | n/a |
 | A peer's message cannot pass as a Backbone brief | ✅ | ✅ | ? | ❌ #294 adopted a forged brief | ? | ? | n/a |

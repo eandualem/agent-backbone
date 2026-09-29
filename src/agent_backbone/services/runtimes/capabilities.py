@@ -78,8 +78,6 @@ UNAVAILABLE: frozenset[str] = frozenset({"gap", "unverified", "exception"})
 VERSION_NOT_RECORDED: frozenset[tuple[str, str]] = frozenset(
     {
         ("browser-group-name", "claude"),
-        ("provider-failure", "codex"),
-        ("provider-failure", "opencode"),
         ("trust", "gemini"),
     }
 )
@@ -593,16 +591,18 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Watch the session for provider errors; the agent may look busy or idle.",
         implemented=lambda rt: bool(rt.provider_error_patterns or rt.provider_error_prefixes),
         cli_dependent=True,
-        claude=_ok("tests/unit/services/agents/test_provider_failures.py", verified_on="2.1.283"),
+        claude=_ok(
+            "tests/unit/services/agents/test_provider_failures.py",
+            "reported by its StopFailure hook",
+            verified_on="2.1.284",
+        ),
         codex=_ok(
             "tests/unit/services/agents/test_provider_failures.py",
-            "live check failed on 0.157.1, see #360",
+            "from the terminal: Codex runs no hook for a failed turn",
+            verified_on="0.157.1",
         ),
         gemini=_gap(),
-        opencode=_ok(
-            "tests/unit/services/agents/test_provider_failures.py",
-            "live check failed on 1.18.32, see #360",
-        ),
+        opencode=_ok("tests/unit/services/agents/test_provider_failures.py", verified_on="1.18.32"),
         deepcode=_ok("tests/unit/services/agents/test_provider_failures.py", verified_on="0.3.1"),
         aider=_gap(),
         shell=_na("a plain shell has no model provider"),

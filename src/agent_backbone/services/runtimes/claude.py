@@ -165,6 +165,8 @@ class ClaudeCode(Runtime):
         ("SessionEnd", None),
         ("UserPromptSubmit", None),
         ("Stop", None),
+        # A turn that failed at the API runs this instead of Stop (2.1.284).
+        ("StopFailure", None),
         ("Notification", None),
         ("PreToolUse", "ExitPlanMode|AskUserQuestion|Bash|mcp__.*__add_issue_comment"),
         ("PostToolUse", ""),

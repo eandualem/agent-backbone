@@ -198,8 +198,9 @@ async def test_the_runtime_named_by_the_hook_record_is_enough(tmp_path):
 
 
 async def test_runtimes_whose_hooks_report_interrupts_are_not_read_while_busy(tmp_path):
+    # Codex's pane is read while busy, for a failed turn its hooks miss (#360).
     _busy(tmp_path, 10)
-    with patch(f"{_INF}.capture_pane", AsyncMock(return_value=SCREENS["codex"])) as capture:
-        snapshot = await get_agent_state(tmp_path, "desk", runtime_hint="codex")
+    with patch(f"{_INF}.capture_pane", AsyncMock(return_value=SCREENS["opencode"])) as capture:
+        snapshot = await get_agent_state(tmp_path, "desk", runtime_hint="opencode")
     assert snapshot.state == AgentState.BUSY
     capture.assert_not_called()

@@ -224,6 +224,30 @@ class Codex(Runtime):
     plan_markers = ("implement this plan?", "no, stay in plan mode")
     plan_approve_keys = ("1",)
     plan_reject_keys = ("3",)
+    # A turn that fails at the provider runs no hook (0.157.1): its
+    # UserPromptSubmit record still says busy while the banner is on screen.
+    hooks_miss_failed_turns = True
+
+    def provider_failure(self, pane_content: str) -> str | None:
+        # The last "›" line is the input: it, the placeholder and the status
+        # line below it (any model, effort and directory) are not output
+        # (0.157.1, live).
+        lines = pane_content.splitlines()
+        last = max(
+            (
+                i
+                for i, raw in enumerate(lines)
+                if sanitize_pane_content(raw).lstrip().startswith(self.prompt_prefixes)
+            ),
+            default=None,
+        )
+        above = pane_content if last is None else "\n".join(lines[:last])
+        return super().provider_failure(above)
+
+    def _opens_with_error_glyph(self, raw: str) -> bool:
+        # Codex draws its banners at the left edge and indents every line of a
+        # reply, so an indented glyph is output quoting one.
+        return sanitize_pane_content(raw).startswith(self.provider_error_prefixes)
 
     def diagnostics(self, pane_content: str) -> tuple[RuntimeDiagnostic, ...]:
         """Observe typed error banners, including one still visible after a model change.

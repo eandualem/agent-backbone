@@ -81,12 +81,13 @@ class RuntimeDiagnostic:
         return hashlib.sha256(encoded.encode()).hexdigest()
 
 
-def _error_foreground(raw: str) -> bool:
-    """Whether visible text has a red foreground (ANSI, palette or true color)."""
+def _error_foreground(raw: str, glyphs: str = "") -> bool:
+    """Whether visible text, or one of ``glyphs``, has a red foreground (ANSI,
+    palette or true color)."""
     red = False
     for part in re.split(r"(\x1b\[[0-9;]*m)", raw):
         if not part.startswith("\x1b["):
-            if red and any(ch.isalpha() for ch in part):
+            if red and any(ch.isalpha() or ch in glyphs for ch in part):
                 return True
             continue
         for attribute in sgr_attributes(part[2:-1]):
@@ -284,6 +285,10 @@ class Runtime:
     """Anchored error-banner patterns for provider capacity, quota or rate limits."""
     provider_error_prefixes: tuple[str, ...] = ()
     """Runtime error glyphs distinguish banners from ordinary response text."""
+    hooks_miss_failed_turns: bool = False
+    """Whether no hook reports a turn that failed at the provider, so a fresh
+    ``busy`` record outlives it. True: the terminal is read for a provider
+    failure while that record is fresh (#360)."""
     interrupt_patterns: tuple[str, ...] = ()
     """Anchored patterns for the line a runtime leaves when a person interrupts
     its turn and no hook reports it. Empty: the hooks report interrupts, and
@@ -677,7 +682,7 @@ class Runtime:
             ):
                 # The words alone may be a final answer quoting an error. Require
                 # the runtime's banner glyph or red error foreground as well.
-                if not line.startswith(self.provider_error_prefixes) and not _error_foreground(raw):
+                if not self._opens_with_error_glyph(raw) and not _error_foreground(raw):
                     return None
                 return "\n".join([text, *reversed(detail)])[:500]
             if re.match(
@@ -688,6 +693,10 @@ class Runtime:
             # A later response/tool output means the earlier error is history.
             return None
         return None
+
+    def _opens_with_error_glyph(self, raw: str) -> bool:
+        """Whether a line opens with one of this runtime's error-banner glyphs."""
+        return sanitize_pane_content(raw).strip().startswith(self.provider_error_prefixes)
 
     def detect_interrupted(self, pane_content: str) -> bool:
         """Whether the prompt is back because a person interrupted the turn.
