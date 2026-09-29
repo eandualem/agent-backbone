@@ -31,7 +31,8 @@ attribute shows a capability, the adapter declares it in its own module
 A ``cli_dependent`` row relies on what a CLI draws, which keys it takes or
 which hook payload it sends, so a CLI release can break it unseen (#355).
 Each ``supported`` cell there names ``verified_on``, the CLI version it was
-verified on: upgrading past it is the trigger to check it again.
+last verified on (by its evidence or a later live check): upgrading past it
+is the trigger to check it again.
 """
 
 from __future__ import annotations
@@ -76,25 +77,10 @@ UNAVAILABLE: frozenset[str] = frozenset({"gap", "unverified", "exception"})
 
 VERSION_NOT_RECORDED: frozenset[tuple[str, str]] = frozenset(
     {
-        ("delivery", "opencode"),
-        ("trust", "claude"),
-        ("trust", "codex"),
-        ("trust", "gemini"),
-        ("brief-after-resume", "claude"),
-        ("brief-after-resume", "codex"),
-        ("hook-state", "claude"),
-        ("hook-state", "codex"),
-        ("hook-state", "opencode"),
-        ("steer", "claude"),
-        ("steer", "codex"),
-        ("approve", "claude"),
-        ("approve", "codex"),
-        ("approve", "opencode"),
-        ("deny", "claude"),
-        ("deny", "codex"),
         ("browser-group-name", "claude"),
         ("provider-failure", "codex"),
         ("provider-failure", "opencode"),
+        ("trust", "gemini"),
     }
 )
 """``(row, runtime)``: supported cells on a ``cli_dependent`` row whose
@@ -203,10 +189,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Check `agent inspect` for the delivery evidence before relying on it.",
         implemented=lambda rt: True,
         cli_dependent=True,
-        claude=_ok(_B3, verified_on="2.1.282"),
-        codex=_ok(_B3, verified_on="0.156.1"),
+        claude=_ok(_B3, verified_on="2.1.284"),
+        codex=_ok(_B3, verified_on="0.157.1"),
         gemini=_ok(_GEMINI_STUB, verified_on="0.46.0"),
-        opencode=_ok(_B3),
+        opencode=_ok(_B3, verified_on="1.18.32"),
         deepcode=_ok("live: checked during development (Deep Code 0.3.1)", verified_on="0.3.1"),
         aider=_unverified(note="not verified live"),
         shell=_ok(
@@ -220,8 +206,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Answer the dialog in the session (`agent attach`).",
         implemented=_declared("trust"),
         cli_dependent=True,
-        claude=_ok(_LAUNCH),
-        codex=_ok(_LAUNCH),
+        claude=_ok(_LAUNCH, verified_on="2.1.284"),
+        codex=_ok(_LAUNCH, verified_on="0.157.1"),
         gemini=_ok(_LAUNCH, "`--skip-trust`"),
         opencode=_na("shows no trust dialog"),
         deepcode=_na("shows no trust dialog"),
@@ -249,8 +235,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Start the agent fresh (`agent start --fresh`) to apply a changed brief.",
         implemented=lambda rt: rt.brief_refresh == "hook_context",
         cli_dependent=True,
-        claude=_ok(_RESUME),
-        codex=_ok(_RESUME),
+        claude=_ok(_RESUME, verified_on="2.1.284"),
+        codex=_ok(_RESUME, verified_on="0.157.1"),
         gemini=_gap(),
         opencode=_gap(273),
         deepcode=_gap(),
@@ -321,13 +307,14 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="State is read from the terminal, which is slower and less certain.",
         implemented=lambda rt: bool(rt.hook_script),
         cli_dependent=True,
-        claude=_ok("tests/unit/hooks/test_claude_hook.py"),
+        claude=_ok("tests/unit/hooks/test_claude_hook.py", verified_on="2.1.284"),
         codex=_ok(
             "tests/unit/hooks/test_codex_hook.py",
             note="from its first prompt (the brief): Codex runs no hook before its first turn",
+            verified_on="0.157.1",
         ),
         gemini=_ok("tests/unit/hooks/test_gemini_hook.py", verified_on="0.46.0"),
-        opencode=_ok("tests/unit/hooks/test_opencode_hook.py"),
+        opencode=_ok("tests/unit/hooks/test_opencode_hook.py", verified_on="1.18.32"),
         deepcode=_gap(note="read from the terminal only"),
         aider=_gap(note="read from the terminal only"),
         shell=_na("a plain shell has no agent turn to report"),
@@ -361,8 +348,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Send an ordinary message; it waits until the agent is at its prompt.",
         implemented=lambda rt: rt.hook_context,
         cli_dependent=True,
-        claude=_ok("tests/unit/hooks/test_context.py"),
-        codex=_ok("tests/unit/hooks/test_context.py"),
+        claude=_ok("tests/unit/hooks/test_context.py", verified_on="2.1.284"),
+        codex=_ok("tests/unit/hooks/test_context.py", verified_on="0.157.1"),
         gemini=_gap(),
         opencode=_ok(
             "tests/unit/hooks/test_context.py",
@@ -380,10 +367,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Watch the session (`agent attach`) for dialogs.",
         implemented=lambda rt: bool(rt.prompt_markers),
         cli_dependent=True,
-        claude=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="2.1.252"),
-        codex=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.152.0"),
+        claude=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="2.1.284"),
+        codex=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.157.1"),
         gemini=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.46.0"),
-        opencode=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="1.18.25"),
+        opencode=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="1.18.32"),
         deepcode=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.3.1"),
         aider=_unverified(note="markers not verified live"),
         shell=_na("a plain shell shows no permission dialog"),
@@ -395,10 +382,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Answer the dialog in the session (`agent attach`).",
         implemented=lambda rt: bool(rt.approve_keys),
         cli_dependent=True,
-        claude=_ok("docs/cli.md"),
-        codex=_ok("docs/cli.md"),
+        claude=_ok("docs/cli.md", verified_on="2.1.284"),
+        codex=_ok("docs/cli.md", verified_on="0.157.1"),
         gemini=_ok("tests/unit/services/agents/test_launch.py", verified_on="0.46.0"),
-        opencode=_ok("docs/cli.md"),
+        opencode=_ok("docs/cli.md", verified_on="1.18.32"),
         deepcode=_ok("tests/unit/services/agents/test_launch.py", verified_on="0.3.1"),
         aider=_gap(),
         shell=_na("a plain shell shows no permission dialog"),
@@ -410,8 +397,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Refuse the dialog in the session (`agent attach`).",
         implemented=lambda rt: bool(rt.deny_keys),
         cli_dependent=True,
-        claude=_ok("docs/cli.md"),
-        codex=_ok("docs/cli.md"),
+        claude=_ok("docs/cli.md", verified_on="2.1.284"),
+        codex=_ok("docs/cli.md", verified_on="0.157.1"),
         gemini=_ok("tests/unit/services/agents/test_launch.py", verified_on="0.46.0"),
         opencode=_ok("tests/unit/services/agents/test_launch.py", verified_on="1.18.32"),
         deepcode=_ok("tests/unit/services/agents/test_launch.py", verified_on="0.3.1"),
@@ -592,9 +579,15 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: bool(rt.provider_error_patterns or rt.provider_error_prefixes),
         cli_dependent=True,
         claude=_ok("tests/unit/services/agents/test_provider_failures.py", verified_on="2.1.283"),
-        codex=_ok("tests/unit/services/agents/test_provider_failures.py"),
+        codex=_ok(
+            "tests/unit/services/agents/test_provider_failures.py",
+            "live check failed on 0.157.1, see #360",
+        ),
         gemini=_gap(),
-        opencode=_ok("tests/unit/services/agents/test_provider_failures.py"),
+        opencode=_ok(
+            "tests/unit/services/agents/test_provider_failures.py",
+            "live check failed on 1.18.32, see #360",
+        ),
         deepcode=_ok("tests/unit/services/agents/test_provider_failures.py", verified_on="0.3.1"),
         aider=_gap(),
         shell=_na("a plain shell has no model provider"),

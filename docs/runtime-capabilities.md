@@ -27,30 +27,30 @@ claims support that the adapter's code does not declare.
 | n/a | Cannot exist on this adapter (for example, a plain shell runs no model) |
 
 Some capabilities depend on what a CLI draws on screen, the keys it takes or
-what its hooks send. On those rows a ✅ names the CLI version it was verified
-on, for example ✅ (2.1.284). A later release of that CLI may change the
-behaviour without any change in Backbone, so check the capability again after
-upgrading past that version. "(version not recorded)" means the check that
-established it did not note the version. `backbone doctor` lists these
+what its hooks send. On those rows a ✅ names the CLI version it was last
+verified on, for example ✅ (2.1.284). A later release of that CLI may change
+the behaviour without any change in Backbone, so check the capability again
+after upgrading past that version. "(version not recorded)" means the check
+that established it did not note the version. `backbone doctor` lists these
 versions for the CLIs installed on your machine.
 
 <!-- capability-table:begin -->
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
-| Message delivery into the session | ✅ (2.1.282) | ✅ (0.156.1) | ✅ (0.46.0) | ✅ (version not recorded) | ✅ (0.3.1) | ? not verified live | ✅ plumbing tests only |
-| Folder-trust dialog answered at start | ✅ (version not recorded) | ✅ (version not recorded) | ✅ (version not recorded) `--skip-trust` | n/a | n/a | ? not checked | n/a |
+| Message delivery into the session | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? not verified live | ✅ plumbing tests only |
+| Folder-trust dialog answered at start | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (version not recorded) `--skip-trust` | n/a | n/a | ? not checked | n/a |
 | Brief reaches a fresh session before other work | ✅ | ✅ | ✅ | ✅ | ? | ? not verified live | n/a |
-| Current brief after resume | ✅ (version not recorded) | ✅ (version not recorded) | ❌ | ❌ #273 | ❌ | ❌ | n/a |
+| Current brief after resume | ✅ (2.1.284) | ✅ (0.157.1) | ❌ | ❌ #273 | ❌ | ❌ | n/a |
 | Brief followed after context compaction | ✅ (2.1.282) | ✅ (0.156.1) | ? | ❌ #291 the rule is kept but no longer followed | ? | ? | n/a |
 | Project AGENTS.md loaded at start | ✅ | ✅ | ❌ reads GEMINI.md unless context.fileName is set | ✅ | ✅ | ❌ reads only files passed to it | n/a |
 | Non-empty user-level instruction file detected | ✅ | ✅ | ✅ | ✅ files listed under `instructions` in its config not checked | ✅ | ? no default user-level file per its docs; not yet verified | n/a |
 | CLI-native memory disabled or detected | ✅ managed settings not read | ✅ managed config and the `[memories]` switches not read | ✅ | n/a | n/a | ? not yet verified | n/a |
-| State reported by the runtime (hooks) | ✅ (version not recorded) | ✅ (version not recorded) from its first prompt (the brief): Codex runs no hook before its first turn | ✅ (0.46.0) | ✅ (version not recorded) | ❌ read from the terminal only | ❌ read from the terminal only | n/a |
+| State reported by the runtime (hooks) | ✅ (2.1.284) | ✅ (0.157.1) from its first prompt (the brief): Codex runs no hook before its first turn | ✅ (0.46.0) | ✅ (1.18.32) | ❌ read from the terminal only | ❌ read from the terminal only | n/a |
 | Interrupted turn reads idle (Escape, refused dialog) | ✅ (2.1.284) from the terminal: Claude Code runs no hook on an interrupt | ✅ (0.157.1) | ❌ a declined dialog runs no hook | ✅ (1.18.32) | ? read from the terminal only | ? not verified live | n/a |
-| Steer and high-priority events into a working agent | ✅ (version not recorded) | ✅ (version not recorded) | ❌ | ✅ (1.18.32) as a user message in the running turn, after the next tool call | ❌ | ❌ | n/a |
-| Permission dialog detected and alerted | ✅ (2.1.252) | ✅ (0.152.0) | ✅ (0.46.0) | ✅ (1.18.25) | ✅ (0.3.1) | ? markers not verified live | n/a |
-| Permission dialog answered (agent approve) | ✅ (version not recorded) | ✅ (version not recorded) | ✅ (0.46.0) | ✅ (version not recorded) | ✅ (0.3.1) | ❌ | n/a |
-| Permission dialog refused (agent deny) | ✅ (version not recorded) | ✅ (version not recorded) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
+| Steer and high-priority events into a working agent | ✅ (2.1.284) | ✅ (0.157.1) | ❌ | ✅ (1.18.32) as a user message in the running turn, after the next tool call | ❌ | ❌ | n/a |
+| Permission dialog detected and alerted | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? markers not verified live | n/a |
+| Permission dialog answered (agent approve) | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
+| Permission dialog refused (agent deny) | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
 | Plan approval answered | ✅ (2.1.284) | ✅ (0.157.1) in Plan mode (`/plan`) | ❌ | ❌ #278 works when OPENCODE_EXPERIMENTAL_PLAN_MODE is set in the agent's environment (off by default; `doctor` names each agent without it) | ❌ | ❌ | n/a |
 | Alert when an automatic safety check refuses an action | ✅ (2.1.282) | ❌ #279 | ❌ | ❌ #279 | ❌ | ❌ | n/a |
 | Browser tab group named after the agent | ✅ (version not recorded) with `backbone chrome install` | ❌ #270 | ❌ | ❌ #270 | ❌ | ❌ | n/a |
@@ -62,7 +62,7 @@ versions for the CLIs installed on your machine.
 | Shared skills linked | ✅ | ✅ | ✅ live-checked: it lists the linked skills (0.46) | ✅ | ✅ | ❌ | n/a |
 | Token usage recorded | ✅ | ✅ | ✅ live-checked with a subagent (0.46) | ✅ | ❌ | ❌ | n/a |
 | agent output from the runtime's own record | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
-| Provider capacity or rate-limit failure detected (blocked) | ✅ (2.1.283) | ✅ (version not recorded) | ❌ | ✅ (version not recorded) | ✅ (0.3.1) | ❌ | n/a |
+| Provider capacity or rate-limit failure detected (blocked) | ✅ (2.1.283) | ✅ (version not recorded) live check failed on 0.157.1, see #360 | ❌ | ✅ (version not recorded) live check failed on 1.18.32, see #360 | ✅ (0.3.1) | ❌ | n/a |
 | Running model observed (status) | ✅ (2.1.267) | ✅ (0.156.1) | ✅ (0.46.0) | ✅ (1.18.32) | ❌ no hook state | ❌ no hook state | n/a |
 | Request errors and model changes recorded (diagnostics) | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | n/a |
 | A peer's message cannot pass as a Backbone brief | ✅ | ✅ | ? | ❌ #294 adopted a forged brief | ? | ? | n/a |
