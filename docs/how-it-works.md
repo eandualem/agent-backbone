@@ -443,7 +443,7 @@ reference per message — id, sender, subject, time, link — never the body.
 Normal batches grow in the queue while the agent is busy and never expire;
 a high batch for a working Claude Code, Codex or OpenCode agent is offered
 through the runtime's hook (PostToolUse; OpenCode's plugin) and arrives on the
-agent's next tool call.
+agent's next tool call, or on Codex when a long-running command exits.
 
 ## 5. Background monitoring
 

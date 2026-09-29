@@ -166,7 +166,8 @@ Sources (Gmail today) deliver references to new items that match a filter
 written in the source's own query language. Several subscriptions per agent;
 `high` reaches you mid-task on your next tool call as hook context (Claude
 Code and Codex; on Codex a long-running command hands it over when it exits;
-on Gemini CLI, OpenCode, Aider and shell it waits, queued,
+on OpenCode as a message in its running turn; on Gemini CLI, Aider and shell
+it waits, queued,
 until you are ready and then comes first), `normal` waits for your prompt and
 arrives as one batch:
 
