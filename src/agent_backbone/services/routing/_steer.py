@@ -27,7 +27,12 @@ from agent_backbone.hooks.backbone_state import (
     steer_key,
     steer_offers,
 )
-from agent_backbone.services.agents import AgentState, read_state_file
+from agent_backbone.services.agents import (
+    AgentState,
+    StateSnapshot,
+    agent_state,
+    read_state_file,
+)
 from agent_backbone.services.routing._delivery import revocation_guard
 from agent_backbone.services.routing._envelope import envelope as make_envelope
 from agent_backbone.services.routing._intelligence import get_session_intelligence
@@ -99,6 +104,18 @@ async def steer_agent(
                 "send an ordinary message instead",
             ],
         )
+    if profile.agent_state == AgentState.BLOCKED and profile.reason == "provider":
+        # Blocked reads as working, but a turn that failed at the provider is
+        # over; a usage limit only pauses it.
+        return SteerReport(
+            "refused",
+            session_name,
+            "not_working",
+            evidence=[
+                *evidence,
+                "its turn failed at the provider; send an ordinary message instead",
+            ],
+        )
     runtime = get_runtime(profile.runtime)
     if not runtime.hook_context:
         return SteerReport(
@@ -152,7 +169,13 @@ async def steer_agent(
         try:
             key = steer_key(delivery_id)
             placed = await asyncio.to_thread(
-                offer_steer, config.state_dir, session_name, launch_id, key, envelope
+                offer_steer,
+                config.state_dir,
+                session_name,
+                launch_id,
+                key,
+                envelope,
+                {"prompted_at": turn[1], "session_id": turn[2]} if turn is not None else None,
             )
         except OSError as exc:
             placed = False
@@ -193,6 +216,11 @@ async def steer_agent(
                 "the task ended while the offer was written; send an ordinary message instead",
             ],
         )
+    if turn is None or turn[1] is None:
+        evidence.append(
+            "the hook has recorded no prompt for this turn, so the offer is not tied to it: "
+            "if the turn ends with no hook event, the next task can take it"
+        )
     return SteerReport(
         "offered",
         session_name,
@@ -216,26 +244,27 @@ def _missed(config: BackboneConfig, session_name: str, launch_id: str, delivery_
     )
 
 
-_HookRecord = tuple[float, float | None]
-"""``(timestamp, prompted_at)`` of the hook's latest state record."""
+_HookRecord = tuple[float, float | None, str | None]
+"""``(timestamp, prompted_at, session_id)`` of the hook's latest state record."""
 
 
 def _hook_record(config: BackboneConfig, session_name: str) -> _HookRecord | None:
     snapshot = read_state_file(config.state_dir, session_name)
     if snapshot is None or snapshot.source != "push":
         return None
-    return snapshot.timestamp, snapshot.prompted_at
+    return snapshot.timestamp, snapshot.prompted_at, snapshot.session_id
 
 
 async def _turn_ended(config: BackboneConfig, session_name: str, turn: _HookRecord | None) -> bool:
     """Whether the hook has recorded the end of the turn marked ``turn``.
 
     The hook's own records are the receipt, as for a pasted prompt
-    (``prompt_hook_after``): it writes the turn's end (idle, or unknown when
-    the session ends) just before it retires offers, and a new prompt starts
-    another turn. A dialog within the turn (waiting for a person) is not its
-    end, whatever the screen shows; a record older than the check, such as
-    one left from an earlier session, says nothing about this turn."""
+    (``prompt_hook_after``): it writes the turn's end (idle; blocked by the
+    provider when the turn failed there; unknown when the session ends) just
+    before it retires offers, and a new prompt starts another turn. A dialog
+    within the turn (waiting for a person) is not its end, whatever the
+    screen shows; a record older than the check, such as one left from an
+    earlier session, says nothing about this turn."""
     snapshot = await asyncio.to_thread(read_state_file, config.state_dir, session_name)
     if snapshot is None or snapshot.source != "push":
         return False  # no hook evidence: the hook's own retirement and the TTL apply
@@ -243,14 +272,22 @@ async def _turn_ended(config: BackboneConfig, session_name: str, turn: _HookReco
         return False
     if snapshot.prompted_at != (turn[1] if turn is not None else None):
         return True
-    return snapshot.state in (AgentState.IDLE, AgentState.UNKNOWN)
+    return snapshot.state in (AgentState.IDLE, AgentState.UNKNOWN) or _provider_failed(snapshot)
 
 
-async def settle_steers(config: BackboneConfig, db: BackboneDB) -> dict[str, int]:
-    """One tick: record what became of every open steer."""
+async def settle_steers(
+    config: BackboneConfig, db: BackboneDB, *, read_states: bool = True
+) -> dict[str, int]:
+    """One tick: record what became of every open steer.
+
+    What the offer files say is recorded first. Then the state of each agent
+    that still has an open offer is read once: a turn that failed at the
+    provider leaves them ``not_taken``. A caller that only needs a handoff
+    recorded passes ``read_states=False``."""
     summary: dict[str, int] = {}
     offers = await asyncio.to_thread(steer_offers, config.state_dir)
     on_disk: set[int] = set()
+    waiting: dict[str, list[tuple[str, int]]] = {}
     for agent, launch_id, delivery_id, state, age in offers:
         on_disk.add(delivery_id)
         if state == "taken":
@@ -258,13 +295,14 @@ async def settle_steers(config: BackboneConfig, db: BackboneDB) -> dict[str, int
             await asyncio.to_thread(clear_steer, config.state_dir, agent, launch_id, delivery_id)
             summary["handed_off"] = summary.get("handed_off", 0) + 1
         elif state == "missed" or age > STEER_TTL_SECONDS:
-            if state == "offered" and not await asyncio.to_thread(
-                expire_steer, config.state_dir, agent, launch_id, delivery_id
-            ):
-                continue  # the hook took it meanwhile: handed_off next tick
-            await asyncio.to_thread(clear_steer, config.state_dir, agent, launch_id, delivery_id)
-            await db.deliveries.settle(delivery_id, "not_taken", expected="offered")
-            summary["not_taken"] = summary.get("not_taken", 0) + 1
+            await _not_taken(config, db, agent, launch_id, delivery_id, state, summary)
+        else:
+            waiting.setdefault(agent, []).append((launch_id, delivery_id))
+    if read_states:
+        for agent, open_offers in waiting.items():
+            if await _turn_failed(config, agent):
+                for launch_id, delivery_id in open_offers:
+                    await _not_taken(config, db, agent, launch_id, delivery_id, "offered", summary)
     open_rows = await db.deliveries.query(kind=STEER_KIND, outcome="offered", limit=500)
     for row in open_rows:
         if row["id"] in on_disk:
@@ -275,6 +313,41 @@ async def settle_steers(config: BackboneConfig, db: BackboneDB) -> dict[str, int
         if await db.deliveries.settle(row["id"], "cancelled", expected="offered"):
             summary["cancelled"] = summary.get("cancelled", 0) + 1
     return summary
+
+
+async def _not_taken(
+    config: BackboneConfig,
+    db: BackboneDB,
+    agent: str,
+    launch_id: str,
+    delivery_id: int,
+    state: str,
+    summary: dict[str, int],
+) -> None:
+    if state == "offered" and not await asyncio.to_thread(
+        expire_steer, config.state_dir, agent, launch_id, delivery_id
+    ):
+        return  # the hook took it meanwhile: handed_off next tick
+    await asyncio.to_thread(clear_steer, config.state_dir, agent, launch_id, delivery_id)
+    await db.deliveries.settle(delivery_id, "not_taken", expected="offered")
+    summary["not_taken"] = summary.get("not_taken", 0) + 1
+
+
+def _provider_failed(snapshot: StateSnapshot) -> bool:
+    return snapshot.state == AgentState.BLOCKED and snapshot.reason == "provider"
+
+
+async def _turn_failed(config: BackboneConfig, agent: str) -> bool:
+    """Whether the agent's turn failed at the provider. A runtime whose hooks
+    miss such a turn (Codex) runs none, so nothing retires its offers; the
+    next task's prompt would find them still offered. A state that cannot be
+    read changes nothing."""
+    try:
+        snapshot = await agent_state(config, agent)
+    except Exception:
+        log.warning("Could not read %s's state to settle its steers", agent, exc_info=True)
+        return False
+    return _provider_failed(snapshot)
 
 
 def _age_seconds(created_at: str | None) -> float:

@@ -289,7 +289,7 @@ async def test_failures_are_bounded_cached_and_noticed_once_per_incident(
 async def test_a_steer_counts_as_soon_as_its_hook_took_it(
     api_client, auth_headers, api_app, key, caller, clock
 ):
-    from agent_backbone.hooks.backbone_state import STEER_PREFIX
+    from agent_backbone.hooks.backbone_state import STEER_PREFIX, offer_steer, steer_key
     from agent_backbone.services.agents import AgentState
     from agent_backbone.services.routing import steer_agent
     from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
@@ -332,8 +332,11 @@ async def test_a_steer_counts_as_soon_as_its_hook_took_it(
     assert report.outcome == "offered"
     (offer,) = config.state_dir.rglob(f"{STEER_PREFIX}*.md")
     offer.rename(offer.with_suffix(".taken"))  # what the hook does; no settle tick has run
-    resp = await _validate(api_client, auth_headers, confirmation["confirmation_id"])
+    offer_steer(config.state_dir, "other", "L2", steer_key(999), "another agent's open offer")
+    with patch(f"{steer}.agent_state", AsyncMock()) as state:
+        resp = await _validate(api_client, auth_headers, confirmation["confirmation_id"])
     assert resp.status_code == 200 and resp.json()["kind"] == "steer", resp.text
+    state.assert_not_awaited()  # the check reads no agent's state
 
 
 async def test_a_burst_cant_outrun_the_bound(api_client, auth_headers, caller, clock):

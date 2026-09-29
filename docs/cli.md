@@ -583,7 +583,8 @@ call (on Codex, a command still running when its call returns hands it over
 when it exits), and OpenCode's plugin adds it to the running turn as a user message after
 that call, so it cannot overwrite a draft or answer a dialog. It is accepted only
 while the agent is `agent_working` on one of those runtimes in a session the
-backbone started; otherwise it is **refused with the reason** (`not_working`,
+backbone started, and not once its turn failed at the provider (`blocked` /
+`provider`); otherwise it is **refused with the reason** (`not_working`,
 `unsupported_runtime`, `offline`, `no_launch_id`) and nothing is queued — send
 an ordinary message instead. The guarantee is at-most-once handoff, not
 incorporation: the delivery record (`kind` `steer`, in `agent inspect`) moves

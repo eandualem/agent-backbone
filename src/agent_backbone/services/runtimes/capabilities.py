@@ -361,12 +361,19 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Send an ordinary message; it waits until the agent is at its prompt.",
         implemented=lambda rt: rt.hook_context,
         cli_dependent=True,
-        claude=_ok("tests/unit/hooks/test_context.py", verified_on="2.1.284"),
+        claude=_ok(
+            "tests/unit/hooks/test_context.py",
+            note=(
+                "a steer that names its turn is handed over only in that turn, also after an Escape"
+            ),
+            verified_on="2.1.284",
+        ),
         codex=_ok(
             "tests/unit/hooks/test_context.py",
             note=(
                 "a command still running when its call returns hands it over "
-                "when it exits (0.157.1)"
+                "when it exits (0.157.1); a steer that names its turn is handed "
+                "over only in that turn, also after a provider failure"
             ),
             verified_on="0.157.1",
         ),

@@ -202,7 +202,7 @@ async def validate(request: Request, config: BackboneConfig, db, confirmation_id
         if outcome == "not_delivered":
             # A steer the agent's hook just took is recorded on the next
             # settle tick; settle it now rather than refuse the recipient.
-            await settle_steers(config, db)
+            await settle_steers(config, db, read_states=False)
             outcome, record = await _check(db, agent, confirmation_id, done)
         if record is None:
             validations.failed(config, agent.name, confirmation_id, outcome, now)
