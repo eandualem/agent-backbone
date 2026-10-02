@@ -200,6 +200,7 @@ async def test_fresh_restart_delivers_brief_then_continuation(db, tmp_path, runt
 
     with (
         patch.object(type(RUNTIMES[runtime]), "build_command", return_value="stub"),
+        patch.object(type(RUNTIMES[runtime]), "available", return_value=True),
         patch(f"{LAUNCH}.stop_agent", AsyncMock(return_value=True)),
         patch(f"{LAUNCH}.start_session", side_effect=start),
         patch(f"{LAUNCH}.capture_pane", AsyncMock(return_value=PROMPTS[runtime])),
@@ -210,8 +211,9 @@ async def test_fresh_restart_delivers_brief_then_continuation(db, tmp_path, runt
         patch(f"{INTEL}.in_copy_mode", AsyncMock(return_value=False)),
         patch(f"{DELIVERY}.send_message", side_effect=send),
     ):
-        assert await run_transitions(lambda: config, store, db) == {"app": "started"}
+        summary = await run_transitions(lambda: config, store, db)
         done = await db.transitions.get(row["id"])
+        assert summary == {"app": "started"}, done["result"]
         assert done["result"]["ready"] == "ready"
         assert done["result"]["message"] != "agent_working"
         if runtime == "codex":
