@@ -423,7 +423,9 @@ async def _start_agent(
     ):
         details["reason"] = "brief_refresh_failed"
         return StartResult(ok=False, evidence=("could not hand the current brief to the session",))
-    write_starting_marker(config.state_dir, spec.name, launched_at)
+    write_starting_marker(
+        config.state_dir, spec.name, launched_at, launch_id=environment["BACKBONE_LAUNCH_ID"]
+    )
     ok = await start_session(
         spec.name,
         working_dir=str(spec.path),

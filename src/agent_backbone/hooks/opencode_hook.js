@@ -125,6 +125,7 @@ function readCurrent(t) {
 }
 
 function writeState(t, record) {
+  if (launchID()) record.launch_id = launchID();
   fs.mkdirSync(t.dir, { recursive: true });
   const file = path.join(t.dir, `${t.agent}.json`);
   const tmp = path.join(t.dir, `.${t.agent}.json.${process.pid}.tmp`);

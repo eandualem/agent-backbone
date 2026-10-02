@@ -26,7 +26,12 @@ await hook.event({event: {type: "session.status", properties: {
 """
     subprocess.run(
         [node, "--input-type=module", "-e", script, plugin.as_uri()],
-        env={**os.environ, "BACKBONE_AGENT": "app", "BACKBONE_STATE_DIR": str(tmp_path)},
+        env={
+            **os.environ,
+            "BACKBONE_AGENT": "app",
+            "BACKBONE_STATE_DIR": str(tmp_path),
+            "BACKBONE_LAUNCH_ID": "replacement-launch",
+        },
         check=True,
         capture_output=True,
         text=True,
@@ -35,6 +40,7 @@ await hook.event({event: {type: "session.status", properties: {
     state = json.loads((tmp_path / "app.json").read_text())
     assert state["runtime"] == "opencode"
     assert state["session_id"] == "opencode-session"
+    assert state["launch_id"] == "replacement-launch"
 
 
 def test_the_running_model_comes_from_a_completed_opencode_reply(tmp_path):

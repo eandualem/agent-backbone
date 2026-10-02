@@ -220,6 +220,13 @@ from other installations is outside this workflow.
 
 ## Retention and limits
 
+Startup readiness is a point-in-time observation, not evidence that the process
+remained alive or completed its assigned work. If a replacement later disappears
+from tmux, the retained startup result and hook history may not identify its exit
+status, terminating signal, final stderr or the actor that stopped it. Rejecting
+a previous launch's hook fixes state attribution; it does not establish why an
+unobserved replacement exited.
+
 Operational diagnostics use `timing.delivery_retention_days`, the existing
 delivery/event retention setting (30 days by default). Repeated diagnostic
 records age from their last observation. The periodic prune job runs every

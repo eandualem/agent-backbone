@@ -314,6 +314,20 @@ CAPABILITIES: tuple[Capability, ...] = (
         shell=_na("a plain shell has no CLI version"),
     ),
     _row(
+        "restart-state",
+        "Replacement state excludes previous launch hooks and submissions",
+        "src/agent_backbone/services/agents/_file_reader.py",
+        fallback="Inspect the replacement terminal; readiness does not establish ongoing liveness.",
+        implemented=lambda rt: True,  # Shared launch and reconciliation path for every adapter.
+        claude=_ok("tests/unit/services/agents/test_restart_state.py"),
+        codex=_ok("tests/unit/services/agents/test_restart_state.py"),
+        gemini=_ok("tests/unit/services/agents/test_restart_state.py"),
+        opencode=_ok("tests/unit/services/agents/test_restart_state.py"),
+        deepcode=_ok("tests/unit/services/agents/test_restart_state.py"),
+        aider=_ok("tests/unit/services/agents/test_restart_state.py"),
+        shell=_ok("tests/unit/services/agents/test_restart_state.py"),
+    ),
+    _row(
         "hook-state",
         "State reported by the runtime (hooks)",
         "src/agent_backbone/hooks",

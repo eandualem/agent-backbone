@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.fs import atomic_write_text
-from agent_backbone.services.agents._file_reader import read_state_file
+from agent_backbone.services.agents._file_reader import read_launch_marker, read_state_file
 from agent_backbone.services.agents.models import (
     REASON_PERMISSION,
     REASON_PLAN,
@@ -233,11 +233,16 @@ async def get_agent_state(
     )
     try:
         submitted = float((state_dir / f"{session}.submitted").read_text())
-        if not math.isfinite(submitted) or (since is not None and submitted < since):
+        launch = read_launch_marker(state_dir, session)
+        if (
+            not math.isfinite(submitted)
+            or (since is not None and submitted < since)
+            or (launch is not None and submitted < launch[0])
+        ):
             return snapshot
     except (OSError, ValueError):
         return snapshot
-    hook = read_state_file(state_dir, session)
+    hook = read_state_file(state_dir, session, current_launch=True)
     if hook and hook.timestamp > submitted:
         return snapshot
     if snapshot.state not in {AgentState.IDLE, AgentState.UNKNOWN}:
@@ -282,7 +287,7 @@ async def _get_agent_state(
     state is verified against the terminal. Every snapshot carries the
     evidence it was built from.
     """
-    push = read_state_file(state_dir, session)
+    push = read_state_file(state_dir, session, current_launch=True)
     # Readiness observes this launch only. Its bookkeeping marker must not
     # mask the actual prompt; ordinary state reads still honor the marker.
     if since is not None and push and (push.timestamp < since or push.state == AgentState.STARTING):
@@ -312,7 +317,7 @@ async def _get_agent_state(
                 if pane_content and runtime.detect_interrupted(pane_content):
                     # A turn that began while the pane was read keeps its
                     # record: its hook writes before the runtime redraws.
-                    latest = read_state_file(state_dir, session)
+                    latest = read_state_file(state_dir, session, current_launch=True)
                 if latest is not None and latest.timestamp == push.timestamp:
                     interrupted = replace(
                         push,
@@ -345,7 +350,9 @@ async def _get_agent_state(
                 # A record written while the pane was read (a new turn, a
                 # dialog) is newer than that screen: read it with a new one.
                 # Being new, it is too young for this override.
-                latest = read_state_file(state_dir, session) if detail else None
+                latest = (
+                    read_state_file(state_dir, session, current_launch=True) if detail else None
+                )
                 if latest is not None and latest.timestamp != push.timestamp:
                     return await _get_agent_state(
                         state_dir, session, stale_threshold, runtime_hint=runtime_hint, since=since
@@ -459,7 +466,12 @@ async def _get_agent_state(
                 0, f"hook state '{push.state.value}' is stale ({push_age:.0f}s) — reading terminal"
             )
         else:
-            pull.evidence.insert(0, "no hook state file — reading terminal")
+            pull.evidence.insert(
+                0,
+                "no current-launch hook state — reading terminal"
+                if read_launch_marker(state_dir, session)
+                else "no hook state file — reading terminal",
+            )
         if pull.state != AgentState.UNKNOWN:
             if push and pull.state == AgentState.BLOCKED:
                 pull.current_issue = push.current_issue

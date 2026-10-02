@@ -36,8 +36,28 @@ def _marker_path(state_dir: Path, session: str) -> Path:
     return state_dir / f"{session}.starting"
 
 
-def write_starting_marker(state_dir: Path, session: str, launched_at: float) -> None:
+def read_launch_marker(state_dir: Path, session: str) -> tuple[float, str] | None:
+    """The latest managed launch, retained after its temporary starting marker clears."""
+    try:
+        record = json.loads((state_dir / f"{session}.launch").read_text())
+        timestamp = float(record["ts"])
+        launch_id = record["launch_id"]
+        if math.isfinite(timestamp) and isinstance(launch_id, str) and launch_id:
+            return timestamp, launch_id
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return None
+
+
+def write_starting_marker(
+    state_dir: Path, session: str, launched_at: float, *, launch_id: str | None = None
+) -> None:
     """Record that ``session`` was launched at ``launched_at`` and is not at its prompt yet."""
+    if launch_id:
+        atomic_write_text(
+            state_dir / f"{session}.launch",
+            json.dumps({"ts": launched_at, "launch_id": launch_id}),
+        )
     atomic_write_text(_marker_path(state_dir, session), json.dumps({"ts": launched_at}))
 
 
@@ -100,7 +120,9 @@ def _hook_diagnostics(data: dict) -> tuple[RuntimeDiagnostic, ...]:
     return tuple(found)
 
 
-def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
+def read_state_file(
+    state_dir: Path, session: str, *, current_launch: bool = False
+) -> StateSnapshot | None:
     """Read hook-written state from ``<state_dir>/<session>.json``.
 
     Expected JSON shape::
@@ -109,7 +131,9 @@ def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
          "issue": 42, "repo": "owner/name", "ts": 1234567890.0,
          "started_at": 1234567800.0, "plan_file": "...", "plan_title": "..."}
 
-    Returns None if the file does not exist or cannot be parsed.
+    Returns None if the file does not exist or cannot be parsed. State decisions
+    request ``current_launch``; historical readers retain the saved conversation
+    for usage accounting, transcripts and explicit resume.
     """
     state_file = state_dir / f"{session}.json"
     if not state_file.exists():
@@ -129,9 +153,15 @@ def read_state_file(state_dir: Path, session: str) -> StateSnapshot | None:
         log.warning("Failed to read state file for %s: %s", session, e)
         return None
 
-    starting = _starting_snapshot(state_dir, session, newer_than=hook_ts)
+    launch = read_launch_marker(state_dir, session)
+    belongs = launch is None or (
+        hook_ts >= launch[0] and data.get("launch_id") in (None, launch[1])
+    )
+    starting = _starting_snapshot(state_dir, session, newer_than=hook_ts if belongs else 0.0)
     if starting is not None:
         return starting
+    if current_launch and not belongs:
+        return None
     state = AgentState.parse(data.get("state"))
     return StateSnapshot(
         state=state,

@@ -107,8 +107,8 @@ async def test_a_prompt_hook_receipt_after_the_first_poll_is_delivered(
     monkeypatch.setattr("agent_backbone.services.routing._delivery.PROMPT_HOOK_WAIT_SECONDS", 2.0)
     polls = []
 
-    def read_then_hook_reports(state_dir, session):
-        snapshot = read_state_file(state_dir, session)
+    def read_then_hook_reports(state_dir, session, **kwargs):
+        snapshot = read_state_file(state_dir, session, **kwargs)
         if not polls:
             config.state_dir.mkdir(parents=True, exist_ok=True)
             (config.state_dir / "ike.json").write_text(
