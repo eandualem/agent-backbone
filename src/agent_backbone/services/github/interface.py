@@ -59,6 +59,14 @@ def _is_api_origin(url: httpx.URL) -> bool:
     return (url.scheme, url.host, url.port) == (base.scheme, base.host, base.port)
 
 
+def _follow_read_redirects(method: str, path: str) -> bool:
+    # Issue transfers also redirect within the API origin. Until we can verify
+    # the complete identity, keep issue-scoped reads on their requested target.
+    parts = path.strip("/").split("/")
+    issue_scoped = len(parts) > 1 and parts[0] in {"issues", "pulls"} and parts[1].isdigit()
+    return method == "GET" and not issue_scoped
+
+
 async def _check_redirect(response: httpx.Response) -> None:
     if response.has_redirect_location:
         target = response.request.url.join(response.headers["Location"])
@@ -263,7 +271,7 @@ class GitHubClient:
             method,
             f"/repos/{owner}/{repo}{path}",
             headers=headers,
-            follow_redirects=method == "GET",
+            follow_redirects=_follow_read_redirects(method, path),
             **kwargs,
         )
         resp.raise_for_status()
@@ -282,7 +290,9 @@ class GitHubClient:
                 raise ValueError("GitHub pagination must stay on the API origin")
             owner, repo = self._resolve_repo(repo_full_name)
             headers = {"Authorization": await self._auth_header(owner, repo)}
-            resp = await self._client.get(nxt["url"], headers=headers, follow_redirects=True)
+            resp = await self._client.get(
+                nxt["url"], headers=headers, follow_redirects=_follow_read_redirects("GET", path)
+            )
             resp.raise_for_status()
             items.extend(resp.json())
         return items

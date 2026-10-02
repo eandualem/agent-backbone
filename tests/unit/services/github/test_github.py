@@ -304,12 +304,12 @@ class TestPagination:
 @pytest.mark.parametrize("status", [301, 302, 307, 308])
 @respx.mock
 async def test_renamed_repository_reads_follow_redirects(config, status):
-    old = f"{API_BASE}/repos/example/old/issues/42"
-    new = f"{API_BASE}/repositories/123/issues/42"
+    old = f"{API_BASE}/repos/example/old/issues"
+    new = f"{API_BASE}/repositories/123/issues"
     respx.get(old).respond(status, headers={"Location": new})
-    target = respx.get(new).respond(json={"number": 42, "title": "Task", "state": "open"})
+    target = respx.get(new).respond(json=[{"number": 42, "title": "Task", "state": "open"}])
     async with GitHubClient(config) as gh:
-        issue = await gh.get_issue(42, repo_full_name="example/old")
+        [issue] = await gh.list_issues(repo_full_name="example/old")
     assert issue.number == 42
     assert issue.repo_full_name == "example/old"  # durable routing identity stays stable
     assert target.calls.last.request.headers["Authorization"] == "Bearer installation-token"
@@ -317,22 +317,51 @@ async def test_renamed_repository_reads_follow_redirects(config, status):
 
 @respx.mock
 async def test_redirect_does_not_forward_credentials_to_another_origin(config):
-    old = f"{API_BASE}/repos/example/old/issues/42"
-    target = "https://example.com/issues/42"
+    old = f"{API_BASE}/repos/example/old/issues"
+    target = "https://example.com/issues"
     respx.get(old).respond(301, headers={"Location": target})
+    async with GitHubClient(config) as gh:
+        with pytest.raises(httpx.HTTPStatusError):
+            await gh.list_issues(repo_full_name="example/old")
+    assert len(respx.calls) == 1
+
+
+@respx.mock
+async def test_redirect_loop_is_bounded(config):
+    url = f"{API_BASE}/repos/example/old/issues"
+    respx.get(url).respond(301, headers={"Location": url})
+    async with GitHubClient(config) as gh:
+        with pytest.raises(httpx.TooManyRedirects):
+            await gh.list_issues(repo_full_name="example/old")
+
+
+@pytest.mark.parametrize(
+    "target_path", ["repos/example/new/issues/7", "repositories/123/issues/42"]
+)
+@respx.mock
+async def test_issue_redirect_cannot_change_its_repository_scoped_identity(config, target_path):
+    respx.get(f"{API_BASE}/repos/example/old/issues/42").respond(
+        301, headers={"Location": f"{API_BASE}/{target_path}"}
+    )
     async with GitHubClient(config) as gh:
         with pytest.raises(httpx.HTTPStatusError):
             await gh.get_issue(42, repo_full_name="example/old")
     assert len(respx.calls) == 1
 
 
+@pytest.mark.parametrize("path", ["/issues/42/comments", "/pulls/42/reviews"])
 @respx.mock
-async def test_redirect_loop_is_bounded(config):
-    url = f"{API_BASE}/repos/example/old/issues/42"
-    respx.get(url).respond(301, headers={"Location": url})
+async def test_issue_scoped_pagination_does_not_follow_transfer_redirects(config, path):
+    first = f"{API_BASE}/repos/example/old{path}"
+    next_page = f"{first}?page=2"
+    respx.get(url__eq=first).respond(json=[], headers={"Link": f'<{next_page}>; rel="next"'})
+    respx.get(url__eq=next_page).respond(
+        301, headers={"Location": f"{API_BASE}/repositories/123{path}?page=2"}
+    )
     async with GitHubClient(config) as gh:
-        with pytest.raises(httpx.TooManyRedirects):
-            await gh.get_issue(42, repo_full_name="example/old")
+        with pytest.raises(httpx.HTTPStatusError):
+            await gh._request_all(path, repo_full_name="example/old", params={})
+    assert len(respx.calls) == 2
 
 
 @respx.mock
