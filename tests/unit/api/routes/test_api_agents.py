@@ -647,8 +647,33 @@ class TestApproveAgent:
 
 
 class TestPostAgentState:
-    async def test_writes_the_hook_state_file(self, api_client, auth_headers, api_app):
-        from agent_backbone.services.agents import get_agent_state, read_state_file
+    @pytest.mark.parametrize("after_managed_hook", [False, True])
+    async def test_writes_the_hook_state_file(
+        self, api_client, auth_headers, api_app, after_managed_hook
+    ):
+        from agent_backbone.services.agents import (
+            get_agent_state,
+            read_state_file,
+            write_state_file,
+        )
+        from agent_backbone.services.agents._file_reader import (
+            clear_starting_marker,
+            write_starting_marker,
+        )
+
+        state_dir = api_app.state.config.state_dir
+        if after_managed_hook:
+            write_starting_marker(state_dir, "ike", time.time() - 10, launch_id="current")
+            write_state_file(
+                state_dir,
+                "ike",
+                {
+                    "state": "idle",
+                    "ts": time.time() - 1,
+                    "launch_id": "current",
+                },
+            )
+            clear_starting_marker(state_dir, "ike")
 
         resp = await api_client.post(
             "/api/agents/ike/state",

@@ -297,3 +297,73 @@ async def test_rename_keeps_a_pending_restart(db, store):
     await store.rename("api", "backend")
     moved = await db.transitions.get(row["id"])
     assert moved["agent_name"] == "backend" and moved["status"] == "pending"
+
+
+async def test_rename_round_trip_preserves_the_latest_launch_conversation(store):
+    from agent_backbone.services.agents._file_reader import (
+        clear_starting_marker,
+        write_starting_marker,
+    )
+
+    state_dir = store.config.state_dir
+    for name, launch, conversation in (
+        ("api", "first", "first-conversation"),
+        ("desk", "second", "latest-conversation"),
+    ):
+        write_starting_marker(state_dir, name, 1.0, launch_id=launch)
+        clear_starting_marker(state_dir, name)
+        write_state_file(
+            state_dir,
+            name,
+            {
+                "runtime": "codex",
+                "session_id": conversation,
+                "state": "idle",
+                "ts": 2.0,
+                "launch_id": launch,
+            },
+        )
+        # A delayed writer has replaced the legacy file, but not this launch's state.
+        write_state_file(
+            state_dir,
+            name,
+            {
+                "session_id": "stale-conversation",
+                "ts": 3.0,
+                "launch_id": "obsolete",
+            },
+        )
+        new_name = "desk" if name == "api" else "api"
+        await store.rename(name, new_name)
+        assert read_state_file(state_dir, new_name).session_id == conversation
+        assert not (state_dir / f"{name}.launch").exists()
+        assert not (state_dir / "launches" / name).exists()
+    assert read_state_file(state_dir, "api").session_id == "latest-conversation"
+
+
+async def test_failed_rename_restores_launch_state(store):
+    from agent_backbone.services.agents._file_reader import (
+        clear_starting_marker,
+        write_starting_marker,
+    )
+
+    state_dir = store.config.state_dir
+    write_starting_marker(state_dir, "api", 1.0, launch_id="current")
+    clear_starting_marker(state_dir, "api")
+    write_state_file(
+        state_dir,
+        "api",
+        {
+            "session_id": "conversation",
+            "ts": 2.0,
+            "launch_id": "current",
+        },
+    )
+    with patch.object(store._db.agents, "rename", side_effect=RuntimeError("database failure")):
+        with pytest.raises(RuntimeError, match="database failure"):
+            await store.rename("api", "desk")
+    assert read_state_file(state_dir, "api").session_id == "conversation"
+    assert (state_dir / "api.launch").exists()
+    assert not (state_dir / "desk.launch").exists()
+    assert not (state_dir / "launches" / "desk").exists()
+    assert not (state_dir / "desk.json").exists()

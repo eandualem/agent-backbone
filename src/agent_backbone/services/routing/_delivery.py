@@ -747,7 +747,9 @@ async def prompt_hook_after(state_dir, session_name: str, since: float, message:
     digest = prompt_digest(message)
     deadline = time.monotonic() + PROMPT_HOOK_WAIT_SECONDS
     while True:
-        snapshot = await asyncio.to_thread(read_state_file, state_dir, session_name)
+        snapshot = await asyncio.to_thread(
+            read_state_file, state_dir, session_name, current_launch=True
+        )
         if (
             snapshot is not None
             and snapshot.source == "push"

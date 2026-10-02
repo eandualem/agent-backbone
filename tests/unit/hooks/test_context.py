@@ -381,7 +381,7 @@ def test_a_steer_not_tied_to_a_turn_is_handed_over_as_before(tmp_path, monkeypat
     _prompt(runtime, tmp_path, at=1000.2)
     assert _tool_call(runtime, tmp_path) == "untied"
     bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(6), "tied", {"prompted_at": 999.0})
-    (tmp_path / "desk.json").write_text(json.dumps({"state": "busy", "ts": 1000.3}))
+    bb.write_state(tmp_path, "desk", {"state": "busy", "ts": 1000.3, "launch_id": "launch-x"})
     assert _tool_call(runtime, tmp_path) == "tied"
 
 

@@ -386,7 +386,17 @@ class AgentStore:
                 )
             source = self.config.state_dir / f"{name}.json"
             target = self.config.state_dir / f"{new_name}.json"
-            if target.exists():
+            launch_moves = [
+                (
+                    self.config.state_dir / f"{name}.launch",
+                    self.config.state_dir / f"{new_name}.launch",
+                ),
+                (
+                    self.config.state_dir / "launches" / name,
+                    self.config.state_dir / "launches" / new_name,
+                ),
+            ]
+            if target.exists() or any(destination.exists() for _, destination in launch_moves):
                 raise ValueError(f"'{new_name}' already has saved state; choose another name")
             # Its skill manifest follows too, or the old name would keep its links
             # alive; it moves with the rename or not at all.
@@ -409,6 +419,7 @@ class AgentStore:
                     "released; choose another name"
                 )
             copied = moved = False
+            moved_launch_state: list[tuple[Path, Path]] = []
             try:
                 if source.exists():
                     atomic_write_text(target, source.read_text())
@@ -416,8 +427,14 @@ class AgentStore:
                 if old_manifest.exists():
                     old_manifest.rename(new_manifest)
                     moved = True
+                for original, destination in launch_moves:
+                    if original.exists():
+                        original.rename(destination)
+                        moved_launch_state.append((original, destination))
                 await self._db.agents.rename(name, new_name)
             except BaseException:
+                for original, destination in reversed(moved_launch_state):
+                    destination.rename(original)
                 if copied:
                     target.unlink(missing_ok=True)
                 if moved:

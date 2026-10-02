@@ -116,20 +116,32 @@ function target() {
   return { agent, dir };
 }
 
+function launchStatePath(t) {
+  if (!launchID()) return null;
+  const identity = createHash("sha256").update(launchID()).digest("hex");
+  return path.join(t.dir, "launches", t.agent, `${identity}.json`);
+}
+
 function readCurrent(t) {
   try {
-    return JSON.parse(fs.readFileSync(path.join(t.dir, `${t.agent}.json`), "utf8"));
+    const scoped = launchStatePath(t);
+    const file = scoped && fs.existsSync(scoped) ? scoped : path.join(t.dir, `${t.agent}.json`);
+    return JSON.parse(fs.readFileSync(file, "utf8"));
   } catch {
     return {};
   }
 }
 
 function writeState(t, record) {
+  if (launchID()) record.launch_id = launchID();
   fs.mkdirSync(t.dir, { recursive: true });
-  const file = path.join(t.dir, `${t.agent}.json`);
-  const tmp = path.join(t.dir, `.${t.agent}.json.${process.pid}.tmp`);
-  fs.writeFileSync(tmp, JSON.stringify(record));
-  fs.renameSync(tmp, file);
+  const files = [launchStatePath(t), path.join(t.dir, `${t.agent}.json`)];
+  for (const file of files.filter(Boolean)) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(record));
+    fs.renameSync(tmp, file);
+  }
   if (record.session_id) {
     try {
       const launch = process.env.BACKBONE_LAUNCH_ID || null;

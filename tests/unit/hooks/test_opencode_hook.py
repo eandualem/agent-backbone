@@ -26,7 +26,12 @@ await hook.event({event: {type: "session.status", properties: {
 """
     subprocess.run(
         [node, "--input-type=module", "-e", script, plugin.as_uri()],
-        env={**os.environ, "BACKBONE_AGENT": "app", "BACKBONE_STATE_DIR": str(tmp_path)},
+        env={
+            **os.environ,
+            "BACKBONE_AGENT": "app",
+            "BACKBONE_STATE_DIR": str(tmp_path),
+            "BACKBONE_LAUNCH_ID": "replacement-launch",
+        },
         check=True,
         capture_output=True,
         text=True,
@@ -35,6 +40,7 @@ await hook.event({event: {type: "session.status", properties: {
     state = json.loads((tmp_path / "app.json").read_text())
     assert state["runtime"] == "opencode"
     assert state["session_id"] == "opencode-session"
+    assert state["launch_id"] == "replacement-launch"
 
 
 def test_the_running_model_comes_from_a_completed_opencode_reply(tmp_path):
@@ -242,3 +248,40 @@ await after({tool: "bash", args: {command: "gh issue comment 7 -R acme/app -b do
     assert [(row["issue"], row["phase"]) for row in rows] == [(5, "intent"), (7, "succeeded")]
     assert not has_commented_on_issue(5, "app", log, repo="acme/app")
     assert has_commented_on_issue(7, "app", log, repo="acme/app")
+
+
+def test_old_opencode_launch_cannot_overwrite_replacement_state(tmp_path):
+    from agent_backbone.services.agents import read_state_file
+    from agent_backbone.services.agents._file_reader import (
+        clear_starting_marker,
+        write_starting_marker,
+    )
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to exercise the JavaScript plugin")
+    plugin = tmp_path / "hook.mjs"
+    plugin.write_text(hook_source("opencode_hook.js").read_text())
+    write_starting_marker(tmp_path, "app", 1.0, launch_id="new")
+    clear_starting_marker(tmp_path, "app")
+    script = """
+const { AgentBackbone } = await import(process.argv[1]);
+const hook = await AgentBackbone();
+process.env.BACKBONE_LAUNCH_ID = "new";
+await hook.event({event: {type: "session.status", properties: {
+    sessionID: "conversation", status: {type: "busy"}
+}}});
+// Even an explicitly resumed conversation has a different launch identity.
+process.env.BACKBONE_LAUNCH_ID = "old";
+await hook.event({event: {type: "session.idle", properties: {sessionID: "conversation"}}});
+"""
+    subprocess.run(
+        [node, "--input-type=module", "-e", script, plugin.as_uri()],
+        env={**os.environ, "BACKBONE_AGENT": "app", "BACKBONE_STATE_DIR": str(tmp_path)},
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert json.loads((tmp_path / "app.json").read_text())["state"] == "idle"
+    assert read_state_file(tmp_path, "app", current_launch=True).state.value == "busy"

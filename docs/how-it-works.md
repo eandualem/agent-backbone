@@ -59,7 +59,17 @@ This page follows real requests through the system. Read
 6. Broadcast a fresh snapshot on Socket.IO `/sessions`.
 
 Startup readiness uses the same state reconciliation as inspection and delivery,
-with a launch timestamp fence to exclude old hooks and submission markers.
+with a persistent launch timestamp and identity to exclude old hooks and
+submission markers. This boundary survives readiness: ordinary inspection,
+delivery and prompt acknowledgements cannot reuse the previous launch's hook.
+Untagged state posted by older integrations is accepted only when its timestamp
+is at or after this launch. Managed hooks also carry the launch identity, so a
+late write from an older process is excluded. Managed hooks keep a separate
+state file for each launch; a delayed writer cannot erase the replacement's
+busy record, even when its input box remains visible. A newer eligible untagged
+API update still takes precedence, and renaming a stopped agent moves its launch
+marker and state records together. The saved conversation remains
+available for explicit resume and usage history.
 Current provider-capacity evidence therefore prevents a false ready result.
 
 Starts with a database handle retain operational diagnostics under one operation
