@@ -1,23 +1,26 @@
 # Deep reviews without stopping your agent
 
-A repository agent can run the installed Codex CLI, or Claude Code, as a
-separate process while its own conversation continues. No Backbone swarm or managed agent session is
-needed. The review produces findings for an agent to verify, not automatic fixes.
+A repository agent can run the installed Codex CLI as a separate reviewer
+process while its own conversation continues. No Backbone swarm or managed
+agent session is needed. The review produces findings for an agent to verify,
+not automatic fixes.
 
-The reviewer is a different model family in a different CLI from the one that
-wrote the change: Claude-led work is reviewed by Codex with `gpt-6-astra`, and
-Codex-led work by Claude Code with `claude-fable-5-1`. Name the model exactly;
-if it is unavailable, report that rather than substituting another.
+Every review uses Codex with `gpt-6-astra`, whether the implementation was
+written with Codex, Claude Code or another runtime. Independence means a separate,
+fresh reviewer context reviewing the pinned changes, not the implementing
+conversation checking itself. A different model family or CLI is not required.
+Name the model exactly; if it is unavailable, report that rather than substituting
+another reviewer.
 
-Two scopes use the same commands at different depths:
+Two scopes use the same command at different depths:
 
-| Scope | Head | Base | Codex effort | Claude level |
-|---|---|---|---|---|
-| Feature branch, **before** its PR opens | the branch's commit | the integration branch (`develop`) | `high` | `high` |
-| Release, develop into main | `develop` | `main` | `ultra` | `max` |
+| Scope | Head | Base | Codex effort |
+|---|---|---|---|
+| Feature branch, **before** its PR opens | the branch's commit | the integration branch (`develop`) | `high` |
+| Release, develop into main | `develop` | `main` | `ultra` |
 
-For a Codex-led repository, the release's "Ultra" review is therefore
-`claude-fable-5-1` at `/code-review max`.
+Use `high` for ordinary feature work. A release review at `ultra` still requires
+explicit release authorization.
 
 ## Codex reviewer
 
@@ -115,7 +118,7 @@ triaged findings and the authorized scope:
 - **Many valid findings, or any high-severity findings:** assume the pass may have
   saturated and left other problems unreported. After the fixes have landed in
   `develop` through ordinary reviewed PRs, run another release-depth pass with the
-  same reviewer (Codex `ultra` or Claude `max`) from the updated
+  same reviewer (`gpt-6-astra` at `ultra`) from the updated
   head to the intended base. Pin the new head, base and merge-base and use a new
   run directory. Apply the same decision rule to that round's findings.
 - **Few findings, all minor:** fix them on a branch, PR to `develop`, complete
@@ -157,64 +160,17 @@ A review does not itself authorize a release. When release work is in scope,
 follow the repository's [promotion process](../CONTRIBUTING.md#releasing-maintainers)
 and verify the resulting PR state before reporting completion.
 
-## Claude Code: a local reviewer
+## Historical review measurements
 
-A Codex-led repository gets its independent review from Claude Code, run the
-same way: a separate headless process in a clean detached checkout, while the
-calling agent keeps working. Prepare the run directory, checkout and `scope.txt`
-exactly as above; record `model=claude-fable-5-1` and the level, and save
-`claude --version` in place of Codex's. Measured with Claude Code 2.1.280.
+These measurements describe earlier reviewer configurations, not approved
+reviewer selections. The current reviewer for every implementation is
+`gpt-6-astra`; do not launch the earlier Claude review recipes.
 
-```bash
-cd /ABSOLUTE/RUN/DIR/repo
-env -u BACKBONE_AGENT -u BACKBONE_RUNTIME -u BACKBONE_STATE_DIR \
-  -u BACKBONE_DATA_DIR -u BACKBONE_API_KEY -u BACKBONE_LAUNCH_ID \
-  claude -p "/code-review LEVEL BASE_COMMIT" --model claude-fable-5-1 \
-  --permission-mode plan --no-session-persistence \
-  --settings '{"disableAllHooks":true}' --output-format json \
-  < /dev/null > /ABSOLUTE/RUN/DIR/report.json 2> /ABSOLUTE/RUN/DIR/stderr.log
-```
-
-`/code-review LEVEL BASE_COMMIT` is Claude Code's built-in review; `LEVEL` is
-`high` or `max` from the table. With a commit as its target it reviews the diff
-from that commit to the checkout's `HEAD`.
-`--permission-mode plan` keeps the reviewer read-only. `disableAllHooks` skips
-every hook in user and project settings, including ones Backbone did not install.
-`--no-session-persistence` leaves no resumable conversation. Do not use `--bare`
-for isolation: it refuses OAuth and keychain logins, so a subscription login cannot
-authenticate.
-
-**Exit status 0 does not prove a review ran.** With an unknown model Claude Code
-exits 0 with `"is_error": false`, an explanation in `result` and an empty
-`modelUsage`. Count the review as done only when `modelUsage` names the requested
-model and `result` holds the findings: a JSON array of `file`,
-`line`, `summary` and `failure_scenario`, followed by a short summary.
-
-```bash
-jq -e '(.is_error | not) and (.modelUsage | has("claude-fable-5-1"))' \
-  /ABSOLUTE/RUN/DIR/report.json
-```
-
-Save `claude --version`, the model from `modelUsage`, the level, `total_cost_usd`
-and `usage` with the report; they are the round's model, cost and token evidence.
-
-From inside a Codex task the reviewer needs network access to Anthropic's API.
-As with the Codex reviewer, ask for this one process to run outside the outer
-sandbox and keep plan mode and disabled hooks. This path has not been measured
-from inside a Codex sandbox.
-
-`claude ultrareview BASE_BRANCH --no-post` is a different thing: a cloud-hosted
-multi-agent review, billed and dependent on the account. `--json` returns
-findings and `--timeout MINUTES` bounds the wait. Check local help and account
-availability before relying on it. Backbone never silently substitutes it for a
-requested local review.
-
-## Review depth, time and cost
-
-A feature review at `high` is cheap enough to run before every implementation
-PR. On a one-file diff with two seeded bugs, Claude `claude-fable-5-1` at `high`
+On a one-file diff with two seeded bugs, Claude `claude-fable-5-1` at `high`
 took 99 s and $0.56 and found both. The same diff at `max` (measured with Opus)
-took 850 s and $6.08. Keep `max` and Codex `ultra` for the release review, where
+took 850 s and $6.08. These observations are not Astra timing or price estimates.
+Record elapsed time and attributable usage for each actual review as described
+above. Keep `ultra` for authorized release reviews, where
 [another round](#decide-whether-to-run-another-ultra-round) is decided from the
 findings.
 
