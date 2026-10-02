@@ -66,7 +66,9 @@ Untagged state posted by older integrations is accepted only when its timestamp
 is at or after this launch. Managed hooks also carry the launch identity, so a
 late write from an older process is excluded. Managed hooks keep a separate
 state file for each launch; a delayed writer cannot erase the replacement's
-busy record, even when its input box remains visible. The saved conversation remains
+busy record, even when its input box remains visible. A newer eligible untagged
+API update still takes precedence, and renaming a stopped agent moves its launch
+marker and state records together. The saved conversation remains
 available for explicit resume and usage history.
 Current provider-capacity evidence therefore prevents a false ready result.
 

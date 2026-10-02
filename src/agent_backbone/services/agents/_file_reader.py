@@ -123,6 +123,29 @@ def _hook_diagnostics(data: dict) -> tuple[RuntimeDiagnostic, ...]:
     return tuple(found)
 
 
+def _read_record(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict):
+            raise ValueError("not a JSON object")
+        if _finite(data.get("ts", 0)) is None or (
+            data.get("started_at") is not None and _finite(data["started_at"]) is None
+        ):
+            raise ValueError("non-finite timestamp")
+        return data
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, TypeError) as exc:
+        log.warning("Failed to read state file %s: %s", path.name, exc)
+        return None
+
+
+def _belongs_to_launch(data: dict, launch: tuple[float, str] | None) -> bool:
+    return launch is None or (
+        float(data.get("ts", 0)) >= launch[0] and data.get("launch_id") in (None, launch[1])
+    )
+
+
 def read_state_file(
     state_dir: Path, session: str, *, current_launch: bool = False
 ) -> StateSnapshot | None:
@@ -140,30 +163,25 @@ def read_state_file(
     """
     launch = read_launch_marker(state_dir, session)
     state_file = state_dir / f"{session}.json"
+    data = _read_record(state_file)
     if launch is not None:
         scoped = launch_state_path(state_dir, session, launch[1])
-        if scoped is not None and scoped.exists():
-            state_file = scoped
-    if not state_file.exists():
+        current = _read_record(scoped) if scoped is not None else None
+        if (
+            current is not None
+            and _belongs_to_launch(current, launch)
+            and (
+                data is None
+                or not _belongs_to_launch(data, launch)
+                or float(current.get("ts", 0)) >= float(data.get("ts", 0))
+            )
+        ):
+            state_file, data = scoped, current
+    if data is None:
         return _starting_snapshot(state_dir, session, newer_than=0.0)
-    try:
-        data = json.loads(state_file.read_text())
-        if not isinstance(data, dict):
-            raise ValueError("not a JSON object")
-        hook_ts = float(data.get("ts", 0))
-        started_at_raw = data.get("started_at")
-        started_at = float(started_at_raw) if started_at_raw is not None else None
-        if not math.isfinite(hook_ts) or (started_at is not None and not math.isfinite(started_at)):
-            raise ValueError("non-finite timestamp")  # "inf" would stay fresh forever
-    except (json.JSONDecodeError, OSError, TypeError, ValueError) as e:
-        # Valid JSON of the wrong shape must degrade to the terminal exactly
-        # like unreadable JSON, not crash every consumer of this agent's state.
-        log.warning("Failed to read state file for %s: %s", session, e)
-        return None
-
-    belongs = launch is None or (
-        hook_ts >= launch[0] and data.get("launch_id") in (None, launch[1])
-    )
+    hook_ts = float(data.get("ts", 0))
+    started_at = _finite(data.get("started_at"))
+    belongs = _belongs_to_launch(data, launch)
     starting = _starting_snapshot(state_dir, session, newer_than=hook_ts if belongs else 0.0)
     if starting is not None:
         return starting
