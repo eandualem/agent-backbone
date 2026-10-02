@@ -4,7 +4,7 @@ Install Backbone, send your first agent a task, then connect a second agent.
 GitHub and Telegram are optional.
 
 Prefer to delegate? Give any agent with a shell this and continue at [GitHub setup](#7-github-issues-as-the-task-list):
-*"Install agent-backbone from PyPI (`uv tool install "agent-backbone[github-app]"`),
+*"Install agent-backbone from PyPI (`uv tool install agent-backbone`),
 then run `backbone help setup` and follow it."* The `setup` playbook covers
 steps 1–6 and says where it needs you.
 
@@ -19,7 +19,7 @@ steps 1–6 and says where it needs you.
 ## 1. Install the CLI
 
 ```bash
-uv tool install "agent-backbone[github-app]"    # from PyPI; pipx install … works too
+uv tool install agent-backbone    # from PyPI; pipx install … works too
 uv tool update-shell        # once, if ~/.local/bin isn't on your PATH yet
 exec $SHELL -l              # `update-shell` edits your profile; reload it
 backbone --help
@@ -29,15 +29,14 @@ If `backbone --help` still says "command not found", `~/.local/bin` is not
 on your PATH in this shell — open a new terminal, or add it by hand.
 
 This puts two identical commands on your PATH: `backbone` and the short
-alias `ab`. The `github-app` extra is what the recommended GitHub setup
-needs; it costs nothing if you don't use it.
+alias `ab`. GitHub App authentication is included in the standard installation.
 
 - macOS note: `/usr/sbin/ab` (Apache Bench) shadows `ab` when `/usr/sbin`
   comes earlier in your PATH — put `~/.local/bin` first, or add
   `alias ab=backbone` to your shell rc.
 - Working on the code itself? `git clone … && cd agent-backbone && uv sync`,
   run everything as `uv run backbone …`, and
-  `uv tool install --editable ".[github-app]"` makes the global CLI follow
+  `uv tool install --editable .` makes the global CLI follow
   your checkout.
 
 ## 2. Initialise

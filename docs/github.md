@@ -287,3 +287,18 @@ deleted resources retire obsolete notices. Explicit closure notices remain valid
 for that closure; transient GitHub failures leave the work pending. Direct and
 swarm messages do not require a GitHub lookup. Review-start notices also retain
 the existing serialized lifecycle guard when drained from the queue.
+
+### Repository redirects
+
+Repository-level GitHub reads follow bounded HTTP redirects within the GitHub API origin,
+including installation lookup and subsequent pages. Notifications keep their original repository key
+so existing queue and delivery receipts remain correlated after a rename. HTTP
+authentication is retained on that origin; off-origin redirects and pagination
+links are refused. Write requests still report a redirect as an error rather
+than changing the method or replaying a write.
+
+Reads for a particular issue or pull request, including its comments and other
+subresources, still report redirects as errors. A same-origin redirect can move
+an issue to another repository or number; it does not prove a repository rename.
+Backbone does not silently change those identities or combine a new issue number
+with the original repository key.

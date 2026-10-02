@@ -11,7 +11,7 @@ already signed in. Use the runtime’s own setup if authentication is missing.
 ## 1. Install
 
 ```bash
-uv tool install "agent-backbone[github-app]"     # or: pipx install "agent-backbone[github-app]"
+uv tool install agent-backbone     # or: pipx install agent-backbone
 backbone --help
 ```
 

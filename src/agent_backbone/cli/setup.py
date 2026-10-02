@@ -383,7 +383,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 check(
                     "GitHub App auth dependencies installed",
                     False,
-                    "install the extra: uv tool install 'agent-backbone[github-app]'",
+                    "reinstall required dependencies: uv tool install --reinstall agent-backbone",
                 )
             key_ok = Path(config.github_app_private_key_path).expanduser().is_file()
             check(f"GitHub App private key: {config.github_app_private_key_path}", key_ok)

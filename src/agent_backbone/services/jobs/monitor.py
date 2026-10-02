@@ -109,11 +109,13 @@ async def monitor_agents(
                 db, source="agent-monitor", stage="usage_collection", error_type=type(exc).__name__
             )
         else:
+            for check in usage_result.get("checks", []):
+                await observe_job(db, source="agent-monitor", **check)
             await observe_job(
                 db,
                 source="agent-monitor",
                 stage="usage_collection",
-                error_type="usage_source_errors" if usage_result.get("errors") else None,
+                error_type="usage_collection_errors" if usage_result.get("errors") else None,
             )
 
         if gh is not None:
