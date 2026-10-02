@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
+from agent_backbone.hooks.backbone_state import launch_state_path
 from agent_backbone.services.agents.models import AgentState, StateSnapshot
 from agent_backbone.services.runtimes import RuntimeDiagnostic
 
@@ -28,6 +29,8 @@ _MODEL_ID = re.compile(r"[A-Za-z0-9_./:@+-]{1,160}")
 def write_state_file(state_dir: Path, session: str, record: dict) -> Path:
     """Write ``<state_dir>/<session>.json`` in the hook's own shape."""
     target = state_dir / f"{session}.json"
+    if scoped := launch_state_path(state_dir, session, record.get("launch_id")):
+        atomic_write_text(scoped, json.dumps(record))
     atomic_write_text(target, json.dumps(record))
     return target
 
@@ -135,7 +138,12 @@ def read_state_file(
     request ``current_launch``; historical readers retain the saved conversation
     for usage accounting, transcripts and explicit resume.
     """
+    launch = read_launch_marker(state_dir, session)
     state_file = state_dir / f"{session}.json"
+    if launch is not None:
+        scoped = launch_state_path(state_dir, session, launch[1])
+        if scoped is not None and scoped.exists():
+            state_file = scoped
     if not state_file.exists():
         return _starting_snapshot(state_dir, session, newer_than=0.0)
     try:
@@ -153,7 +161,6 @@ def read_state_file(
         log.warning("Failed to read state file for %s: %s", session, e)
         return None
 
-    launch = read_launch_marker(state_dir, session)
     belongs = launch is None or (
         hook_ts >= launch[0] and data.get("launch_id") in (None, launch[1])
     )

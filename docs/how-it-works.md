@@ -64,7 +64,9 @@ submission markers. This boundary survives readiness: ordinary inspection,
 delivery and prompt acknowledgements cannot reuse the previous launch's hook.
 Untagged state posted by older integrations is accepted only when its timestamp
 is at or after this launch. Managed hooks also carry the launch identity, so a
-late write from an older process is excluded. The saved conversation remains
+late write from an older process is excluded. Managed hooks keep a separate
+state file for each launch; a delayed writer cannot erase the replacement's
+busy record, even when its input box remains visible. The saved conversation remains
 available for explicit resume and usage history.
 Current provider-capacity evidence therefore prevents a false ready result.
 

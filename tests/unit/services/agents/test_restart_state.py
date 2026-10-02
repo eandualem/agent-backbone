@@ -222,3 +222,49 @@ async def test_fresh_restart_delivers_brief_then_continuation(db, tmp_path, runt
             assert len(sent) == 2
             assert "continue" not in sent[0]
         assert sent[-1] == "[via:backbone from:backbone] continue"
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode", "gemini"])
+async def test_late_old_writer_cannot_erase_current_busy_evidence(tmp_path, runtime):
+    from agent_backbone.hooks.backbone_state import write_state
+
+    config = bootstrap_config(tmp_path / "data")
+    launched = time.time() - 20
+    write_starting_marker(config.state_dir, "app", launched, launch_id="new")
+    clear_starting_marker(config.state_dir, "app")
+    (config.state_dir / "app.submitted").write_text(str(launched + 1))
+    write_state(
+        config.state_dir,
+        "app",
+        {
+            "state": "busy",
+            "ts": time.time(),
+            "runtime": runtime,
+            "launch_id": "new",
+            "session_id": "current-session",
+        },
+    )
+    write_state(
+        config.state_dir,
+        "app",
+        {
+            "state": "idle",
+            "ts": time.time(),
+            "runtime": runtime,
+            "launch_id": "old",
+            "session_id": "old-session",
+        },
+    )
+    assert json.loads((config.state_dir / "app.json").read_text())["launch_id"] == "old"
+    with (
+        patch(f"{INTEL}.list_sessions", AsyncMock(return_value=["app"])),
+        # An input box remains visible during a turn; no visible busy indicator.
+        patch(f"{INTEL}.capture_pane", AsyncMock(return_value=PROMPTS[runtime])),
+        patch(f"{INTEL}.resolve_runtime", AsyncMock(return_value=RUNTIMES[runtime])),
+        patch(f"{INTEL}.in_copy_mode", AsyncMock(return_value=False)),
+        patch(f"{DELIVERY}.send_message", AsyncMock()) as send,
+    ):
+        result = await safe_deliver("app", "continue", config, priority=True)
+    assert result.outcome == DeliveryOutcome.AGENT_WORKING
+    send.assert_not_awaited()
+    assert read_state_file(config.state_dir, "app").session_id == "current-session"

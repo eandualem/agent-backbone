@@ -554,6 +554,14 @@ def clip_message(text: str | None) -> str | None:
     return text[:LAST_MESSAGE_CHARS] + ("…" if len(text) > LAST_MESSAGE_CHARS else "")
 
 
+def launch_state_path(state_dir: Path, agent: str, launch_id: object) -> Path | None:
+    """A launch owns its state file: a delayed older writer cannot replace it."""
+    if not isinstance(launch_id, str) or not launch_id:
+        return None
+    identity = hashlib.sha256(launch_id.encode()).hexdigest()
+    return state_dir / "launches" / agent / f"{identity}.json"
+
+
 def write_state(state_dir: Path, agent: str, record: dict) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     plan_text = record.pop("plan_text", None)
@@ -563,10 +571,14 @@ def write_state(state_dir: Path, agent: str, record: dict) -> None:
         plan_path = plans_dir / f"{agent}.md"
         plan_path.write_text(plan_text)
         record["plan_file"] = str(plan_path)
-    target = state_dir / f"{agent}.json"
-    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")  # never shared with another writer
-    tmp.write_text(json.dumps(record))
-    os.replace(tmp, target)
+    targets = [state_dir / f"{agent}.json"]
+    if scoped := launch_state_path(state_dir, agent, record.get("launch_id")):
+        targets.insert(0, scoped)
+    for target in targets:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(record))
+        os.replace(tmp, target)
 
 
 def remember_usage_session(state_dir: Path, agent: str, record: dict) -> None:
@@ -884,8 +896,12 @@ def hook_context_output(event: str, texts: list[str]) -> str:
 
 
 def read_current(state_dir: Path, agent: str) -> dict | None:
+    target = state_dir / f"{agent}.json"
+    scoped = launch_state_path(state_dir, agent, os.environ.get("BACKBONE_LAUNCH_ID"))
+    if scoped is not None and scoped.exists():
+        target = scoped
     try:
-        return json.loads((state_dir / f"{agent}.json").read_text())
+        return json.loads(target.read_text())
     except (OSError, ValueError):
         return None
 
