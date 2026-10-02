@@ -22,6 +22,7 @@ async def observe_job(
     stage: str,
     error_type: str | None = None,
     agent_name: str = "",
+    runtime: str = "",
     repo: str = "",
     issue_number: int | None = None,
     duration_ms: int | None = None,
@@ -33,7 +34,7 @@ async def observe_job(
     A process restart begins a new observation episode, never a guessed recovery.
     """
     incidents = _incidents.setdefault(db, {})
-    scope = (source, stage, agent_name, repo, issue_number)
+    scope = (source, stage, agent_name, runtime, repo, issue_number)
     operation_id = incidents.get(scope)
     if error_type is None and operation_id is None:
         return
@@ -52,6 +53,7 @@ async def observe_job(
         severity="error" if error_type else "info",
         source=source,
         agent_name=agent_name,
+        runtime=runtime,
         repo=repo,
         issue_number=issue_number,
         details=details,

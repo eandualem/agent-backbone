@@ -299,3 +299,95 @@ class TestPagination:
         async with GitHubClient(config) as gh:
             subs = await gh.get_sub_issues(7, repo_full_name=REPO)
         assert [s.number for s in subs] == [8, 9]
+
+
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
+@respx.mock
+async def test_renamed_repository_reads_follow_redirects(config, status):
+    old = f"{API_BASE}/repos/example/old/issues/42"
+    new = f"{API_BASE}/repositories/123/issues/42"
+    respx.get(old).respond(status, headers={"Location": new})
+    target = respx.get(new).respond(json={"number": 42, "title": "Task", "state": "open"})
+    async with GitHubClient(config) as gh:
+        issue = await gh.get_issue(42, repo_full_name="example/old")
+    assert issue.number == 42
+    assert issue.repo_full_name == "example/old"  # durable routing identity stays stable
+    assert target.calls.last.request.headers["Authorization"] == "Bearer installation-token"
+
+
+@respx.mock
+async def test_redirect_does_not_forward_credentials_to_another_origin(config):
+    old = f"{API_BASE}/repos/example/old/issues/42"
+    target = "https://example.com/issues/42"
+    respx.get(old).respond(301, headers={"Location": target})
+    async with GitHubClient(config) as gh:
+        with pytest.raises(httpx.HTTPStatusError):
+            await gh.get_issue(42, repo_full_name="example/old")
+    assert len(respx.calls) == 1
+
+
+@respx.mock
+async def test_redirect_loop_is_bounded(config):
+    url = f"{API_BASE}/repos/example/old/issues/42"
+    respx.get(url).respond(301, headers={"Location": url})
+    async with GitHubClient(config) as gh:
+        with pytest.raises(httpx.TooManyRedirects):
+            await gh.get_issue(42, repo_full_name="example/old")
+
+
+@respx.mock
+async def test_redirected_installation_lookup(config, monkeypatch):
+    monkeypatch.setattr(GitHubClient, "_get_installation_token", _ORIGINAL_GET_INSTALLATION_TOKEN)
+    monkeypatch.setattr(GitHubClient, "_build_app_jwt", lambda self: "app-jwt")
+    respx.get(f"{API_BASE}/repos/example/old/installation").respond(
+        301, headers={"Location": f"{API_BASE}/repositories/123/installation"}
+    )
+    respx.get(f"{API_BASE}/repositories/123/installation").respond(json={"id": 321})
+    respx.post(f"{API_BASE}/app/installations/321/access_tokens").respond(
+        201, json={"token": "new-token", "expires_at": "2099-01-01T00:00:00Z"}
+    )
+    target = respx.get(f"{API_BASE}/repos/example/old/issues/42").respond(
+        json={"number": 42, "title": "Task"}
+    )
+    async with GitHubClient(config) as gh:
+        await gh.get_issue(42, repo_full_name="example/old")
+    assert target.calls.last.request.headers["Authorization"] == "Bearer new-token"
+
+
+@respx.mock
+async def test_redirected_pagination_keeps_all_pages(config):
+    respx.get(f"{API_BASE}/repos/example/old/issues", params={"state": "open"}).respond(
+        json=[{"number": 1, "title": "First"}],
+        headers={"Link": f'<{API_BASE}/repos/example/old/issues?page=2>; rel="next"'},
+    )
+    respx.get(f"{API_BASE}/repos/example/old/issues?page=2").respond(
+        301, headers={"Location": f"{API_BASE}/repositories/123/issues?page=2"}
+    )
+    respx.get(f"{API_BASE}/repositories/123/issues?page=2").respond(
+        json=[{"number": 2, "title": "Second"}]
+    )
+    async with GitHubClient(config) as gh:
+        issues = await gh.list_issues(repo_full_name="example/old", all_pages=True)
+    assert [issue.number for issue in issues] == [1, 2]
+
+
+@respx.mock
+async def test_pagination_cannot_send_a_token_to_another_origin(config):
+    respx.get(f"{API_BASE}/repos/example/old/issues").respond(
+        json=[], headers={"Link": '<https://example.com/next>; rel="next"'}
+    )
+    async with GitHubClient(config) as gh:
+        with pytest.raises(ValueError, match="API origin"):
+            await gh.list_issues(repo_full_name="example/old", all_pages=True)
+    assert len(respx.calls) == 1
+
+
+@respx.mock
+async def test_read_redirect_support_does_not_replay_writes(config):
+    source = f"{API_BASE}/repos/example/old/issues"
+    target = f"{API_BASE}/repositories/123/issues"
+    respx.post(source).respond(301, headers={"Location": target})
+    async with GitHubClient(config) as gh:
+        with pytest.raises(httpx.HTTPStatusError):
+            await gh.create_issue(title="Task", body="", repo_full_name="example/old")
+    assert len(respx.calls) == 1

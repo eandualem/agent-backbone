@@ -758,3 +758,44 @@ async def test_streamed_usage_page_preserves_full_exact_totals(tmp_path, db):
     assert view["sessions"][0]["observations"] == 1001
     current = await usage_view(config, db, refresh=False, current_only=True)
     assert current["items"] == [] and current["totals"]["observations"] == 0
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_registration_conflict_has_safe_agent_scoped_evidence(tmp_path, db, runtime):
+    config = config_for(tmp_path, runtime)
+    await db.usage.remember("original-owner", runtime, "private-session", at=T)
+    register(config, runtime, "private-session")
+    register(config, runtime, "valid-session")
+    result = await collect_usage(config, db)
+    assert result["checks"] == [
+        {
+            "agent_name": "worker",
+            "runtime": runtime,
+            "stage": "usage_registration",
+            "error_type": "ValueError",
+        }
+    ]
+    assert "worker/" + runtime in result["errors"][0]
+    assert "private-session" not in str(result["checks"])
+    # A conflict is evidence, never permission to reassign somebody else's history.
+    assert {row["agent_name"] for row in await db.usage.sessions()} == {"worker", "original-owner"}
+    assert len(list((config.state_dir / "usage-sessions").glob("*.json"))) == 1
+
+
+async def test_usage_source_failure_is_separate_from_registration(tmp_path, db, monkeypatch):
+    config = config_for(tmp_path)
+    path = tmp_path / "source.jsonl"
+    append(path, claude())
+    monkeypatch.setattr(RUNTIMES["claude"], "usage_paths", lambda sid, env: [path])
+
+    def fail(*args):
+        raise OSError("private path or provider message")
+
+    monkeypatch.setattr(RUNTIMES["claude"], "read_usage", fail)
+    register(config)
+    result = await collect_usage(config, db)
+    assert {row["stage"]: row["error_type"] for row in result["checks"]} == {
+        "usage_registration": None,
+        "usage_source": "OSError",
+    }
+    assert "private path" not in str(result)

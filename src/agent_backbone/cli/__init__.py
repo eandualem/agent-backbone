@@ -562,7 +562,7 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
     sys.exit(args.func(args))
 
