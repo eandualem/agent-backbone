@@ -52,7 +52,8 @@ mkdir -p "$review_run"
 git worktree add --detach "$review_run/repo" "$review_head"
 printf '%s\n' "head=$review_head" "base=$review_base" \
   "merge_base=$(git merge-base "$review_base" "$review_head")" \
-  "model=gpt-6-astra" "effort=$review_effort" "service_tier=default" > "$review_run/scope.txt"
+  "model=gpt-6-astra" "effort=$review_effort" \
+  "requested_service_tier=default" > "$review_run/scope.txt"
 codex --version >> "$review_run/scope.txt"
 ```
 
@@ -81,6 +82,10 @@ the caller's state or acknowledgments. `--ignore-user-config` leaves Codex's own
 login available while skipping its user configuration file, including any service-tier
 default there. Keep the explicit `service_tier=default` override even when that
 file already selects the standard tier. Repository instructions still apply.
+The same explicit tier override applies to partitioned reviews launched with a
+custom prompt through `codex exec`, instead of `codex exec review`. Keep the
+independent context, pinned commits, selected effort and sandbox for each
+partition, and retain its full prompt with the command evidence.
 The review retains its read-only sandbox; do not bypass it to remove a prompt.
 
 Run through the caller's background command facility and retain the process handle.
@@ -88,6 +93,12 @@ For a job that must outlive that facility, use a detached supervisor with closed
 stdin that records the process exit code and timestamps. Save the command, CLI
 version, model, effort, service tier, head, base and merge-base alongside the
 report. Keep these artifacts under the repository's ignored `.backbone/reviews/` directory, not `docs/`.
+Record `requested_service_tier=default` separately from the served tier. A
+command or configuration records the request, not proof of how it was served.
+If the retained response or usage metadata does not report the served tier,
+record it as `unknown`; do not infer it from speed, effort or zero usage counters.
+Ephemeral runs may leave no session transcript, so retain the available process
+output without claiming missing tier evidence.
 CLI 0.155.1 reports every token count as 0 in `exec review`'s `turn.completed`
 event; record tokens as unavailable, not zero. Remove the detached checkout afterwards with `git worktree remove "$review_run/repo"`;
 the saved evidence stays in the run directory.
