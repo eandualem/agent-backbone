@@ -16,6 +16,7 @@ from agent_backbone.services.runtimes.codex import pre_trust_codex_directory
 _BASE = "agent_backbone.services.runtimes.base"
 # Every Codex launch opens the sandbox to the network so members reach the API.
 _NET = ["-c", "sandbox_workspace_write.network_access=true"]
+_STANDARD_TIER = ["-c", "service_tier=default"]
 # Unattended Codex: never ask, and pin the sandbox the promise rests on.
 _NEVER_ASK = ["-a", "never", "-s", "workspace-write"]
 
@@ -98,7 +99,14 @@ class TestBuildCommand:
         brief.write_text("You are agent x.")
         with _resolve("/bin/codex"):
             command = RUNTIMES["codex"].build_command(model="gpt-5.2", brief_file=brief)
-        assert command == ["/bin/codex", *_NET, "--no-alt-screen", "--model", "gpt-5.2"]
+        assert command == [
+            "/bin/codex",
+            *_NET,
+            *_STANDARD_TIER,
+            "--no-alt-screen",
+            "--model",
+            "gpt-5.2",
+        ]
 
     def test_codex_resume_is_a_subcommand(self):
         with _resolve("/bin/codex"):
@@ -107,6 +115,7 @@ class TestBuildCommand:
                 "resume",
                 "--last",
                 *_NET,
+                *_STANDARD_TIER,
                 "--no-alt-screen",
             ]
 
@@ -119,6 +128,24 @@ class TestBuildCommand:
             resumed = RUNTIMES["codex"].build_command(resume="sess-1")
         assert fresh[1:3] == _NET
         assert resumed[1:3] == ["resume", "sess-1"] and resumed[3:5] == _NET
+
+    @pytest.mark.parametrize("resume", [False, True, "sess-1"])
+    @pytest.mark.parametrize("model", [None, "gpt-6-astra:high", "gpt-6-astra:ultra"])
+    def test_codex_launch_pins_standard_tier_independently_of_effort(self, resume, model):
+        with _resolve("/bin/codex"):
+            command = RUNTIMES["codex"].build_command(model=model, resume=resume)
+        overrides = [command[i + 1] for i, arg in enumerate(command) if arg == "-c"]
+        assert [value for value in overrides if value.startswith("service_tier=")] == [
+            "service_tier=default"
+        ]
+        if model:
+            assert command[command.index("--model") + 1] == "gpt-6-astra"
+            assert f"model_reasoning_effort={model.split(':')[1]}" in overrides
+        else:
+            assert "--model" not in command
+            assert not any(value.startswith("model_reasoning_effort=") for value in overrides)
+        # Set the starting tier without disabling a later operator choice.
+        assert not any(value.startswith("features.fast_mode=") for value in overrides)
 
     def test_gemini_flags(self, tmp_path):
         brief = tmp_path / "brief.md"
@@ -355,6 +382,7 @@ class TestEffort:
             "-c",
             "model_reasoning_effort=high",
             *_NET,
+            *_STANDARD_TIER,
             "--no-alt-screen",
             "--model",
             "gpt-6-astra",
@@ -370,6 +398,7 @@ class TestEffort:
             assert RUNTIMES["codex"].build_command(model="gpt-6-astra") == [
                 "/bin/codex",
                 *_NET,
+                *_STANDARD_TIER,
                 "--no-alt-screen",
                 "--model",
                 "gpt-6-astra",
@@ -436,6 +465,7 @@ class TestUnattended:
             "model_reasoning_effort=high",
             *_NEVER_ASK,
             *_NET,
+            *_STANDARD_TIER,
             "--no-alt-screen",
             "--model",
             "gpt-6-astra",
