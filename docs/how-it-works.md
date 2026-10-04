@@ -42,6 +42,11 @@ This page follows real requests through the system. Read
    `--settings <data_dir>/hooks/claude-settings.json` — a backbone-owned
    settings file, replaced atomically at every start, that wires the state hooks
    without touching the repository or `~/.claude/settings.json`.
+   Codex starts and resumes with `-c service_tier=default`, independently of
+   the selected model and reasoning effort. This selects standard processing
+   even when inherited settings prefer Fast mode. It sets the launch default;
+   an operator can still change the tier explicitly inside the session. Running
+   sessions are unaffected until their next explicit start or resume.
 5. **Wait until ready** (up to `timing.start_timeout_seconds`, 60 s): a
    fresh hook-written `idle` state, or a visible empty prompt for runtimes
    without hooks. A fresh busy or blocked hook keeps startup waiting even if

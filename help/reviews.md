@@ -12,11 +12,13 @@ need to use the same runtime as the reviewer. No managed agent or swarm is creat
    implementing agent's active checkout.
 3. Use Codex `gpt-6-astra` for every review, whether the implementation used
    Codex, Claude Code or another runtime:
-   `codex exec review --base BASE_COMMIT --model gpt-6-astra`. Start a separate, fresh
-   reviewer context; the implementing conversation reviewing itself does not
+   `codex exec -c service_tier=default review --base BASE_COMMIT --model gpt-6-astra`.
+   Start a separate, fresh reviewer context; the implementing conversation reviewing itself does not
    satisfy the independent-review gate. A different family or CLI is not required.
    Run with the read-only Codex sandbox and hooks disabled, in an environment
    without the caller's Backbone identity, saving JSON evidence as the guide shows.
+   Pin the standard service tier explicitly, including with `--ignore-user-config`;
+   it is separate from reasoning effort.
    Depth: `high` for a feature branch, **before** its PR opens; `ultra` for an
    explicitly authorized develop → main release review. If Astra cannot run,
    report the blocker rather than substituting another model.

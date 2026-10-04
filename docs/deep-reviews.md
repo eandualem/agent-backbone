@@ -27,8 +27,10 @@ explicit release authorization.
 Check `codex --version` and `codex exec review --help`. Complete reviews were verified
 with `gpt-6-astra` at `ultra` (CLI 0.153.4) and at `high` (CLI 0.155.1). An unknown
 model fails: exit 1, a `turn.failed` event and no report. Ultra is a reasoning setting for
-Codex's review command, not a separate `codex ultrareview` subcommand. Set both
-model and effort explicitly rather than inheriting the implementing agent's defaults.
+Codex's review command, not a separate `codex ultrareview` subcommand. Set
+model, effort and `service_tier=default` explicitly. The standard service tier is
+independent of reasoning effort, including `ultra`; it does not select Fast or
+Ultrafast processing.
 
 Fetch the intended repository refs, resolve the head and base to commit IDs, and
 use a clean, detached checkout of the head. This is a merge-base diff;
@@ -50,7 +52,7 @@ mkdir -p "$review_run"
 git worktree add --detach "$review_run/repo" "$review_head"
 printf '%s\n' "head=$review_head" "base=$review_base" \
   "merge_base=$(git merge-base "$review_base" "$review_head")" \
-  "model=gpt-6-astra" "effort=$review_effort" > "$review_run/scope.txt"
+  "model=gpt-6-astra" "effort=$review_effort" "service_tier=default" > "$review_run/scope.txt"
 codex --version >> "$review_run/scope.txt"
 ```
 
@@ -67,6 +69,7 @@ env -u BACKBONE_AGENT -u BACKBONE_RUNTIME -u BACKBONE_STATE_DIR \
   --disable hooks --disable shell_snapshot \
   -c approval_policy=never \
   -c model_reasoning_effort=EFFORT \
+  -c service_tier=default \
   review --base BASE_COMMIT --model gpt-6-astra \
   --json --output-last-message /ABSOLUTE/RUN/DIR/report.md \
   > /ABSOLUTE/RUN/DIR/events.jsonl 2> /ABSOLUTE/RUN/DIR/stderr.log
@@ -75,14 +78,16 @@ env -u BACKBONE_AGENT -u BACKBONE_RUNTIME -u BACKBONE_STATE_DIR \
 Use a fresh environment without the implementing agent's `BACKBONE_*` identity,
 state paths or secrets. Disabling hooks prevents reviewer events from overwriting
 the caller's state or acknowledgments. `--ignore-user-config` leaves Codex's own
-login available while skipping its user configuration file. Repository instructions still apply.
+login available while skipping its user configuration file, including any service-tier
+default there. Keep the explicit `service_tier=default` override even when that
+file already selects the standard tier. Repository instructions still apply.
 The review retains its read-only sandbox; do not bypass it to remove a prompt.
 
 Run through the caller's background command facility and retain the process handle.
 For a job that must outlive that facility, use a detached supervisor with closed
 stdin that records the process exit code and timestamps. Save the command, CLI
-version, model, effort, head, base and merge-base alongside the report. Keep these
-artifacts under the repository's ignored `.backbone/reviews/` directory, not `docs/`.
+version, model, effort, service tier, head, base and merge-base alongside the
+report. Keep these artifacts under the repository's ignored `.backbone/reviews/` directory, not `docs/`.
 CLI 0.155.1 reports every token count as 0 in `exec review`'s `turn.completed`
 event; record tokens as unavailable, not zero. Remove the detached checkout afterwards with `git worktree remove "$review_run/repo"`;
 the saved evidence stays in the run directory.
