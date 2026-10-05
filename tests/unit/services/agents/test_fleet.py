@@ -118,6 +118,22 @@ class TestSave:
         _, stopped = await _save(store, db, running=running, states=states, stop=True, force=True)
         assert sorted(stopped) == ["app", "orch", "web"]
 
+    async def test_an_agent_that_turns_busy_before_its_stop_is_left_running(self, db, tmp_path):
+        store = await _store(db, tmp_path, ("app", "claude"))
+        seen = iter(["idle", "busy"])  # at the save, then right before the stop
+
+        async def state(config, name, **kwargs):
+            return StateSnapshot(state=AgentState(next(seen)))
+
+        with (
+            patch(f"{_FLEET}.session_exists", AsyncMock(return_value=True)),
+            patch(f"{_FLEET}.agent_state", state),
+            patch(f"{_FLEET}.stop_agent_session", AsyncMock(return_value=True)) as stop,
+        ):
+            snapshot = await save_fleet(store, store.config, db, stop=True)
+        assert snapshot["agents"][0]["stop"] == "skipped_busy"
+        stop.assert_not_awaited()
+
     async def test_the_caller_is_stopped_last(self, db, tmp_path):
         store = await _store(db, tmp_path, ("app", "claude"), ("web", "codex"), ("zed", "claude"))
         _, stopped = await _save(
@@ -179,6 +195,22 @@ class TestResume:
         snapshot = await _snapshot(db, {"dir": path, "model": "opus"})
         await _resume(store, db, snapshot)
         assert store.agents.get("app").model == "opus"
+
+    async def test_a_saved_default_model_clears_one_set_since(self, db, tmp_path):
+        store = await _store(db, tmp_path, ("app", "claude"))
+        await store.update("app", model="opus")
+        snapshot = await _snapshot(db, {"dir": str(store.agents.get("app").path), "model": None})
+        _, commands = await _resume(store, db, snapshot)
+        assert store.agents.get("app").model is None
+        assert "opus" not in commands["app"]
+
+    async def test_concurrent_resumes_both_stay_in_the_history(self, db, tmp_path):
+        snapshot = await _snapshot(db, {"dir": "/x"})
+        import asyncio
+
+        await asyncio.gather(*(db.fleet.add_resume(snapshot["id"], {"run": n}) for n in range(5)))
+        runs = (await db.fleet.get(snapshot["id"]))["resumes"]
+        assert sorted(run["run"] for run in runs) == list(range(5))
 
     async def test_session_confirmed_compares_the_reported_id(self, db, tmp_path):
         store = await _store(db, tmp_path, ("app", "claude"))

@@ -119,7 +119,12 @@ async def save_fleet(
     if stop:
         # The caller last: an agent saving its own fleet keeps running until the rest is done.
         for entry in sorted(agents, key=lambda entry: entry["name"] == from_entity):
-            if not force and AgentState.parse(entry["state_at_save"]) in _BUSY:
+            # Checked again right before the stop: an agent may have started
+            # working while the others were saved.
+            busy = AgentState.parse(entry["state_at_save"]) in _BUSY or (
+                (await agent_state(config, entry["name"])).state in _BUSY
+            )
+            if busy and not force:
                 entry["stop"] = "skipped_busy"
                 continue
             try:
@@ -181,8 +186,11 @@ async def _resume_one(
         return _not_resumed(
             entry, "dir_changed", f"saved in {entry['dir']}; the agent is now in {spec.path}"
         )
-    req = StartRequest(name=name, model=entry.get("model"), session_id=session_id, wait=wait)
+    req = StartRequest(name=name, session_id=session_id, wait=wait)
     try:
+        if spec.model != entry.get("model"):
+            # The saved model, including none: a model set since is not kept.
+            await store.update(name, model=entry.get("model"))
         spec = await resolve_agent(store, req)
         result = await start_resolved(store, config, spec, req, db=db)
     except (KeyError, ValueError) as exc:

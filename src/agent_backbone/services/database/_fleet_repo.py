@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from sqlalchemy import text
@@ -23,6 +24,12 @@ def _row(row) -> dict:
 
 
 class FleetSnapshotRepo(Repo):
+    def __init__(self, engine) -> None:
+        super().__init__(engine)
+        # The backbone is one process: this serializes the history's
+        # read-modify-write, which a transaction alone does not.
+        self._resume_lock = asyncio.Lock()
+
     async def create(
         self,
         *,
@@ -59,9 +66,8 @@ class FleetSnapshotRepo(Repo):
             )
 
     async def add_resume(self, snapshot_id: int, run: dict) -> None:
-        """Append a resume run. Read and written in one transaction, so two
-        runs finishing together both stay."""
-        async with self._tx() as conn:
+        """Append a resume run; two runs finishing together both stay."""
+        async with self._resume_lock, self._tx() as conn:
             result = await conn.execute(
                 text("SELECT resumes FROM fleet_snapshots WHERE id = :id"), {"id": snapshot_id}
             )
