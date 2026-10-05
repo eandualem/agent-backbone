@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from agent_backbone.services.agents._file_reader import read_state_file
 from agent_backbone.services.agents._inference import agent_state
+from agent_backbone.services.agents._locks import lifecycle_lock
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.agents.operations import (
     StartRequest,
@@ -190,12 +191,18 @@ async def _resume_one(
         return _not_resumed(
             entry, "dir_changed", f"saved in {entry['dir']}; the agent is now in {spec.path}"
         )
-    previous = spec.model
-    outcome = await _launch(store, config, db, entry, session_id, wait=wait)
-    if outcome["outcome"] != "resumed_known_session" and previous != entry.get("model"):
-        # A resume that did not happen leaves the agent's settings as they were.
-        with contextlib.suppress(KeyError, ValueError):
-            await store.update(name, model=previous)
+    # Held from reading the model to any rollback, so a change made meanwhile is never undone.
+    async with lifecycle_lock(name):
+        await store.refresh()
+        current = store.agents.get(name)
+        if current is None:
+            return _not_resumed(entry, "agent_unknown", f"'{name}' is no longer a registered agent")
+        previous = current.model
+        outcome = await _launch(store, config, db, entry, session_id, wait=wait)
+        if outcome["outcome"] != "resumed_known_session" and previous != entry.get("model"):
+            # A resume that did not happen leaves the agent's settings as they were.
+            with contextlib.suppress(KeyError, ValueError):
+                await store.update(name, model=previous)
     return outcome
 
 

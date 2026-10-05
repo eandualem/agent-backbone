@@ -305,3 +305,30 @@ async def test_an_unexpected_error_is_one_agents_failure(db, tmp_path):
     outcomes = {a["name"]: a["outcome"] for a in run["agents"]}
     assert outcomes == {"app": "failed", "web": "already_running"}
     assert (await db.fleet.get(snapshot["id"]))["resumes"]
+
+
+async def test_a_model_change_during_a_failed_resume_is_kept(db, tmp_path):
+    """The owner sets a model while the resume launches: the rollback must not undo it."""
+    import asyncio
+
+    store = await _store(db, tmp_path, ("app", "claude"))
+    await store.update("app", model="sonnet")
+    snapshot = await _snapshot(db, {"dir": str(store.agents.get("app").path), "model": "opus"})
+    launched = asyncio.Event()
+
+    async def slow_failure(*args, **kwargs):
+        launched.set()
+        await asyncio.sleep(0.05)
+        return False
+
+    async def owner():
+        await launched.wait()
+        await store.update("app", model="haiku")
+
+    with (
+        patch(f"{_FLEET}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_LAUNCH}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_LAUNCH}.start_session", slow_failure),
+    ):
+        await asyncio.gather(resume_fleet(store, store.config, db, snapshot, wait=False), owner())
+    assert store.agents.get("app").model == "haiku"
