@@ -22,6 +22,7 @@ from agent_backbone.services.agents._file_reader import (
     clear_starting_marker,
     read_launch_session,
     read_state_file,
+    restore_launch_marker,
     write_starting_marker,
 )
 from agent_backbone.services.agents._inference import get_agent_state
@@ -449,7 +450,7 @@ async def _start_agent(
     ):
         details["reason"] = "brief_refresh_failed"
         return StartResult(ok=False, evidence=("could not hand the current brief to the session",))
-    write_starting_marker(
+    previous_launch = write_starting_marker(
         config.state_dir,
         spec.name,
         launched_at,
@@ -467,6 +468,8 @@ async def _start_agent(
     if not ok:
         details["reason"] = "session_failed"
         clear_starting_marker(config.state_dir, spec.name)
+        # It never ran: the last launch, and the conversation it held, stay the previous one.
+        restore_launch_marker(config.state_dir, spec.name, previous_launch)
         return StartResult(ok=False, evidence=("tmux could not create the session",))
     extra = f", model: {effective_model}" if effective_model else ""
     if unattended:

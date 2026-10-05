@@ -1472,3 +1472,30 @@ def test_a_malformed_launch_record_has_no_session(tmp_path, content):
 
     (tmp_path / "ike.launch").write_text(content)
     assert read_launch_session(tmp_path, "ike", "codex") is None
+
+
+async def test_a_launch_tmux_refused_leaves_the_last_launch_as_it_was(tmp_path):
+    """A resume of X that never ran must not make a later resume open X over Y."""
+    from agent_backbone.services.agents import write_starting_marker
+
+    config = bootstrap_config(tmp_path / "data")
+    project = tmp_path / "project"
+    project.mkdir()
+    write_starting_marker(config.state_dir, "ike", 1.0, launch_id="L1")
+    write_state_file(
+        config.state_dir,
+        "ike",
+        {"state": "idle", "ts": 2.0, "session_id": "Y", "runtime": "codex", "launch_id": "L1"},
+    )
+    spec = AgentSpec(name="ike", dir=str(project), runtime="codex")
+    with (
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+        patch(f"{_MOD}.start_session", new_callable=AsyncMock, side_effect=[False, True]) as start,
+        patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
+    ):
+        failed = await start_agent(spec, config, session_id="X", wait=False)
+        result = await start_agent(spec, config, resume=True, wait=False)
+    assert not failed.ok
+    command = start.await_args.kwargs["command"]
+    assert "Y" in command and "X" not in command
+    assert any("the last launch reported: Y" in line for line in result.evidence)
