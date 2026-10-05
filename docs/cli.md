@@ -492,7 +492,7 @@ A fresh start that could have resumed adds `fresh conversation; the previous
 one (AGE old) is still available: backbone agent resume app`. Gemini's
 [session guide](https://geminicli.com/docs/cli/session-management/) and
 OpenCode's [CLI guide](https://opencode.ai/docs/cli/) describe their id flags.
-||||||| parent of 01a67e2 (feat: fleet snapshots save running agents and resume their exact sessions)
+
 ## `backbone fleet save|list|show|resume`
 
 Save the agents running now, stop them for the night, and bring the same
