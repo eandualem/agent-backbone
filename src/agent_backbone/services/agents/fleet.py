@@ -167,15 +167,7 @@ async def _resume_one(
 ) -> dict:
     name = entry["name"]
     session_id = entry.get("session_id")
-    if not session_id:
-        return _not_resumed(entry, "no_saved_session", "no session id was reported before the save")
     runtime = RUNTIMES.get(entry["runtime"])
-    if runtime is None or not runtime.supports_exact_resume:
-        return _not_resumed(
-            entry,
-            "exact_resume_unsupported",
-            f"{entry['runtime']} cannot open a session by id",
-        )
     # Held from checking the agent to any rollback: a change made meanwhile is
     # either seen by these checks or never undone by the rollback.
     async with lifecycle_lock(name):
@@ -185,6 +177,16 @@ async def _resume_one(
             return _not_resumed(entry, "agent_unknown", f"'{name}' is no longer a registered agent")
         if await session_exists(name):
             return {**_outcome(entry), "outcome": "already_running", "evidence": ["left running"]}
+        if not session_id:
+            return _not_resumed(
+                entry, "no_saved_session", "no session id was reported before the save"
+            )
+        if runtime is None or not runtime.supports_exact_resume:
+            return _not_resumed(
+                entry,
+                "exact_resume_unsupported",
+                f"{entry['runtime']} cannot open a session by id",
+            )
         if spec.runtime != entry["runtime"]:
             return _not_resumed(
                 entry,

@@ -240,7 +240,7 @@ class TestResume:
             {"name": "moved", "dir": "/old/place"},
             {"name": "dc", "dir": path("dc"), "runtime": "deepcode"},
             {"name": "nosess", "dir": path("nosess"), "session_id": None},
-            {"name": "up", "dir": path("up")},
+            {"name": "up", "dir": path("up"), "session_id": None},
         )
         run, commands = await _resume(store, db, snapshot, running=("up",))
         outcomes = {a["name"]: (a["outcome"], a["reason"]) for a in run["agents"]}
