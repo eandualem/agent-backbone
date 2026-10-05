@@ -473,7 +473,8 @@ The conversation is chosen like this. The start's evidence lines show the result
 | No id recorded, or Deep Code, which cannot open a session by id | The runtime's own latest conversation for the directory | none |
 | The agent is already running | Nothing; the session is left as it is | `app: already running` (API: `already_existed: true`) |
 
-Aider has no resume: `--resume` launches it as usual. The
+Aider has no supported resume: start it fresh (`backbone agent start NAME`, without
+`--resume`) and let its handoff carry the context. The
 [runtime capabilities](runtime-capabilities.md) page lists this per runtime.
 
 The recorded id is the one the runtime's hook last wrote to the agent's state
