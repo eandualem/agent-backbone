@@ -1435,3 +1435,40 @@ async def test_a_launch_that_resumed_by_id_holds_that_conversation_before_report
     assert "sess-1" in start.await_args.kwargs["command"]
     opened = "resuming the session the last launch opened: sess-1"
     assert any(opened in line for line in result.evidence)
+
+
+async def test_the_id_a_launch_resumed_is_used_even_when_history_holds_another(tmp_path):
+    """Resumed on B (a fleet snapshot's) while the history still records A; stopped
+    before reporting: resuming again opens B, not the runtime's latest."""
+    from agent_backbone.services.agents import write_starting_marker
+
+    config = bootstrap_config(tmp_path / "data")
+    project = tmp_path / "project"
+    project.mkdir()
+    write_state_file(
+        config.state_dir,
+        "ike",
+        {"state": "idle", "ts": 2.0, "session_id": "A", "runtime": "codex", "launch_id": "L1"},
+    )
+    write_starting_marker(config.state_dir, "ike", 3.0, launch_id="L2", opened=("codex", "B"))
+    from agent_backbone.services.agents import clear_starting_marker
+
+    clear_starting_marker(config.state_dir, "ike")
+    spec = AgentSpec(name="ike", dir=str(project), runtime="codex")
+    with (
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+        patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+        patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
+    ):
+        result = await start_agent(spec, config, resume=True, wait=False)
+    command = start.await_args.kwargs["command"]
+    assert "B" in command and "A" not in command and "--last" not in command
+    assert any("the last launch opened: B" in line for line in result.evidence)
+
+
+@pytest.mark.parametrize("content", ["null", "[]", '"x"'])
+def test_a_malformed_launch_record_has_no_session(tmp_path, content):
+    from agent_backbone.services.agents._file_reader import read_launch_session
+
+    (tmp_path / "ike.launch").write_text(content)
+    assert read_launch_session(tmp_path, "ike", "codex") is None

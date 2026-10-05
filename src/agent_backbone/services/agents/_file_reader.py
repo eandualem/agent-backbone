@@ -78,7 +78,9 @@ def read_launch_session(state_dir: Path, session: str, runtime: str) -> str | No
         record = json.loads((state_dir / f"{session}.launch").read_text())
     except (OSError, ValueError):
         return None
-    session_id = record.get("session_id") if isinstance(record, dict) else None
+    if not isinstance(record, dict):
+        return None
+    session_id = record.get("session_id")
     if record.get("runtime") == runtime and isinstance(session_id, str) and session_id:
         return session_id
     return None
