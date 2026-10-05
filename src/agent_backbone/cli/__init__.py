@@ -43,6 +43,7 @@ from agent_backbone.cli.agents import (
 )
 from agent_backbone.cli.completion import cmd_completion, complete
 from agent_backbone.cli.diagnostics import add_diagnostics_parser
+from agent_backbone.cli.fleet import add_fleet_parser
 from agent_backbone.cli.instructions import add_instruction_commands
 from agent_backbone.cli.reports import add_report_parsers
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_up
@@ -142,6 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_status)
 
     add_diagnostics_parser(sub)
+    add_fleet_parser(sub)
     add_instruction_commands(sub)
     add_skill_commands(sub)
     add_report_parsers(sub)

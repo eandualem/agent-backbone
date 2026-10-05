@@ -24,6 +24,7 @@ _EXPECTED_TABLES = {
     "diagnostics",
     "events",
     "event_outbox",
+    "fleet_snapshots",
     "issue_dependencies",
     "message_queue",
     "poll_cursors",

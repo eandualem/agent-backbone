@@ -26,6 +26,11 @@ if several agents share that directory, specify a name.
 
 Any agent may start other agents; you do not need a human for this.
 
+`backbone fleet save --stop` saves every running agent with its current
+conversation and stops the idle ones; `backbone fleet resume` later starts each
+on exactly that conversation and reports the agents it could not resume, with
+the reason (`backbone docs cli` has the outcomes).
+
 ```bash
 backbone agent start                       # this directory becomes an agent
 backbone agent start NAME                  # known agent: its recorded settings

@@ -164,6 +164,7 @@ _FRESH = "live: #290 post-fix probe (stale brief retired, current brief first)"
 _RESUME = "live: #273 post-fix probe (resume and compaction)"
 _GEMINI_STUB = "live: #302 (Gemini CLI 0.46 against a local API stub)"
 _LAUNCH = "tests/unit/services/runtimes/test_launch_commands.py"
+_FLEET = "tests/unit/services/agents/test_fleet.py"
 _NO_MODEL = "a plain shell runs no model"
 _USER_FILES = "tests/unit/services/runtimes/test_user_instructions.py"
 _MEMORY = "tests/unit/services/runtimes/test_native_memory.py"
@@ -510,6 +511,23 @@ CAPABILITIES: tuple[Capability, ...] = (
         opencode=_ok(_LAUNCH),
         deepcode=_gap(note="resumes the directory's latest session"),
         aider=_gap(),
+        shell=_na("a plain shell has no conversation to resume"),
+    ),
+    _row(
+        "fleet-resume",
+        "Fleet snapshot resumes the saved session exactly",
+        "src/agent_backbone/services/agents/fleet.py",
+        fallback=(
+            "The agent is reported as not resumed; start it fresh and its handoff carries "
+            "the context."
+        ),
+        implemented=lambda rt: rt.supports_exact_resume,
+        claude=_ok(_FLEET),
+        codex=_ok(_FLEET),
+        gemini=_ok(_FLEET),
+        opencode=_ok(_FLEET),
+        deepcode=_gap(note="reported as exact_resume_unsupported"),
+        aider=_gap(note="reported as exact_resume_unsupported"),
         shell=_na("a plain shell has no conversation to resume"),
     ),
     _row(
