@@ -11,9 +11,10 @@ terminal behavior and machine-readable output contracts.
 
 Starting an existing agent reuses its saved CLI and model and begins a **new
 conversation**. Continuing the previous one is your call: `backbone agent resume
-NAME` (or `start --resume`; API `resume: true`) reopens the session the backbone
-last saw for that runtime, or the runtime's own last conversation when no ID is
-saved. A fresh start says when a previous conversation is available. Starts are
+NAME` (or `start --resume`; API `resume: true`) reopens the conversation the
+agent's last launch held (the session id its hook reported, or the one it was
+resumed on), or the runtime's own last conversation when there is none. An id
+left by an earlier launch is not reused. A fresh start says when a previous conversation is available. Starts are
 fresh by default because a resumed agent trusts its own context over whatever
 happened in the checkout since — another CLI, a swarm, the shared memory.
 The project's handoff and shared memory carry progress across fresh sessions,
@@ -468,7 +469,8 @@ The conversation is chosen like this. The start's evidence lines show the result
 
 | Situation | What starts | Evidence line |
 |---|---|---|
-| The agent's runtime hook recorded a session id for this runtime, and the runtime can open a session by id (Claude Code, Codex, Gemini CLI, OpenCode) | That exact conversation | `resuming the session the backbone last saw: ID (AGE old)` |
+| The agent's last launch reported a session id through its runtime hook, or resumed one by id, and the runtime can open a session by id (Claude Code, Codex, Gemini CLI, OpenCode) | That exact conversation | `resuming the session the last launch reported: ID (AGE old)` (`… opened: …` when it resumed that id and had not reported yet) |
+| The last launch ended before its hook reported an id, and did not resume one, so the id on record is from an earlier session | The runtime's own latest conversation | `the last launch reported no session id; ID (AGE old) is from an earlier session, so using claude's own resume` |
 | The recorded id belongs to another runtime (the agent switched CLI since) | The current runtime's own latest conversation | `last session id belongs to codex; using claude's own resume` |
 | No id recorded, or Deep Code, which cannot open a session by id | The runtime's own latest conversation for the directory | none |
 | The agent is already running | Nothing; the session is left as it is | `app: already running` (API: `already_existed: true`) |
@@ -478,11 +480,9 @@ Aider has no supported resume: start it fresh (`backbone agent start NAME`, with
 [runtime capabilities](runtime-capabilities.md) page lists this per runtime.
 
 The recorded id is the one the runtime's hook last wrote to the agent's state
-file, from whichever earlier session last reported one. `agent inspect` shows
-the id and `Hook age (seconds)`, how long ago the hook last wrote. For a running
-agent, it shows only an id reported by the current session. If a session
-ended before its hook ever reported one, the id that resume uses belongs to an
-earlier session, so check the evidence line. The start's
+file. `agent inspect` shows the id and `Hook age (seconds)`, how long ago the
+hook last wrote. For a running agent, it shows only an id reported by the
+current session. The start's
 [diagnostics](api.md#get-apidiagnosticsrecords) record the choice as
 `resume_selection`: `fresh`, `known_session` or `runtime_latest`. Read the
 start's final record (`ready`, `timeout` or a failure code), not `requested`.
@@ -508,8 +508,9 @@ backbone fleet resume [ID|latest]     # start each saved agent on its saved conv
 ```
 
 `save` records, for every running agent, its runtime, model, directory and
-the session id its **current** session reported through its hook. An id left
-by an earlier session is never saved. A plain `save` stops nothing.
+the session id of its **current** session: the one its hook reported or, before
+the first report, the one it was resumed on by id. An id left by an earlier
+session is never saved. A plain `save` stops nothing.
 `--stop` stops each saved agent afterwards. Agents that are busy or waiting for
 you are saved but left running unless you add `--force`. When an agent runs
 the command itself, its own session is stopped last. With no agent running,

@@ -20,6 +20,7 @@ from agent_backbone.hooks.backbone_state import clear_agent_context, offer_steer
 from agent_backbone.models import BRIEF_SOURCE
 from agent_backbone.services.agents._file_reader import (
     clear_starting_marker,
+    read_launch_session,
     read_state_file,
     write_starting_marker,
 )
@@ -332,21 +333,34 @@ async def _start_agent(
         else None
     )
     saved_age = _age(last.timestamp, time.time()) if last is not None else ""
+    # The last launch's conversation is the id its hook reported or, before
+    # that, the one it resumed by id. A launch that ended before either leaves
+    # only an earlier session's id behind, which is never resumed.
+    reported = read_state_file(config.state_dir, spec.name, current_launch=True)
+    if reported is not None and reported.session_id and reported.runtime in (None, rt.id):
+        last_launch = reported.session_id
+        how = f"reported: {last_launch} ({_age(reported.timestamp, time.time())} old)"
+    else:
+        last_launch = read_launch_session(config.state_dir, spec.name, rt.id)
+        how = f"opened: {last_launch}"
     if session_id is not None:
         resume_target = session_id
         details["resume_selection"] = "known_session"
         resume_evidence.append(f"resuming the saved session: {session_id}")
+    elif resume and last_launch and rt.supports_exact_resume:
+        resume_target = last_launch
+        details["resume_selection"] = "known_session"
+        resume_evidence.append(f"resuming the session the last launch {how}")
     elif resume and last is not None and last.session_id and own_session is None:
         resume_evidence.append(
             f"last session id belongs to {last.runtime}; using {rt.id}'s own resume"
         )
     elif resume and own_session and rt.supports_exact_resume:
-        resume_target = own_session
-        details["resume_selection"] = "known_session"
         resume_evidence.append(
-            f"resuming the session the backbone last saw: {own_session} ({saved_age} old)"
+            f"the last launch reported no session id; {own_session} ({saved_age} old) is from "
+            f"an earlier session, so using {rt.id}'s own resume"
         )
-    elif not resume and own_session and rt.supports_exact_resume:
+    elif not resume and last_launch and rt.supports_exact_resume:
         resume_evidence.append(
             f"fresh conversation; the previous one ({saved_age} old) is still available: "
             f"backbone agent resume {spec.name}"
@@ -450,6 +464,16 @@ async def _start_agent(
         details["reason"] = "session_failed"
         clear_starting_marker(config.state_dir, spec.name)
         return StartResult(ok=False, evidence=("tmux could not create the session",))
+    if isinstance(resume_target, str):
+        # Recorded once the session runs: the conversation this launch holds
+        # until its hook reports. A launch that never ran records none.
+        write_starting_marker(
+            config.state_dir,
+            spec.name,
+            launched_at,
+            launch_id=environment["BACKBONE_LAUNCH_ID"],
+            opened=(rt.id, resume_target),
+        )
     extra = f", model: {effective_model}" if effective_model else ""
     if unattended:
         extra += ", unattended"

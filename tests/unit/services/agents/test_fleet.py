@@ -344,3 +344,15 @@ async def test_a_runtime_change_just_before_the_launch_is_seen(db, tmp_path):
     run, commands = await _resume(store, db, snapshot)
     assert run["agents"][0]["reason"] == "runtime_changed"
     assert commands == {}
+
+
+async def test_a_resumed_session_is_saved_before_its_first_report(db, tmp_path):
+    """A Codex agent resumed by id and saved again before a turn keeps its conversation."""
+    store = await _store(db, tmp_path, ("app", "codex"))
+    write_starting_marker(
+        store.config.state_dir, "app", 5.0, launch_id="L2", opened=("codex", "sess-1")
+    )
+    snapshot, _ = await _save(store, db)
+    (entry,) = snapshot["agents"]
+    assert entry["session_id"] == "sess-1" and entry["resumable"]
+    assert entry["session_reported_at"] is None

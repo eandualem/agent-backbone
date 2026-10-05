@@ -53,15 +53,37 @@ def read_launch_marker(state_dir: Path, session: str) -> tuple[float, str] | Non
 
 
 def write_starting_marker(
-    state_dir: Path, session: str, launched_at: float, *, launch_id: str | None = None
+    state_dir: Path,
+    session: str,
+    launched_at: float,
+    *,
+    launch_id: str | None = None,
+    opened: tuple[str, str] | None = None,
 ) -> None:
-    """Record that ``session`` was launched at ``launched_at`` and is not at its prompt yet."""
+    """Record that ``session`` was launched at ``launched_at`` and is not at its prompt yet.
+
+    ``opened`` is ``(runtime, session id)`` when the launch resumed that exact
+    conversation: it is the launch's conversation before its hook reports."""
     if launch_id:
-        atomic_write_text(
-            state_dir / f"{session}.launch",
-            json.dumps({"ts": launched_at, "launch_id": launch_id}),
-        )
+        record = {"ts": launched_at, "launch_id": launch_id}
+        if opened is not None:
+            record.update(runtime=opened[0], session_id=opened[1])
+        atomic_write_text(state_dir / f"{session}.launch", json.dumps(record))
     atomic_write_text(_marker_path(state_dir, session), json.dumps({"ts": launched_at}))
+
+
+def read_launch_session(state_dir: Path, session: str, runtime: str) -> str | None:
+    """The conversation the latest launch resumed by id on ``runtime``, if it did."""
+    try:
+        record = json.loads((state_dir / f"{session}.launch").read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    session_id = record.get("session_id")
+    if record.get("runtime") == runtime and isinstance(session_id, str) and session_id:
+        return session_id
+    return None
 
 
 def clear_starting_marker(state_dir: Path, session: str) -> None:

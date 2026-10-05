@@ -82,9 +82,10 @@ actually generated a response in the running session.
 
 Starting an existing agent reuses its saved CLI and model and begins a **new
 conversation**. Continuing the previous one is your call: `backbone agent resume
-NAME` (or `start --resume`; API `resume: true`) reopens the session the backbone
-last saw for that runtime, or the runtime's own last conversation when no ID is
-saved. A fresh start says when a previous conversation is available. Starts are
+NAME` (or `start --resume`; API `resume: true`) reopens the conversation the
+agent's last launch held (the session id its hook reported, or the one it was
+resumed on), or the runtime's own last conversation when there is none. An id
+left by an earlier launch is not reused. A fresh start says when a previous conversation is available. Starts are
 fresh by default because a resumed agent trusts its own context over whatever
 happened in the checkout since — another CLI, a swarm, the shared memory.
 Changing runtime without specifying a model clears the previous runtime's model.
@@ -121,7 +122,7 @@ fresh one:
 
 ```json
 {"ok": true, "session": "app", "name": "app", "runtime": "codex", "already_existed": false,
- "ready": "ready", "evidence": ["resuming the session the backbone last saw: 019a… (9h old)"]}
+ "ready": "ready", "evidence": ["resuming the session the last launch reported: 019a… (9h old)"]}
 ```
 
 When the saved session id is used, an evidence line names it. Without that line
@@ -392,7 +393,8 @@ are optional; a plain save stops nothing. `201`:
  "resumes": []}
 ```
 
-`session_id` is saved only when the agent's current session reported it.
+`session_id` is the current session's: the id its hook reported or, before that,
+the one it was resumed on by id (`session_reported_at` is then `null`).
 `not_resumable_reason` is `no_session_reported` or `exact_resume_unsupported`.
 `stop` is `stopped`, `skipped_busy`, `stop_failed` (with `stop_error`) or
 `not_requested`. Every entry is kept, whatever its stop did. With no agent

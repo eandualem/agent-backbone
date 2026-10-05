@@ -1348,3 +1348,200 @@ class TestSkillsAtLaunch:
             result, start = await self._start(spec, config)
         assert not result.ok and start.await_count == 0
         assert result.evidence[0].startswith("skills: ") and "no SKILL.md" in result.evidence[0]
+
+
+class TestResumeOnlyTheLastLaunchesSession:
+    """A launch that ended before its hook reported an id leaves an earlier
+    session's id on record: resuming it would reopen the wrong conversation."""
+
+    def _setup(self, tmp_path, runtime, *, reported_by_last_launch):
+        from agent_backbone.services.agents import clear_starting_marker, write_starting_marker
+
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        write_starting_marker(config.state_dir, "ike", 1.0, launch_id="L1")
+        write_state_file(
+            config.state_dir,
+            "ike",
+            {
+                "state": "idle",
+                "ts": 2.0,
+                "session_id": "old-sess",
+                "runtime": runtime,
+                "launch_id": "L1",
+            },
+        )
+        if not reported_by_last_launch:
+            # Launched again and stopped before its hook ever wrote (a Codex
+            # agent reports only at its first turn).
+            write_starting_marker(config.state_dir, "ike", 3.0, launch_id="L2")
+            clear_starting_marker(config.state_dir, "ike")
+        return config, AgentSpec(name="ike", dir=str(project), runtime=runtime)
+
+    async def _start(self, config, spec, *, resume):
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value=f"/usr/bin/{spec.runtime}"),
+        ):
+            result = await start_agent(spec, config, resume=resume, wait=False)
+        return start.await_args.kwargs["command"], result.evidence
+
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    async def test_an_earlier_sessions_id_is_not_resumed(self, tmp_path, runtime):
+        config, spec = self._setup(tmp_path, runtime, reported_by_last_launch=False)
+        command, evidence = await self._start(config, spec, resume=True)
+        assert "old-sess" not in command
+        assert any(
+            "last launch reported no session id" in line and "earlier session" in line
+            for line in evidence
+        )
+        _, fresh = await self._start(config, spec, resume=False)
+        assert not any("still available" in line for line in fresh)
+
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    async def test_the_last_launches_session_is_resumed(self, tmp_path, runtime):
+        config, spec = self._setup(tmp_path, runtime, reported_by_last_launch=True)
+        command, evidence = await self._start(config, spec, resume=True)
+        assert "old-sess" in command
+        assert any("resuming the session the last launch reported" in line for line in evidence)
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_a_launch_that_resumed_by_id_holds_that_conversation_before_reporting(
+    tmp_path, runtime
+):
+    """Resumed by id, stopped before its hook reported: resuming again reopens the same one."""
+    from agent_backbone.services.agents import clear_starting_marker
+
+    config = bootstrap_config(tmp_path / "data")
+    project = tmp_path / "project"
+    project.mkdir()
+    spec = AgentSpec(name="ike", dir=str(project), runtime=runtime)
+    write_state_file(
+        config.state_dir,
+        "ike",
+        {"state": "idle", "ts": 2.0, "session_id": "sess-1", "runtime": runtime, "launch_id": "L1"},
+    )
+    with (
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+        patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+        patch(f"{_BASE}.resolve_command", return_value=f"/usr/bin/{runtime}"),
+    ):
+        await start_agent(spec, config, resume=True, wait=False)  # resumes sess-1 by id
+        clear_starting_marker(config.state_dir, "ike")  # stopped before its hook wrote
+        result = await start_agent(spec, config, resume=True, wait=False)
+    assert "sess-1" in start.await_args.kwargs["command"]
+    opened = "resuming the session the last launch opened: sess-1"
+    assert any(opened in line for line in result.evidence)
+
+
+async def test_the_id_a_launch_resumed_is_used_even_when_history_holds_another(tmp_path):
+    """Resumed on B (a fleet snapshot's) while the history still records A; stopped
+    before reporting: resuming again opens B, not the runtime's latest."""
+    from agent_backbone.services.agents import write_starting_marker
+
+    config = bootstrap_config(tmp_path / "data")
+    project = tmp_path / "project"
+    project.mkdir()
+    write_state_file(
+        config.state_dir,
+        "ike",
+        {"state": "idle", "ts": 2.0, "session_id": "A", "runtime": "codex", "launch_id": "L1"},
+    )
+    write_starting_marker(config.state_dir, "ike", 3.0, launch_id="L2", opened=("codex", "B"))
+    from agent_backbone.services.agents import clear_starting_marker
+
+    clear_starting_marker(config.state_dir, "ike")
+    spec = AgentSpec(name="ike", dir=str(project), runtime="codex")
+    with (
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+        patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+        patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
+    ):
+        result = await start_agent(spec, config, resume=True, wait=False)
+    command = start.await_args.kwargs["command"]
+    assert "B" in command and "A" not in command and "--last" not in command
+    assert any("the last launch opened: B" in line for line in result.evidence)
+
+
+@pytest.mark.parametrize("content", ["null", "[]", '"x"'])
+def test_a_malformed_launch_record_has_no_session(tmp_path, content):
+    from agent_backbone.services.agents._file_reader import read_launch_session
+
+    (tmp_path / "ike.launch").write_text(content)
+    assert read_launch_session(tmp_path, "ike", "codex") is None
+
+
+async def test_a_launch_tmux_refused_records_no_conversation(tmp_path):
+    """A resume of X that never ran must not make a later resume open X."""
+    from agent_backbone.services.agents import write_starting_marker
+
+    config = bootstrap_config(tmp_path / "data")
+    project = tmp_path / "project"
+    project.mkdir()
+    write_starting_marker(config.state_dir, "ike", 1.0, launch_id="L1")
+    write_state_file(
+        config.state_dir,
+        "ike",
+        {"state": "idle", "ts": 2.0, "session_id": "Y", "runtime": "codex", "launch_id": "L1"},
+    )
+    spec = AgentSpec(name="ike", dir=str(project), runtime="codex")
+    with (
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+        patch(f"{_MOD}.start_session", new_callable=AsyncMock, side_effect=[False, True]) as start,
+        patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
+    ):
+        failed = await start_agent(spec, config, session_id="X", wait=False)
+        result = await start_agent(spec, config, resume=True, wait=False)
+    assert not failed.ok
+    command = start.await_args.kwargs["command"]
+    assert "X" not in command and "Y" not in command
+    assert any("is from an earlier session" in line for line in result.evidence)
+
+
+async def test_a_launch_killed_after_its_hook_reported_stays_the_last_launch(tmp_path):
+    """tmux created the session, the hook reported Z, then the scrub failed and
+    the session was killed: Z is the last launch's conversation, not Y."""
+    from agent_backbone.services.agents import write_starting_marker
+
+    config = bootstrap_config(tmp_path / "data")
+    project = tmp_path / "project"
+    project.mkdir()
+    write_starting_marker(config.state_dir, "ike", 1.0, launch_id="L1")
+    write_state_file(
+        config.state_dir,
+        "ike",
+        {"state": "idle", "ts": 2.0, "session_id": "Y", "runtime": "codex", "launch_id": "L1"},
+    )
+    spec = AgentSpec(name="ike", dir=str(project), runtime="codex")
+
+    async def created_then_killed(name, *, environment, **kwargs):
+        write_state_file(
+            config.state_dir,
+            name,
+            {
+                "state": "idle",
+                "ts": time.time(),
+                "session_id": "Z",
+                "runtime": "codex",
+                "launch_id": environment["BACKBONE_LAUNCH_ID"],
+            },
+        )
+        return False
+
+    with (
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+        patch(f"{_MOD}.start_session", side_effect=created_then_killed),
+        patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
+    ):
+        await start_agent(spec, config, session_id="X", wait=False)
+    with (
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+        patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+        patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
+    ):
+        result = await start_agent(spec, config, resume=True, wait=False)
+    assert "Z" in start.await_args.kwargs["command"]
+    assert any("the last launch reported: Z" in line for line in result.evidence)
