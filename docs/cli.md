@@ -35,11 +35,8 @@ the server’s port precedence: process `BACKBONE_PORT`, then the data directory
 `.env`, then `backbone.port`. Commands that need local agent configuration load
 it explicitly; offline database operations retain their normal initialization.
 
-Resuming by saved ID requires an adapter that can address the session exactly.
-Codex, Claude Code, Gemini and OpenCode pass the saved ID; for other adapters
-`--resume` falls back to the runtime's own latest session, as it does for every
-runtime when no ID is saved. Gemini's [session guide](https://geminicli.com/docs/cli/session-management/)
-and OpenCode's [CLI guide](https://opencode.ai/docs/cli/) describe their ID flags.
+[Resuming a previous conversation](#resuming-a-previous-conversation) explains
+how a resume chooses the conversation and how to check which one it used.
 
 ## Quick reference and Tab completion
 
@@ -454,6 +451,46 @@ app: started, waiting for you — claude repo acme/app   # e.g. Claude's folder-
 app: started but not at its prompt yet                 # timeout; the last terminal lines are shown
 app: already running
 ```
+
+### Resuming a previous conversation
+
+```bash
+backbone agent inspect app                  # Session: the conversation id on record
+backbone agent resume app                   # the same as: agent start app --resume
+backbone agent resume app web orch          # several known agents, one after another
+backbone agent start --always-on --resume   # every always_on agent, e.g. after a reboot
+```
+
+Over the API, send `{"resume": true}` to `POST /api/agents/{name}/start` (or
+`POST /api/agents/start`). Leave it out, or send `false`, for a fresh conversation.
+
+The conversation is chosen like this. The start's evidence lines show the result:
+
+| Situation | What starts | Evidence line |
+|---|---|---|
+| The agent's runtime hook recorded a session id for this runtime, and the runtime can open a session by id (Claude Code, Codex, Gemini CLI, OpenCode) | That exact conversation | `resuming the session the backbone last saw: ID (AGE old)` |
+| The recorded id belongs to another runtime (the agent switched CLI since) | The current runtime's own latest conversation | `last session id belongs to codex; using claude's own resume` |
+| No id recorded, or Deep Code, which cannot open a session by id | The runtime's own latest conversation for the directory | none |
+| The agent is already running | Nothing; the session is left as it is | `app: already running` (API: `already_existed: true`) |
+
+Aider has no resume: `--resume` launches it as usual. The
+[runtime capabilities](runtime-capabilities.md) page lists this per runtime.
+
+The recorded id is the one the runtime's hook last wrote to the agent's state
+file, from whichever earlier session last reported one. `agent inspect` shows
+the id and `Hook age (seconds)`, how long ago the hook last wrote. For a running
+agent, it shows only an id reported by the current session. If a session
+ended before its hook ever reported one, the id that resume uses belongs to an
+earlier session, so check the evidence line. The start's
+[diagnostics](api.md#get-apidiagnosticsrecords) record the choice as
+`resume_selection`: `fresh`, `known_session` or `runtime_latest`. Read the
+start's final record (`ready`, `timeout` or a failure code), not `requested`.
+The `requested` record is written before the choice is made.
+
+A fresh start that could have resumed adds `fresh conversation; the previous
+one (AGE old) is still available: backbone agent resume app`. Gemini's
+[session guide](https://geminicli.com/docs/cli/session-management/) and
+OpenCode's [CLI guide](https://opencode.ai/docs/cli/) describe their id flags.
 
 ## `backbone swarm create|list|status|disband`
 

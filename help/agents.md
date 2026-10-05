@@ -15,6 +15,10 @@ when you explicitly want to reopen a previous conversation, such as after an
 unexpected closure. It uses the saved conversation ID for the selected runtime
 when supported, or that runtime's latest conversation when no usable ID is
 available. A fresh start does not replay a previous conversation.
+The start's evidence says which one opened (`resuming the session the backbone
+last saw: ID (AGE old)` names the exact one); `backbone agent inspect NAME`
+shows the id on record before you resume. A running agent is left as it is
+(`already running`). `backbone docs cli` covers every case.
 Changing runtime without specifying a model clears the previous runtime's model.
 Starting from a directory reuses its registered name, even after a rename;
 if several agents share that directory, specify a name.

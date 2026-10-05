@@ -116,6 +116,20 @@ With `"inbox_only": true` the agent is registered as
 ### `POST /api/agents/{name}/start`
 
 Same body; starts a known agent (`dir` in the body registers it first).
+`{"resume": true}` continues its previous conversation instead of starting a
+fresh one:
+
+```json
+{"ok": true, "session": "app", "name": "app", "runtime": "codex", "already_existed": false,
+ "ready": "ready", "evidence": ["resuming the session the backbone last saw: 019a… (9h old)"]}
+```
+
+The evidence line says which conversation was opened: the session id on record,
+or the runtime's own latest when there is no usable id. A running agent is left
+as it is and returns `already_existed: true`; nothing is resumed. The CLI
+reference's [Resuming a previous conversation](cli.md#resuming-a-previous-conversation)
+lists every case, and `resume_selection` in the start's diagnostic records
+(`fresh`, `known_session` or `runtime_latest`) records the same choice.
 
 ### `POST /api/agents/{name}/stop`
 
@@ -208,13 +222,16 @@ Everything the backbone knows about one agent, with the evidence:
  "model": null, "repo": "acme/app", "watches": [],
  "state": "busy", "reason": null, "current_issue": 42, "current_repo": "acme/app",
  "state_source": "push", "state_age_seconds": 4.4, "delivery": "agent_working",
- "evidence": ["runtime: claude", "hook state 'busy' written 4s ago (fresh)"],
+ "session_id": "a1b2c3d4-…", "evidence": ["runtime: claude", "hook state 'busy' written 4s ago (fresh)"],
  "tmux": {"pane_in_mode": "0", "…": "…"}, "pane_tail": ["❯ …"],
  "recent_deliveries": [{"kind": "direct_message", "outcome": "agent_working", "…": "…"}]}
 ```
 
 `delivery` is the delivery condition: `ready`, `settling`, `human_typing`, `human_reading`,
 `agent_working`, `waiting_for_human`, `offline` or `unknown`.
+`session_id` is the runtime conversation a resume would open, as its hook
+reported it; for a running agent, only one reported by the current session.
+`state_age_seconds` is how long ago the hook last wrote.
 
 ### `GET /api/agents/{name}/state`
 
