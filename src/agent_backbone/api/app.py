@@ -376,6 +376,7 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     from agent_backbone.api.routes.deliveries import router as deliveries_router
     from agent_backbone.api.routes.diagnostics import router as diagnostics_router
     from agent_backbone.api.routes.events import router as events_router
+    from agent_backbone.api.routes.fleet import router as fleet_router
     from agent_backbone.api.routes.help import router as help_router
     from agent_backbone.api.routes.integrations import router as integrations_router
     from agent_backbone.api.routes.issues import router as issues_router
@@ -398,6 +399,7 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
         deliveries_router,
         diagnostics_router,
         events_router,
+        fleet_router,
         help_router,
         integrations_router,
         issues_router,

@@ -59,6 +59,7 @@ version differs.
 | Alert when an automatic safety check refuses an action | ✅ (2.1.282) | ❌ #279 | ❌ | ❌ #279 | ❌ | ❌ | n/a |
 | Browser tab group named after the agent | ✅ (version not recorded) with `backbone chrome install` | ❌ #270 | ❌ | ❌ #270 | ❌ | ❌ | n/a |
 | Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ resumes the directory's latest session | ❌ | n/a |
+| Fleet snapshot resumes the saved session exactly | ✅ | ✅ | ✅ | ✅ | ❌ reported as exact_resume_unsupported | ❌ reported as exact_resume_unsupported | n/a |
 | Reasoning effort chosen with the model (`model:effort`) | ✅ | ✅ | ? whether the CLI has an effort setting is not checked | ❌ #296 the CLI has one; Backbone refuses the effort | ✅ low, high or max, through DEEPCODE_REASONING_EFFORT | ? whether the CLI has an effort setting is not checked | n/a |
 | No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
 | Writes bounded while unattended | ❌ #285 | ✅ OS sandbox | ❌ | ❌ #285 | ❌ | ❌ | n/a |
@@ -100,6 +101,7 @@ version differs.
 | Alert when an automatic safety check refuses an action | Watch the agent's output (`agent output`) for refused actions. |
 | Browser tab group named after the agent | A Codex agent can name its own group with its Chrome client's `nameSession`. |
 | Resume the agent's own session | Start the agent fresh; its handoff carries the context. |
+| Fleet snapshot resumes the saved session exactly | The agent is reported as not resumed; start it fresh and its handoff carries the context. |
 | Reasoning effort chosen with the model (`model:effort`) | Set the effort in the CLI's own settings, or run the agent on Claude Code or Codex. |
 | No-approval mode (unattended) | Run the agent attended and answer its prompts. |
 | Writes bounded while unattended | Run unattended agents only on a sandboxed runtime (Codex). |

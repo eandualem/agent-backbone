@@ -363,6 +363,77 @@ Supported runtimes with availability; raw tmux session names; a one-shot
 capture of a **registered agent's** screen (404 for any other tmux session —
 the API never reads or types into sessions that are not backbone agents).
 
+## Fleet snapshots
+
+The agents running at one moment, each with the conversation it was in, saved
+to be resumed exactly later. `backbone fleet` is the CLI for these routes; its
+[reference](cli.md#backbone-fleet-savelistshowresume) explains the outcomes
+and what a resumed conversation keeps.
+
+### `POST /api/fleet/snapshots`
+
+```json
+{"stop": true, "force": false, "note": "night", "from_entity": "orch"}
+```
+
+Saves every registered agent whose session is running, then, with `stop`,
+stops them. Agents that are busy or `waiting_for_human` are left running
+unless `force` is set. The caller (`from_entity`) is stopped last. All fields
+are optional; a plain save stops nothing. `201`:
+
+```json
+{"id": 12, "created_at": "2026-10-05T21:00:00.000000Z", "created_by": "orch",
+ "note": "night", "stop": true, "force": false,
+ "agents": [{"name": "app", "runtime": "codex", "model": "gpt-6-astra", "dir": "/Users/me/code/app",
+             "session_id": "a1b2c3d4-…", "session_reported_at": "2026-10-05T20:58:11.000000Z",
+             "resumable": true, "not_resumable_reason": null, "state_at_save": "idle",
+             "stop": "stopped", "stop_error": null}],
+ "counts": {"saved": 1, "resumable": 1, "stopped": 1, "skipped_busy": 0, "stop_failed": 0},
+ "resumes": []}
+```
+
+`session_id` is saved only when the agent's current session reported it.
+`not_resumable_reason` is `no_session_reported` or `exact_resume_unsupported`.
+`stop` is `stopped`, `skipped_busy`, `stop_failed` (with `stop_error`) or
+`not_requested`. Every entry is kept, whatever its stop did. With no agent
+running, `409` and nothing is saved.
+
+### `GET /api/fleet/snapshots?limit=20`
+
+Snapshots, newest first: `id`, `created_at`, `created_by`, `note`, `stop`,
+`counts` and `last_resume` (`{"at", "counts"}` or `null`).
+
+### `GET /api/fleet/snapshots/{id}`
+
+One snapshot in the shape above, with every resume run in `resumes`. `{id}` is
+a number or `latest`; an unknown one returns `404`.
+
+### `POST /api/fleet/snapshots/{id}/resume`
+
+Body (optional): `{"from_entity": "orch", "wait": true}`. Starts each saved
+agent on exactly its saved session id, with its saved model, a few at a time.
+With `wait`, the response comes once each is at its prompt. A resume never
+falls back to the runtime's latest conversation or a fresh one.
+
+```json
+{"snapshot_id": 12, "resumed_at": "2026-10-06T07:00:00.000000Z", "resumed_by": "orch",
+ "agents": [{"name": "app", "outcome": "resumed_known_session", "reason": null,
+             "session_id": "a1b2c3d4-…", "runtime": "codex", "model": "gpt-6-astra",
+             "ready": "ready", "session_confirmed": true,
+             "evidence": ["resuming the saved session: a1b2c3d4-…"]}],
+ "counts": {"resumed_known_session": 1}}
+```
+
+`outcome` is one of:
+- `resumed_known_session`;
+- `already_running` (left alone);
+- `not_resumed`, with `reason` `no_saved_session`, `exact_resume_unsupported`, `agent_unknown`, `dir_changed` or `runtime_changed`;
+- `failed` (the launch failed or the runtime exited).
+
+`session_confirmed` is `true` when the resumed session's hook reported the
+saved id, `false` for another id, and `null` before it reports (Codex and
+OpenCode report at their first turn, Claude Code at startup).
+
 ## Messages
 
 ### `POST /api/messages`

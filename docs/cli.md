@@ -492,6 +492,59 @@ A fresh start that could have resumed adds `fresh conversation; the previous
 one (AGE old) is still available: backbone agent resume app`. Gemini's
 [session guide](https://geminicli.com/docs/cli/session-management/) and
 OpenCode's [CLI guide](https://opencode.ai/docs/cli/) describe their id flags.
+||||||| parent of 01a67e2 (feat: fleet snapshots save running agents and resume their exact sessions)
+## `backbone fleet save|list|show|resume`
+
+Save the agents running now, stop them for the night, and bring the same
+conversations back later. A snapshot is kept in the database, so it survives
+a backbone restart, and every resume of it is recorded with it.
+
+```bash
+backbone fleet save --stop            # save every running agent, then stop the idle ones
+backbone fleet save --stop --force    # also stop agents that are busy or waiting for you
+backbone fleet list                   # snapshots, newest first
+backbone fleet show [ID|latest]       # one snapshot: who was saved, stopped, resumable
+backbone fleet resume [ID|latest]     # start each saved agent on its saved conversation
+```
+
+`save` records, for every running agent, its runtime, model, directory and
+the session id its **current** session reported through its hook. An id left
+by an earlier session is never saved. A plain `save` stops nothing.
+`--stop` stops each saved agent afterwards. Agents that are busy or waiting for
+you are saved but left running unless you add `--force`. When an agent runs
+the command itself, its own session is stopped last. With no agent running,
+nothing is saved, so a second save in one night never replaces the real
+snapshot as `latest`. `--note TEXT` is kept with the snapshot.
+
+The table shows each agent's state at the save, its stop (`stopped`,
+`skipped_busy`, `stop_failed` or `not_requested`) and whether it can be
+resumed. `no_session_reported` means its session had not reported an id yet.
+`exact_resume_unsupported` means its runtime cannot open a session by id
+(Deep Code, Aider).
+
+`resume` is exact. Each agent starts on its saved conversation with its saved
+model, never the runtime's latest one and never a fresh one. Every agent ends
+with one outcome:
+
+| Outcome | Meaning |
+|---|---|
+| `resumed_known_session` | Started on the saved conversation. `Session` says whether its hook reported the same id (`confirmed`) or another one. Claude Code reports at startup; Codex and OpenCode report at their first turn, so it shows `-` until then |
+| `already_running` | The agent was running; it is left as it is |
+| `not_resumed` | Not started, with the reason: `no_saved_session`, `exact_resume_unsupported`, `agent_unknown` (forgotten since), `dir_changed` or `runtime_changed` (switched to another CLI since the save; reported, not reverted) |
+| `failed` | The launch failed or the runtime exited, as it does when it rejects the id; the evidence says why |
+
+A few agents start at a time. Running `resume` again is safe: agents that are
+up come back as `already_running`. The command exits 1 when any agent failed.
+`--json` prints the API response. It needs the running backbone.
+
+A resumed conversation carries what the runtime itself recorded: the messages,
+tool calls and results in its transcript. It does not carry a tool call or
+command that was running at the stop, an unanswered permission prompt or
+dialog, the terminal screen and scrollback, or text typed but not sent.
+Messages sent to an agent while it was stopped wait in the queue and expire
+as usual (`timing.queue_expiry_minutes`, 30 by default), so overnight messages
+are reported as expired rather than delivered at the resume. Whether a resumed agent receives
+the current brief depends on its runtime ([runtime capabilities](runtime-capabilities.md)).
 
 ## `backbone swarm create|list|status|disband`
 

@@ -125,6 +125,7 @@ async def start_agent(
     runtime: str | None = None,
     model: str | None = None,
     resume: bool = False,
+    session_id: str | None = None,
     brief_file: Path | str | None = None,
     db: BackboneDB | None = None,
     wait: bool = True,
@@ -136,7 +137,8 @@ async def start_agent(
     owner decides when an agent continues, because a resumed agent trusts
     its own context over what happened in the checkout since (other
     runtimes, swarms, the shared memory). The saved runtime and model are
-    reused either way.
+    reused either way. ``session_id`` resumes exactly that conversation and
+    nothing else: a runtime that cannot open a session by id is refused.
 
     Diagnostic details contain classifications only. The human-facing result
     may include terminal evidence, paths or a session id; none of those are
@@ -144,6 +146,7 @@ async def start_agent(
     """
     operation_id = operation_id or uuid.uuid4().hex
     started = time.monotonic()
+    resume = resume or session_id is not None
     details: dict = {
         "stage": "preflight",
         "requested_runtime": runtime,
@@ -199,6 +202,7 @@ async def start_agent(
             runtime=runtime,
             model=model,
             resume=resume,
+            session_id=session_id,
             brief_file=brief_file,
             db=db,
             wait=wait,
@@ -237,6 +241,7 @@ async def _start_agent(
     runtime: str | None,
     model: str | None,
     resume: bool,
+    session_id: str | None = None,
     brief_file: Path | str | None,
     db: BackboneDB | None,
     wait: bool,
@@ -272,6 +277,9 @@ async def _start_agent(
         log.error("Cannot start agent '%s': unknown runtime %s", spec.name, runtime_id)
         return StartResult(ok=False, evidence=(f"unknown runtime: {runtime_id}",))
     rt = RUNTIMES[runtime_id]
+    if session_id is not None and not rt.supports_exact_resume:
+        details["reason"] = "exact_resume_unsupported"
+        return StartResult(ok=False, evidence=(f"{rt.id} cannot open a session by id",))
     effective_model = model if model is not None else spec.model
     section = config.launch
     details["stage"] = "preparation"
@@ -324,7 +332,11 @@ async def _start_agent(
         else None
     )
     saved_age = _age(last.timestamp, time.time()) if last is not None else ""
-    if resume and last is not None and last.session_id and own_session is None:
+    if session_id is not None:
+        resume_target = session_id
+        details["resume_selection"] = "known_session"
+        resume_evidence.append(f"resuming the saved session: {session_id}")
+    elif resume and last is not None and last.session_id and own_session is None:
         resume_evidence.append(
             f"last session id belongs to {last.runtime}; using {rt.id}'s own resume"
         )

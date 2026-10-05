@@ -40,6 +40,8 @@ class StartRequest:
     runtime: str | None = None
     model: str | None = None
     resume: bool = False
+    session_id: str | None = None
+    """Resume exactly this conversation (a fleet snapshot's); never another."""
     watch: tuple[str, ...] = ()
     wait: bool = True
     inbox_only: bool = False
@@ -213,6 +215,7 @@ async def start_resolved(
             runtime=runtime,
             model=req.model if req.model is not None else spec.model,
             resume=req.resume,
+            session_id=req.session_id,
             db=db,
             wait=req.wait,
             operation_id=req.operation_id,

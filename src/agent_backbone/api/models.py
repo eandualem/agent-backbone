@@ -673,3 +673,77 @@ class SkillAddRequest(BaseModel):
 class SkillTagsRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     actor: str = "unknown"
+
+
+class FleetSaveRequest(BaseModel):
+    """Save the running agents; with ``stop``, stop them afterwards."""
+
+    stop: bool = False
+    force: bool = False
+    """Also stop agents that are busy or waiting for a person."""
+    note: str | None = None
+    from_entity: str = ""
+
+
+class FleetSnapshotAgent(BaseModel):
+    name: str
+    runtime: str
+    model: str | None = None
+    dir: str
+    session_id: str | None = None
+    session_reported_at: str | None = None
+    resumable: bool
+    not_resumable_reason: str | None = None
+    """``no_session_reported`` | ``exact_resume_unsupported``."""
+    state_at_save: str
+    stop: str
+    """``stopped`` | ``skipped_busy`` | ``stop_failed`` | ``not_requested``."""
+    stop_error: str | None = None
+
+
+class FleetResumeAgent(BaseModel):
+    name: str
+    outcome: str
+    """``resumed_known_session`` | ``already_running`` | ``not_resumed`` | ``failed``."""
+    reason: str | None = None
+    session_id: str | None = None
+    runtime: str
+    model: str | None = None
+    ready: str | None = None
+    session_confirmed: bool | None = None
+    evidence: list[str] = Field(default_factory=list)
+
+
+class FleetResumeRun(BaseModel):
+    snapshot_id: int
+    resumed_at: str
+    resumed_by: str = ""
+    agents: list[FleetResumeAgent]
+    counts: dict[str, int]
+
+
+class FleetSnapshotView(BaseModel):
+    id: int
+    created_at: str
+    created_by: str = ""
+    note: str | None = None
+    stop: bool
+    force: bool = False
+    agents: list[FleetSnapshotAgent]
+    counts: dict[str, int]
+    resumes: list[FleetResumeRun] = Field(default_factory=list)
+
+
+class FleetSnapshotSummary(BaseModel):
+    id: int
+    created_at: str
+    created_by: str = ""
+    note: str | None = None
+    stop: bool
+    counts: dict[str, int]
+    last_resume: dict | None = None
+
+
+class FleetResumeRequest(BaseModel):
+    from_entity: str = ""
+    wait: bool = True

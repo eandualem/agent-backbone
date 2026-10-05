@@ -315,6 +315,26 @@ class AgentTransitionORM(Base):
     )
 
 
+class FleetSnapshotORM(Base):
+    """The agents that were running at one moment, with the conversation each
+    was in (``backbone fleet save``), and every resume of that set since."""
+
+    __tablename__ = "fleet_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stop: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    force: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    agents: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    """JSON: one entry per saved agent, with the outcome of its stop."""
+    resumes: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    """JSON: every resume run of this snapshot, oldest first."""
+
+    __table_args__ = ({"sqlite_autoincrement": True},)
+
+
 class IssueDependencyORM(Base):
     """Parent/sub-issue dependency tracking (per repository)."""
 

@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 59e64bd045d7
+Revision ID: 3141225220f1
 Revises:
-Create Date: 2026-09-28 00:29:20.578455
+Create Date: 2026-10-05 13:17:14.913267
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "59e64bd045d7"
+revision: str = "3141225220f1"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -216,6 +216,19 @@ def upgrade() -> None:
         batch_op.create_index("idx_events_repo", ["repo"], unique=False)
         batch_op.create_index("uq_events_delivery_id", ["delivery_id"], unique=True)
 
+    op.create_table(
+        "fleet_snapshots",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("created_by", sa.Text(), server_default="", nullable=False),
+        sa.Column("note", sa.Text(), nullable=True),
+        sa.Column("stop", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column("force", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column("agents", sa.Text(), server_default="[]", nullable=False),
+        sa.Column("resumes", sa.Text(), server_default="[]", nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_fleet_snapshots")),
+        sqlite_autoincrement=True,
+    )
     op.create_table(
         "issue_dependencies",
         sa.Column("repo", sa.Text(), server_default="", nullable=False),
@@ -643,6 +656,7 @@ def downgrade() -> None:
         batch_op.drop_index("idx_deps_sub")
 
     op.drop_table("issue_dependencies")
+    op.drop_table("fleet_snapshots")
     with op.batch_alter_table("events", schema=None) as batch_op:
         batch_op.drop_index("uq_events_delivery_id")
         batch_op.drop_index("idx_events_repo")
