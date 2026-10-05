@@ -332,3 +332,15 @@ async def test_a_model_change_during_a_failed_resume_is_kept(db, tmp_path):
     ):
         await asyncio.gather(resume_fleet(store, store.config, db, snapshot, wait=False), owner())
     assert store.agents.get("app").model == "haiku"
+
+
+async def test_a_runtime_change_just_before_the_launch_is_seen(db, tmp_path):
+    """Checked under the lock after a refresh: a saved Claude id never reaches Codex."""
+    store = await _store(db, tmp_path, ("app", "claude"))
+    snapshot = await _snapshot(db, {"dir": str(store.agents.get("app").path)})
+    writer = AgentStore(db, tmp_path / "data")
+    await writer.start()
+    await writer.update("app", runtime="codex")  # another store: this one has not seen it
+    run, commands = await _resume(store, db, snapshot)
+    assert run["agents"][0]["reason"] == "runtime_changed"
+    assert commands == {}

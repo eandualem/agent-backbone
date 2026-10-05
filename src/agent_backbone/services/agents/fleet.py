@@ -166,11 +166,6 @@ async def _resume_one(
     store: AgentStore, config: BackboneConfig, db: BackboneDB, entry: dict, *, wait: bool
 ) -> dict:
     name = entry["name"]
-    spec = store.agents.get(name)
-    if spec is None:
-        return _not_resumed(entry, "agent_unknown", f"'{name}' is no longer a registered agent")
-    if await session_exists(name):
-        return {**_outcome(entry), "outcome": "already_running", "evidence": ["left running"]}
     session_id = entry.get("session_id")
     if not session_id:
         return _not_resumed(entry, "no_saved_session", "no session id was reported before the save")
@@ -181,23 +176,26 @@ async def _resume_one(
             "exact_resume_unsupported",
             f"{entry['runtime']} cannot open a session by id",
         )
-    if spec.runtime != entry["runtime"]:
-        return _not_resumed(
-            entry,
-            "runtime_changed",
-            f"saved on {entry['runtime']}; the agent now runs {spec.runtime}",
-        )
-    if str(spec.path) != entry["dir"]:
-        return _not_resumed(
-            entry, "dir_changed", f"saved in {entry['dir']}; the agent is now in {spec.path}"
-        )
-    # Held from reading the model to any rollback, so a change made meanwhile is never undone.
+    # Held from checking the agent to any rollback: a change made meanwhile is
+    # either seen by these checks or never undone by the rollback.
     async with lifecycle_lock(name):
         await store.refresh()
-        current = store.agents.get(name)
-        if current is None:
+        spec = store.agents.get(name)
+        if spec is None:
             return _not_resumed(entry, "agent_unknown", f"'{name}' is no longer a registered agent")
-        previous = current.model
+        if await session_exists(name):
+            return {**_outcome(entry), "outcome": "already_running", "evidence": ["left running"]}
+        if spec.runtime != entry["runtime"]:
+            return _not_resumed(
+                entry,
+                "runtime_changed",
+                f"saved on {entry['runtime']}; the agent now runs {spec.runtime}",
+            )
+        if str(spec.path) != entry["dir"]:
+            return _not_resumed(
+                entry, "dir_changed", f"saved in {entry['dir']}; the agent is now in {spec.path}"
+            )
+        previous = spec.model
         outcome = await _launch(store, config, db, entry, session_id, wait=wait)
         if outcome["outcome"] != "resumed_known_session" and previous != entry.get("model"):
             # A resume that did not happen leaves the agent's settings as they were.
