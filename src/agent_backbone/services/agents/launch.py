@@ -20,6 +20,7 @@ from agent_backbone.hooks.backbone_state import clear_agent_context, offer_steer
 from agent_backbone.models import BRIEF_SOURCE
 from agent_backbone.services.agents._file_reader import (
     clear_starting_marker,
+    read_launch_session,
     read_state_file,
     write_starting_marker,
 )
@@ -332,10 +333,15 @@ async def _start_agent(
         else None
     )
     saved_age = _age(last.timestamp, time.time()) if last is not None else ""
-    # Only an id the last launch reported is its conversation: a launch that
-    # ended before its hook reported one leaves an earlier session's id behind.
+    # The last launch's conversation is the id its hook reported or, before
+    # that, the one it resumed by id. A launch that ended before either leaves
+    # an earlier session's id behind.
     reported = read_state_file(config.state_dir, spec.name, current_launch=True)
-    earlier = own_session is not None and (reported is None or reported.session_id != own_session)
+    if reported is not None and reported.session_id:
+        last_launch, how = reported.session_id, "reported"
+    else:
+        last_launch, how = read_launch_session(config.state_dir, spec.name, rt.id), "opened"
+    earlier = own_session is not None and own_session != last_launch
     if session_id is not None:
         resume_target = session_id
         details["resume_selection"] = "known_session"
@@ -353,7 +359,7 @@ async def _start_agent(
         resume_target = own_session
         details["resume_selection"] = "known_session"
         resume_evidence.append(
-            f"resuming the session the last launch reported: {own_session} ({saved_age} old)"
+            f"resuming the session the last launch {how}: {own_session} ({saved_age} old)"
         )
     elif not resume and own_session and not earlier and rt.supports_exact_resume:
         resume_evidence.append(
@@ -445,7 +451,11 @@ async def _start_agent(
         details["reason"] = "brief_refresh_failed"
         return StartResult(ok=False, evidence=("could not hand the current brief to the session",))
     write_starting_marker(
-        config.state_dir, spec.name, launched_at, launch_id=environment["BACKBONE_LAUNCH_ID"]
+        config.state_dir,
+        spec.name,
+        launched_at,
+        launch_id=environment["BACKBONE_LAUNCH_ID"],
+        opened=(rt.id, resume_target) if isinstance(resume_target, str) else None,
     )
     ok = await start_session(
         spec.name,

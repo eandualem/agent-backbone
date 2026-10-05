@@ -16,7 +16,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from agent_backbone.services.agents._file_reader import read_state_file
+from agent_backbone.services.agents._file_reader import read_launch_session, read_state_file
 from agent_backbone.services.agents._inference import agent_state
 from agent_backbone.services.agents._locks import lifecycle_lock
 from agent_backbone.services.agents.models import AgentState
@@ -71,6 +71,11 @@ async def _entry(config: BackboneConfig, spec, *, stop: bool) -> dict:
     session_id = hook.session_id if hook is not None else None
     if session_id and hook.runtime not in (None, spec.runtime):
         session_id = None
+    reported_at = _iso(hook.timestamp) if session_id and hook.timestamp else None
+    if not session_id:
+        # Not reported yet (Codex reports at its first turn), but the session
+        # was launched on exactly this conversation.
+        session_id = read_launch_session(config.state_dir, spec.name, spec.runtime)
     reason = None
     if not RUNTIMES[spec.runtime].supports_exact_resume:
         reason = "exact_resume_unsupported"
@@ -82,7 +87,7 @@ async def _entry(config: BackboneConfig, spec, *, stop: bool) -> dict:
         "model": spec.model,
         "dir": str(spec.path),
         "session_id": session_id,
-        "session_reported_at": _iso(hook.timestamp) if session_id and hook.timestamp else None,
+        "session_reported_at": reported_at,
         "resumable": reason is None,
         "not_resumable_reason": reason,
         "state_at_save": snapshot.state.value,

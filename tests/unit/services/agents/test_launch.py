@@ -1406,3 +1406,32 @@ class TestResumeOnlyTheLastLaunchesSession:
         command, evidence = await self._start(config, spec, resume=True)
         assert "old-sess" in command
         assert any("resuming the session the last launch reported" in line for line in evidence)
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_a_launch_that_resumed_by_id_holds_that_conversation_before_reporting(
+    tmp_path, runtime
+):
+    """Resumed by id, stopped before its hook reported: resuming again reopens the same one."""
+    from agent_backbone.services.agents import clear_starting_marker
+
+    config = bootstrap_config(tmp_path / "data")
+    project = tmp_path / "project"
+    project.mkdir()
+    spec = AgentSpec(name="ike", dir=str(project), runtime=runtime)
+    write_state_file(
+        config.state_dir,
+        "ike",
+        {"state": "idle", "ts": 2.0, "session_id": "sess-1", "runtime": runtime, "launch_id": "L1"},
+    )
+    with (
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+        patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+        patch(f"{_BASE}.resolve_command", return_value=f"/usr/bin/{runtime}"),
+    ):
+        await start_agent(spec, config, resume=True, wait=False)  # resumes sess-1 by id
+        clear_starting_marker(config.state_dir, "ike")  # stopped before its hook wrote
+        result = await start_agent(spec, config, resume=True, wait=False)
+    assert "sess-1" in start.await_args.kwargs["command"]
+    opened = "resuming the session the last launch opened: sess-1"
+    assert any(opened in line for line in result.evidence)

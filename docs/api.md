@@ -392,7 +392,8 @@ are optional; a plain save stops nothing. `201`:
  "resumes": []}
 ```
 
-`session_id` is saved only when the agent's current session reported it.
+`session_id` is the current session's: the id its hook reported or, before that,
+the one it was resumed on by id (`session_reported_at` is then `null`).
 `not_resumable_reason` is `no_session_reported` or `exact_resume_unsupported`.
 `stop` is `stopped`, `skipped_busy`, `stop_failed` (with `stop_error`) or
 `not_requested`. Every entry is kept, whatever its stop did. With no agent
