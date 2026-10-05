@@ -9,7 +9,6 @@ cannot race on one path.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import math
@@ -60,31 +59,17 @@ def write_starting_marker(
     *,
     launch_id: str | None = None,
     opened: tuple[str, str] | None = None,
-) -> str | None:
+) -> None:
     """Record that ``session`` was launched at ``launched_at`` and is not at its prompt yet.
 
     ``opened`` is ``(runtime, session id)`` when the launch resumed that exact
-    conversation: it is the launch's conversation before its hook reports.
-    Returns the previous launch record, for ``restore_launch_marker``."""
-    previous = None
+    conversation: it is the launch's conversation before its hook reports."""
     if launch_id:
-        with contextlib.suppress(OSError):
-            previous = (state_dir / f"{session}.launch").read_text()
         record = {"ts": launched_at, "launch_id": launch_id}
         if opened is not None:
             record.update(runtime=opened[0], session_id=opened[1])
         atomic_write_text(state_dir / f"{session}.launch", json.dumps(record))
     atomic_write_text(_marker_path(state_dir, session), json.dumps({"ts": launched_at}))
-    return previous
-
-
-def restore_launch_marker(state_dir: Path, session: str, previous: str | None) -> None:
-    """Put back the launch record a launch that never ran replaced."""
-    path = state_dir / f"{session}.launch"
-    if previous is None:
-        path.unlink(missing_ok=True)
-    else:
-        atomic_write_text(path, previous)
 
 
 def read_launch_session(state_dir: Path, session: str, runtime: str) -> str | None:

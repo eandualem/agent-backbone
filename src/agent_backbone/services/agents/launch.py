@@ -22,7 +22,6 @@ from agent_backbone.services.agents._file_reader import (
     clear_starting_marker,
     read_launch_session,
     read_state_file,
-    restore_launch_marker,
     write_starting_marker,
 )
 from agent_backbone.services.agents._inference import get_agent_state
@@ -450,12 +449,8 @@ async def _start_agent(
     ):
         details["reason"] = "brief_refresh_failed"
         return StartResult(ok=False, evidence=("could not hand the current brief to the session",))
-    previous_launch = write_starting_marker(
-        config.state_dir,
-        spec.name,
-        launched_at,
-        launch_id=environment["BACKBONE_LAUNCH_ID"],
-        opened=(rt.id, resume_target) if isinstance(resume_target, str) else None,
+    write_starting_marker(
+        config.state_dir, spec.name, launched_at, launch_id=environment["BACKBONE_LAUNCH_ID"]
     )
     ok = await start_session(
         spec.name,
@@ -468,12 +463,17 @@ async def _start_agent(
     if not ok:
         details["reason"] = "session_failed"
         clear_starting_marker(config.state_dir, spec.name)
-        # tmux can also fail after creating the session (scrubbing), so only a
-        # launch whose hook never wrote is undone: the last launch, and the
-        # conversation it held, then stay the previous one.
-        if read_state_file(config.state_dir, spec.name, current_launch=True) is None:
-            restore_launch_marker(config.state_dir, spec.name, previous_launch)
         return StartResult(ok=False, evidence=("tmux could not create the session",))
+    if isinstance(resume_target, str):
+        # Recorded once the session runs: the conversation this launch holds
+        # until its hook reports. A launch that never ran records none.
+        write_starting_marker(
+            config.state_dir,
+            spec.name,
+            launched_at,
+            launch_id=environment["BACKBONE_LAUNCH_ID"],
+            opened=(rt.id, resume_target),
+        )
     extra = f", model: {effective_model}" if effective_model else ""
     if unattended:
         extra += ", unattended"

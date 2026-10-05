@@ -1474,8 +1474,8 @@ def test_a_malformed_launch_record_has_no_session(tmp_path, content):
     assert read_launch_session(tmp_path, "ike", "codex") is None
 
 
-async def test_a_launch_tmux_refused_leaves_the_last_launch_as_it_was(tmp_path):
-    """A resume of X that never ran must not make a later resume open X over Y."""
+async def test_a_launch_tmux_refused_records_no_conversation(tmp_path):
+    """A resume of X that never ran must not make a later resume open X."""
     from agent_backbone.services.agents import write_starting_marker
 
     config = bootstrap_config(tmp_path / "data")
@@ -1497,8 +1497,8 @@ async def test_a_launch_tmux_refused_leaves_the_last_launch_as_it_was(tmp_path):
         result = await start_agent(spec, config, resume=True, wait=False)
     assert not failed.ok
     command = start.await_args.kwargs["command"]
-    assert "Y" in command and "X" not in command
-    assert any("the last launch reported: Y" in line for line in result.evidence)
+    assert "X" not in command and "Y" not in command
+    assert any("is from an earlier session" in line for line in result.evidence)
 
 
 async def test_a_launch_killed_after_its_hook_reported_stays_the_last_launch(tmp_path):
