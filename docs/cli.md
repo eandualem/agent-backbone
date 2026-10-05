@@ -528,7 +528,7 @@ with one outcome:
 
 | Outcome | Meaning |
 |---|---|
-| `resumed_known_session` | Started on the saved conversation. `Session` says whether its hook reported the same id (`confirmed`) or another one. Claude Code reports at startup; Codex and OpenCode report at their first turn, so it shows `-` until then |
+| `resumed_known_session` | Started on the saved conversation. `Session` says whether its hook reported the same id (`confirmed`) or another one. Claude Code reports at startup, OpenCode a moment after its prompt appears and Codex at its first turn, so it can show `-` right after a resume |
 | `already_running` | The agent was running; it is left as it is |
 | `not_resumed` | Not started, with the reason: `no_saved_session`, `exact_resume_unsupported`, `agent_unknown` (forgotten since), `dir_changed` or `runtime_changed` (switched to another CLI since the save; reported, not reverted) |
 | `failed` | The launch failed or the runtime exited, as it does when it rejects the id; the evidence says why |

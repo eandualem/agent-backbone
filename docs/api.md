@@ -431,8 +431,9 @@ falls back to the runtime's latest conversation or a fresh one.
 - `failed` (the launch failed or the runtime exited).
 
 `session_confirmed` is `true` when the resumed session's hook reported the
-saved id, `false` for another id, and `null` before it reports (Codex and
-OpenCode report at their first turn, Claude Code at startup).
+saved id, `false` for another id, and `null` before it reports (Claude Code
+reports at startup, OpenCode a moment after its prompt appears, Codex at its
+first turn).
 
 ## Messages
 
