@@ -332,6 +332,10 @@ async def _start_agent(
         else None
     )
     saved_age = _age(last.timestamp, time.time()) if last is not None else ""
+    # Only an id the last launch reported is its conversation: a launch that
+    # ended before its hook reported one leaves an earlier session's id behind.
+    reported = read_state_file(config.state_dir, spec.name, current_launch=True)
+    earlier = own_session is not None and (reported is None or reported.session_id != own_session)
     if session_id is not None:
         resume_target = session_id
         details["resume_selection"] = "known_session"
@@ -340,13 +344,18 @@ async def _start_agent(
         resume_evidence.append(
             f"last session id belongs to {last.runtime}; using {rt.id}'s own resume"
         )
+    elif resume and own_session and earlier and rt.supports_exact_resume:
+        resume_evidence.append(
+            f"the last launch reported no session id; {own_session} ({saved_age} old) is from "
+            f"an earlier session, so using {rt.id}'s own resume"
+        )
     elif resume and own_session and rt.supports_exact_resume:
         resume_target = own_session
         details["resume_selection"] = "known_session"
         resume_evidence.append(
-            f"resuming the session the backbone last saw: {own_session} ({saved_age} old)"
+            f"resuming the session the last launch reported: {own_session} ({saved_age} old)"
         )
-    elif not resume and own_session and rt.supports_exact_resume:
+    elif not resume and own_session and not earlier and rt.supports_exact_resume:
         resume_evidence.append(
             f"fresh conversation; the previous one ({saved_age} old) is still available: "
             f"backbone agent resume {spec.name}"

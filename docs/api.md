@@ -121,7 +121,7 @@ fresh one:
 
 ```json
 {"ok": true, "session": "app", "name": "app", "runtime": "codex", "already_existed": false,
- "ready": "ready", "evidence": ["resuming the session the backbone last saw: 019a… (9h old)"]}
+ "ready": "ready", "evidence": ["resuming the session the last launch reported: 019a… (9h old)"]}
 ```
 
 When the saved session id is used, an evidence line names it. Without that line

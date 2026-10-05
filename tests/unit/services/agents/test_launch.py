@@ -1348,3 +1348,61 @@ class TestSkillsAtLaunch:
             result, start = await self._start(spec, config)
         assert not result.ok and start.await_count == 0
         assert result.evidence[0].startswith("skills: ") and "no SKILL.md" in result.evidence[0]
+
+
+class TestResumeOnlyTheLastLaunchesSession:
+    """A launch that ended before its hook reported an id leaves an earlier
+    session's id on record: resuming it would reopen the wrong conversation."""
+
+    def _setup(self, tmp_path, runtime, *, reported_by_last_launch):
+        from agent_backbone.services.agents import clear_starting_marker, write_starting_marker
+
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        write_starting_marker(config.state_dir, "ike", 1.0, launch_id="L1")
+        write_state_file(
+            config.state_dir,
+            "ike",
+            {
+                "state": "idle",
+                "ts": 2.0,
+                "session_id": "old-sess",
+                "runtime": runtime,
+                "launch_id": "L1",
+            },
+        )
+        if not reported_by_last_launch:
+            # Launched again and stopped before its hook ever wrote (a Codex or
+            # OpenCode agent reports only at its first turn).
+            write_starting_marker(config.state_dir, "ike", 3.0, launch_id="L2")
+            clear_starting_marker(config.state_dir, "ike")
+        return config, AgentSpec(name="ike", dir=str(project), runtime=runtime)
+
+    async def _start(self, config, spec, *, resume):
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value=f"/usr/bin/{spec.runtime}"),
+        ):
+            result = await start_agent(spec, config, resume=resume, wait=False)
+        return start.await_args.kwargs["command"], result.evidence
+
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    async def test_an_earlier_sessions_id_is_not_resumed(self, tmp_path, runtime):
+        config, spec = self._setup(tmp_path, runtime, reported_by_last_launch=False)
+        command, evidence = await self._start(config, spec, resume=True)
+        assert "old-sess" not in command
+        assert any(
+            "last launch reported no session id" in line and "earlier session" in line
+            for line in evidence
+        )
+        _, fresh = await self._start(config, spec, resume=False)
+        assert not any("still available" in line for line in fresh)
+
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    async def test_the_last_launches_session_is_resumed(self, tmp_path, runtime):
+        config, spec = self._setup(tmp_path, runtime, reported_by_last_launch=True)
+        command, evidence = await self._start(config, spec, resume=True)
+        assert "old-sess" in command
+        assert any("resuming the session the last launch reported" in line for line in evidence)

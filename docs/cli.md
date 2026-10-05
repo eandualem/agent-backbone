@@ -468,7 +468,8 @@ The conversation is chosen like this. The start's evidence lines show the result
 
 | Situation | What starts | Evidence line |
 |---|---|---|
-| The agent's runtime hook recorded a session id for this runtime, and the runtime can open a session by id (Claude Code, Codex, Gemini CLI, OpenCode) | That exact conversation | `resuming the session the backbone last saw: ID (AGE old)` |
+| The agent's last launch reported a session id through its runtime hook, and the runtime can open a session by id (Claude Code, Codex, Gemini CLI, OpenCode) | That exact conversation | `resuming the session the last launch reported: ID (AGE old)` |
+| The last launch ended before its hook reported an id, so the id on record is from an earlier session | The runtime's own latest conversation | `the last launch reported no session id; ID (AGE old) is from an earlier session, so using claude's own resume` |
 | The recorded id belongs to another runtime (the agent switched CLI since) | The current runtime's own latest conversation | `last session id belongs to codex; using claude's own resume` |
 | No id recorded, or Deep Code, which cannot open a session by id | The runtime's own latest conversation for the directory | none |
 | The agent is already running | Nothing; the session is left as it is | `app: already running` (API: `already_existed: true`) |
@@ -478,11 +479,9 @@ Aider has no supported resume: start it fresh (`backbone agent start NAME`, with
 [runtime capabilities](runtime-capabilities.md) page lists this per runtime.
 
 The recorded id is the one the runtime's hook last wrote to the agent's state
-file, from whichever earlier session last reported one. `agent inspect` shows
-the id and `Hook age (seconds)`, how long ago the hook last wrote. For a running
-agent, it shows only an id reported by the current session. If a session
-ended before its hook ever reported one, the id that resume uses belongs to an
-earlier session, so check the evidence line. The start's
+file. `agent inspect` shows the id and `Hook age (seconds)`, how long ago the
+hook last wrote. For a running agent, it shows only an id reported by the
+current session. The start's
 [diagnostics](api.md#get-apidiagnosticsrecords) record the choice as
 `resume_selection`: `fresh`, `known_session` or `runtime_latest`. Read the
 start's final record (`ready`, `timeout` or a failure code), not `requested`.
