@@ -276,3 +276,32 @@ async def test_an_exact_resume_is_refused_where_the_runtime_cannot_open_an_id(tm
         result = await start_agent(spec, config, session_id="sess-1", wait=False)
     assert not result.ok
     start.assert_not_awaited()
+
+
+async def test_a_failed_resume_keeps_the_agents_model(db, tmp_path):
+    store = await _store(db, tmp_path, ("app", "claude"))
+    await store.update("app", model="sonnet")
+    snapshot = await _snapshot(db, {"dir": str(store.agents.get("app").path), "model": "opus"})
+    run, _ = await _resume(store, db, snapshot, started=False)
+    assert run["agents"][0]["outcome"] == "failed"
+    assert store.agents.get("app").model == "sonnet"
+
+
+async def test_an_unexpected_error_is_one_agents_failure(db, tmp_path):
+    store = await _store(db, tmp_path, ("app", "claude"), ("web", "claude"))
+    snapshot = await _snapshot(
+        db,
+        {"dir": str(store.agents.get("app").path)},
+        {"name": "web", "dir": str(store.agents.get("web").path)},
+    )
+
+    async def exists(name):
+        if name == "app":
+            raise FileNotFoundError("tmux")
+        return True
+
+    with patch(f"{_FLEET}.session_exists", exists):
+        run = await resume_fleet(store, store.config, db, snapshot, wait=False)
+    outcomes = {a["name"]: a["outcome"] for a in run["agents"]}
+    assert outcomes == {"app": "failed", "web": "already_running"}
+    assert (await db.fleet.get(snapshot["id"]))["resumes"]

@@ -11,6 +11,8 @@ so the owner decides what happens next.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -30,6 +32,8 @@ if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
     from agent_backbone.services.agents.store import AgentStore
     from agent_backbone.services.database import BackboneDB
+
+log = logging.getLogger(__name__)
 
 _BUSY = frozenset({AgentState.BUSY, AgentState.WAITING_FOR_HUMAN})
 _PARALLEL_STARTS = 4
@@ -186,9 +190,28 @@ async def _resume_one(
         return _not_resumed(
             entry, "dir_changed", f"saved in {entry['dir']}; the agent is now in {spec.path}"
         )
+    previous = spec.model
+    outcome = await _launch(store, config, db, entry, session_id, wait=wait)
+    if outcome["outcome"] != "resumed_known_session" and previous != entry.get("model"):
+        # A resume that did not happen leaves the agent's settings as they were.
+        with contextlib.suppress(KeyError, ValueError):
+            await store.update(name, model=previous)
+    return outcome
+
+
+async def _launch(
+    store: AgentStore,
+    config: BackboneConfig,
+    db: BackboneDB,
+    entry: dict,
+    session_id: str,
+    *,
+    wait: bool,
+) -> dict:
+    name = entry["name"]
     req = StartRequest(name=name, session_id=session_id, wait=wait)
     try:
-        if spec.model != entry.get("model"):
+        if store.agents.get(name).model != entry.get("model"):
             # The saved model, including none: a model set since is not kept.
             await store.update(name, model=entry.get("model"))
         spec = await resolve_agent(store, req)
@@ -222,7 +245,15 @@ async def resume_fleet(
 
     async def one(entry: dict) -> dict:
         async with gate:
-            return await _resume_one(store, config, db, entry, wait=wait)
+            try:
+                return await _resume_one(store, config, db, entry, wait=wait)
+            except Exception as exc:  # one agent's failure never loses the run's record
+                log.exception("Fleet resume of %s failed", entry["name"])
+                return {
+                    **_outcome(entry),
+                    "outcome": "failed",
+                    "evidence": [f"{type(exc).__name__}: {exc}"],
+                }
 
     agents = list(await asyncio.gather(*(one(entry) for entry in snapshot["agents"])))
     run = {
