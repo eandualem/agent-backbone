@@ -1499,3 +1499,49 @@ async def test_a_launch_tmux_refused_leaves_the_last_launch_as_it_was(tmp_path):
     command = start.await_args.kwargs["command"]
     assert "Y" in command and "X" not in command
     assert any("the last launch reported: Y" in line for line in result.evidence)
+
+
+async def test_a_launch_killed_after_its_hook_reported_stays_the_last_launch(tmp_path):
+    """tmux created the session, the hook reported Z, then the scrub failed and
+    the session was killed: Z is the last launch's conversation, not Y."""
+    from agent_backbone.services.agents import write_starting_marker
+
+    config = bootstrap_config(tmp_path / "data")
+    project = tmp_path / "project"
+    project.mkdir()
+    write_starting_marker(config.state_dir, "ike", 1.0, launch_id="L1")
+    write_state_file(
+        config.state_dir,
+        "ike",
+        {"state": "idle", "ts": 2.0, "session_id": "Y", "runtime": "codex", "launch_id": "L1"},
+    )
+    spec = AgentSpec(name="ike", dir=str(project), runtime="codex")
+
+    async def created_then_killed(name, *, environment, **kwargs):
+        write_state_file(
+            config.state_dir,
+            name,
+            {
+                "state": "idle",
+                "ts": time.time(),
+                "session_id": "Z",
+                "runtime": "codex",
+                "launch_id": environment["BACKBONE_LAUNCH_ID"],
+            },
+        )
+        return False
+
+    with (
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+        patch(f"{_MOD}.start_session", side_effect=created_then_killed),
+        patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
+    ):
+        await start_agent(spec, config, session_id="X", wait=False)
+    with (
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+        patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+        patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
+    ):
+        result = await start_agent(spec, config, resume=True, wait=False)
+    assert "Z" in start.await_args.kwargs["command"]
+    assert any("the last launch reported: Z" in line for line in result.evidence)

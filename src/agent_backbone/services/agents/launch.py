@@ -468,8 +468,11 @@ async def _start_agent(
     if not ok:
         details["reason"] = "session_failed"
         clear_starting_marker(config.state_dir, spec.name)
-        # It never ran: the last launch, and the conversation it held, stay the previous one.
-        restore_launch_marker(config.state_dir, spec.name, previous_launch)
+        # tmux can also fail after creating the session (scrubbing), so only a
+        # launch whose hook never wrote is undone: the last launch, and the
+        # conversation it held, then stay the previous one.
+        if read_state_file(config.state_dir, spec.name, current_launch=True) is None:
+            restore_launch_marker(config.state_dir, spec.name, previous_launch)
         return StartResult(ok=False, evidence=("tmux could not create the session",))
     extra = f", model: {effective_model}" if effective_model else ""
     if unattended:
