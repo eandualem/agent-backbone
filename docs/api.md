@@ -124,8 +124,8 @@ fresh one:
  "ready": "ready", "evidence": ["resuming the session the backbone last saw: 019a… (9h old)"]}
 ```
 
-The evidence line says which conversation was opened: the session id on record,
-or the runtime's own latest when there is no usable id. A running agent is left
+When the saved session id is used, an evidence line names it. Without that line
+the runtime's own latest conversation was opened. A running agent is left
 as it is and returns `already_existed: true`; nothing is resumed. The CLI
 reference's [Resuming a previous conversation](cli.md#resuming-a-previous-conversation)
 lists every case, and `resume_selection` in the start's diagnostic records
@@ -229,8 +229,10 @@ Everything the backbone knows about one agent, with the evidence:
 
 `delivery` is the delivery condition: `ready`, `settling`, `human_typing`, `human_reading`,
 `agent_working`, `waiting_for_human`, `offline` or `unknown`.
-`session_id` is the runtime conversation a resume would open, as its hook
-reported it; for a running agent, only one reported by the current session.
+`session_id` is the conversation id the agent's hook reported; for a running
+agent, only one reported by the current session. A resume opens it only when
+the agent's runtime still matches the one that reported it and can open a
+session by id. Otherwise the runtime's own latest conversation opens.
 `state_age_seconds` is how long ago the hook last wrote.
 
 ### `GET /api/agents/{name}/state`
