@@ -1373,8 +1373,8 @@ class TestResumeOnlyTheLastLaunchesSession:
             },
         )
         if not reported_by_last_launch:
-            # Launched again and stopped before its hook ever wrote (a Codex or
-            # OpenCode agent reports only at its first turn).
+            # Launched again and stopped before its hook ever wrote (a Codex
+            # agent reports only at its first turn).
             write_starting_marker(config.state_dir, "ike", 3.0, launch_id="L2")
             clear_starting_marker(config.state_dir, "ike")
         return config, AgentSpec(name="ike", dir=str(project), runtime=runtime)
