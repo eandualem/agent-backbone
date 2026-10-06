@@ -381,10 +381,14 @@ class Codex(Runtime):
         # Pin the launch tier independently of model/effort and inherited config.
         # An operator can still explicitly change the tier inside the session.
         # Inline output preserves tmux scrollback and mouse handling.
+        # codex-cli 0.160: with any `-c` override, an available update stops the
+        # launch on a numbered dialog; upgrading stays the operator's choice.
         args = [
             *_LOCAL_API_ACCESS,
             "-c",
             "service_tier=default",
+            "-c",
+            "check_for_update_on_startup=false",
             "--no-alt-screen",
             *hook,
         ]

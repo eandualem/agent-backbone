@@ -17,6 +17,7 @@ _BASE = "agent_backbone.services.runtimes.base"
 # Every Codex launch opens the sandbox to the network so members reach the API.
 _NET = ["-c", "sandbox_workspace_write.network_access=true"]
 _STANDARD_TIER = ["-c", "service_tier=default"]
+_NO_UPDATE_PROMPT = ["-c", "check_for_update_on_startup=false"]
 # Unattended Codex: never ask, and pin the sandbox the promise rests on.
 _NEVER_ASK = ["-a", "never", "-s", "workspace-write"]
 
@@ -103,6 +104,7 @@ class TestBuildCommand:
             "/bin/codex",
             *_NET,
             *_STANDARD_TIER,
+            *_NO_UPDATE_PROMPT,
             "--no-alt-screen",
             "--model",
             "gpt-5.2",
@@ -116,6 +118,7 @@ class TestBuildCommand:
                 "--last",
                 *_NET,
                 *_STANDARD_TIER,
+                *_NO_UPDATE_PROMPT,
                 "--no-alt-screen",
             ]
 
@@ -146,6 +149,14 @@ class TestBuildCommand:
             assert not any(value.startswith("model_reasoning_effort=") for value in overrides)
         # Set the starting tier without disabling a later operator choice.
         assert not any(value.startswith("features.fast_mode=") for value in overrides)
+
+    @pytest.mark.parametrize("resume", [False, "sess-1"])
+    def test_codex_launch_skips_the_update_dialog(self, resume):
+        # An update prompt at launch would hold the session on a numbered dialog.
+        with _resolve("/bin/codex"):
+            command = RUNTIMES["codex"].build_command(resume=resume)
+        overrides = [command[i + 1] for i, arg in enumerate(command) if arg == "-c"]
+        assert "check_for_update_on_startup=false" in overrides
 
     def test_gemini_flags(self, tmp_path):
         brief = tmp_path / "brief.md"
@@ -383,6 +394,7 @@ class TestEffort:
             "model_reasoning_effort=high",
             *_NET,
             *_STANDARD_TIER,
+            *_NO_UPDATE_PROMPT,
             "--no-alt-screen",
             "--model",
             "gpt-6-astra",
@@ -399,6 +411,7 @@ class TestEffort:
                 "/bin/codex",
                 *_NET,
                 *_STANDARD_TIER,
+                *_NO_UPDATE_PROMPT,
                 "--no-alt-screen",
                 "--model",
                 "gpt-6-astra",
@@ -466,6 +479,7 @@ class TestUnattended:
             *_NEVER_ASK,
             *_NET,
             *_STANDARD_TIER,
+            *_NO_UPDATE_PROMPT,
             "--no-alt-screen",
             "--model",
             "gpt-6-astra",
