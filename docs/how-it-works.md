@@ -48,6 +48,9 @@ This page follows real requests through the system. Read
    even when inherited settings prefer Fast mode. It sets the launch default;
    an operator can still change the tier explicitly inside the session. Running
    sessions are unaffected until their next explicit start or resume.
+   Codex also starts with `-c check_for_update_on_startup=false`, so an
+   available Codex update never stops a launch on its update dialog; upgrade
+   Codex yourself when you choose to.
 5. **Wait until ready** (up to `timing.start_timeout_seconds`, 60 s): a
    fresh hook-written `idle` state, or a visible empty prompt for runtimes
    without hooks. A fresh busy or blocked hook keeps startup waiting even if
