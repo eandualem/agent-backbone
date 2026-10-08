@@ -1,23 +1,22 @@
 # Deep reviews without stopping your agent
 
-A repository agent can run the installed Codex CLI as a separate reviewer
-process while its own conversation continues. No Backbone swarm or managed
+A repository agent can run a reviewer CLI as a separate process while its own
+conversation continues. No Backbone swarm or managed
 agent session is needed. The review produces findings for an agent to verify,
 not automatic fixes.
 
-Every review uses Codex with `gpt-6-astra`, whether the implementation was
-written with Codex, Claude Code or another runtime. Independence means a separate,
-fresh reviewer context reviewing the pinned changes, not the implementing
-conversation checking itself. A different model family or CLI is not required.
-Name the model exactly; if it is unavailable, report that rather than substituting
-another reviewer.
+The reviewer depends on the CLI that wrote the change. An agent on the Codex
+CLI uses Claude Opus 5.5 (`claude-opus-5-5`), preferably, or Codex
+`gpt-6-astra`. Every other agent, Claude Code included, uses Codex
+`gpt-6-astra`. Independence means a separate, fresh reviewer context reviewing
+the pinned changes, not the implementing conversation checking itself. A
+different model family or CLI is not required. Name the model exactly; if no
+permitted reviewer can run, report that rather than substituting another one.
 
-Two scopes use the same command at different depths:
-
-| Scope | Head | Base | Codex effort |
+| Scope | Head | Base | Reviewer and depth |
 |---|---|---|---|
-| Feature branch, **before** its PR opens | the branch's commit | the integration branch (`develop`) | `high` |
-| Release, develop into main | `develop` | `main` | `ultra` |
+| Feature branch, **before** its PR opens | the branch's commit | the integration branch (`develop`) | Codex implementer: [Opus](#claude-opus-reviewer-for-codex-implementers) at `--effort high`, or Astra at `high`. Any other: [Astra](#codex-reviewer) at `high` |
+| Release, develop into main | `develop` | `main` | [Astra](#codex-reviewer) at `ultra`, whatever wrote the change |
 
 Use `high` for ordinary feature work. A release review at `ultra` still requires
 explicit release authorization.
@@ -100,6 +99,68 @@ hooks. Do not use `--dangerously-bypass-approvals-and-sandbox`. A missing model 
 authentication failure is a different problem: inspect stderr and preserve the
 requested model rather than silently substituting another one.
 
+## Claude Opus reviewer (for Codex implementers)
+
+An agent working in the Codex CLI reviews its feature branch with Claude Code
+running `claude-opus-5-5`, the same way: a separate headless process in the
+clean detached checkout, while the calling agent keeps working. Prepare the run
+directory, checkout and `scope.txt` as above, recording `model=claude-opus-5-5`
+and `effort=high`, and save `claude --version` in place of Codex's. Measured
+with Claude Code 2.1.294.
+
+```bash
+cd /ABSOLUTE/RUN/DIR/repo
+env -u BACKBONE_AGENT -u BACKBONE_RUNTIME -u BACKBONE_STATE_DIR \
+  -u BACKBONE_DATA_DIR -u BACKBONE_API_KEY -u BACKBONE_LAUNCH_ID \
+  claude -p "Review the changes from BASE_COMMIT to HEAD in this repository: \
+read them with git diff BASE_COMMIT...HEAD and git log BASE_COMMIT..HEAD, and \
+read the surrounding code. Report only problems a maintainer would fix (bugs, \
+regressions, security issues), each checked against the code. Do not change \
+any file. Reply with a JSON array of findings, each with file, line, severity \
+(P0 to P3), summary and failure_scenario, then one short paragraph; reply [] \
+if you find nothing." \
+  --model claude-opus-5-5 --effort high \
+  --permission-mode dontAsk --tools "Read,Grep,Glob,Bash" \
+  --allowedTools "Read Grep Glob Bash(git diff:*) Bash(git log:*) Bash(git show:*)" \
+  --no-session-persistence --settings '{"disableAllHooks":true}' \
+  --output-format json \
+  < /dev/null > /ABSOLUTE/RUN/DIR/report.json 2> /ABSOLUTE/RUN/DIR/stderr.log
+```
+
+`--tools` leaves the reviewer only reading tools and Bash, and `dontAsk` with
+`--allowedTools` refuses every command other than `git diff`, `git log` and
+`git show` without asking; refusals are listed in `permission_denials`. This is
+Claude Code's permission check, not an operating-system sandbox like Codex's
+`--sandbox read-only`, so run it only in the detached review checkout.
+`disableAllHooks` skips every hook in user and project settings, including ones
+Backbone did not install, and `--no-session-persistence` leaves no resumable
+conversation. Do not use `--bare` for isolation: it refuses OAuth and keychain
+logins, so a subscription login cannot authenticate.
+
+Use a plain review prompt like the one above, not Claude Code's built-in
+`/code-review`: that skill chooses its own model, so `--model` does not decide
+who reviews (measured: a run asked for `haiku` was answered by
+`claude-sonnet-5-5`).
+
+**Exit status 0 does not prove a review ran.** Count the review as done only when
+`modelUsage` names the requested model and `result` holds the findings:
+
+```bash
+jq -e '(.is_error | not) and (.modelUsage | has("claude-opus-5-5"))' \
+  /ABSOLUTE/RUN/DIR/report.json
+```
+
+Save the model from `modelUsage`, `total_cost_usd` and `usage` with the report;
+they are the round's model, cost and token evidence.
+
+From inside a Codex session the reviewer needs network access to Anthropic's
+API. An agent Backbone launched on Codex has it (`claude -p --model
+claude-opus-5-5` was measured to run there). Elsewhere, ask for this one process
+to run outside the outer sandbox and keep the permission settings above.
+
+Release reviews use Astra at `ultra` for every implementer, as described in
+[Codex reviewer](#codex-reviewer).
+
 ## Retrieve and assess the result
 
 Read the saved final report after the process completes. Retain the event log and
@@ -168,8 +229,8 @@ and verify the resulting PR state before reporting completion.
 ## Historical review measurements
 
 These measurements describe earlier reviewer configurations, not approved
-reviewer selections. The current reviewer for every implementation is
-`gpt-6-astra`; do not launch the earlier Claude review recipes.
+reviewer selections. Use the reviewers named at the top of this guide; do not
+launch the earlier `/code-review` recipe.
 
 On a one-file diff with two seeded bugs, Claude `claude-fable-5-1` at `high`
 took 99 s and $0.56 and found both. The same diff at `max` (measured with Opus)
