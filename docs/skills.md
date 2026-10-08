@@ -2,7 +2,31 @@
 
 Keep one copy of every skill your agents share, tag it, and let the backbone
 put the right ones in front of each agent — in the directory its CLI actually
-reads — at every launch.
+reads — at every launch, and at once when a skill or an agent's tags change
+while it runs.
+
+## Where an agent's skills come from
+
+An agent's CLI loads skills from four places. `backbone skills AGENT` lists the
+first three for that agent, with what each skill is for and where it comes from.
+
+| Source | Where it lives | Who gets it |
+|---|---|---|
+| Shared | the store, `~/skills` | agents whose tags match the skill's tags, linked into the folder their CLI reads |
+| Repository | the project's `.claude/skills`, `.agents/skills`, `.codex/skills` or `.opencode/skills` | every agent working in that project, whichever of Claude Code, Codex or OpenCode it runs |
+| User-level | the CLI's own folders in your home directory (below) | every agent on that CLI, in every project |
+| Plugins | installed with the CLI's plugins | every agent on that CLI; not listed by the backbone |
+
+The user-level folders, measured 2026-10-08 (each is searched at any depth):
+
+| CLI | User-level folders |
+|---|---|
+| Claude Code 2.1.294 | `~/.claude/skills` (`$CLAUDE_CONFIG_DIR/skills`), including the skills it syncs from claude.ai |
+| Codex 0.160.0 | `~/.agents/skills` and `~/.codex/skills` (`$CODEX_HOME/skills`), its built-in `.system` skills included |
+| OpenCode 1.18.32 | `~/.agents/skills`, `~/.claude/skills` and `~/.config/opencode/skills` |
+
+The backbone manages only the shared store and the links it makes; the other
+sources stay exactly as their owners keep them.
 
 ## Why a store
 
@@ -36,6 +60,9 @@ the `coder` skills and the `python` skills; one tagged `coder typescript` never
 sees the Python one. No hierarchy is needed in the filesystem, and a skill that
 belongs to two unrelated groups just carries both tags.
 
+Tag a new agent as you start it, so its first session already has its skills
+and policies: `backbone agent start --dir ~/code/site --tag coder --tag web`.
+
 ## What happens at launch
 
 For runtimes with a measured skills directory — Claude Code (`.claude/skills`),
@@ -53,16 +80,40 @@ Codex, Gemini, OpenCode and Deep Code (`.agents/skills`) — the start path:
    `.git/info/exclude` — git's per-clone ignore list, never a tracked file — so
    the repository's own skills stay tracked and only the links are hidden;
 4. fails the start if a selected skill does not resolve to a `SKILL.md` through
-   its link, the same way a missing policy fails it.
+   its link, the same way a missing policy fails it;
+5. links each of the repository's own skills that sits only in a folder this
+   CLI does not read (`.claude/skills/<name>` for a Codex agent, say) into the
+   folder it does, with a relative link (`../../.claude/skills/<name>`) that is
+   recorded and kept out of `git status` like the others. A repository skill
+   therefore reaches the agent whichever of Claude Code, Codex or OpenCode it
+   runs, and the link goes when the skill or the need for it does.
 
-Everything the repository owns is left alone. A real directory with the same
-name as a store skill is the repository's skill and wins; the start reports it
-and continues. A repository that ships its own skills keeps them, with or
+Everything the repository owns is left alone. A repository skill with the same
+name as a store skill wins, wherever the repository keeps it; the start reports
+it and continues. A link the repository made itself between its skill folders
+is its own and is never touched. A repository that ships its own skills keeps them, with or
 without the backbone; with the backbone absent, a project simply has fewer
 skills. Store links remain and need their original shared store to resolve.
 
 Cursor is not materialised: it is not a backbone runtime and was not measured.
 Plain shells and `aider` receive nothing.
+
+## When a skill or a tag changes
+
+`backbone skills add`, `backbone skills tag`, `backbone agent tag` and `backbone
+agent untag` bring the links of every running agent concerned in line at once,
+and print which agents changed. Agents that are not running get the change at
+their next launch.
+
+Claude Code and Codex load a skill linked into their folder, or a changed
+description, during the session (measured 2026-10-08). OpenCode reads its
+skills only when it starts, so for a running OpenCode agent the backbone leaves
+a note (`<state_dir>/<agent>.skills-reload`) that its OpenCode plugin acts on at
+the next pause between turns: it restarts OpenCode's instance for the project,
+which keeps the conversation and reads the skills again. It never does this
+during a turn, which the restart would abort, and the agent shows as busy while
+it reloads, so nothing is delivered into it meanwhile. Tags also select
+policies, which always follow at the next fresh launch.
 
 ## Commands
 
@@ -72,7 +123,7 @@ backbone skills show NAME                   # print a store skill
 backbone skills path [NAME]                 # the store, or one skill's directory
 backbone skills add PATH [--name N] [--tag T]… [--replace] [--local]
 backbone skills tag NAME [TAG…]             # replace tags; none = reaches nobody
-backbone skills preview AGENT [--json]      # next launch: skills, directories, link state
+backbone skills preview AGENT [--json]      # every skill the agent's CLI loads, by source
 backbone skills AGENT                       # the same, for short
 backbone skills validate [AGENT]            # store entries and every agent's selection
 ```
@@ -98,22 +149,26 @@ replacement: it is never discarded automatically.
 
 Nothing requires the store. An agent that wants a skill only for itself creates
 it in its own repository (`.claude/skills/<name>/` or `.agents/skills/<name>/`)
-and uses it; the backbone never adopts or moves it. `backbone skills add` is the
+and uses it; the backbone never adopts or moves it, and links it for whichever
+CLI the agent runs. `backbone skills add` is the
 one step that shares it, and the agent chooses the tags then. `backbone help
 skills` is the agent-facing version of this page.
 
-## Measured behaviour this relies on (2026-09-10)
+## Measured behaviour this relies on
 
-| CLI | Reads | Symlinked skill directory | Symlinked `SKILL.md` |
-|---|---|---|---|
-| Claude Code 2.1.267 | `.claude/skills` | followed | followed |
-| Codex 0.153.4 | `.agents/skills`, `.codex/skills` | followed | **silently ignored** |
-| OpenCode 1.18.29 | `.claude/skills`, `.agents/skills`, `.opencode/skills` | followed | followed |
-| Gemini 0.46.0 | `.agents/skills` (needs folder trust) | followed | not measured |
-| Deep Code 0.3.1 (2026-09-27) | `.agents/skills`, `.deepcode/skills` | followed | not measured |
+| CLI | Project folders it reads | Symlinked skill directory | Relative link between skill folders | Symlinked `SKILL.md` | New or changed skill mid-session |
+|---|---|---|---|---|---|
+| Claude Code 2.1.294 | `.claude/skills` | followed | followed | followed (2.1.267) | loaded |
+| Codex 0.160.0 | `.agents/skills`, `.codex/skills` | followed | followed | **silently ignored** (0.153.4) | loaded |
+| OpenCode 1.18.32 | `.claude/skills`, `.agents/skills`, `.opencode/skills`, `.opencode/skill` | followed | followed | followed (1.18.29) | only at start; reloaded between turns by the backbone's plugin (1.18.35) |
+| Gemini 0.46.0 (2026-09-10) | `.agents/skills` (needs folder trust) | followed | not measured | not measured | not measured |
+| Deep Code 0.3.1 (2026-09-27) | `.agents/skills`, `.deepcode/skills` | followed | not measured | not measured | not measured |
 
-Gemini was checked with `gemini skills list` and Deep Code with its `/skills`
-list; the other three were checked by asking the running CLI to name its skills.
+Claude Code, Codex and OpenCode were measured on 2026-10-08 with listings that
+need no model (Claude Code's `/skills`, Codex's skill picker, `opencode debug
+skill`) and a few short model turns for the mid-session check; the older cells
+name the version they were measured on. Gemini was checked with `gemini skills
+list` and Deep Code with its `/skills` list.
 The backbone therefore links whole skill directories, never single files. The
 Codex sandbox also refuses writes through such a link (measured the same day);
 reads are fine.

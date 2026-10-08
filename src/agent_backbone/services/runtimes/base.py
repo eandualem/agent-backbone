@@ -252,6 +252,10 @@ class Runtime:
     skill_dirs: tuple[str, ...] = ()
     """Project-relative directories this CLI reads skills from, measured live
     (``docs/skills.md``). Empty: the backbone materialises no skills for it."""
+    skill_read_dirs: tuple[str, ...] = ()
+    """Every project-relative directory this CLI loads skills from, measured
+    live; empty means ``skill_dirs`` alone. A repository skill in a directory
+    another CLI reads is linked into ``skill_dirs`` for this one."""
     unattended_args: tuple[str, ...] | None = None
     """The CLI's own switch that stops it asking a person before acting — the
     launch arguments for an ``unattended`` agent, as the CLI spells them
@@ -381,6 +385,18 @@ class Runtime:
         own overrides of the process environment; ``project``, when given, is the
         directory the session starts in."""
         return []
+
+    def user_skill_dirs(self, env: dict[str, str]) -> list[Path]:
+        """The user-level skill directories this CLI loads in every project, as
+        it would pick them now (measured live; ``docs/skills.md``). ``env`` as
+        for ``user_instructions``; ``skills preview`` lists what they hold."""
+        return []
+
+    def reload_skills(self, state_dir: Path, session: str) -> str | None:
+        """Have a running session load its skills again after the backbone
+        changed its links; what it will do, for the evidence. ``None``: the CLI
+        loads a linked or changed skill mid-session by itself (measured live)."""
+        return None
 
     def native_memory(self, env: dict[str, str], project: Path | None = None) -> str | None:
         """The CLI's own memory across sessions, when the settings Backbone can

@@ -94,12 +94,14 @@ if several agents share that directory, specify a name.
 
 ```json
 {"dir": "/Users/me/code/app", "name": null, "runtime": null, "model": null,
- "resume": false, "watch": ["acme/web"], "wait": true}
+ "resume": false, "watch": ["acme/web"], "tags": ["coder"], "wait": true}
 ```
 
 Discovers (or re-registers) the agent for `dir`, starts it and — with
 `wait` — blocks until it is at its prompt (up to
 `timing.start_timeout_seconds`). Without `dir`, `name` must be a known agent.
+`tags` are added to the agent before it launches, so its first session already
+has the skills and policies they select.
 
 ```json
 {"ok": true, "session": "app", "name": "app", "working_directory": "/Users/me/code/app",
@@ -523,9 +525,15 @@ store entry with its tags, validity and the agents it reaches.
 directory into the store and tags it (422 when the directory is not a skill or
 the name is taken without `replace`; 400 when `skills.store` is empty).
 `PUT /api/skills/{name}/tags` `{tags, actor}` replaces its tags (404 for an
-unknown skill). `GET /api/skills/preview/{agent}` returns what that agent's next
-launch links, per directory, with link state and notices. `actor` is recorded in
-the store's commit history when the store is a git repository.
+unknown skill). Both relink every running agent at once and return the skill
+with `relinked`, one evidence line per running agent whose links were brought
+in line; `POST /api/agents/{name}/tags` does the same for that agent.
+`GET /api/skills/preview/{agent}` returns every skill that agent's CLI loads:
+`skills` (store skills selected by tag, per directory, with link state),
+`repository` (the repository's own, with the `directories` they are in and how
+this CLI reaches each: `state`), `user` (from `user_directories`, the CLI's
+user-level directories) and `notices`. `actor` is recorded in the store's
+commit history when the store is a git repository.
 
 ## Help and documentation
 

@@ -376,7 +376,7 @@ backbone config set escalation.target orch
 
 | Command | Effect |
 |---|---|
-| `agent start [NAME…] [--dir D] [--runtime R] [--model M] [--resume \| --fresh] [--watch REPO]… [--no-wait] [--attach]` | Discover the agent from `--dir` (default: cwd), record it, start its tmux session and **wait until it is at its prompt**. A bare known `NAME` starts from its recorded directory; a bare unknown `NAME` registers the cwd under that name. A `NAME` that differs from a registered one only in letter case (`alfred` beside `Alfred`) is refused, naming the registered agent, rather than registered as a second agent that messages to the first never reach. Several names start a group of known agents (`ab agent start app web orch`). `--attach` opens a single session afterwards |
+| `agent start [NAME…] [--dir D] [--runtime R] [--model M] [--resume \| --fresh] [--watch REPO]… [--tag TAG]… [--no-wait] [--attach]` | Discover the agent from `--dir` (default: cwd), record it, start its tmux session and **wait until it is at its prompt**. A bare known `NAME` starts from its recorded directory; a bare unknown `NAME` registers the cwd under that name. A `NAME` that differs from a registered one only in letter case (`builder` beside `Builder`) is refused, naming the registered agent, rather than registered as a second agent that messages to the first never reach. Several names start a group of known agents (`ab agent start app web orch`). `--attach` opens a single session afterwards |
 | `agent resume NAME… [--attach]` | Start known agents continuing their saved runtime conversations (the same as `agent start --resume`); a bare `agent start` is always a fresh conversation. An already running session is left running |
 | `agent attach NAME [--read-only]` | Open a session in your terminal. Detach with Ctrl-b, then d. From inside tmux, switch the current client; read-only viewing requires a separate terminal |
 | `agent list [--tag TAG] [--json]` | Known agents with runtime, model, directory and tags |
@@ -416,6 +416,7 @@ an orchestrator that should spin up workers runs these commands itself.
 | `--runtime R` | Which CLI runs the agent: `claude` (default via `agents.default_runtime`), `codex`, `gemini`, `opencode`, `deepcode`, `aider`, or `shell` | yes — later bare starts reuse it |
 | `--model M` | Passed to the runtime as `--model M` (e.g. `opus`, `sonnet`, or a full model id — whatever that CLI accepts). Use it to run cheaper models per agent. Write it as `M:EFFORT` (e.g. `gpt-6-astra:high`, `opus:max`) to set the reasoning effort too — such a spec is **not** passed verbatim: it is split, and the CLI gets the bare model plus its own effort switch. A level the runtime does not have, or an effort with no model (`:high`), is refused rather than dropped | yes — later bare starts reuse it |
 | `--watch OWNER/REPO` | Also subscribe to a repository (repeatable) | yes |
+| `--tag TAG` | Add a tag before launching (repeatable), so the first session already has the skills and policies it selects. Tags are only added here; `agent untag` removes one | yes |
 | `--resume` | Continue the conversation the backbone last saw for this runtime (the runtime's own last conversation when no ID is saved); same as `agent resume` | no |
 | `--fresh` | New conversation, keeping saved CLI and model — the default, spelled out | no |
 | `--always-on` | Instead of names: start every agent marked `always_on` (after a reboot, with `--resume`) | — |
@@ -429,6 +430,7 @@ Examples:
 backbone agent start                                  # this repo, defaults
 backbone agent start --runtime claude --model opus    # this repo, explicit Claude model
 backbone agent start orch --dir ~/ws/orch --watch acme/app
+backbone agent start --dir ~/code/site --tag coder --tag web   # tagged from its first session
 backbone agent start --dir ~/ws/api --runtime codex --model gpt-5.2
 backbone agent start docs-writer                      # known agent, recorded settings
 ```
@@ -779,18 +781,22 @@ or `policy:NAME`. See [Templates](templates.md) for examples and adoption rules.
 ## `backbone skills`
 
 One shared store of skills (`skills.store`, default `~/skills`), each tagged
-with the agents it is for; at launch the backbone links the right ones into the
-directory the agent's CLI reads. `list [--tag TAG] [--json]` shows store skills,
+with the agents it is for; at launch, and for running agents whenever a skill or
+their tags change, the backbone links the right ones into the directory the
+agent's CLI reads. `list [--tag TAG] [--json]` shows store skills,
 tags and the agents each reaches; `show NAME` prints one; `path [NAME]` locates
 the store or a skill; `add PATH [--name N] [--tag T]… [--replace]` moves a skill
-directory into the store and tags it; `tag NAME [TAG…]` replaces its tags;
-`preview AGENT [--json]` — or just `backbone skills AGENT` — shows what the next
-launch links and where;
+directory into the store and tags it; `tag NAME [TAG…]` replaces its tags (both
+name the running agents whose links changed at once);
+`preview AGENT [--json]` — or just `backbone skills AGENT` — shows every skill
+the agent's CLI loads, by source (shared, the repository's own, user-level),
+and where each comes from;
 `validate [AGENT]` checks the store and every selection. See [Skills](skills.md).
 
 `backbone agent tag NAME TAG...` adds persistent group tags;
 `backbone agent untag NAME TAG...` removes them. Swarm/role identity tags cannot
-be changed with these commands. Changes take effect at the next fresh launch.
+be changed with these commands. A running session gets the skills its new tags
+select at once; policies follow at its next fresh launch.
 
 ## Cooperative message checkpoints
 

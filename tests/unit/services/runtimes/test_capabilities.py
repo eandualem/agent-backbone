@@ -201,7 +201,8 @@ def test_a_cli_dependent_cell_names_the_cli_version_it_was_verified_on(cap):
 def test_verified_versions_groups_a_runtimes_cells_by_version():
     claude = verified_versions("claude")
     assert "plan-approval" in claude["2.1.284"] and "browser-group-name" in claude["not recorded"]
-    assert list(claude)[0] == "2.1.284" and list(claude)[-1] == "not recorded"  # newest first
+    assert "skills-view" in claude["2.1.294"]
+    assert list(claude)[0] == "2.1.294" and list(claude)[-1] == "not recorded"  # newest first
     assert verified_versions("shell") == {}
 
 

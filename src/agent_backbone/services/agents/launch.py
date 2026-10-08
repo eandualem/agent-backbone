@@ -34,6 +34,7 @@ from agent_backbone.services.runtimes import (
     STATE_DIR_ENV_KEY,
     Runtime,
     get_runtime,
+    project_skill_dirs,
     read_brief,
     resolve_runtime,
     sanitize_pane_content,
@@ -504,7 +505,9 @@ def _materialize_skills(
     Evidence lines for the start result, and an error when a selected skill
     does not resolve (the store's referential integrity is checked at every
     launch, like a missing policy). A name the repository already owns is
-    skipped, not fatal: the repository's own skill wins.
+    skipped, not fatal: the repository's own skill wins. The repository's
+    own skills in a directory this runtime does not read are linked where
+    it does, so they reach whichever CLI runs the agent.
     """
     store = config.skills.store_path
     if store is None or not rt.skill_dirs:
@@ -512,14 +515,31 @@ def _materialize_skills(
     try:
         selected = select_skills(read_store(store), spec.tags, spec.name)
         outcome = materialize(
-            store, spec.path, rt.skill_dirs, selected, manifest_path(config.data_dir, spec.name)
+            store,
+            spec.path,
+            rt.skill_dirs,
+            selected,
+            manifest_path(config.data_dir, spec.name),
+            read=rt.skill_read_dirs,
+            sources=project_skill_dirs(),
         )
     except OSError as exc:
         return [], f"skills: could not link into {spec.path}: {exc}"
     evidence: list[str] = []
-    if outcome.linked:
-        names = ", ".join(skill.name for skill in selected)
-        evidence.append(f"skills: {names} linked in {', '.join(rt.skill_dirs)} from {store}")
+    from_store = set(outcome.linked) - set(outcome.mirrored)
+    if names := [
+        skill.name
+        for skill in selected
+        if any(f"{directory}/{skill.name}" in from_store for directory in rt.skill_dirs)
+    ]:
+        evidence.append(
+            f"skills: {', '.join(names)} linked in {', '.join(rt.skill_dirs)} from {store}"
+        )
+    evidence.extend(
+        f"skills: repository skill {source} linked as {rel}"
+        for rel, source in outcome.mirrored.items()
+        if rel in outcome.linked
+    )
     evidence.extend(f"skills: {line}" for line in outcome.conflicts)
     if outcome.broken:
         return evidence, "skills: " + "; ".join(outcome.broken)

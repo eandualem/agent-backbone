@@ -65,6 +65,9 @@ version differs.
 | Writes bounded while unattended | ❌ #285 | ✅ OS sandbox | ❌ | ❌ #285 | ❌ | ❌ | n/a |
 | Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ `--approve-for-me` | ❌ | ❌ #293 | ❌ | ❌ | n/a |
 | Shared skills linked | ✅ | ✅ | ✅ live-checked: it lists the linked skills (0.46) | ✅ | ✅ | ❌ | n/a |
+| Repository skills reach the agent's CLI | ✅ (2.1.294) live-checked: follows a relative link between skill folders | ✅ (0.160.0) live-checked: follows a relative link between skill folders | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ✅ (1.18.32) live-checked: follows a relative link between skill folders | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ❌ | n/a |
+| Skill and tag changes reach a running agent | ✅ (2.1.294) live-checked: loads a skill linked mid-session | ✅ (0.160.0) live-checked: loads a skill linked mid-session | ❌ whether it loads a skill mid-session is not measured | ✅ (1.18.35) its plugin reloads skills between turns (live-checked) | ❌ whether it loads a skill mid-session is not measured | ❌ | n/a |
+| Every skill an agent's CLI loads, listed by source | ✅ (2.1.294) live-checked against its /skills list | ✅ (0.160.0) live-checked against its skill list | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ✅ (1.18.32) live-checked: `opencode debug skill` | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ❌ | n/a |
 | Token usage recorded | ✅ | ✅ | ✅ live-checked with a subagent (0.46) | ✅ | ❌ | ❌ | n/a |
 | agent output from the runtime's own record | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
 | Provider capacity or rate-limit failure detected (blocked) | ✅ (2.1.284) reported by its StopFailure hook | ✅ (0.157.1) from the terminal: Codex runs no hook for a failed turn | ❌ | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
@@ -107,6 +110,9 @@ version differs.
 | Writes bounded while unattended | Run unattended agents only on a sandboxed runtime (Codex). |
 | Automatic permission review (agents.auto_review) | Review permission prompts yourself, or use the runtime's own policy. |
 | Shared skills linked | Point the agent at the skill files by path. |
+| Repository skills reach the agent's CLI | Keep the skill where that CLI reads, or point the agent at it by path. |
+| Skill and tag changes reach a running agent | Restart the agent: its next launch links the change. |
+| Every skill an agent's CLI loads, listed by source | Ask the agent to list its skills; `skills preview` still shows the shared ones. |
 | Token usage recorded | Read usage in the CLI or its provider's console. |
 | agent output from the runtime's own record | `agent output` shows the visible screen instead. |
 | Provider capacity or rate-limit failure detected (blocked) | Watch the session for provider errors; the agent may look busy or idle. |

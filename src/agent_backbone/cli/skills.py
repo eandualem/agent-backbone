@@ -12,6 +12,7 @@ from pathlib import Path
 from agent_backbone.cli import _common
 from agent_backbone.cli.presentation import note, print_record, print_table
 from agent_backbone.services.agents import skills_preview
+from agent_backbone.services.agents.operations import relink_skills
 from agent_backbone.skills import (
     ALL_TAG,
     add_skill,
@@ -98,10 +99,11 @@ def _print_preview(view: dict) -> None:
             ("Tags", ", ".join(view["tags"]) or "none"),
             ("Store", view["store"] or "disabled"),
             ("Directories", ", ".join(view["directories"]) or "none for this runtime"),
+            ("User-level", ", ".join(view.get("user_directories", [])) or "none recorded"),
         ],
     )
     print_table(
-        "Selected skills",
+        "Shared skills (store, by tag)",
         ("Skill", "Tags", "Link state"),
         [
             (
@@ -114,8 +116,42 @@ def _print_preview(view: dict) -> None:
         ],
         empty="No store skill is tagged for this agent.",
     )
+    print_table(
+        "Repository skills",
+        ("Skill", "Purpose", "Where", "State"),
+        [
+            (
+                entry["name"],
+                f"INVALID: {entry['error']}" if entry["error"] else entry["description"],
+                "\n".join(entry["directories"]),
+                entry["state"],
+            )
+            for entry in view.get("repository", [])
+        ],
+        empty="The repository has no skills of its own.",
+    )
+    print_table(
+        "User-level skills",
+        ("Skill", "Purpose", "Directory"),
+        [
+            (
+                entry["name"],
+                f"INVALID: {entry['error']}" if entry["error"] else entry["description"],
+                entry["directory"],
+            )
+            for entry in view.get("user", [])
+        ],
+        empty="None in this CLI's user-level directories.",
+    )
     for notice in view["notices"]:
         note(f"Notice: {notice}", style="yellow")
+
+
+def _print_relinked(relinked: list[str]) -> None:
+    """Which running agents the change reached now; the rest get it at their next launch."""
+    if relinked:
+        note("Running agents, links updated now:\n" + "\n".join(f"  {line}" for line in relinked))
+    note("Agents not running get the change at their next launch.")
 
 
 async def _skills(args: argparse.Namespace) -> int:
@@ -197,15 +233,16 @@ async def _skills(args: argparse.Namespace) -> int:
                 detail = detail.get("detail", detail) if isinstance(detail, dict) else detail
                 raise ValueError(f"could not add skill: {detail}")
             skill = response[1]
-            name, tags = skill["name"], skill["tags"]
+            name, tags, relinked = skill["name"], skill["tags"], skill.get("relinked", [])
         else:
             added = add_skill(
                 store, body["path"], name=args.name, tags=tuple(args.tag), replace=args.replace
             )
             await commit_store(store, f"add {added.name} [{' '.join(added.tags)}] by {_actor()}")
             name, tags = added.name, list(added.tags)
+            relinked = await relink_skills(config, list(config.agents), skill=name)
         print(f"Added {name} to {store} with tags: {' '.join(tags) or 'none (reaches nobody)'}")
-        print("Agents tagged for it receive the link at their next launch.")
+        _print_relinked(relinked)
         return 0
     if sub == "tag":
         if await _common.api_up(config):
@@ -219,7 +256,7 @@ async def _skills(args: argparse.Namespace) -> int:
                 detail = response[1] if response else "API unreachable"
                 detail = detail.get("detail", detail) if isinstance(detail, dict) else detail
                 raise ValueError(f"could not retag skill: {detail}")
-            tags = response[1]["tags"]
+            tags, relinked = response[1]["tags"], response[1].get("relinked", [])
         else:
             current = parse_skill(store / args.name)
             if current.error in ("not a directory", "no SKILL.md"):
@@ -227,7 +264,9 @@ async def _skills(args: argparse.Namespace) -> int:
             write_tags(store / args.name, tuple(args.tags))
             await commit_store(store, f"tag {args.name} [{' '.join(args.tags)}] by {_actor()}")
             tags = list(parse_skill(store / args.name).tags)
+            relinked = await relink_skills(config, list(config.agents), skill=args.name)
         print(f"{args.name}: {' '.join(tags) or 'no tags (reaches nobody)'}")
+        _print_relinked(relinked)
         return 0
     specs = [config.agents.get(args.agent)] if args.agent else list(config.agents)
     if any(spec is None for spec in specs):

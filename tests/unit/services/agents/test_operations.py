@@ -49,6 +49,30 @@ async def registered_store(db, tmp_path):
     return store
 
 
+async def test_start_tags_a_new_agent_before_it_launches(db, tmp_path):
+    store = AgentStore(db, tmp_path)
+    await store.start()
+    project = tmp_path / "site"
+    project.mkdir()
+    with patch("agent_backbone.services.agents.store.detect_repo", AsyncMock(return_value="")):
+        spec = await resolve_agent(
+            store, StartRequest(directory=str(project), tags=("coder", "web"))
+        )
+    assert spec.tags == ("coder", "web")
+    again = await resolve_agent(store, StartRequest(name="site", tags=("web", "python")))
+    assert again.tags == ("coder", "web", "python")
+
+
+async def test_start_refuses_a_bad_tag_before_registering(db, tmp_path):
+    store = AgentStore(db, tmp_path)
+    await store.start()
+    project = tmp_path / "site"
+    project.mkdir()
+    with pytest.raises(ValueError):
+        await resolve_agent(store, StartRequest(directory=str(project), tags=("swarm:x",)))
+    assert store.agents.get("site") is None
+
+
 @pytest.mark.parametrize("mutation", ["forget", "update"])
 @pytest.mark.parametrize("separate_store", [False, True])
 async def test_start_rejects_a_spec_changed_after_resolution(

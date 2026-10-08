@@ -218,6 +218,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="also watch this repository (repeatable)",
     )
     ps.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        metavar="TAG",
+        help="add this tag before launching, so the first session already has "
+        "the skills and policies it selects (repeatable)",
+    )
+    ps.add_argument(
         "--no-wait",
         action="store_true",
         help="return immediately instead of waiting for the prompt",

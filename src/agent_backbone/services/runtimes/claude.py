@@ -424,6 +424,15 @@ class ClaudeCode(Runtime):
         candidates = [home / "CLAUDE.md", *sorted((home / "rules").rglob("*.md"))]
         return [path for path in candidates if has_text(path)]
 
+    def user_skill_dirs(self, env):
+        home = Path(
+            env.get("CLAUDE_CONFIG_DIR")
+            or os.environ.get("CLAUDE_CONFIG_DIR")
+            or agent_home(env) / ".claude"
+        ).expanduser()
+        # 2.1.294: claude.ai-synced skills sit nested under skills/synced/<id>/.
+        return [home / "skills"]
+
     def native_memory(self, env, project=None):
         home = Path(
             env.get("CLAUDE_CONFIG_DIR")

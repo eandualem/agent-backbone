@@ -166,6 +166,10 @@ _GEMINI_STUB = "live: #302 (Gemini CLI 0.46 against a local API stub)"
 _LAUNCH = "tests/unit/services/runtimes/test_launch_commands.py"
 _FLEET = "tests/unit/services/agents/test_fleet.py"
 _NO_MODEL = "a plain shell runs no model"
+_SKILLS = "tests/unit/test_skills.py"
+_SKILLS_API = "tests/unit/api/routes/test_api_skills.py"
+_RELATIVE = "live-checked: follows a relative link between skill folders"
+_UNMEASURED_SKILLS = "which skill folders it reads beyond `.agents/skills` is not measured"
 _USER_FILES = "tests/unit/services/runtimes/test_user_instructions.py"
 _MEMORY = "tests/unit/services/runtimes/test_native_memory.py"
 _VERSION = "tests/unit/services/runtimes/test_installed_version.py"
@@ -599,6 +603,59 @@ CAPABILITIES: tuple[Capability, ...] = (
         gemini=_ok("tests/unit/test_skills.py", "live-checked: it lists the linked skills (0.46)"),
         opencode=_ok("tests/unit/test_skills.py"),
         deepcode=_ok("tests/unit/api/routes/test_api_skills.py"),
+        aider=_gap(),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "skills-repository",
+        "Repository skills reach the agent's CLI",
+        "src/agent_backbone/skills.py",
+        fallback="Keep the skill where that CLI reads, or point the agent at it by path.",
+        implemented=lambda rt: bool(rt.skill_dirs),
+        cli_dependent=True,
+        claude=_ok(_SKILLS, _RELATIVE, verified_on="2.1.294"),
+        codex=_ok(_SKILLS, _RELATIVE, verified_on="0.160.0"),
+        gemini=_gap(note=_UNMEASURED_SKILLS),
+        opencode=_ok(_SKILLS, _RELATIVE, verified_on="1.18.32"),
+        deepcode=_gap(note=_UNMEASURED_SKILLS),
+        aider=_gap(),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "skills-live",
+        "Skill and tag changes reach a running agent",
+        "src/agent_backbone/services/agents/operations.py",
+        fallback="Restart the agent: its next launch links the change.",
+        implemented=lambda rt: bool(rt.skill_dirs),
+        cli_dependent=True,
+        claude=_ok(
+            _SKILLS_API, "live-checked: loads a skill linked mid-session", verified_on="2.1.294"
+        ),
+        codex=_ok(
+            _SKILLS_API, "live-checked: loads a skill linked mid-session", verified_on="0.160.0"
+        ),
+        gemini=_gap(note="whether it loads a skill mid-session is not measured"),
+        opencode=_ok(
+            "tests/unit/hooks/test_opencode_hook.py",
+            "its plugin reloads skills between turns (live-checked)",
+            verified_on="1.18.35",
+        ),
+        deepcode=_gap(note="whether it loads a skill mid-session is not measured"),
+        aider=_gap(),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "skills-view",
+        "Every skill an agent's CLI loads, listed by source",
+        "src/agent_backbone/services/agents/skills_preview.py",
+        fallback="Ask the agent to list its skills; `skills preview` still shows the shared ones.",
+        implemented=lambda rt: bool(rt.user_skill_dirs({})),
+        cli_dependent=True,
+        claude=_ok(_SKILLS_API, "live-checked against its /skills list", verified_on="2.1.294"),
+        codex=_ok(_SKILLS_API, "live-checked against its skill list", verified_on="0.160.0"),
+        gemini=_gap(note=_UNMEASURED_SKILLS),
+        opencode=_ok(_SKILLS_API, "live-checked: `opencode debug skill`", verified_on="1.18.32"),
+        deepcode=_gap(note=_UNMEASURED_SKILLS),
         aider=_gap(),
         shell=_na(_NO_MODEL),
     ),

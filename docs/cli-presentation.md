@@ -52,7 +52,8 @@ Descriptions and tags are optional; no extra agent declarations are required.
 ## Command conventions
 
 - **Skills:** list has purpose, tags, receiving agents and validity; preview has
-  directories and per-link state; validation has per-agent counts and link state.
+  directories, per-link state and the repository's own and user-level skills with
+  their purpose; validation has per-agent counts and link state.
   Full descriptions replace the old 100-character clips. `show`/`path` stay raw.
 - **Agents:** list exposes purpose and tags alongside saved CLI/model; inspection
   provides repository and directory details.

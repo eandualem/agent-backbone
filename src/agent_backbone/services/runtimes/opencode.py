@@ -44,6 +44,8 @@ class OpenCode(Runtime):
     supports_exact_resume = True
     id = "opencode"
     skill_dirs = (".agents/skills",)
+    # 1.18.32; the first skill found under a name wins.
+    skill_read_dirs = (".claude/skills", ".agents/skills", ".opencode/skills", ".opencode/skill")
     display_name = "OpenCode"
     aliases = ("open-code", "open_code")
     binary = "opencode"
@@ -130,6 +132,24 @@ class OpenCode(Runtime):
             str(plugin),
             *command,
         ]
+
+    def user_skill_dirs(self, env):
+        home = agent_home(env)
+        config = Path(_setting(env, "XDG_CONFIG_HOME") or home / ".config").expanduser()
+        # 1.18.32 reads the first two recursively; its own directory measured 1.18.29.
+        return [
+            home / ".agents" / "skills",
+            home / ".claude" / "skills",
+            config / "opencode" / "skills",
+        ]
+
+    def reload_skills(self, state_dir, session):
+        # 1.18.35 reads skills only at start; the plugin (opencode_hook.js)
+        # restarts the instance between turns, keeping the conversation.
+        marker = Path(state_dir) / f"{session}.skills-reload"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+        return "OpenCode reloads its skills at its next pause between turns"
 
     def user_instructions(self, env, project=None):
         home = agent_home(env)
