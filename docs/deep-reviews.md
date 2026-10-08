@@ -113,7 +113,8 @@ cd /ABSOLUTE/RUN/DIR/repo
 env -u BACKBONE_AGENT -u BACKBONE_RUNTIME -u BACKBONE_STATE_DIR \
   -u BACKBONE_DATA_DIR -u BACKBONE_API_KEY -u BACKBONE_LAUNCH_ID \
   claude -p "Review the changes from BASE_COMMIT to HEAD in this repository: \
-read them with git diff BASE_COMMIT...HEAD and git log BASE_COMMIT..HEAD, and \
+read them with git diff --no-ext-diff --no-textconv BASE_COMMIT...HEAD and \
+git log --no-ext-diff --no-textconv BASE_COMMIT..HEAD, and \
 read the surrounding code. Report only problems a maintainer would fix (bugs, \
 regressions, security issues), each checked against the code. Do not change \
 any file. Reply with a JSON array of findings, each with file, line, severity \
@@ -121,7 +122,8 @@ any file. Reply with a JSON array of findings, each with file, line, severity \
 if you find nothing." \
   --model claude-opus-5-5 --effort high \
   --setting-sources "" --permission-mode dontAsk --tools "Read,Grep,Glob,Bash" \
-  --allowedTools "Read Grep Glob Bash(git diff:*) Bash(git log:*) Bash(git show:*)" \
+  --allowedTools "Read Grep Glob Bash(git diff --no-ext-diff --no-textconv:*) \
+Bash(git log --no-ext-diff --no-textconv:*) Bash(git show --no-ext-diff --no-textconv:*)" \
   --no-session-persistence --settings '{"disableAllHooks":true}' \
   --output-format json \
   < /dev/null > /ABSOLUTE/RUN/DIR/report.json 2> /ABSOLUTE/RUN/DIR/stderr.log
@@ -132,7 +134,9 @@ rule from them widens what the reviewer may run; the login is not a setting and
 still works. `--tools` leaves the reviewer only reading tools and Bash, and
 `dontAsk` with `--allowedTools` refuses every command other than `git diff`,
 `git log` and `git show` without asking; refusals are listed in
-`permission_denials`. This is
+`permission_denials`. Those three are allowed only with `--no-ext-diff
+--no-textconv`, so git cannot run an external diff or textconv command its
+configuration names, which would run outside Claude Code's permission check. This is
 Claude Code's permission check, not an operating-system sandbox like Codex's
 `--sandbox read-only`, so run it only in the detached review checkout.
 `disableAllHooks` also turns off any hook that still applies, and `--no-session-persistence` leaves no resumable
@@ -148,7 +152,8 @@ who reviews (measured: a run asked for `haiku` was answered by
 `modelUsage` names the requested model and `result` holds the findings:
 
 ```bash
-jq -e '(.is_error | not) and (.modelUsage | has("claude-opus-5-5"))' \
+jq -e '.is_error == false and (.result | type == "string" and length > 0)
+  and (.modelUsage | has("claude-opus-5-5"))' \
   /ABSOLUTE/RUN/DIR/report.json
 ```
 

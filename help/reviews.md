@@ -12,11 +12,11 @@ need to use the same runtime as the reviewer. No managed agent or swarm is creat
    implementing agent's active checkout.
 3. Use the reviewer for the CLI that wrote the change. On the Codex CLI, use
    Claude Opus 5.5 (`claude-opus-5-5`), preferably, or Codex `gpt-6-astra`; on
-   Claude Code or any other runtime, use Codex `gpt-6-astra`:
-   `codex exec -c service_tier=default review --base BASE_COMMIT --model gpt-6-astra`.
-   The Opus form is `claude -p "REVIEW PROMPT" --model claude-opus-5-5 --effort high`,
-   limited to reading and `git diff`, `log` and `show` (the guide's "Claude Opus
-   reviewer" has the full command and prompt).
+   Claude Code or any other runtime, use Codex `gpt-6-astra`. The core of each
+   command is `codex exec review --base BASE_COMMIT --model gpt-6-astra` and
+   `claude -p "REVIEW PROMPT" --model claude-opus-5-5 --effort high`; run the full
+   commands from the guide (its "Codex reviewer" and "Claude Opus reviewer"),
+   which add the read-only settings, the depth and the evidence files.
    Start a separate, fresh reviewer context; the implementing conversation reviewing itself does not
    satisfy the independent-review gate. A different family or CLI is not required.
    Run with the reviewer's read-only settings and hooks disabled, in an environment
