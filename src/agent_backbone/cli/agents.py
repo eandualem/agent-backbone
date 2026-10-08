@@ -360,8 +360,8 @@ async def _agent_start(args: argparse.Namespace) -> int:
         if len(names) == 1:
             return await _agent_start(argparse.Namespace(**{**vars(args), "group": True}))
     if len(args.names) > 1:
-        if args.dir or args.watch:
-            print("--dir/--watch apply to a single agent; start a group by name only")
+        if args.dir or args.watch or getattr(args, "tag", None):
+            print("--dir/--watch/--tag apply to a single agent; start a group by name only")
             return 1
         # A group start: each name must already be a known agent.
         worst = 0
@@ -393,6 +393,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
         "model": args.model,
         "resume": args.resume,
         "watch": args.watch or [],
+        "tags": getattr(args, "tag", None) or [],
         "wait": not args.no_wait,
         "inbox_only": getattr(args, "inbox_only", False),
     }
@@ -426,6 +427,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
             model=args.model,
             resume=args.resume,
             watch=tuple(args.watch or ()),
+            tags=tuple(body["tags"]),
             wait=not args.no_wait,
             inbox_only=body["inbox_only"],
         )
@@ -548,6 +550,7 @@ async def _agent(args: argparse.Namespace) -> int:
             if sub == "rename"
             else {"tags": args.tags, "remove": sub == "untag"}
         )
+        relinked: list[str] = []
         if api_up:
             endpoint = "rename" if sub == "rename" else "tags"
             response = await _common.api(
@@ -556,13 +559,18 @@ async def _agent(args: argparse.Namespace) -> int:
             if not response or response[0] != 200:
                 print(f"error: {response[1] if response else 'API unreachable'}")
                 return 1
+            if isinstance(response[1], dict):
+                relinked = response[1].get("relinked", [])
         else:
             async with _common.Direct(boot) as direct:
                 try:
                     if sub == "rename":
                         await direct.store.rename(args.name, args.new_name)
                     else:
-                        await direct.store.tag(args.name, args.tags, remove=sub == "untag")
+                        from agent_backbone.services.agents.operations import relink_skills
+
+                        spec = await direct.store.tag(args.name, args.tags, remove=sub == "untag")
+                        relinked = await relink_skills(direct.store.config, [spec])
                 except (KeyError, ValueError, OSError) as exc:
                     print(f"error: {exc}")
                     return 1
@@ -572,6 +580,9 @@ async def _agent(args: argparse.Namespace) -> int:
             print(f"Update external for:{args.name} labels and scripts to use {args.new_name}.")
         else:
             print(f"{args.name}: tags updated")
+            for line in relinked:
+                print(f"  {line}")
+            print("Policies follow at its next fresh launch; so do skills if it is not running.")
         return 0
 
     if sub == "restart":

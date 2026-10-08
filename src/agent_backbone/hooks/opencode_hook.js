@@ -26,6 +26,12 @@
 // and joins the running turn as a user message, OpenCode's own path for
 // input typed while it works: the turn's next step reads it (verified live
 // against OpenCode 1.18).
+//
+// OpenCode reads skills only when its instance starts. When the backbone
+// changes a running agent's skill links it leaves <state_dir>/<agent>.skills-reload;
+// between turns the plugin restarts the instance (client.instance.dispose(),
+// verified on 1.18.35: the session and its history stay, skills are read
+// again). Never during a turn: disposing aborts it.
 
 import fs from "node:fs";
 import { createHash } from "node:crypto";
@@ -229,6 +235,15 @@ function record(t, event, state, reason, extra = {}) {
   writeState(t, out);
 }
 
+const SKILLS_RELOAD_POLL_MS = 3000;
+// One check per process however often OpenCode builds the plugin again (each
+// instance does): the newest instance's check is the one the timer runs.
+const reloader = (globalThis[Symbol.for("agent-backbone.skills-reload")] ??= {
+  check: null,
+  loadedAt: Date.now(),
+  timer: null,
+});
+
 export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
   const t = target();
   if (!t) return {};
@@ -301,6 +316,41 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
     record(t, event, STATE_IDLE, null, { session_id: sessionID });
     retireSteers(t);
   };
+
+  let reloading = false;
+  reloader.check = async () => {
+    const marker = path.join(t.dir, `${t.agent}.skills-reload`);
+    let changedAt;
+    try {
+      changedAt = fs.statSync(marker).mtimeMs;
+    } catch {
+      return; // nothing changed
+    }
+    if (reloading || working.size > 0 || pending.size > 0) return; // between turns only
+    try {
+      fs.unlinkSync(marker);
+    } catch {
+      return;
+    }
+    if (changedAt < reloader.loadedAt) return; // this process started after: it read them
+    reloading = true;
+    try {
+      // Busy while it reloads, so the backbone delivers nothing into it.
+      record(t, "skills.reload", STATE_BUSY, null);
+      await client?.instance?.dispose?.();
+    } catch {
+      /* the skills stay as they were until the next change or start */
+    } finally {
+      try {
+        record(t, "skills.reload", STATE_IDLE, null);
+      } catch { /* hook failures must not stop the agent */ }
+      reloading = false;
+    }
+  };
+  if (!reloader.timer) {
+    reloader.timer = setInterval(() => reloader.check?.(), SKILLS_RELOAD_POLL_MS);
+    reloader.timer.unref?.();
+  }
 
   return {
     "chat.params": async (input) => {

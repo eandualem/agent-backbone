@@ -32,6 +32,10 @@ Linux. Unedited recording at 3× speed.*
   that watches several repositories.
 - **Teams:** a swarm puts a coordinator and workers on one issue, sharing a
   worktree and branch. Closing the issue tears down its sessions.
+- **Shared skills:** keep one copy of each skill in `~/skills` and tag it. Every
+  agent with that tag finds it in its own CLI (Claude Code, Codex or OpenCode),
+  linked rather than copied. `backbone skills AGENT` shows everything an agent
+  has. [Skills](docs/skills.md).
 - **Usage visibility:** inspect tokens by agent, CLI conversation and model,
   with optional API-equivalent estimates. [Coverage and limits](docs/token-usage.md).
 
@@ -79,6 +83,8 @@ follow `backbone help setup`.
 - [GitHub](docs/github.md): route issues and review notifications, starting with
   token-based polling. [GitHub App setup](docs/github-app-setup.md) adds webhooks.
 - [Swarms](docs/swarms.md): put several specialists on one task.
+- [Skills](docs/skills.md): where skills live, how tags decide who gets them,
+  and how an agent shares one it wrote.
 - [Telegram](docs/telegram.md): send messages and read reports from your phone.
 - [API](docs/api.md): build a dashboard or automation; Backbone ships no UI.
 - [Runtime support and limits](docs/status-and-roadmap.md): checked capabilities,

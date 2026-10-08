@@ -114,6 +114,7 @@ class Codex(Runtime):
     supports_exact_resume = True
     id = "codex"
     skill_dirs = (".agents/skills",)
+    skill_read_dirs = (".agents/skills", ".codex/skills")  # 0.160.0
     fallback_prompts = ("›",)
     display_name = "Codex"
     binary = "codex"
@@ -409,6 +410,13 @@ class Codex(Runtime):
             if has_text(path):
                 return [path]
         return []
+
+    def user_skill_dirs(self, env):
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
+        ).expanduser()
+        # 0.160.0 reads both recursively, $CODEX_HOME/skills/.system included.
+        return [agent_home(env) / ".agents" / "skills", home / "skills"]
 
     def native_memory(self, env, project=None):
         home = Path(

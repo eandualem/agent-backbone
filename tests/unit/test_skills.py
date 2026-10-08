@@ -9,7 +9,8 @@ from unittest.mock import patch
 import pytest
 
 from agent_backbone import skills
-from agent_backbone.services.runtimes import RUNTIMES
+from agent_backbone.services.runtimes import RUNTIMES, project_skill_dirs
+from agent_backbone.services.runtimes.capabilities import REQUIRED
 from agent_backbone.skills import (
     EXCLUDE_BEGIN,
     EXCLUDE_END,
@@ -572,6 +573,120 @@ async def test_commit_store_initialises_history_on_first_use(tmp_path):
     assert calls[0] == ("init", "-q")
     assert calls[1] == ("add", "-A") and calls[3] == ("commit", "-q", "-m", "add x by leo")
     assert ("init", "-q") not in calls[4:]
+
+
+def _link_for(rt, store, repo, manifest, selected=()):
+    """What a launch of runtime ``rt`` does in ``repo``."""
+    return materialize(
+        store,
+        repo,
+        rt.skill_dirs,
+        list(selected),
+        manifest,
+        read=rt.skill_read_dirs,
+        sources=project_skill_dirs(),
+    )
+
+
+class TestRepositorySkills:
+    """A repository's own skill reaches whichever of the CLIs runs the agent."""
+
+    @pytest.mark.parametrize("runtime", REQUIRED)
+    @pytest.mark.parametrize("home", [".claude/skills", ".agents/skills"])
+    def test_a_repository_skill_reaches_the_cli_that_runs_the_agent(self, tmp_path, runtime, home):
+        rt = RUNTIMES[runtime]
+        store = tmp_path / "store"
+        store.mkdir()
+        repo = _git_repo(tmp_path / "repo")
+        make_skill(repo / home, "own")
+        result = _link_for(rt, store, repo, manifest_path(tmp_path / "data", "app"))
+        assert result.ok
+        read = {*rt.skill_dirs, *rt.skill_read_dirs}
+        assert any((repo / directory / "own" / "SKILL.md").is_file() for directory in read)
+        if home in read:
+            assert result.mirrored == {}
+        else:
+            rel = f"{rt.skill_dirs[0]}/own"
+            assert result.mirrored == {rel: f"{home}/own"}
+            assert os.readlink(repo / rel) == os.path.join("..", "..", home, "own")
+            assert f"/{rel}" in (repo / ".git" / "info" / "exclude").read_text()
+
+    def test_the_link_follows_the_skill_and_the_runtime(self, tmp_path):
+        store = tmp_path / "store"
+        store.mkdir()
+        repo = _git_repo(tmp_path / "repo")
+        own = make_skill(repo / ".claude" / "skills", "own")
+        manifest = manifest_path(tmp_path / "data", "app")
+        codex, claude = RUNTIMES["codex"], RUNTIMES["claude"]
+        _link_for(codex, store, repo, manifest)
+        link = repo / ".agents" / "skills" / "own"
+        assert link.is_symlink()
+        # Switched to Claude Code, which reads .claude/skills: the link goes.
+        assert _link_for(claude, store, repo, manifest).removed == [".agents/skills/own"]
+        assert not link.exists() and (own / "SKILL.md").is_file()
+        _link_for(codex, store, repo, manifest)
+        assert link.is_symlink()
+        # The repository deletes its skill: the link goes with it.
+        skills._remove(own)
+        assert _link_for(codex, store, repo, manifest).removed == [".agents/skills/own"]
+        assert not link.is_symlink()
+
+    def test_the_repository_skill_wins_over_a_store_skill_of_the_same_name(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "own", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        make_skill(repo / ".claude" / "skills", "own")
+        selected = select_skills(read_store(store), (), "app")
+        manifest = manifest_path(tmp_path / "data", "app")
+        result = _link_for(RUNTIMES["codex"], store, repo, manifest, selected)
+        assert result.conflicts == [
+            ".agents/skills/own: the repository's own .claude/skills/own wins"
+        ]
+        assert os.readlink(repo / ".agents" / "skills" / "own") == "../../.claude/skills/own"
+
+    def test_a_store_link_gives_way_when_the_repository_adds_the_skill(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "own", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        selected = select_skills(read_store(store), (), "app")
+        manifest = manifest_path(tmp_path / "data", "app")
+        codex = RUNTIMES["codex"]
+        _link_for(codex, store, repo, manifest, selected)
+        link = repo / ".agents" / "skills" / "own"
+        assert os.readlink(link) == str(store / "own")
+        make_skill(repo / ".claude" / "skills", "own")
+        _link_for(codex, store, repo, manifest, selected)
+        assert os.readlink(link) == "../../.claude/skills/own"
+
+    def test_agents_sharing_a_checkout_share_the_link(self, tmp_path):
+        store = tmp_path / "store"
+        store.mkdir()
+        repo = _git_repo(tmp_path / "repo")
+        make_skill(repo / ".claude" / "skills", "own")
+        first = manifest_path(tmp_path / "data", "first")
+        second = manifest_path(tmp_path / "data", "second")
+        codex, claude = RUNTIMES["codex"], RUNTIMES["claude"]
+        _link_for(codex, store, repo, first)
+        assert _link_for(codex, store, repo, second).ok  # the first agent's link is shared
+        link = repo / ".agents" / "skills" / "own"
+        _link_for(claude, store, repo, first)  # the first agent moves to Claude Code
+        assert link.is_symlink()  # the second still gets it
+        _link_for(claude, store, repo, second)
+        assert not link.is_symlink()
+
+    def test_a_link_the_repository_made_between_its_directories_is_left_alone(self, tmp_path):
+        store = tmp_path / "store"
+        store.mkdir()
+        repo = _git_repo(tmp_path / "repo")
+        make_skill(repo / ".claude" / "skills", "own")
+        theirs = repo / ".agents" / "skills" / "own"
+        theirs.parent.mkdir(parents=True)
+        theirs.symlink_to("../../.claude/skills/own")
+        manifest = manifest_path(tmp_path / "data", "app")
+        result = _link_for(RUNTIMES["codex"], store, repo, manifest)
+        assert result.mirrored == {} and result.linked == []
+        _link_for(RUNTIMES["claude"], store, repo, manifest)
+        assert theirs.is_symlink() and not manifest.exists()
 
 
 def test_a_sibling_manifest_without_a_links_list_is_ignored(tmp_path):

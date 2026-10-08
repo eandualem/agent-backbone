@@ -32,13 +32,15 @@ inspect NAME` shows your tags), or when it is tagged `all` (everyone) or
 `agent:YOUR-NAME` (only you). Your repository's own skills — real directories
 under `.claude/skills` or `.agents/skills` — stay exactly as they are; the
 backbone only adds links beside them, and a repository skill with the same
-name as a store skill wins.
+name as a store skill wins. One kept only where another CLI looks is linked
+where yours does, so the repository's skills reach you on any of Claude Code,
+Codex or OpenCode.
 
 ## See what you have
 
 ```bash
 backbone skills list                 # every store skill, its tags, who receives it
-backbone skills NAME                 # what NAME's next launch links, and where (= preview)
+backbone skills NAME                 # every skill NAME's CLI loads: shared, repository, user-level
 backbone skills show SKILL           # print a store skill
 ```
 
@@ -57,7 +59,7 @@ backbone skills add .claude/skills/my-skill --tag coder --tag python
 
 This **moves** the directory into the store (the store holds the only copy),
 records the tags in its frontmatter, commits the store's history with your name,
-and the link appears in your repository at your next launch. Pick the narrowest
+and the link appears in your repository at once. Pick the narrowest
 tags that fit: `all` reaches every agent on the machine, and other agents will
 follow what you wrote. Do not write into the store directory directly — the
 command is the sanctioned path, and it works from inside a sandbox because the
@@ -84,7 +86,10 @@ How you edit depends on your sandbox — measured, not assumed:
   directly. The copy-and-replace path above works there too and leaves a
   commit with your name, which the in-place edit does not.
 
-Every agent tagged for the skill sees the change at its next launch. Change who
+Running agents tagged for the skill get the change at once, and the command
+names them: Claude Code and Codex load it during the session, and OpenCode
+reloads its skills at its next pause between turns. Agents not running get it
+at their next launch. Change who
 receives it with:
 
 ```bash

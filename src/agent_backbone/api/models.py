@@ -40,6 +40,8 @@ class AgentStartRequest(BaseModel):
     resume: bool = False
     """Continue the saved conversation (the runtime's latest when none is saved); default fresh."""
     watch: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    """Added to the agent's tags before it launches (skills and policies follow tags)."""
     wait: bool = True
     """Block until the agent is at its prompt (or the start timeout passes)."""
     inbox_only: bool = False
@@ -657,6 +659,13 @@ class SkillView(BaseModel):
             tags=list(skill.tags),
             error=skill.error,
         )
+
+
+class SkillChangeView(SkillView):
+    """A store skill after ``add`` or ``tag``, with what reached running agents."""
+
+    relinked: list[str] = Field(default_factory=list)
+    """Evidence, one line per running agent whose links were brought in line now."""
 
 
 class SkillAddRequest(BaseModel):

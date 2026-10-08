@@ -285,3 +285,84 @@ await hook.event({event: {type: "session.idle", properties: {sessionID: "convers
     )
     assert json.loads((tmp_path / "app.json").read_text())["state"] == "idle"
     assert read_state_file(tmp_path, "app", current_launch=True).state.value == "busy"
+
+
+def _run_plugin(tmp_path, script):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to exercise the JavaScript plugin")
+    plugin = tmp_path / "hook.mjs"
+    plugin.write_text(hook_source("opencode_hook.js").read_text())
+    return subprocess.run(
+        [node, "--input-type=module", "-e", script, plugin.as_uri()],
+        env={**os.environ, "BACKBONE_AGENT": "app", "BACKBONE_STATE_DIR": str(tmp_path)},
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    ).stdout
+
+
+_RELOAD = """
+import fs from "node:fs";
+const disposed = [];
+const { AgentBackbone } = await import(process.argv[1]);
+const hook = await AgentBackbone({client: {instance: {dispose: async () => disposed.push(1)}}});
+const check = globalThis[Symbol.for("agent-backbone.skills-reload")].check;
+const marker = `${process.env.BACKBONE_STATE_DIR}/app.skills-reload`;
+const status = (type) => hook.event({event: {type: "session.status", properties: {
+    sessionID: "root", status: {type}}}});
+"""
+
+
+def test_changed_skills_are_reloaded_between_turns_only(tmp_path):
+    out = _run_plugin(
+        tmp_path,
+        _RELOAD
+        + """
+await status("busy");
+fs.writeFileSync(marker, "");
+await check();
+const duringTurn = [disposed.length, fs.existsSync(marker)];
+await status("idle");
+await check();
+console.log(JSON.stringify({duringTurn, after: [disposed.length, fs.existsSync(marker)]}));
+""",
+    )
+    result = json.loads(out)
+    assert result["duringTurn"] == [0, True]  # disposing would abort the turn
+    assert result["after"] == [1, False]
+    state = json.loads((tmp_path / "app.json").read_text())
+    assert (state["event"], state["state"]) == ("skills.reload", "idle")
+
+
+def test_a_change_older_than_the_process_needs_no_reload(tmp_path):
+    out = _run_plugin(
+        tmp_path,
+        _RELOAD
+        + """
+fs.writeFileSync(marker, "");
+fs.utimesSync(marker, new Date(0), new Date(0));
+await check();
+console.log(JSON.stringify([disposed.length, fs.existsSync(marker)]));
+""",
+    )
+    assert json.loads(out) == [0, False]
+
+
+def test_a_failed_reload_does_not_block_the_next_one(tmp_path):
+    out = _run_plugin(
+        tmp_path,
+        _RELOAD
+        + """
+const state = `${process.env.BACKBONE_STATE_DIR}/app.json`;
+fs.mkdirSync(state);  // the state file cannot be written
+fs.writeFileSync(marker, "");
+await check();
+fs.rmdirSync(state);
+fs.writeFileSync(marker, "");
+await check();
+console.log(JSON.stringify([disposed.length, fs.existsSync(marker)]));
+""",
+    )
+    assert json.loads(out) == [1, False]

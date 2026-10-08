@@ -6,6 +6,7 @@ when it is not; both paths call these functions so the two never drift.
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -15,14 +16,24 @@ from agent_backbone.services.agents import launch
 from agent_backbone.services.agents._locks import lifecycle_lock
 from agent_backbone.services.agents._validation import validate_agent_spec
 from agent_backbone.services.agents.launch import StartResult
-from agent_backbone.services.agents.store import refuse_case_twin
-from agent_backbone.services.runtimes import RUNTIMES, install_hint
+from agent_backbone.services.agents.store import check_agent_tags, refuse_case_twin
+from agent_backbone.services.runtimes import (
+    RUNTIMES,
+    install_hint,
+    resolve_runtime,
+    unavailable,
+)
 from agent_backbone.services.terminal import session_exists
+from agent_backbone.skills import manifest_links, manifest_path
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from agent_backbone.config import AgentSpec, BackboneConfig
     from agent_backbone.services.agents.store import AgentStore
     from agent_backbone.services.database import BackboneDB
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -43,6 +54,9 @@ class StartRequest:
     session_id: str | None = None
     """Resume exactly this conversation (a fleet snapshot's); never another."""
     watch: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
+    """Added to the agent's tags before it launches, so its first session
+    already has the skills and policies they select."""
     wait: bool = True
     inbox_only: bool = False
     operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
@@ -104,8 +118,9 @@ async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
         raise ValueError("an inbox-only agent takes no part in GitHub routing: drop the watches")
     if req.inbox_only and req.resume:
         raise ValueError("an inbox-only agent is never launched: there is nothing to resume")
+    check_agent_tags(req.tags)
     if req.directory:
-        return await store.register_directory(
+        spec = await store.register_directory(
             req.directory,
             name=req.name,
             runtime=req.runtime,
@@ -113,6 +128,7 @@ async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
             watches=req.watch,
             inbox_only=req.inbox_only,
         )
+        return await store.tag(spec.name, list(req.tags)) if req.tags else spec
 
     if not req.name:
         raise ValueError("name or dir is required")
@@ -130,7 +146,52 @@ async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
         changes["inbox_only"] = True
     if changes:
         spec = await store.update(spec.name, **changes)
+    if req.tags:
+        spec = await store.tag(spec.name, list(req.tags))
     return spec
+
+
+async def relink_skills(
+    config: BackboneConfig, specs: Iterable[AgentSpec], *, skill: str | None = None
+) -> list[str]:
+    """Bring the skill links of the running agents among ``specs`` in line
+    with the store and their tags now, as their next launch would.
+
+    A skill added or retagged (``skill``, whose content may have changed),
+    or an agent tagged, then reaches a running session without a restart:
+    Claude Code and Codex load a skill linked mid-session, and a CLI that
+    reads skills only at start is asked to load them again
+    (``Runtime.reload_skills``). Evidence lines, each naming its agent.
+    """
+    evidence: list[str] = []
+    for spec in specs:
+        try:
+            if spec.inbox_only or not await session_exists(spec.name):
+                continue
+            async with lifecycle_lock(spec.name):
+                # The runtime the session runs, which ``agent set`` may have changed since.
+                runtime = await resolve_runtime(spec.name)
+                manifest = manifest_path(config.data_dir, spec.name)
+                before = manifest_links(manifest)
+                lines, error = launch._materialize_skills(config, spec, runtime)
+                after = manifest_links(manifest)
+                touched = skill is not None and any(
+                    rel.rpartition("/")[2] == skill for rel in before | after
+                )
+                if before != after or touched:
+                    if note := runtime.reload_skills(config.state_dir, spec.name):
+                        lines = [*lines, f"skills: {note}"]
+                    elif any(cap.id == "skills-live" for cap in unavailable(runtime.id)):
+                        lines = [
+                            *lines,
+                            f"skills: not verified that {runtime.display_name} loads a "
+                            "change mid-session; restart it to be sure",
+                        ]
+        except Exception as exc:  # the change itself is saved; its next launch links it
+            log.warning("Could not relink the skills of '%s': %s", spec.name, exc)
+            lines, error = [], f"skills: could not relink now ({type(exc).__name__})"
+        evidence.extend(f"{spec.name}: {line}" for line in (*lines, *filter(None, [error])))
+    return evidence
 
 
 async def stop_agent_session(config: BackboneConfig, name: str) -> bool:

@@ -102,6 +102,13 @@ def agent_clis() -> list[str]:
     return [rt.id for rt in RUNTIMES.values() if rt.binary and rt.id != "shell"]
 
 
+def project_skill_dirs() -> tuple[str, ...]:
+    """Every project-relative directory some runtime loads skills from: where
+    a repository's own skills can be (``skills.materialize``'s ``sources``)."""
+    dirs = (d for rt in RUNTIMES.values() for d in (*rt.skill_dirs, *rt.skill_read_dirs))
+    return tuple(dict.fromkeys(dirs))
+
+
 def install_hint() -> str:
     """What to do when no agent CLI (or not the chosen one) is on PATH."""
     return (
@@ -133,6 +140,7 @@ __all__ = [
     "detect_runtime",
     "get_runtime",
     "install_hint",
+    "project_skill_dirs",
     "read_brief",
     "read_usage_jsonl",
     "resolve_command",

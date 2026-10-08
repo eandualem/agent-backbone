@@ -191,9 +191,11 @@ from the runtime's measured state and from operational diagnostics. See
 A directory with a `SKILL.md` that an agent's CLI loads on demand. The
 **store** (`skills.store`, `~/skills`) holds the one shared copy of each;
 a skill's frontmatter names the **tags** of the agents that receive it
-(`all` for everyone, `agent:NAME` for one). At launch the backbone links the
-selected skills into the directory the runtime reads and never touches a
-skill the repository owns. See [Skills](skills.md).
+(`all` for everyone, `agent:NAME` for one). At launch, and for a running
+agent whenever a skill or its tags change, the backbone links the selected
+skills into the directory the runtime reads. It never changes a skill the
+repository owns, and links one kept where only another CLI reads it, so the
+repository's skills reach whichever CLI runs the agent. See [Skills](skills.md).
 
 ## Settings
 

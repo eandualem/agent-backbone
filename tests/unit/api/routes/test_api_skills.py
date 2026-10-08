@@ -9,6 +9,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec, SkillsConfig
+from agent_backbone.services.runtimes import RUNTIMES
+
+_OPS = "agent_backbone.services.agents.operations"
 
 
 def _skill(root: Path, name: str, tags: str | None = None) -> Path:
@@ -78,6 +81,41 @@ async def test_add_moves_the_directory_and_tags_it(api_client, auth_headers, sto
     assert again.status_code == 422
 
 
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_a_retag_reaches_running_agents_now(
+    api_client, auth_headers, store, api_app, runtime
+):
+    """leo runs (on ``runtime``); web does not: only leo's links change at once."""
+    rt = RUNTIMES[runtime]
+    project = store.parent / "project"
+    with (
+        patch(f"{_OPS}.session_exists", AsyncMock(side_effect=lambda name: name == "leo")),
+        patch(f"{_OPS}.resolve_runtime", AsyncMock(return_value=rt)),
+    ):
+        resp = await api_client.put(
+            "/api/skills/backend/tags", headers=auth_headers, json={"tags": ["coder"]}
+        )
+    assert resp.status_code == 200
+    link = project / rt.skill_dirs[0] / "backend"
+    assert (link / "SKILL.md").is_file()
+    assert any(line.startswith("leo: skills: ") for line in resp.json()["relinked"])
+    assert not any(line.startswith("web:") for line in resp.json()["relinked"])
+    # Claude Code and Codex load it mid-session; OpenCode is asked to reload.
+    marker = api_app.state.config.state_dir / "leo.skills-reload"
+    assert marker.exists() == (runtime == "opencode")
+
+
+async def test_a_runtime_not_verified_to_load_mid_session_says_so(api_client, auth_headers, store):
+    with (
+        patch(f"{_OPS}.session_exists", AsyncMock(side_effect=lambda name: name == "leo")),
+        patch(f"{_OPS}.resolve_runtime", AsyncMock(return_value=RUNTIMES["gemini"])),
+    ):
+        resp = await api_client.put(
+            "/api/skills/backend/tags", headers=auth_headers, json={"tags": ["coder"]}
+        )
+    assert any("restart it to be sure" in line for line in resp.json()["relinked"])
+
+
 async def test_retag_and_unknown_skill(api_client, auth_headers, store):
     resp = await api_client.put(
         "/api/skills/backend/tags", headers=auth_headers, json={"tags": ["typescript"]}
@@ -100,6 +138,57 @@ async def test_preview_names_directories_and_link_state(api_client, auth_headers
     assert web["directories"] == [".agents/skills"]
     missing = await api_client.get("/api/skills/preview/nobody", headers=auth_headers)
     assert missing.status_code == 404
+
+
+async def test_preview_lists_the_repositorys_own_skills_and_how_each_cli_reaches_them(
+    api_client, auth_headers, store
+):
+    project = store.parent / "project"
+    _skill(project / ".claude" / "skills", "own")
+    _skill(project / ".claude" / "skills", "shared")  # the repository's own wins
+    leo = (await api_client.get("/api/skills/preview/leo", headers=auth_headers)).json()
+    web = (await api_client.get("/api/skills/preview/web", headers=auth_headers)).json()
+    assert [(e["name"], e["state"]) for e in leo["repository"]] == [
+        ("own", "read where it is"),
+        ("shared", "read where it is"),
+    ]
+    assert [(e["name"], e["state"]) for e in web["repository"]] == [
+        ("own", "will link as .agents/skills/own"),
+        ("shared", "will link as .agents/skills/shared"),
+    ]
+    assert web["repository"][0]["description"] == "d own"
+    assert web["skills"][0]["links"] == {
+        ".agents/skills": "repository's own .claude/skills/shared wins"
+    }
+    assert "plugins" in " ".join(web["notices"])
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_preview_lists_the_user_level_skills_the_cli_loads(
+    api_client, auth_headers, store, api_app, runtime
+):
+    """Each CLI's own user-level directories, searched at any depth (tests run on an empty HOME)."""
+    leo = api_app.state.config.agents.specs["leo"]
+    api_app.state.config = replace(
+        api_app.state.config,
+        agents=AgentsConfig(specs={"leo": replace(leo, runtime=runtime)}),
+    )
+    folder = RUNTIMES[runtime].user_skill_dirs({})[0]
+    _skill(folder / "synced" / "abc", "mine")
+    view = (await api_client.get("/api/skills/preview/leo", headers=auth_headers)).json()
+    assert str(folder) in view["user_directories"]
+    (entry,) = view["user"]
+    assert entry["name"] == "mine" and entry["directory"] == str(folder)
+    assert entry["path"] == str(folder / "synced" / "abc" / "mine")
+
+
+async def test_preview_follows_linked_user_level_skills_once(api_client, auth_headers, store):
+    folder = RUNTIMES["claude"].user_skill_dirs({})[0]
+    folder.mkdir(parents=True)
+    (folder / "linked").symlink_to(_skill(store.parent / "elsewhere", "linked"))
+    (folder / "loop").symlink_to(folder)  # a link back up the tree ends there
+    view = (await api_client.get("/api/skills/preview/leo", headers=auth_headers)).json()
+    assert [entry["name"] for entry in view["user"]] == ["linked"]
 
 
 async def test_preview_names_the_deep_code_directory(api_client, auth_headers, store, api_app):
