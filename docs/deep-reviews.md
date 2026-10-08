@@ -120,20 +120,22 @@ any file. Reply with a JSON array of findings, each with file, line, severity \
 (P0 to P3), summary and failure_scenario, then one short paragraph; reply [] \
 if you find nothing." \
   --model claude-opus-5-5 --effort high \
-  --permission-mode dontAsk --tools "Read,Grep,Glob,Bash" \
+  --setting-sources "" --permission-mode dontAsk --tools "Read,Grep,Glob,Bash" \
   --allowedTools "Read Grep Glob Bash(git diff:*) Bash(git log:*) Bash(git show:*)" \
   --no-session-persistence --settings '{"disableAllHooks":true}' \
   --output-format json \
   < /dev/null > /ABSOLUTE/RUN/DIR/report.json 2> /ABSOLUTE/RUN/DIR/stderr.log
 ```
 
-`--tools` leaves the reviewer only reading tools and Bash, and `dontAsk` with
-`--allowedTools` refuses every command other than `git diff`, `git log` and
-`git show` without asking; refusals are listed in `permission_denials`. This is
+`--setting-sources ""` loads no user, project or local settings, so no allow
+rule from them widens what the reviewer may run; the login is not a setting and
+still works. `--tools` leaves the reviewer only reading tools and Bash, and
+`dontAsk` with `--allowedTools` refuses every command other than `git diff`,
+`git log` and `git show` without asking; refusals are listed in
+`permission_denials`. This is
 Claude Code's permission check, not an operating-system sandbox like Codex's
 `--sandbox read-only`, so run it only in the detached review checkout.
-`disableAllHooks` skips every hook in user and project settings, including ones
-Backbone did not install, and `--no-session-persistence` leaves no resumable
+`disableAllHooks` also turns off any hook that still applies, and `--no-session-persistence` leaves no resumable
 conversation. Do not use `--bare` for isolation: it refuses OAuth and keychain
 logins, so a subscription login cannot authenticate.
 
