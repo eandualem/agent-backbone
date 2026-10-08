@@ -16,7 +16,7 @@ permitted reviewer can run, report that rather than substituting another one.
 | Scope | Head | Base | Reviewer and depth |
 |---|---|---|---|
 | Feature branch, **before** its PR opens | the branch's commit | the integration branch (`develop`) | Codex implementer: [Opus](#claude-opus-reviewer-for-codex-implementers) at `--effort high`, or Astra at `high`. Any other: [Astra](#codex-reviewer) at `high` |
-| Release, develop into main | `develop` | `main` | [Astra](#codex-reviewer) at `ultra`, whatever wrote the change |
+| Release, develop into main | `develop` | `main` | [Astra](#codex-reviewer) at `ultra`, whatever wrote the change, until an Opus release depth is set |
 
 Use `high` for ordinary feature work. A release review at `ultra` still requires
 explicit release authorization.
@@ -150,16 +150,17 @@ jq -e '(.is_error | not) and (.modelUsage | has("claude-opus-5-5"))' \
   /ABSOLUTE/RUN/DIR/report.json
 ```
 
-Save the model from `modelUsage`, `total_cost_usd` and `usage` with the report;
-they are the round's model, cost and token evidence.
+Save the model `modelUsage` names, not only the one you asked for, with
+`total_cost_usd` and `usage`: they are the round's evidence of who reviewed, at
+what cost and with how many tokens.
 
 From inside a Codex session the reviewer needs network access to Anthropic's
 API. An agent Backbone launched on Codex has it (`claude -p --model
 claude-opus-5-5` was measured to run there). Elsewhere, ask for this one process
 to run outside the outer sandbox and keep the permission settings above.
 
-Release reviews use Astra at `ultra` for every implementer, as described in
-[Codex reviewer](#codex-reviewer).
+No Opus release depth is set yet. Until one is, release reviews use Astra at
+`ultra` for every implementer, as described in [Codex reviewer](#codex-reviewer).
 
 ## Retrieve and assess the result
 

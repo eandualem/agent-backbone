@@ -25,7 +25,9 @@ need to use the same runtime as the reviewer. No managed agent or swarm is creat
    `--ignore-user-config`; it is separate from reasoning effort.
    Depth: `high` for a feature branch, **before** its PR opens. An explicitly
    authorized develop → main release review uses Codex `gpt-6-astra` at `ultra`,
-   whatever CLI wrote the change. If no permitted reviewer can run, report the
+   whatever CLI wrote the change, until an Opus release depth is set. Record the
+   model the reviewer reports using (Opus: `modelUsage`), not only the one you
+   asked for. If no permitted reviewer can run, report the
    blocker rather than substituting another model.
 4. Start the process in the background, retain its handle, and continue working.
    Capture exit status; a timeout, failed launch or missing report is not a clean
