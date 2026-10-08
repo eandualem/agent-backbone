@@ -348,3 +348,21 @@ console.log(JSON.stringify([disposed.length, fs.existsSync(marker)]));
 """,
     )
     assert json.loads(out) == [0, False]
+
+
+def test_a_failed_reload_does_not_block_the_next_one(tmp_path):
+    out = _run_plugin(
+        tmp_path,
+        _RELOAD
+        + """
+const state = `${process.env.BACKBONE_STATE_DIR}/app.json`;
+fs.mkdirSync(state);  // the state file cannot be written
+fs.writeFileSync(marker, "");
+await check();
+fs.rmdirSync(state);
+fs.writeFileSync(marker, "");
+await check();
+console.log(JSON.stringify([disposed.length, fs.existsSync(marker)]));
+""",
+    )
+    assert json.loads(out) == [1, False]

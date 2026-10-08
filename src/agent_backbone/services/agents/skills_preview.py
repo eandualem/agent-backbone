@@ -58,7 +58,11 @@ def _repository_state(spec: AgentSpec, rt, places: list[str], name: str) -> str:
         return f"not read by {rt.display_name}"
     rel = f"{rt.skill_dirs[0]}/{name}"
     link = spec.path / rel
-    if link.is_symlink() and Path(os.path.normpath(link.parent / os.readlink(link))) == (
+    try:
+        target = os.readlink(link) if link.is_symlink() else None
+    except OSError:  # replaced meanwhile
+        target = None
+    if target is not None and Path(os.path.normpath(link.parent / target)) == (
         spec.path / places[0] / name
     ):
         return f"linked as {rel}"

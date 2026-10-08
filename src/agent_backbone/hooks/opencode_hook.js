@@ -334,13 +334,18 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
     }
     if (changedAt < reloader.loadedAt) return; // this process started after: it read them
     reloading = true;
-    // Busy while it reloads, so the backbone delivers nothing into it.
-    record(t, "skills.reload", STATE_BUSY, null);
     try {
+      // Busy while it reloads, so the backbone delivers nothing into it.
+      record(t, "skills.reload", STATE_BUSY, null);
       await client?.instance?.dispose?.();
-    } catch { /* the skills stay as they were until the next start */ }
-    record(t, "skills.reload", STATE_IDLE, null);
-    reloading = false;
+    } catch {
+      /* the skills stay as they were until the next change or start */
+    } finally {
+      try {
+        record(t, "skills.reload", STATE_IDLE, null);
+      } catch { /* hook failures must not stop the agent */ }
+      reloading = false;
+    }
   };
   if (!reloader.timer) {
     reloader.timer = setInterval(() => reloader.check?.(), SKILLS_RELOAD_POLL_MS);

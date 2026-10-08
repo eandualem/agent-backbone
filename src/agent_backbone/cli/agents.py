@@ -582,8 +582,7 @@ async def _agent(args: argparse.Namespace) -> int:
             print(f"{args.name}: tags updated")
             for line in relinked:
                 print(f"  {line}")
-            later = "Policies" if relinked else "Skills and policies"
-            print(f"{later} follow at its next fresh launch.")
+            print("Policies follow at its next fresh launch; so do skills if it is not running.")
         return 0
 
     if sub == "restart":
