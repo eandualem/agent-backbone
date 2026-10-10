@@ -49,7 +49,7 @@ You need macOS or Linux, Python 3.11+, tmux, [uv](https://docs.astral.sh/uv/)
 (or pipx), and an agent CLI installed and signed in.
 
 ```bash
-uv tool install "agent-backbone[github-app]"
+uv tool install agent-backbone
 backbone init
 backbone service install           # start now and at login
 backbone doctor                    # check dependencies and API access

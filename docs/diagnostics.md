@@ -267,3 +267,16 @@ metadata. A current stamp alone does not prove queue conflict indexes are correc
 Matching schemas avoid rebuilds; operator-added indexes are left in place. This
 additional DDL comparison is SQLite-specific; PostgreSQL continues to use the
 existing revision and required-table/column repair path.
+
+Usage collection records `usage_registration_failed` separately from
+`usage_source_failed`, scoped to the agent and runtime. Registration conflicts
+retain the existing session owner; they do not reassign historical usage. A
+successful source read cannot recover a registration failure, and another
+runtime’s success cannot recover it either. `usage_collection_failed` remains the
+aggregate signal. Source paths, session IDs and raw exception messages are
+excluded from these diagnostic records. The usage response also exposes these
+checks as typed metadata alongside its existing error list.
+
+CLI service log entries include the calendar date and numeric timezone offset
+so incidents can be correlated across midnight and service restarts. Uvicorn
+access logs retain their own format.

@@ -54,6 +54,26 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 
+def _is_api_origin(url: httpx.URL) -> bool:
+    base = httpx.URL(API_BASE)
+    return (url.scheme, url.host, url.port) == (base.scheme, base.host, base.port)
+
+
+def _follow_read_redirects(method: str, path: str) -> bool:
+    # Issue transfers also redirect within the API origin. Until we can verify
+    # the complete identity, keep issue-scoped reads on their requested target.
+    parts = path.strip("/").split("/")
+    issue_scoped = len(parts) > 1 and parts[0] in {"issues", "pulls"} and parts[1].isdigit()
+    return method == "GET" and not issue_scoped
+
+
+async def _check_redirect(response: httpx.Response) -> None:
+    if response.has_redirect_location:
+        target = response.request.url.join(response.headers["Location"])
+        if not _is_api_origin(target):
+            response.raise_for_status()
+
+
 class GitHubClient:
     """Async GitHub REST API client.
 
@@ -108,6 +128,7 @@ class GitHubClient:
                 "X-GitHub-Api-Version": "2022-11-28",
             },
             timeout=httpx.Timeout(10.0, connect=5.0),
+            event_hooks={"response": [_check_redirect]},
         )
 
     async def stop(self) -> None:
@@ -149,14 +170,7 @@ class GitHubClient:
         if self._private_key is not None:
             return self._private_key
 
-        try:
-            from cryptography.hazmat.primitives import serialization
-        except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "GitHub App auth needs the 'github-app' extra: "
-                "uv tool install 'agent-backbone[github-app]' "
-                "(or pip install 'agent-backbone[github-app]')"
-            ) from exc
+        from cryptography.hazmat.primitives import serialization
 
         key_path = Path(self._config.github_app_private_key_path).expanduser()
         try:
@@ -192,7 +206,9 @@ class GitHubClient:
         assert self._client is not None
         headers = dict(kwargs.pop("headers", {}))
         headers["Authorization"] = f"Bearer {self._build_app_jwt()}"
-        return await self._client.request(method, url, headers=headers, **kwargs)
+        return await self._client.request(
+            method, url, headers=headers, follow_redirects=method == "GET", **kwargs
+        )
 
     async def _get_installation_id(self, owner: str, repo: str) -> int:
         repo_key = f"{owner}/{repo}"
@@ -252,7 +268,11 @@ class GitHubClient:
         headers = dict(kwargs.pop("headers", {}))
         headers["Authorization"] = await self._auth_header(owner, repo)
         resp = await self._client.request(
-            method, f"/repos/{owner}/{repo}{path}", headers=headers, **kwargs
+            method,
+            f"/repos/{owner}/{repo}{path}",
+            headers=headers,
+            follow_redirects=_follow_read_redirects(method, path),
+            **kwargs,
         )
         resp.raise_for_status()
         return resp
@@ -266,9 +286,13 @@ class GitHubClient:
         resp = await self._request("GET", path, repo_full_name=repo_full_name, params=params)
         items: list[dict[str, Any]] = list(resp.json())
         while (nxt := resp.links.get("next")) and nxt.get("url"):
+            if not _is_api_origin(httpx.URL(nxt["url"])):
+                raise ValueError("GitHub pagination must stay on the API origin")
             owner, repo = self._resolve_repo(repo_full_name)
             headers = {"Authorization": await self._auth_header(owner, repo)}
-            resp = await self._client.get(nxt["url"], headers=headers)
+            resp = await self._client.get(
+                nxt["url"], headers=headers, follow_redirects=_follow_read_redirects("GET", path)
+            )
             resp.raise_for_status()
             items.extend(resp.json())
         return items

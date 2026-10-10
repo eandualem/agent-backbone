@@ -108,3 +108,20 @@ async def test_model_change_is_separate_evidence_from_error(db, config):
     assert {row["code"] for row in rows} == {"model_account_incompatible", "model_changed"}
     assert len({row["operation_id"] for row in rows}) == 1
     assert {row["details"]["observed_model"] for row in rows} == {"model-x", "model-y"}
+
+
+async def test_usage_failure_recovery_is_scoped_to_runtime_and_stage(db):
+    scope = dict(source="agent-monitor", stage="usage_registration", agent_name="worker")
+    for _ in range(2):
+        await observe_job(db, **scope, runtime="claude", error_type="ValueError")
+    await observe_job(db, **scope, runtime="codex")
+    await observe_job(
+        db, source="agent-monitor", stage="usage_source", agent_name="worker", runtime="claude"
+    )
+    (failure,) = await db.diagnostics.query()
+    assert failure["occurrences"] == 2
+    assert failure["runtime"] == "claude"
+    await observe_job(db, **scope, runtime="claude")
+    recovered, failure = await db.diagnostics.query()
+    assert recovered["code"] == "usage_registration_recovered"
+    assert recovered["operation_id"] == failure["operation_id"]

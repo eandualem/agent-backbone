@@ -62,11 +62,19 @@ def _registrations(config: BackboneConfig) -> list[dict]:
 async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
     """Refresh bounded source chunks on query and the existing monitor tick."""
     if not config.settings.get("usage.enabled", True):
-        return {"enabled": False, "errors": []}
+        return {"enabled": False, "errors": [], "checks": []}
     lock = _locks.setdefault(db, asyncio.Lock())
     async with lock:
         now = timestamp(datetime.now(UTC).isoformat())
         errors = []
+        checks = {}
+
+        def checked(agent: str, runtime: str, stage: str, error_type: str | None = None):
+            # A later successful source for the same agent must not hide an
+            # earlier failure. Only typed metadata goes to operational diagnostics.
+            key = (agent, runtime, stage)
+            checks[key] = checks.get(key) or error_type
+
         registrations = await asyncio.to_thread(_registrations, config)
         for row in registrations:
             if row.get("agent") not in config.agents.names or row.get("runtime") not in RUNTIMES:
@@ -87,8 +95,13 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                 if registration := row.get("_registration_path"):
                     with suppress(OSError):
                         registration.unlink(missing_ok=True)
-            except (ValueError, KeyError, TypeError):
-                errors.append("invalid or conflicting session registration")
+            except (ValueError, KeyError, TypeError) as exc:
+                errors.append(
+                    f"{row['agent']}/{row['runtime']}: invalid or conflicting session registration"
+                )
+                checked(row["agent"], row["runtime"], "usage_registration", type(exc).__name__)
+            else:
+                checked(row["agent"], row["runtime"], "usage_registration")
         known = {s["id"]: s for s in await db.usage.sessions()}
         pending = deque(known.values())
         processed = set()
@@ -130,6 +143,12 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                 )
                 if batch.error:
                     errors.append(f"{session['id']}: {batch.error}")
+                checked(
+                    session["agent_name"],
+                    session["runtime"],
+                    "usage_source",
+                    "source_read_error" if batch.error else None,
+                )
                 detail = batch.error or ("source read incomplete" if not batch.caught_up else "")
                 if (
                     not batch.events
@@ -179,9 +198,20 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                     pending.append(child)
             except Exception as exc:
                 errors.append(f"{session['id']}: {type(exc).__name__}")
+                checked(
+                    session["agent_name"], session["runtime"], "usage_source", type(exc).__name__
+                )
                 log.warning("Usage collection failed for %s: %s", session["id"], type(exc).__name__)
         await db.usage.observed(unchanged, now)
-        return {"enabled": True, "errors": errors, "observed_at": now}
+        return {
+            "enabled": True,
+            "errors": errors,
+            "observed_at": now,
+            "checks": [
+                {"agent_name": agent, "runtime": runtime, "stage": stage, "error_type": error}
+                for (agent, runtime, stage), error in checks.items()
+            ],
+        }
 
 
 @dataclass
