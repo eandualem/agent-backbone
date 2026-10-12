@@ -221,7 +221,7 @@ Background loops inside the backbone process:
 | `integrations-sync` | 5 min | re-provision each integration's per-agent surfaces, such as Telegram topics |
 | `report-notifications` | 30 s | post new [progress reports](reports.md) to the integrations |
 | `report-audio` | 30 s | send report voice messages, when `telegram.report_audio` is on |
-| `upgrade-watch` | 60 s | restart the backbone itself onto new code when the checkout or installed version changes and nothing is being routed; off with `backbone.restart_on_upgrade` |
+| `upgrade-watch` | 60 s | restart the backbone itself onto new code when the installed version changes, or the checkout moves on the branch it started on (not when it switches branches), and nothing is being routed; off with `backbone.restart_on_upgrade` |
 
 ## What the backbone does not decide
 
