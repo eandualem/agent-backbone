@@ -496,7 +496,7 @@ class Codex(Runtime):
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session_id):
             return []
         home = Path(
-            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
         ).expanduser()
         return sorted(
             [
@@ -509,7 +509,7 @@ class Codex(Runtime):
         self, path: Path, session_id: str, env: dict[str, str]
     ) -> list[tuple[str, Path]]:
         home = Path(
-            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
         ).expanduser()
         cached = _usage_lineage.get(str(home))
         if cached and time.monotonic() - cached[0] < 30:

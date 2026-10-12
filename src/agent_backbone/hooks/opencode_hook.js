@@ -89,10 +89,16 @@ function takeContext(t) {
     return x[0] - y[0] || x[1] - y[1] || (x[2] < y[2] ? -1 : x[2] > y[2] ? 1 : 0);
   };
   const texts = [];
-  for (const dir of offerDirs(t)) {
+  const directories = offerDirs(t);
+  const current = readCurrent(t);
+  for (const dir of directories) {
     for (const name of offers(dir).sort(order)) {
       const offer = path.join(dir, name);
       try {
+        if (dir !== directories[0] && forEarlierTurn(offer, current)) {
+          fs.renameSync(offer, `${offer.slice(0, -3)}.missed`);
+          continue;
+        }
         // Read first: once it is .taken the backbone may settle and remove it.
         const text = fs.readFileSync(offer, "utf8");
         fs.renameSync(offer, `${offer.slice(0, -3)}.taken`);
@@ -101,6 +107,19 @@ function takeContext(t) {
     }
   }
   return texts;
+}
+
+function forEarlierTurn(offer, current) {
+  // Match backbone_state.py: compare only identity fields present on both
+  // sides, and keep legacy offers without readable turn metadata usable.
+  try {
+    const turn = JSON.parse(fs.readFileSync(`${offer.slice(0, -3)}.turn`, "utf8"));
+    if (!turn || typeof turn !== "object" || Array.isArray(turn)) return false;
+    return ["prompted_at", "session_id"].some((key) =>
+      turn[key] != null && current[key] != null && turn[key] !== current[key]);
+  } catch {
+    return false;
+  }
 }
 
 function retireSteers(t) {

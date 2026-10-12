@@ -193,7 +193,7 @@ class OpenCode(Runtime):
         root = Path(
             env.get("XDG_DATA_HOME")
             or os.environ.get("XDG_DATA_HOME")
-            or Path.home() / ".local/share"
+            or agent_home(env) / ".local/share"
         )
         path = root / "opencode/opencode.db"
         if not path.is_file():
