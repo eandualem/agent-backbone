@@ -38,7 +38,8 @@ This page follows real requests through the system. Read
    skills are never touched ([skills](skills.md)).
 4. **Launch.** `tmux new-session -d -s <name> -c <dir>` running the runtime
    command (`claude --model …`), with `BACKBONE_RUNTIME`, `BACKBONE_AGENT`,
-   `BACKBONE_STATE_DIR` and the agent's `env` exported into the session.
+   `BACKBONE_LAUNCH_ID` (new for every launch), `BACKBONE_STATE_DIR` and the
+   agent's `env` exported into the session.
    For Claude Code the command also carries
    `--settings <data_dir>/hooks/claude-settings.json` — a backbone-owned
    settings file, replaced atomically at every start, that wires the state hooks
@@ -114,8 +115,10 @@ Register an agent with that session name before sending it messages through
 the backbone; unregistered sessions cannot receive API messages or be streamed.
 
 Stopping (`agent stop`) is `tmux kill-session`. The backbone refuses to
-stop its own session. A session that dies on its own is **reported** (to
-the escalation target and Telegram, once) — never restarted.
+stop its own session. A session that dies on its own is never restarted.
+For an agent marked `always_on` it is **reported** at once, to the
+escalation target and Telegram; any other absent agent is reported only
+when messages are queued for it ([`always_on`](configuration.md#agents)).
 
 Restarting (`agent restart`, `POST /api/agents/{name}/restart`) is the one
 restart the backbone performs, because it was asked for. The request is
@@ -486,9 +489,10 @@ Every `timing.monitor_interval_seconds` (60 s), `agent-monitor`:
 3. **Stalls**: `busy` on one issue for > `timing.stall_threshold_seconds`
    (90 min) → one message to `escalation.target`, deduplicated for
    `timing.escalation_dedup_seconds` (30 min).
-4. **Dead sessions**: an agent that had a live state and has no session now
-   → reported to `escalation.target` and Telegram, once; state reset.
-   Never restarted. If no notification route accepts the alert, the transition
+4. **Dead sessions**: an `always_on` agent that had a live state and has no
+   session now → reported to `escalation.target` and Telegram, once; state
+   reset. Any other absent agent is reported only when messages are queued
+   for it. Never restarted. If no notification route accepts the alert, the transition
    stays pending for the next monitor tick.
 5. **Plan waiting**: Telegram notification (`/viewplan`, `/approve`) and a
    message to `escalation.target`, once per plan after delivery or successful

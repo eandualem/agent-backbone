@@ -218,6 +218,10 @@ Background loops inside the backbone process:
 | `sources-poll` | `sources.poll_interval_seconds` (60 s) | only with a configured [source](sources.md): search each source for new items matching any subscription filter and deliver them |
 | `github-backfill` | starts at startup | webhook intake only: catch up on downtime; `delivery-retry` retries unfinished repositories until catch-up succeeds |
 | `prune` | 6 h | delete old deliveries, events and completed queue bodies; rotate the hook action log |
+| `integrations-sync` | 5 min | re-provision each integration's per-agent surfaces, such as Telegram topics |
+| `report-notifications` | 30 s | post new [progress reports](reports.md) to the integrations |
+| `report-audio` | 30 s | send report voice messages, when `telegram.report_audio` is on |
+| `upgrade-watch` | 60 s | restart the backbone itself onto new code when the checkout or installed version changes and nothing is being routed; off with `backbone.restart_on_upgrade` |
 
 ## What the backbone does not decide
 

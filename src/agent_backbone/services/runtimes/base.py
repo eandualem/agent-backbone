@@ -4,8 +4,9 @@ One object per runtime holds it all: how to recognise the CLI in a pane
 (prompt, busy marker, permission dialog), how to paste into it, how to
 answer its permission prompt, how to launch it (binary, model, resume,
 brief injection, trust dialog, state hooks). Adding a runtime is one new
-module in this package that subclasses ``Runtime`` and registers itself in
-``__init__``.
+module in this package that subclasses ``Runtime`` and exports ``RUNTIME``,
+an entry in ``catalog.json`` (which ``__init__`` loads), and a cell in every
+row of the capability contract (``capabilities.py``).
 """
 
 from __future__ import annotations
