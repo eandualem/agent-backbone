@@ -211,7 +211,9 @@ async def drain_message_queue(
             continue  # never typed into: its messages wait for backbone inbox
         _draining.add(session_name)
         try:
-            completed = await _drain_session(config, db, gh, session_name, summary)
+            completed = await _drain_session(
+                config, db, gh, session_name, summary, active_sessions=active_sessions
+            )
         except Exception as exc:
             log.exception("Queue drain failed for %s (other sessions continue)", session_name)
             await observe_job(
@@ -255,7 +257,15 @@ async def drain_agent(config, db, session_name: str) -> None:
 
 
 async def _drain_session(
-    config, db, gh, session_name, summary, *, limit: int = 5, brief_only: bool = False
+    config,
+    db,
+    gh,
+    session_name,
+    summary,
+    *,
+    limit: int = 5,
+    brief_only: bool = False,
+    active_sessions: Collection[str] | None = None,
 ) -> bool:
     queued = await db.queue.dequeue(session_name, limit=limit)
     if brief_only:
@@ -347,6 +357,16 @@ async def _drain_session(
                 # Revoked or completed meanwhile: never deliver the stale copy.
                 summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
                 continue
+            if (
+                active_sessions is not None
+                and session_name not in active_sessions
+                and session_name not in await list_sessions()
+            ):
+                # Offline queues still expire and retire obsolete work above.
+                # Retained notices wait without another futile terminal attempt;
+                # re-read sessions because the monitor's snapshot may be old.
+                completed = False
+                break
             outcome = (
                 await safe_deliver(
                     session_name,

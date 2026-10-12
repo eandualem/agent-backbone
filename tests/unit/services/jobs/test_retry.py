@@ -170,8 +170,11 @@ class TestDrainAgent:
 
 
 class TestDeliveryRetryQueueDrain:
+    @patch("agent_backbone.services.jobs.retry.list_sessions", new_callable=AsyncMock)
     @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
-    async def test_drain_includes_queued_sessions(self, mock_deliver, db, config):
+    async def test_drain_includes_newly_active_queued_sessions(
+        self, mock_deliver, mock_sessions, db, config
+    ):
         await db.queue.enqueue(
             session_name="scratch",
             message="Queued",
@@ -179,12 +182,155 @@ class TestDeliveryRetryQueueDrain:
             source="api-messages",
         )
         mock_deliver.return_value = DeliveryReport(DeliveryOutcome.DELIVERED)
+        mock_sessions.return_value = ["scratch"]
 
         summary = await drain_message_queue(config, db, AsyncMock(), active_sessions=set())
 
         assert summary["queue_delivered"] == 1
         assert mock_deliver.await_args.args[0] == "scratch"
         assert (await queue_row(db, 1))["status"] == "delivered"
+
+    @pytest.mark.parametrize(
+        "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    )
+    async def test_offline_expiry_notice_waits_without_attempts_then_delivers(
+        self, db, tmp_path, runtime
+    ):
+        from sqlalchemy import text
+
+        from agent_backbone.services.routing import safe_deliver
+        from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+        config = make_config(
+            tmp_path,
+            agents=AgentsConfig(specs={"app": AgentSpec(name="app", dir="/x", runtime=runtime)}),
+        )
+        profile = SessionProfile(session_name="app", intelligence=SessionIntelligence.OFFLINE)
+        with (
+            patch(
+                "agent_backbone.services.routing._delivery.get_session_intelligence",
+                return_value=profile,
+            ),
+            patch(
+                "agent_backbone.services.routing._delivery.send_message", return_value=True
+            ) as send,
+            patch("agent_backbone.services.jobs.retry.list_sessions", return_value=[]) as sessions,
+        ):
+            receipt = await safe_deliver(
+                "app",
+                "[via:backbone] Expired message notice",
+                config,
+                db=db,
+                delivery_kind="direct_message",
+                source="queue-expiry",
+            )
+            async with db.queue._tx() as conn:
+                await conn.execute(
+                    text("UPDATE message_queue SET enqueued_at = '2000-01-01T00:00:00Z'")
+                )
+            original = await queue_row(db, receipt.queue_id)
+            for _ in range(3):
+                assert await drain_message_queue(config, db, None, active_sessions=set()) == {}
+            send.assert_not_awaited()
+            assert len(await db.deliveries.query(session_name="app")) == 1
+            waiting = await queue_row(db, receipt.queue_id)
+            assert waiting["status"] == "pending" and waiting["leased_at"] is None
+            assert waiting["enqueued_at"] == original["enqueued_at"]
+            assert waiting["operation_id"] == receipt.operation_id
+
+            # The supplied monitor snapshot predates the session's return.
+            sessions.return_value = ["app"]
+            profile.intelligence = SessionIntelligence.READY
+            summary = await drain_message_queue(config, db, None, active_sessions=set())
+            assert summary == {"queue_delivered": 1}
+            send.assert_awaited_once()
+        assert (await queue_row(db, receipt.queue_id))["status"] == "delivered"
+        receipts = await db.deliveries.query(session_name="app")
+        assert {row["outcome"] for row in receipts} == {"offline", "delivered"}
+        assert {row["operation_id"] for row in receipts} == {receipt.operation_id}
+
+    async def test_offline_drain_still_expires_ordinary_messages(self, db, tmp_path):
+        from sqlalchemy import text
+
+        config = make_config(
+            tmp_path, agents=AgentsConfig(specs={"app": AgentSpec(name="app", dir="/x")})
+        )
+        queued = await db.queue.enqueue(
+            session_name="app", message="ordinary message", delivery_kind="direct_message"
+        )
+        async with db.queue._tx() as conn:
+            await conn.execute(
+                text("UPDATE message_queue SET enqueued_at = '2000-01-01T00:00:00Z'")
+            )
+        with (
+            patch("agent_backbone.services.jobs.retry.list_sessions", return_value=[]),
+            patch("agent_backbone.services.jobs.retry.safe_deliver") as deliver,
+        ):
+            assert await drain_message_queue(config, db, None, active_sessions=set()) == {
+                "queue_expired": 1
+            }
+        deliver.assert_not_awaited()
+        assert (await queue_row(db, queued.id))["status"] == "expired"
+        assert await db.queue.pending_count("app") == 1  # the retained expiry notice
+
+    @pytest.mark.parametrize("hold", ["inbox", "uncertain"])
+    async def test_offline_drain_preserves_inbox_retention(self, db, tmp_path, hold):
+        from sqlalchemy import text
+
+        config = make_config(
+            tmp_path,
+            agents=AgentsConfig(
+                specs={"app": AgentSpec(name="app", dir="/x", inbox_only=hold == "inbox")}
+            ),
+        )
+        queued = await db.queue.enqueue(
+            session_name="app", message="waiting message", delivery_kind="direct_message"
+        )
+        if hold == "uncertain":
+            await db.queue.enqueue(
+                session_name="app",
+                message="unconfirmed message",
+                delivery_kind="direct_message",
+                uncertain=True,
+            )
+        async with db.queue._tx() as conn:
+            await conn.execute(
+                text("UPDATE message_queue SET enqueued_at = '2000-01-01T00:00:00Z'")
+            )
+        with (
+            patch("agent_backbone.services.jobs.retry.list_sessions", return_value=[]),
+            patch("agent_backbone.services.jobs.retry.safe_deliver") as deliver,
+        ):
+            assert await drain_message_queue(config, db, None, active_sessions=set()) == {}
+        deliver.assert_not_awaited()
+        assert (await queue_row(db, queued.id))["status"] == "pending"
+        messages = await db.queue.checkpoint("app")
+        assert any(row["id"] == queued.id for row in messages)
+
+    @pytest.mark.parametrize("kind", ["issue", "comment", "review", "pull_request", "watch"])
+    async def test_offline_drain_still_retires_closed_work(self, db, config, kind):
+        queued = await db.queue.enqueue(
+            session_name="app",
+            message="old work",
+            delivery_kind=kind,
+            repo="example/app",
+            issue_number=42,
+            target_entity="app",
+        )
+        gh = AsyncMock()
+        gh.get_issue.return_value = IssueData(
+            number=42, repo_full_name="example/app", state="closed"
+        )
+        with (
+            patch("agent_backbone.services.jobs.retry.list_sessions", return_value=[]) as sessions,
+            patch("agent_backbone.services.jobs.retry.safe_deliver") as deliver,
+        ):
+            assert await drain_message_queue(config, db, gh, active_sessions=set()) == {
+                "queue_cleared": 1
+            }
+        sessions.assert_not_awaited()  # retirement precedes terminal eligibility
+        deliver.assert_not_awaited()
+        assert (await queue_row(db, queued.id))["status"] == "delivered"
 
     @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
     async def test_drain_releases_lease_on_failure(self, mock_deliver, db, config):
