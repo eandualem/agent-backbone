@@ -57,6 +57,12 @@ deliveries. It includes normal blocking conditions and excludes other
 message kinds and GitHub outbox work. Its count is not a system-wide count
 of bugs or lost messages.
 
+An outbox recipient that fails before it reaches delivery, for example
+because the issue or queue lookup could not reach GitHub, is recorded as
+`outbox_recipient_failed` (category `delivery`). The record carries the
+recipient's operation, the event and the exception type. The recipient
+stays `failed`, and `delivery-retry` tries it again.
+
 ## Reading the diagnostic digest
 
 Operational diagnostic records have a stable code, category, severity,
