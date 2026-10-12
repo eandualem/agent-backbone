@@ -269,7 +269,7 @@ class TestDeliveryRetryQueueDrain:
             assert await drain_message_queue(config, db, None, active_sessions=set()) == {
                 "queue_expired": 1
             }
-        deliver.assert_not_awaited()
+        deliver.assert_not_called()
         assert (await queue_row(db, queued.id))["status"] == "expired"
         assert await db.queue.pending_count("app") == 1  # the retained expiry notice
 
@@ -302,7 +302,7 @@ class TestDeliveryRetryQueueDrain:
             patch("agent_backbone.services.jobs.retry.safe_deliver") as deliver,
         ):
             assert await drain_message_queue(config, db, None, active_sessions=set()) == {}
-        deliver.assert_not_awaited()
+        deliver.assert_not_called()
         assert (await queue_row(db, queued.id))["status"] == "pending"
         messages = await db.queue.checkpoint("app")
         assert any(row["id"] == queued.id for row in messages)
@@ -329,7 +329,7 @@ class TestDeliveryRetryQueueDrain:
                 "queue_cleared": 1
             }
         sessions.assert_not_awaited()  # retirement precedes terminal eligibility
-        deliver.assert_not_awaited()
+        deliver.assert_not_called()
         assert (await queue_row(db, queued.id))["status"] == "delivered"
 
     @patch("agent_backbone.services.jobs.retry.safe_deliver", new_callable=AsyncMock)
