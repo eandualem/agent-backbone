@@ -9,7 +9,8 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   between agents: every agent can read every other agent's files, and any
   agent can call the API if you give it the key.
 - **One key, full admin.** `BACKBONE_API_KEY` guards every authenticated
-  route (everything except `/health` and the HMAC-checked webhook) with the
+  route (everything except `/health`, the HMAC-checked webhook, and the
+  generated API description at `/docs`, `/redoc` and `/openapi.json`) with the
   same weight: change settings, register/start/stop/forget agents, send
   messages, read and stream every registered agent's terminal. There is no
   scoped or read-only credential yet. When `docs/getting-started.md` says
@@ -97,7 +98,7 @@ no-approval switch (`deepcode`, `aider`, `shell`) refuse unattended startup.
 
 ## What an agent session inherits
 
-A session the backbone starts gets exactly three variables of its own, plus
+A session the backbone starts gets these variables of its own, plus
 whatever you configured on the agent with `agent set env=`:
 
 | Variable | Why |
@@ -105,6 +106,8 @@ whatever you configured on the agent with `agent set env=`:
 | `BACKBONE_AGENT` | the agent's name — its `from:` identity for `backbone tell` |
 | `BACKBONE_RUNTIME` | which runtime is in the pane |
 | `BACKBONE_STATE_DIR` | where the shipped hooks write state |
+| `BACKBONE_LAUNCH_ID` | this launch, so a late hook from an earlier launch is ignored |
+| `BACKBONE_OPERATION_ID` | the start operation that launched it, when there is one |
 
 It does **not** get the backbone's secrets. `BACKBONE_API_KEY`,
 `GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`,
@@ -114,7 +117,7 @@ It does **not** get the backbone's secrets. `BACKBONE_API_KEY`,
 yourself in any agent's pane:
 
 ```bash
-env | grep -E 'GITHUB|BACKBONE_|TELEGRAM'   # only BACKBONE_AGENT/RUNTIME/STATE_DIR
+env | grep -E 'GITHUB|BACKBONE_|TELEGRAM'   # only the BACKBONE_ variables above
 ```
 
 Two mechanisms, because either alone leaves a hole:
@@ -153,7 +156,7 @@ agents need it to find the same backbone you are running.
 
 | Concern | Default | Override |
 |---|---|---|
-| API authentication | Required. Every route except `/health` and the webhook needs the bearer key | `security.allow_unauthenticated = true` — dev boxes only |
+| API authentication | Required. Every route except `/health`, the webhook and the generated API description (`/docs`, `/redoc`, `/openapi.json`) needs the bearer key | `security.allow_unauthenticated = true` — dev boxes only |
 | Bind address | `127.0.0.1` | `backbone.host` — put TLS and auth in front before exposing |
 | CORS | Off | `backbone.cors_origins` |
 | Webhook | Rejected unless `GITHUB_WEBHOOK_SECRET` is set and the HMAC matches | — |
