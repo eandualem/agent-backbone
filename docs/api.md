@@ -697,7 +697,7 @@ See [Integrations](integrations.md).
 
 ## Webhook
 
-`POST /webhooks/github` (also `POST /`). Verified with
+`POST /webhooks/github`. Verified with
 `X-Hub-Signature-256`; `X-GitHub-Delivery` deduplicates; `ping` returns
 `pong`.
 

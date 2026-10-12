@@ -71,8 +71,8 @@ policy owns the shared memory protocol.
   `.gitignore` and must stay there — it also holds swarm worktrees.
 - Swarm members run in `.backbone/swarms/<name>/`, a separate worktree: the
   shared memory of the main checkout is at `../../memory/` relative to it.
-  Members report through the coordinator and the issue; they do not usually
-  edit the shared memory.
+  Members report to their coordinator, which reports to the initiating agent
+  with `backbone tell`; they do not usually edit the shared memory.
 
 ## Commands
 

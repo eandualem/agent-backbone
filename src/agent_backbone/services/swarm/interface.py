@@ -3,8 +3,9 @@
 A swarm is one coordinator plus members sharing a single worktree and
 branch, created to complete one pre-existing GitHub issue. Members are
 ordinary backbone agents; all communication runs through the existing
-delivery pipeline. The issue is the channel between the swarm and its
-initiator; members talk to their coordinator with ``backbone tell``.
+delivery pipeline. Members talk to their coordinator, and the coordinator
+to its initiator, with ``backbone tell``; issue comments are reserved for
+the coordinator's PR handoff.
 """
 
 from __future__ import annotations
