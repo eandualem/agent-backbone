@@ -117,7 +117,7 @@ It does **not** get the backbone's secrets. `BACKBONE_API_KEY`,
 yourself in any agent's pane:
 
 ```bash
-env | grep -E 'GITHUB|BACKBONE_|TELEGRAM'   # only the BACKBONE_ variables above
+env | cut -d= -f1 | grep -E '^(GITHUB|BACKBONE_|TELEGRAM)'   # names only: the BACKBONE_ variables above
 ```
 
 Two mechanisms, because either alone leaves a hole:
