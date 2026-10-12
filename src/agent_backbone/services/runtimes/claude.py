@@ -479,7 +479,7 @@ class ClaudeCode(Runtime):
         home = Path(
             env.get("CLAUDE_CONFIG_DIR")
             or os.environ.get("CLAUDE_CONFIG_DIR")
-            or Path.home() / ".claude"
+            or agent_home(env) / ".claude"
         ).expanduser()
         return sorted(home.glob(f"projects/*/{session_id}.jsonl"))
 
