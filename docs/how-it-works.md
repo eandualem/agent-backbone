@@ -364,7 +364,7 @@ sequenceDiagram
 - **Queue hygiene.** Ordinary pending messages expire after `timing.queue_expiry_minutes`
   (30). Active swarm coordination, inbox holds and startup briefs are retained, and a session
   held by an unconfirmed (`uncertain`) delivery keeps its queue until the hold is
-  acknowledged. Each expiry sweep sends one notice to every recipient and every
+  acknowledged. Each expiry sweep sends one notice to every registered recipient and every
   registered sender it dropped messages between; the notices never expire. A queue
   whose agent has no tmux session still expires and retires obsolete work, but
   the drain makes no delivery attempt for it until the session exists again,

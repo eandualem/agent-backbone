@@ -453,7 +453,8 @@ false, "queue": null, "detail": "Delivered to web."}`. The target must be a
 registered agent or an active swarm (404 otherwise — the backbone never
 types into a tmux session that is not one of its agents). Outcomes:
 `delivered`, `agent_working`, `waiting_for_human`, `offline`, `expired`,
-`human_typing`, `human_reading`, `settling`, `delivery_failed`.
+`human_typing`, `human_reading`, `settling`, `delivery_failed`, `awaiting_ack` (queued
+behind an unconfirmed delivery, or a copy is already held for acknowledgement).
 
 The reply also includes `operation_id`, `delivery_id` and `queue_id` (nullable).
 The operation identifies this message across queue drains and retries; a duplicate

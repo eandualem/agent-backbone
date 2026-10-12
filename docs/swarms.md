@@ -221,7 +221,10 @@ Backbone does not silently replace intentionally configured ownership.
 
 Coordinators assign research to scouts, implementation to coders and independent
 verification to reviewers. Scouts are read-only by instruction, not a filesystem
-security boundary. Do not assign every role a production slice. Each shared fix
+security boundary. A swarm's `reviewer` role checks work inside the swarm; the
+independent review a branch needs before its pull request runs from the
+initiating agent's session ([deep reviews](deep-reviews.md)), because unattended
+Codex members cannot start a reviewer outside their sandbox. Do not assign every role a production slice. Each shared fix
 has one owner; consuming swarms integrate its reviewed commit rather than editing
 another copy. Work labels for newly registered members use their explicit swarm
 task tag.
