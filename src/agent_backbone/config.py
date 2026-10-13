@@ -276,9 +276,6 @@ _SETTING_CHOICES: dict[str, tuple[str, ...]] = {
 _INT_LIST_SETTINGS = frozenset({"telegram.allowed_chat_ids"})
 # Scheduler job periods: a zero or negative value would make Scheduler.add()
 # raise on the next startup, so reject it at write time.
-_PERCENT_SETTINGS = frozenset(
-    {"diagnostics.pressure_swap_percent", "diagnostics.pressure_free_percent"}
-)
 _POSITIVE_SETTINGS = frozenset(
     {
         "github.poll_interval_seconds",
@@ -289,6 +286,10 @@ _POSITIVE_SETTINGS = frozenset(
         "backbone.log_backups",  # RotatingFileHandler never rotates without one
     }
 )
+_PERCENT_SETTINGS = frozenset(
+    {"diagnostics.pressure_swap_percent", "diagnostics.pressure_free_percent"}
+)
+_NON_NEGATIVE_SETTINGS = frozenset({"backbone.log_max_mb"})  # 0: never rotate
 
 
 def _is_absolute(path: str) -> bool:
@@ -406,6 +407,8 @@ def validate_setting(key: str, value: Any) -> Any:
             raise ValueError(f"{key}: expected an integer") from exc
         if key in _POSITIVE_SETTINGS and coerced <= 0:
             raise ValueError(f"{key}: expected a positive integer")
+        if key in _NON_NEGATIVE_SETTINGS and coerced < 0:
+            raise ValueError(f"{key}: expected zero or a positive integer")
         if key in _PERCENT_SETTINGS and not 0 <= coerced <= 100:
             raise ValueError(f"{key}: expected a percentage from 0 to 100")
         return coerced

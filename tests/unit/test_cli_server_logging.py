@@ -122,3 +122,11 @@ def test_reload_and_a_log_file_are_refused_together(tmp_path, capsys):
         assert server.cmd_up(args) == 2
     run.assert_not_called()
     assert "--reload" in capsys.readouterr().out
+
+
+def test_a_negative_log_size_is_refused_and_zero_is_kept():
+    from agent_backbone.config import validate_setting
+
+    with pytest.raises(ValueError, match="zero or a positive"):
+        validate_setting("backbone.log_max_mb", -1)
+    assert validate_setting("backbone.log_max_mb", 0) == 0
