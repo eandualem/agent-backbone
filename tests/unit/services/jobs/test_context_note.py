@@ -36,7 +36,7 @@ def _states(runtime="claude", session="s"):
     return {"desk": snapshot}
 
 
-async def _request(db, tokens, runtime="claude", session="s", coverage="measured"):
+async def _request(db, tokens, runtime="claude", session="s", coverage="measured", detail=""):
     """One recorded request of the conversation, with its context size."""
     identity = await db.usage.remember("desk", runtime, session, at=T)
     row = await db.usage.session(identity)
@@ -48,7 +48,7 @@ async def _request(db, tokens, runtime="claude", session="s", coverage="measured
         cursor={},
         events=[event.model_copy(update={"context_tokens": tokens})],
         coverage=coverage,
-        detail="",
+        detail=detail,
         prices={},
         observed_at=T,
     )
@@ -144,9 +144,15 @@ async def test_the_runtimes_own_hook_hands_the_note_over(tmp_path, db, monkeypat
     assert _tool_call(runtime, config.state_dir) == ""
 
 
-async def test_a_note_is_held_while_the_conversation_is_still_being_read(tmp_path, db):
+@pytest.mark.parametrize(
+    ("coverage", "detail"),
+    [("catching_up", "source read incomplete"), ("partial", "source read incomplete")],
+)
+async def test_a_note_is_held_while_the_conversation_is_still_being_read(
+    tmp_path, db, coverage, detail
+):
     config = _config(tmp_path)
-    await _request(db, 400_000, coverage="catching_up")  # compacted further on, perhaps
+    await _request(db, 400_000, coverage=coverage, detail=detail)  # compacted further on?
     assert await note_context_size(config, db, _states()) == []
     await _request(db, 90_000)
     assert await note_context_size(config, db, _states()) == []

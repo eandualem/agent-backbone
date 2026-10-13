@@ -76,8 +76,9 @@ async def note_context_size(
             continue  # recorded as unavailable in the capability contract
         identity = usage_id(snapshot.runtime, snapshot.session_id)
         session = sessions.get(identity)
-        # A source still being read may end in a smaller context (a compaction).
-        if session is None or session["coverage"] == "catching_up":
+        # A source still being read may end in a smaller context (a compaction);
+        # ``detail`` names an incomplete read or an error, also on a partial record.
+        if session is None or session["coverage"] == "catching_up" or session["detail"]:
             continue
         tokens = await db.usage.latest_context_tokens(identity)
         if tokens is None or tokens < first:
