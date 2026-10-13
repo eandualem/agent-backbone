@@ -353,15 +353,20 @@ class DiagnosticRepo(Repo):
                     .limit(limit)
                 )
             ).mappings()
-            slow_jobs = [
-                {
-                    "job": row["source"],
-                    "longest_ms": _row(row)["details"].get("duration_ms"),
-                    "runs": row["occurrences"],
-                    "last_seen_at": row["last_seen_at"],
-                }
-                for row in slow
-            ]
+            # Jobs belong to no agent: an agent's digest has none.
+            slow_jobs = (
+                []
+                if agent_name is not None
+                else [
+                    {
+                        "job": row["source"],
+                        "longest_ms": _row(row)["details"].get("duration_ms"),
+                        "runs": row["occurrences"],
+                        "last_seen_at": row["last_seen_at"],
+                    }
+                    for row in slow
+                ]
+            )
             window = self._where(since=since, category="resource")
             sample = (
                 (
@@ -382,6 +387,8 @@ class DiagnosticRepo(Repo):
                         select(DiagnosticORM).where(
                             DiagnosticORM.operation_id == sample["operation_id"],
                             DiagnosticORM.code == "agent_memory",
+                            # The machine figures stay; only that agent's row is listed.
+                            *self._where(agent_name=agent_name),
                         )
                     )
                 ).mappings()

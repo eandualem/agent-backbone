@@ -75,7 +75,7 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 | `backbone.session_name` | `backbone` | tmux session used by `backbone up --detach` |
 | `backbone.cors_origins` | `[]` | Browser origins allowed to call the API; empty disables CORS |
 | `backbone.log_max_mb` | `20` | Size in MB at which `backbone up --log-file` (what the macOS service runs) rotates its log; `0` never rotates. Applies at the next start |
-| `backbone.log_backups` | `3` | Rotated log files kept beside the current one (`backbone.log.1`, …) |
+| `backbone.log_backups` | `3` | Rotated log files kept beside the current one (`backbone.log.1`, …); at least 1 |
 | `backbone.restart_on_upgrade` | `true` | Restart the running backbone onto new code when the installed version (or, for a development checkout, the commit of the branch it started on) changes. Checked once a minute; waits until nothing is being routed; a checkout switched to another branch is left alone. Agents are untouched |
 
 ### `agents.*`

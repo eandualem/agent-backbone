@@ -41,7 +41,7 @@ def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
             "class": "logging.handlers.RotatingFileHandler",
             "filename": str(log_file),
             "maxBytes": max(0, config.settings.get("backbone.log_max_mb", 20)) * 1024 * 1024,
-            "backupCount": max(0, config.settings.get("backbone.log_backups", 3)),
+            "backupCount": max(1, config.settings.get("backbone.log_backups", 3)),
             "encoding": "utf-8",
         }
     return {

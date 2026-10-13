@@ -159,7 +159,7 @@ SETTINGS_HELP: dict[str, str] = {
     "backbone.log_max_mb": (
         "Rotate the service log (`backbone up --log-file`) at this size in MB (0: never)"
     ),
-    "backbone.log_backups": "Rotated service logs kept beside the current one",
+    "backbone.log_backups": "Rotated service logs kept beside the current one (at least 1)",
     "diagnostics.slow_job_seconds": (
         "Record a scheduled job run slower than this in diagnostics (0 disables)"
     ),
@@ -283,6 +283,7 @@ _POSITIVE_SETTINGS = frozenset(
         "sources.poll_interval_seconds",
         "timing.monitor_interval_seconds",
         "timing.retry_interval_seconds",
+        "backbone.log_backups",  # RotatingFileHandler never rotates without one
     }
 )
 

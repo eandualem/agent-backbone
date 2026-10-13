@@ -145,7 +145,10 @@ When the machine slows down, the digest shows what the backbone saw:
   of the ten agents whose session process trees use the most.
 
 `backbone diagnostics --since 1h` then shows the slow jobs and the latest
-sample, with its largest agents, next to the problem groups. Resident memory
+sample, with its largest agents, next to the problem groups. With `--agent`,
+the sample's machine figures stay and only that agent is listed; slow jobs,
+which belong to no agent, are left out. When tmux does not answer, the
+agents' share is shown as unknown rather than as zero. Resident memory
 leaves out what the system compressed or swapped, so a process can hold more
 than it shows; a large share under "other processes" points outside the
 backbone and its agents.

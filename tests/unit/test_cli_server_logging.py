@@ -74,3 +74,10 @@ async def test_a_detached_backbone_keeps_its_log_file(tmp_path):
         assert await _up_detached(make_config(tmp_path), tmp_path / "backbone.log") == 0
     command = start.call_args.kwargs["command"]
     assert command[-3:] == ["up", "--log-file", str((tmp_path / "backbone.log").resolve())]
+
+
+def test_a_log_keeps_at_least_one_backup():
+    from agent_backbone.config import validate_setting
+
+    with pytest.raises(ValueError, match="positive"):
+        validate_setting("backbone.log_backups", 0)

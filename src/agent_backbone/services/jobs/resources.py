@@ -99,8 +99,13 @@ async def sample_resources(config: BackboneConfig, db: BackboneDB) -> dict:
     if (not machine["swap_total_mb"] or swap_used < swap_limit) and available > free_limit:
         return {"sampled": False, "reason": "no_pressure"}
     sessions, own_kb, total_kb = await process_memory()
-    agents = {name: usage for name, usage in sessions.items() if name in config.agents.names}
-    agents_kb = sum(kb for kb, _ in agents.values())
+    details = {**machine, "backbone_rss_mb": own_kb // 1024}
+    agents = {}
+    if sessions is not None:  # else tmux could not be read: agents' share unknown
+        agents = {name: usage for name, usage in sessions.items() if name in config.agents.names}
+        agents_kb = sum(kb for kb, _ in agents.values())
+        details["agents_rss_mb"] = agents_kb // 1024
+        details["other_rss_mb"] = max(0, total_kb - agents_kb - own_kb) // 1024
     operation_id = uuid.uuid4().hex
     await db.diagnostics.record(
         operation_id=operation_id,
@@ -108,12 +113,7 @@ async def sample_resources(config: BackboneConfig, db: BackboneDB) -> dict:
         code="memory_pressure",
         severity="warning",
         source="resource-sample",
-        details={
-            **machine,
-            "backbone_rss_mb": own_kb // 1024,
-            "agents_rss_mb": agents_kb // 1024,
-            "other_rss_mb": max(0, total_kb - agents_kb - own_kb) // 1024,
-        },
+        details=details,
     )
     largest = sorted(agents.items(), key=lambda item: item[1][0], reverse=True)[:TOP_AGENTS]
     for name, (kb, count) in largest:

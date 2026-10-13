@@ -144,15 +144,18 @@ def _print_digest(data: dict) -> None:
             f" agents {memory.get('agents_rss_mb', '?')} MB,"
             f" other processes {memory.get('other_rss_mb', '?')} MB"
         )
-        print_table(
-            "Largest agents",
-            ("Agent", "Resident (MB)", "Processes"),
-            [
-                (agent["agent_name"], agent.get("rss_mb", "?"), agent.get("processes", "?"))
-                for agent in memory.get("agents", [])
-            ],
-            empty="No agent sessions were running.",
-        )
+        if "agents_rss_mb" not in memory:
+            note("    agent sessions could not be read (tmux did not answer)")
+        else:
+            print_table(
+                "Largest agents",
+                ("Agent", "Resident (MB)", "Processes"),
+                [
+                    (agent["agent_name"], agent.get("rss_mb", "?"), agent.get("processes", "?"))
+                    for agent in memory.get("agents", [])
+                ],
+                empty="No agent sessions were running.",
+            )
     informational = data.get("informational", {})
     if informational:
         print_table(

@@ -31,12 +31,19 @@ async def test_each_session_sums_its_pane_process_trees():
     assert (own, total) == (70000, 77500)
 
 
-async def test_without_a_tmux_server_the_totals_still_count():
-    from agent_backbone.services.terminal import CallerUnknown
-
+async def test_without_a_tmux_server_there_are_no_sessions_and_the_totals_still_count():
     with (
         patch(f"{_MEM}._output", AsyncMock(return_value=(0, _PS))),
-        patch(f"{_MEM}._panes", AsyncMock(side_effect=CallerUnknown("no tmux server answered"))),
+        patch(f"{_MEM}._run_tmux", AsyncMock(return_value=(1, b"", b"no server running on x"))),
         patch(f"{_MEM}.os.getpid", return_value=300),
     ):
         assert await process_memory() == ({}, 70000, 77500)
+
+
+async def test_when_tmux_cannot_be_read_the_sessions_are_unknown():
+    with (
+        patch(f"{_MEM}._output", AsyncMock(return_value=(0, _PS))),
+        patch(f"{_MEM}._run_tmux", AsyncMock(return_value=(-1, b"", b"tmux command timed out"))),
+        patch(f"{_MEM}.os.getpid", return_value=300),
+    ):
+        assert await process_memory() == (None, 70000, 77500)

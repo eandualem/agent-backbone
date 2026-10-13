@@ -107,3 +107,33 @@ def test_linux_memory_is_read_from_proc_meminfo():
     )
     info = resources._meminfo(text)
     assert info["MemTotal"] == 16000 and info["SwapTotal"] - info["SwapFree"] == 976
+
+
+async def test_unknown_agent_memory_is_not_recorded_as_none(db, config):
+    with (
+        patch(f"{_RES}.machine_memory", AsyncMock(return_value=_SWAPPING)),
+        patch(f"{_RES}.process_memory", AsyncMock(return_value=(None, 51_200, 20_000_000))),
+    ):
+        assert await sample_resources(config, db) == {"sampled": True, "agents": 0}
+    memory = (await db.diagnostics.digest())["memory"]
+    assert "agents_rss_mb" not in memory and "other_rss_mb" not in memory
+    assert memory["backbone_rss_mb"] == 50
+
+
+async def test_an_agents_digest_lists_only_that_agent_and_no_jobs(db, config):
+    await observe_duration(db, source="agent-monitor", duration_ms=45_000, threshold_ms=30_000)
+    sessions = dict.fromkeys(config.agents.names, (100 * 1024, 1))
+    with (
+        patch(f"{_RES}.machine_memory", AsyncMock(return_value=_SWAPPING)),
+        patch(f"{_RES}.process_memory", AsyncMock(return_value=(sessions, 0, 20_000_000))),
+    ):
+        await sample_resources(config, db)
+    name = (
+        config.agents.names[0]
+        if isinstance(config.agents.names, list)
+        else sorted(config.agents.names)[0]
+    )
+    digest = await db.diagnostics.digest(agent_name=name)
+    assert digest["slow_jobs"] == []
+    assert [agent["agent_name"] for agent in digest["memory"]["agents"]] == [name]
+    assert digest["memory"]["swap_used_mb"] == _SWAPPING["swap_used_mb"]  # machine context stays
