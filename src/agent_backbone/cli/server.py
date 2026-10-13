@@ -146,6 +146,10 @@ def cmd_up(args: argparse.Namespace) -> int:
     config = asyncio.run(_common.load_config())
     # A quoted `~/…` reaches us unexpanded; a detached run starts elsewhere.
     log_file = args.log_file.expanduser().resolve() if args.log_file else None
+    if log_file is not None and args.reload:
+        # The reloader and its server would each rotate the same file.
+        print("error: --log-file can't be combined with --reload")
+        return 2
     if args.detach:
         return asyncio.run(_up_detached(config, log_file))
     _run_server(config, reload=args.reload, log_file=log_file)

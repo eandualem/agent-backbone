@@ -106,3 +106,19 @@ def test_a_pressure_threshold_is_a_percentage(value):
 
     with pytest.raises(ValueError, match="percentage"):
         validate_setting("diagnostics.pressure_free_percent", value)
+
+
+def test_reload_and_a_log_file_are_refused_together(tmp_path, capsys):
+    import argparse
+    from unittest.mock import AsyncMock, patch
+
+    from agent_backbone.cli import server
+
+    args = argparse.Namespace(detach=False, reload=True, log_file=tmp_path / "backbone.log")
+    with (
+        patch.object(server._common, "load_config", AsyncMock(return_value=make_config(tmp_path))),
+        patch.object(server, "_run_server") as run,
+    ):
+        assert server.cmd_up(args) == 2
+    run.assert_not_called()
+    assert "--reload" in capsys.readouterr().out
