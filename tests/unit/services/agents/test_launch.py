@@ -1603,3 +1603,16 @@ async def test_a_fresh_start_is_recorded_before_the_readiness_wait(
     ):
         assert (await start_agent(spec, config, resume=resume, db=db, wait=True)).ok
     assert (seen["at"] != "2026-10-13T19:59:43.000000Z") is moves
+
+
+async def test_a_failed_start_record_never_fails_a_running_session(tmp_path):
+    db = AsyncMock()
+    db.agents.touch_started.side_effect = RuntimeError("database is locked")
+    config = bootstrap_config(tmp_path / "data")
+    spec = AgentSpec(name="ike", dir=str(tmp_path), runtime="claude")
+    with (
+        patch(f"{_MOD}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_MOD}.start_session", AsyncMock(return_value=True)),
+        patch(f"{_BASE}.resolve_command", return_value="/bin/claude"),
+    ):
+        assert (await start_agent(spec, config, db=db, wait=False)).ok

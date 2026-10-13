@@ -470,8 +470,13 @@ async def _start_agent(
     if db is not None and (not resume_target or command is None):
         # A fresh conversation (a plain shell has none to resume): what earlier
         # ones received no longer counts for it. Recorded before the readiness
-        # wait, which a backbone restart can cut short.
-        await db.agents.touch_started(spec.name, session_started)
+        # wait, which a backbone restart can cut short. The session is already
+        # up, so a failed write must not fail the start (a swarm would roll
+        # back a member that keeps running).
+        try:
+            await db.agents.touch_started(spec.name, session_started)
+        except Exception:
+            log.warning("Could not record the start of '%s'", spec.name, exc_info=True)
     if isinstance(resume_target, str):
         # Recorded once the session runs: the conversation this launch holds
         # until its hook reports. A launch that never ran records none.
