@@ -75,7 +75,8 @@ When it first reaches 200,000 tokens, the agent is told on its next turn:
 It is told again at each further 100,000 (300k, 400k, …). Each level is noted
 once per conversation, also across backbone restarts, and a fresh conversation
 starts over; a note not yet taken is dropped then, and also when a compaction
-brings the conversation below its level. Nothing is noted while the
+brings the conversation below its level (a compaction's own hook event can still
+hand over a note offered just before it). Nothing is noted while the
 conversation's record is still being read or could not be read. The note arrives through the
 runtime's hook, like a steer: it never starts a turn and never interrupts the
 agent. Restarting stays the

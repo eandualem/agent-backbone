@@ -188,3 +188,12 @@ async def test_a_note_not_taken_is_withdrawn_after_a_compaction(tmp_path, db):
     await _request(db, 40_000)  # compacted before the note was taken
     assert await note_context_size(config, db, _states()) == []
     assert _offered(config) == []
+
+
+async def test_turning_the_note_off_withdraws_one_not_taken(tmp_path, db):
+    config = _config(tmp_path)
+    await _request(db, 260_000)
+    assert await note_context_size(config, db, _states()) == ["desk"]
+    config.settings["usage.context_note_tokens"] = 0
+    assert await note_context_size(config, db, _states()) == []
+    assert _offered(config) == []

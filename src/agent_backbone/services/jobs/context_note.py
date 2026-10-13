@@ -69,6 +69,8 @@ async def note_context_size(
     first = int(config.settings.get("usage.context_note_tokens", 200_000))
     step = int(config.settings.get("usage.context_note_step_tokens", 100_000))
     if first <= 0 or not config.settings.get("usage.enabled", True):
+        for name in states:  # turned off: nothing offered earlier is handed over
+            await asyncio.to_thread(_withdraw, config.state_dir, name)
         return []
     sessions = {s["id"]: s for s in await db.usage.sessions()}
     noted = []
