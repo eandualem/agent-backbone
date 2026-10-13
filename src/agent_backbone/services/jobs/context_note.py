@@ -53,6 +53,11 @@ def _offer(state_dir: Path, agent: str, key: str, session_id: str, text: str) ->
     offer_context(state_dir, agent, key, text)  # a key already taken is not offered again
 
 
+def _withdraw(state_dir: Path, agent: str) -> None:
+    for offer in (state_dir / CONTEXT_DIR / agent).glob(f"{_KEY_PREFIX}*.md"):
+        offer.unlink(missing_ok=True)
+
+
 async def note_context_size(
     config: BackboneConfig, db: BackboneDB, states: AgentStates
 ) -> list[str]:
@@ -81,7 +86,12 @@ async def note_context_size(
         if session is None or session["coverage"] == "catching_up" or session["detail"]:
             continue
         tokens = await db.usage.latest_context_tokens(identity)
-        if tokens is None or tokens < first:
+        if tokens is None:
+            continue
+        if tokens < session["context_noted"]:
+            # Compacted since: a note not taken yet would name a size that is gone.
+            await asyncio.to_thread(_withdraw, config.state_dir, name)
+        if tokens < first:
             continue
         level = first + (tokens - first) // step * step if step > 0 else first
         if level <= session["context_noted"]:

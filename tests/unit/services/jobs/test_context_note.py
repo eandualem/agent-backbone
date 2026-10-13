@@ -179,3 +179,12 @@ async def test_a_note_never_reaches_the_next_conversation(tmp_path, db, monkeypa
     if runtime != "opencode":  # its driver starts the conversation itself
         _prompt(runtime, config.state_dir, time.time())
     assert _tool_call(runtime, config.state_dir) == ""
+
+
+async def test_a_note_not_taken_is_withdrawn_after_a_compaction(tmp_path, db):
+    config = _config(tmp_path)
+    await _request(db, 260_000)
+    assert await note_context_size(config, db, _states()) == ["desk"]
+    await _request(db, 40_000)  # compacted before the note was taken
+    assert await note_context_size(config, db, _states()) == []
+    assert _offered(config) == []
