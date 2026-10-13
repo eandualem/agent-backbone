@@ -19,8 +19,10 @@ import logging
 import re
 import shutil
 import subprocess
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal
 
 from agent_backbone.hooks import install as hooks
@@ -235,6 +237,8 @@ class Runtime:
     started with): handed to its ``SessionStart`` hook as context, which a
     peer's message cannot imitate, or not at all (a gap: start the agent
     fresh to apply a changed brief). Never as a chat message (#294)."""
+    default_env: Mapping[str, str] = MappingProxyType({})
+    """Launch environment the agent's own ``env`` can override (an opt-in)."""
     declared_capabilities: frozenset[str] = frozenset()
     """Contract rows (``capabilities.py``) this CLI provides by itself, where
     no other adapter attribute shows it (loading ``AGENTS.md``, declining a

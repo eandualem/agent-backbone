@@ -218,6 +218,15 @@ secrets are stripped from the session, including anything you added to
 `.env` yourself. See
 [What an agent session inherits](security.md#what-an-agent-session-inherits).
 
+A Claude Code agent starts with `CLAUDE_CODE_SEND_FEEDBACK=0`: Claude can't
+draft feedback reports to Anthropic, which would include the session's
+transcript when sent. An agent whose work may be shared opts in with
+`CLAUDE_CODE_SEND_FEEDBACK=1` in its `env` (keep its other variables, since
+`env` is replaced as a whole); it applies at the agent's next start. This is
+a launch default, not a lock: an `env` entry in a project's Claude Code
+settings can still set the variable. The other runtimes draft no such
+reports.
+
 ## Secrets (`.env` / environment)
 
 | Variable | Purpose |
