@@ -80,6 +80,8 @@ from every agent session's environment (see ``session_secret_keys``)."""
 SETTINGS_DEFAULTS: dict[str, Any] = {
     "usage.enabled": True,
     "usage.prices": DEFAULT_PRICES,
+    "usage.context_note_tokens": 200_000,
+    "usage.context_note_step_tokens": 100_000,
     "backbone.host": "127.0.0.1",
     "backbone.port": DEFAULT_PORT,
     "backbone.session_name": "backbone",
@@ -136,6 +138,13 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
 SETTINGS_HELP: dict[str, str] = {
     "usage.enabled": "Collect numeric usage from identified runtime sessions; no prompt content",
     "usage.prices": "Dated USD-per-million-token API price catalog; unknown models remain unpriced",
+    "usage.context_note_tokens": (
+        "Tell an agent its conversation size once it reaches this many tokens of context, "
+        "recommending a fresh session after its current task (0 disables)"
+    ),
+    "usage.context_note_step_tokens": (
+        "After the first note, note again at each further step of this many tokens (0: only once)"
+    ),
     "backbone.host": (
         "Bind address for the API (keep 127.0.0.1 unless you add TLS+auth in front; "
         "the CLI reaches a non-loopback host over https)"

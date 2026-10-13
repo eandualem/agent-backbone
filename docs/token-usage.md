@@ -61,6 +61,27 @@ Missing/deleted records cannot be recovered. Tokens may be incomplete for
 interrupted requests, unrecorded descendants, or runtime versions that omit
 usage. `unpriced` is separate: token counts remain available without a price.
 
+## Context-size note
+
+An agent that does not work issue by issue has no natural point to start
+fresh, and its conversation keeps growing. Each monitor tick reads the context
+size of the most recent request in every live agent's current conversation.
+When it first reaches 200,000 tokens, the agent is told on its next turn:
+
+```text
+[via:backbone context] Your conversation is at 205k tokens. When you finish your current task, write your handoff and start a fresh session (backbone agent restart).
+```
+
+It is told again at each further 100,000 (300k, 400k, …). Each level is noted
+once per conversation, also across backbone restarts, and a fresh conversation
+starts over. The note arrives through the runtime's hook, like a steer: it
+never starts a turn and never interrupts the agent. Restarting stays the
+agent's decision; the backbone never restarts it. Swarm members are not noted,
+since they end with their swarm. Claude Code, Codex and OpenCode receive the
+note; other runtimes don't yet (see [Runtime capabilities](runtime-capabilities.md)).
+Change the levels with `usage.context_note_tokens` and
+`usage.context_note_step_tokens` in [Configuration](configuration.md#usage).
+
 ## Optional cost
 
 `--cost` adds the **standard API-equivalent estimate**, not a subscription bill.

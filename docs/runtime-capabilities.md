@@ -36,7 +36,6 @@ versions for the CLIs installed on your machine and notes where the installed
 version differs.
 
 <!-- capability-table:begin -->
-
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
 | Message delivery into the session | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? not verified live | ✅ plumbing tests only |
@@ -69,6 +68,7 @@ version differs.
 | Skill and tag changes reach a running agent | ✅ (2.1.294) live-checked: loads a skill linked mid-session | ✅ (0.160.0) live-checked: loads a skill linked mid-session | ❌ whether it loads a skill mid-session is not measured | ✅ (1.18.35) its plugin reloads skills between turns (live-checked) | ❌ whether it loads a skill mid-session is not measured | ❌ | n/a |
 | Every skill an agent's CLI loads, listed by source | ✅ (2.1.294) live-checked against its /skills list | ✅ (0.160.0) live-checked against its skill list | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ✅ (1.18.32) live-checked: `opencode debug skill` | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ❌ | n/a |
 | Token usage recorded | ✅ | ✅ | ✅ live-checked with a subagent (0.46) | ✅ | ❌ | ❌ | n/a |
+| Context-size note recommending a fresh session | ✅ (2.1.284) | ✅ (0.157.1) | ❌ usage is recorded, but its hook takes no offered context | ✅ (1.18.32) | ❌ | ❌ | n/a |
 | agent output from the runtime's own record | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
 | Provider capacity or rate-limit failure detected (blocked) | ✅ (2.1.284) reported by its StopFailure hook | ✅ (0.157.1) from the terminal: Codex runs no hook for a failed turn | ❌ | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
 | Running model observed (status) | ✅ (2.1.267) | ✅ (0.156.1) | ✅ (0.46.0) | ✅ (1.18.32) | ❌ no hook state | ❌ no hook state | n/a |
@@ -114,6 +114,7 @@ version differs.
 | Skill and tag changes reach a running agent | Restart the agent: its next launch links the change. |
 | Every skill an agent's CLI loads, listed by source | Ask the agent to list its skills; `skills preview` still shows the shared ones. |
 | Token usage recorded | Read usage in the CLI or its provider's console. |
+| Context-size note recommending a fresh session | Check the conversation size with `backbone usage`; restart at a task boundary. |
 | agent output from the runtime's own record | `agent output` shows the visible screen instead. |
 | Provider capacity or rate-limit failure detected (blocked) | Watch the session for provider errors; the agent may look busy or idle. |
 | Running model observed (status) | `status` shows the configured model; check the session for the running one. |
@@ -126,7 +127,6 @@ version differs.
 | New inbox messages hinted on Socket.IO (`inbox:pending`) | Read the inbox (`POST /api/messages/inbox`) on a timer. |
 | Escalations reach an inbox-only target's inbox | Set `escalation.target` to an agent with a terminal session. |
 | Deep review run from and for this runtime | Run the review with Claude Code or Codex as the reviewer. |
-
 <!-- capability-table:end -->
 
 ## Notes

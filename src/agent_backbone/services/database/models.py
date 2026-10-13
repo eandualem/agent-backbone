@@ -498,6 +498,8 @@ class UsageSessionORM(Base):
     coverage: Mapped[str] = mapped_column(Text, nullable=False, server_default="unavailable")
     detail: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     launches: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    context_noted: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    """The highest context size the agent was told about in this conversation."""
     __table_args__ = (Index("idx_usage_sessions_agent", "agent_name", "last_seen"),)
 
 

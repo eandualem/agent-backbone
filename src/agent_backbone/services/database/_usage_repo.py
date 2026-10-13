@@ -220,6 +220,31 @@ class UsageRepo(Repo):
             for r in batch
         ]
 
+    async def latest_context_tokens(self, identity: str) -> int | None:
+        """The context size of the conversation's most recent request that reported one."""
+        async with self._tx() as conn:
+            rows = await conn.execute(
+                select(_E.c.data)
+                .where(_E.c.session == identity)
+                .order_by(_E.c.at.desc(), _E.c.event_key.desc())
+                .limit(20)
+            )
+            for (data,) in rows:
+                tokens = json.loads(data).get("context_tokens")
+                if tokens is not None:
+                    return tokens
+        return None
+
+    async def note_context(self, identity: str, level: int) -> bool:
+        """Record ``level`` as told; False when this or a higher level already was."""
+        async with self._tx() as conn:
+            result = await conn.execute(
+                update(_S)
+                .where(_S.c.id == identity, _S.c.context_noted < level)
+                .values(context_noted=level)
+            )
+        return result.rowcount == 1
+
     async def observed(self, identities: list[str], at: str) -> None:
         """Refresh collection timestamps without rewriting unchanged checkpoints."""
         if not identities:
