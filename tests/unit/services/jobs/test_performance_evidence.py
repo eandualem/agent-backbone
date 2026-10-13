@@ -145,3 +145,14 @@ async def test_a_long_slow_job_list_says_it_is_cut_off(db):
         await observe_duration(db, source="prune", duration_ms=1_000, threshold_ms=30_000)
     digest = await db.diagnostics.digest(limit=2)
     assert len(digest["slow_jobs"]) == 2 and digest["slow_jobs_more"]
+
+
+async def test_a_failed_process_read_keeps_the_machine_figures(db, config):
+    with (
+        patch(f"{_RES}.machine_memory", AsyncMock(return_value=_SWAPPING)),
+        patch(f"{_RES}.process_memory", AsyncMock(side_effect=TimeoutError)),
+    ):
+        assert await sample_resources(config, db) == {"sampled": True, "agents": 0}
+    memory = (await db.diagnostics.digest())["memory"]
+    assert memory["swap_used_mb"] == _SWAPPING["swap_used_mb"]
+    assert "backbone_rss_mb" not in memory and "agents_rss_mb" not in memory

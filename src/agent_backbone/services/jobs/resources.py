@@ -98,8 +98,13 @@ async def sample_resources(config: BackboneConfig, db: BackboneDB) -> dict:
     available = machine["available_mb"] * 100 // max(machine["memory_total_mb"], 1)
     if (not machine["swap_total_mb"] or swap_used < swap_limit) and available > free_limit:
         return {"sampled": False, "reason": "no_pressure"}
-    sessions, own_kb, total_kb = await process_memory()
-    details = {**machine, "backbone_rss_mb": own_kb // 1024}
+    details: dict = dict(machine)
+    try:
+        sessions, own_kb, total_kb = await process_memory()
+    except Exception:  # `ps` failed or timed out: the machine figures still count
+        sessions = None
+    else:
+        details["backbone_rss_mb"] = own_kb // 1024
     agents = {}
     if sessions is not None:  # else tmux could not be read: agents' share unknown
         agents = {name: usage for name, usage in sessions.items() if name in config.agents.names}
