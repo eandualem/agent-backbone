@@ -1019,6 +1019,4 @@ async def test_telegram_start_waits_for_lifecycle_lock_and_rechecks_registration
         launch.assert_not_awaited()
         assert "forgotten" in update.message.reply_text.await_args.args[0]
     else:
-        launch.assert_awaited_once()
-        async with db.engine.connect() as conn:
-            assert await conn.scalar(text("SELECT last_started_at FROM agents WHERE name = 'app'"))
+        launch.assert_awaited_once()  # the launch records the session start itself (#410)

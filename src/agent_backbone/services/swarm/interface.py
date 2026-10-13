@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING
 
 from agent_backbone.config import AgentSpec
 from agent_backbone.services.agents import agent_state, lifecycle_lock, start_agent
-from agent_backbone.services.database import now_iso
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.swarm._roster import (
     COORDINATOR_ROLE,
@@ -277,7 +276,6 @@ async def create_swarm(
                     )
                 # Reused names may retain state files from an earlier swarm.
                 # New members must receive this issue's role brief and roster.
-                launched_at = now_iso()  # members may receive messages while they start
                 result = await start_agent(
                     agent, config, resume=False, brief_file=brief_file, db=db
                 )
@@ -287,7 +285,6 @@ async def create_swarm(
                 if not result.ok:
                     raise SwarmError(f"failed to start member '{agent_name}'")
                 started.append(agent_name)
-                await store.touch_started(agent_name, launched_at)
                 if result.ready == "exited":
                     raise SwarmError(f"member '{agent_name}' exited before reaching its prompt")
     except Exception:

@@ -208,7 +208,7 @@ class _FakeStore:
         self.registered.append(spec)
         return spec
 
-    async def touch_started(self, name, at=None):
+    async def touch_started(self, name):
         pass
 
     async def forget(self, name):

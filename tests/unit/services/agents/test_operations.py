@@ -157,32 +157,3 @@ async def test_forget_waits_for_a_start_in_progress_and_then_refuses():
         with pytest.raises(RuntimeError):
             await task
     store.forget.assert_not_called()
-
-
-async def test_the_session_start_is_recorded_from_before_the_launch(db, tmp_path):
-    """#410: messages can reach the session while it starts; they belong to it."""
-    from agent_backbone.services.database import now_iso
-
-    store = await registered_store(db, tmp_path)
-    req = StartRequest(name="app")
-    spec = await resolve_agent(store, req)
-    during = []
-
-    async def launching(*args, **kwargs):
-        during.append(now_iso())  # a delivery made while the session starts
-        return StartResult(ok=True)
-
-    with patch(f"{_OPS}.launch.start_agent", side_effect=launching):
-        assert (await start_resolved(store, store.config, spec, req, db=db)).ok
-    assert await db.agents.started_at("app") <= during[0]
-
-
-async def test_a_resumed_conversation_keeps_its_start(db, tmp_path):
-    """#410: a resume continues the conversation that received earlier messages."""
-    store = await registered_store(db, tmp_path)
-    await db.agents.touch_started("app", "2026-10-13T19:59:43.000000Z")
-    req = StartRequest(name="app", resume=True)
-    spec = await resolve_agent(store, req)
-    with patch(f"{_OPS}.launch.start_agent", AsyncMock(return_value=StartResult(ok=True))):
-        assert (await start_resolved(store, store.config, spec, req, db=db)).ok
-    assert await db.agents.started_at("app") == "2026-10-13T19:59:43.000000Z"

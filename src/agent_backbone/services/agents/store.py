@@ -507,8 +507,8 @@ class AgentStore:
         return removed
 
     @serialized_mutation
-    async def touch_started(self, name: str, at: str | None = None) -> None:
-        await self._db.agents.touch_started(name, at)
+    async def touch_started(self, name: str) -> None:
+        await self._db.agents.touch_started(name)
 
     # --- Settings ---
 

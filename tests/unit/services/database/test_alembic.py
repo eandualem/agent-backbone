@@ -700,3 +700,56 @@ async def test_an_agent_registered_before_inbox_only_reads_as_not_inbox_only(tmp
         assert not agents_from_rows(await db.agents.list()).get("app").inbox_only
         await db.agents.update_fields("app", {"inbox_only": True})
         assert agents_from_rows(await db.agents.list()).get("app").inbox_only
+
+
+@pytest.mark.skipif(
+    sqlite3.sqlite_version_info < (3, 35, 0),
+    reason="constructing the old schema uses SQLite 3.35+ DROP COLUMN",
+)
+async def test_an_installed_database_frees_an_earlier_sessions_delivery_slot(tmp_path):
+    """#410 on upgrade: the old owner index and no superseded_at, reopened normally."""
+    from sqlalchemy import text
+
+    url = f"sqlite+aiosqlite:///{tmp_path}/installed.db"
+    db = BackboneDB(url)
+    await db.start()
+    issue = {
+        "issue_number": 7,
+        "target_entity": "desk",
+        "session_name": "desk",
+        "source": "agent-monitor",
+        "repo": "example/app",
+    }
+    earlier = await db.deliveries.claim(**issue)
+    await db.deliveries.finalize(earlier, "delivered")
+    async with db.engine.begin() as conn:  # the schema an earlier release installed
+        await conn.execute(text("DROP INDEX uq_deliveries_active_owner"))
+        await conn.execute(text("ALTER TABLE deliveries DROP COLUMN superseded_at"))
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_deliveries_active_owner ON deliveries "
+                "(repo, issue_number, session_name) WHERE kind = 'issue' "
+                "AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+            )
+        )
+        await conn.execute(text("UPDATE alembic_version SET version_num = 'deadbeef0000'"))
+    await db.stop()
+
+    db = BackboneDB(url)
+    await db.start()  # normal startup repairs the schema
+    try:
+        assert await db.deliveries.claim(**issue) is None  # the same session: delivered once
+        from agent_backbone.services.database import now_iso
+
+        since = now_iso()  # a fresh session started after it
+        assert await db.deliveries.claim(**issue, since=since) is not None
+        assert await db.deliveries.claim(**issue, since=since) is None  # once per session
+        async with db.engine.begin() as conn:
+            outcome = (
+                await conn.execute(
+                    text("SELECT outcome FROM deliveries WHERE id = :id"), {"id": earlier}
+                )
+            ).scalar()
+        assert outcome == "delivered"  # the earlier delivery survives as evidence
+    finally:
+        await db.stop()
