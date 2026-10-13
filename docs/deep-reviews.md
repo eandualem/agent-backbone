@@ -99,6 +99,10 @@ hooks. Do not use `--dangerously-bypass-approvals-and-sandbox`. A missing model 
 authentication failure is a different problem: inspect stderr and preserve the
 requested model rather than silently substituting another one.
 
+A swarm member cannot take that route: unattended Codex members run with
+`-a never` and cannot ask for the one-process permission. Run a swarm's gate
+review from the initiating agent's session instead, on the swarm's branch.
+
 ## Claude Opus reviewer (for Codex implementers)
 
 An agent working in the Codex CLI reviews its feature branch with Claude Code
