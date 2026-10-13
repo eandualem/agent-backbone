@@ -47,6 +47,9 @@ class AgentORM(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     last_started_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conversation_started_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """When the agent's current conversation started fresh: issue deliveries from
+    before it reached an earlier conversation (#410). Empty until a fresh start."""
     report_identity: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Lazily assigned report author ID; survives rename, never reused after forget."""
 

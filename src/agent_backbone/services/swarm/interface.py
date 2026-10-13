@@ -285,6 +285,7 @@ async def create_swarm(
                 if not result.ok:
                     raise SwarmError(f"failed to start member '{agent_name}'")
                 started.append(agent_name)
+                await store.touch_started(agent_name)
                 if result.ready == "exited":
                     raise SwarmError(f"member '{agent_name}' exited before reaching its prompt")
     except Exception:

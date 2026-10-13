@@ -474,7 +474,7 @@ async def _start_agent(
         # up, so a failed write must not fail the start (a swarm would roll
         # back a member that keeps running).
         try:
-            await db.agents.touch_started(spec.name, session_started)
+            await db.agents.conversation_started(spec.name, session_started)
         except Exception:
             log.warning("Could not record the start of '%s'", spec.name, exc_info=True)
     if isinstance(resume_target, str):

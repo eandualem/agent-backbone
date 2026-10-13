@@ -154,16 +154,23 @@ class AgentRepo(Repo):
         """When the agent's current conversation started fresh, if it ever did."""
         async with self._tx() as conn:
             return await conn.scalar(
-                text("SELECT last_started_at FROM agents WHERE name = :name"), {"name": name}
+                text("SELECT conversation_started_at FROM agents WHERE name = :name"),
+                {"name": name},
             )
 
-    async def touch_started(self, name: str, at: str | None = None) -> None:
-        """Record when the agent's conversation started fresh: ``at``, taken before
-        the launch, since the session can receive messages while it starts."""
+    async def touch_started(self, name: str) -> None:
         async with self._tx() as conn:
             await conn.execute(
                 text("UPDATE agents SET last_started_at = :now WHERE name = :name"),
-                {"now": at or now_iso(), "name": name},
+                {"now": now_iso(), "name": name},
+            )
+
+    async def conversation_started(self, name: str, at: str) -> None:
+        """Record that a fresh conversation started at ``at`` (taken before the launch)."""
+        async with self._tx() as conn:
+            await conn.execute(
+                text("UPDATE agents SET conversation_started_at = :at WHERE name = :name"),
+                {"at": at, "name": name},
             )
 
     async def delete(self, name: str) -> bool:

@@ -1586,7 +1586,7 @@ async def test_a_fresh_start_is_recorded_before_the_readiness_wait(
     restart can cut the wait short."""
     common = {"runtime": runtime, "model": None, "repo": "", "tags": [], "env": {}}
     await db.agents.upsert("ike", dir=str(tmp_path), description="", unattended=False, **common)
-    await db.agents.touch_started("ike", "2026-10-13T19:59:43.000000Z")
+    await db.agents.conversation_started("ike", "2026-10-13T19:59:43.000000Z")
     config = bootstrap_config(tmp_path / "data")
     spec = AgentSpec(name="ike", dir=str(tmp_path), runtime=runtime)
     seen = {}
@@ -1607,7 +1607,7 @@ async def test_a_fresh_start_is_recorded_before_the_readiness_wait(
 
 async def test_a_failed_start_record_never_fails_a_running_session(tmp_path):
     db = AsyncMock()
-    db.agents.touch_started.side_effect = RuntimeError("database is locked")
+    db.agents.conversation_started.side_effect = RuntimeError("database is locked")
     config = bootstrap_config(tmp_path / "data")
     spec = AgentSpec(name="ike", dir=str(tmp_path), runtime="claude")
     with (

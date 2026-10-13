@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 203aacc72f18
+Revision ID: 0b7302f62269
 Revises:
-Create Date: 2026-10-14 00:07:51.665914
+Create Date: 2026-10-14 00:58:19.872185
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "203aacc72f18"
+revision: str = "0b7302f62269"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -113,6 +113,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
         sa.Column("updated_at", sa.Text(), nullable=False),
         sa.Column("last_started_at", sa.Text(), nullable=True),
+        sa.Column("conversation_started_at", sa.Text(), nullable=True),
         sa.Column("report_identity", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("name", name=op.f("pk_agents")),
     )

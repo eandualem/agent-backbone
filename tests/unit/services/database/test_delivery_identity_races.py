@@ -104,7 +104,9 @@ async def test_an_issue_delivered_to_an_earlier_session_can_be_claimed_by_the_ne
     earlier = await db.deliveries.claim(**issue)
     await db.deliveries.finalize(earlier, "delivered")
     assert await db.deliveries.claim(**issue) is None  # the same session: delivered once
-    await db.agents.touch_started("desk")
+    from agent_backbone.services.database import now_iso
+
+    await db.agents.conversation_started("desk", now_iso())
     since = await db.agents.started_at("desk")
     again = await db.deliveries.claim(**issue, since=since)
     assert again is not None and again != earlier

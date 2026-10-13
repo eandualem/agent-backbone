@@ -281,4 +281,6 @@ async def start_resolved(
             wait=req.wait,
             operation_id=req.operation_id,
         )
+        if result.ok and not result.already_running:
+            await store.touch_started(spec.name)
     return result

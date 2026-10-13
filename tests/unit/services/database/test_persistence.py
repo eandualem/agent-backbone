@@ -676,10 +676,11 @@ class TestAgentStartedAt:
     async def test_the_current_session_start_is_read_back(self, db):
         common = {"dir": "/tmp/a", "runtime": "claude", "model": None, "repo": "", "tags": []}
         await db.agents.upsert("desk", description="", unattended=False, env={}, **common)
-        assert await db.agents.started_at("desk") is None  # never started
-        await db.agents.touch_started("desk")
-        started = await db.agents.started_at("desk")
-        assert started and started.endswith("Z")
+        assert await db.agents.started_at("desk") is None  # never started fresh
+        await db.agents.touch_started("desk")  # any start, a resume included
+        assert await db.agents.started_at("desk") is None
+        await db.agents.conversation_started("desk", "2026-10-13T19:59:43.000000Z")
+        assert await db.agents.started_at("desk") == "2026-10-13T19:59:43.000000Z"
         assert await db.agents.started_at("unknown") is None
 
 
