@@ -47,3 +47,14 @@ async def test_when_tmux_cannot_be_read_the_sessions_are_unknown():
         patch(f"{_MEM}.os.getpid", return_value=300),
     ):
         assert await process_memory() == (None, 70000, 77500)
+
+
+async def test_this_process_is_never_counted_in_a_session():
+    panes = {100: {"desk"}}
+    with (
+        patch(f"{_MEM}._output", AsyncMock(return_value=(0, _PS))),
+        patch(f"{_MEM}._panes", AsyncMock(return_value=panes)),
+        patch(f"{_MEM}.os.getpid", return_value=101),  # the backbone runs in desk's pane
+    ):
+        sessions, own, _ = await process_memory()
+    assert sessions == {"desk": (500, 1)} and own == 2000
