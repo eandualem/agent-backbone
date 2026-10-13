@@ -119,7 +119,7 @@ def restart_requested(app) -> bool:
     return bool(getattr(state, "restart_requested", False))
 
 
-async def _up_detached(config: BackboneConfig) -> int:
+async def _up_detached(config: BackboneConfig, log_file: Path | None = None) -> int:
     from agent_backbone.services.terminal import session_exists, start_session
 
     session = config.backbone.session_name
@@ -127,6 +127,8 @@ async def _up_detached(config: BackboneConfig) -> int:
         print(f"backbone already running in tmux session '{session}'")
         return 0
     command = [sys.executable, "-m", "agent_backbone.cli", "up"]
+    if log_file is not None:
+        command += ["--log-file", str(log_file.expanduser().resolve())]
     env = {"BACKBONE_DATA_DIR": str(config.data_dir)}
     ok = await start_session(session, working_dir=str(Path.cwd()), command=command, environment=env)
     if ok:
@@ -143,7 +145,7 @@ async def _up_detached(config: BackboneConfig) -> int:
 def cmd_up(args: argparse.Namespace) -> int:
     config = asyncio.run(_common.load_config())
     if args.detach:
-        return asyncio.run(_up_detached(config))
+        return asyncio.run(_up_detached(config, args.log_file))
     _run_server(config, reload=args.reload, log_file=args.log_file)
     return 0
 

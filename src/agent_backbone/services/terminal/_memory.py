@@ -23,8 +23,12 @@ async def process_memory() -> tuple[dict[str, tuple[int, int]], int, int]:
             pid, ppid, kb = (int(part) for part in parts)
             rss[pid] = kb
             children.setdefault(ppid, []).append(pid)
+    try:
+        panes = await _panes()
+    except CallerUnknown:
+        panes = {}  # no tmux server: no sessions, the totals still count
     sessions: dict[str, tuple[int, int]] = {}
-    for pane, names in (await _panes()).items():
+    for pane, names in panes.items():
         tree, pending = set(), [pane]
         while pending:
             pid = pending.pop()

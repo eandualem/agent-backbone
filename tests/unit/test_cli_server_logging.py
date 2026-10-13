@@ -57,3 +57,20 @@ def test_without_a_log_file_lines_go_to_stderr(tmp_path, restore_logging, capsys
     logging.config.dictConfig(log_config(make_config(tmp_path), None))
     logging.getLogger("agent_backbone").warning("restarting onto the new code")
     assert _LINE.match(capsys.readouterr().err)
+
+
+async def test_a_detached_backbone_keeps_its_log_file(tmp_path):
+    from unittest.mock import AsyncMock, patch
+
+    from agent_backbone.cli.server import _up_detached
+
+    with (
+        patch("agent_backbone.services.terminal.session_exists", AsyncMock(return_value=False)),
+        patch(
+            "agent_backbone.services.terminal.start_session", AsyncMock(return_value=True)
+        ) as start,
+        patch("agent_backbone.cli.service.state", return_value="installed"),
+    ):
+        assert await _up_detached(make_config(tmp_path), tmp_path / "backbone.log") == 0
+    command = start.call_args.kwargs["command"]
+    assert command[-3:] == ["up", "--log-file", str((tmp_path / "backbone.log").resolve())]
