@@ -171,6 +171,7 @@ _LIVE_AFTER_DEPLOY = (
     "the hook-context path is live-checked with steers on this version; "
     "the note's own live check follows deployment"
 )
+_NO_FEEDBACK = "the CLI drafts no feedback reports to its vendor"
 _SKILLS = "tests/unit/test_skills.py"
 _SKILLS_API = "tests/unit/api/routes/test_api_skills.py"
 _RELATIVE = "live-checked: follows a relative link between skill folders"
@@ -691,6 +692,26 @@ CAPABILITIES: tuple[Capability, ...] = (
         opencode=_ok(_CONTEXT_NOTE, _LIVE_AFTER_DEPLOY, verified_on="1.18.32"),
         deepcode=_gap(),
         aider=_gap(),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "drafted-feedback-off",
+        "Drafted feedback to the CLI's vendor off unless the agent opts in",
+        "src/agent_backbone/services/runtimes/claude.py",
+        fallback="Turn drafted feedback off in the CLI's own settings.",
+        implemented=lambda rt: rt.default_env.get("CLAUDE_CODE_SEND_FEEDBACK") == "0",
+        cli_dependent=True,
+        claude=_ok(
+            "tests/unit/services/agents/test_launch.py",
+            "CLAUDE_CODE_SEND_FEEDBACK=0 at launch; set it to 1 in the agent's env to opt in. "
+            "The live check follows deployment",
+            verified_on="2.1.296",
+        ),
+        codex=_na(_NO_FEEDBACK),
+        gemini=_na(_NO_FEEDBACK),
+        opencode=_na(_NO_FEEDBACK),
+        deepcode=_na(_NO_FEEDBACK),
+        aider=_na(_NO_FEEDBACK),
         shell=_na(_NO_MODEL),
     ),
     _row(

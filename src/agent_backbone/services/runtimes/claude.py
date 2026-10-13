@@ -7,6 +7,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from types import MappingProxyType
 
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.hooks.install import save_settings
@@ -176,6 +177,10 @@ class ClaudeCode(Runtime):
     )
     hook_timeout = 10  # seconds
     hook_context = True  # PostToolUse additionalContext
+    # Claude-drafted feedback can send the session's transcript to Anthropic,
+    # which may hold private or third-party data. Off unless the agent's env
+    # sets CLAUDE_CODE_SEND_FEEDBACK itself (to 1, to opt in).
+    default_env = MappingProxyType({"CLAUDE_CODE_SEND_FEEDBACK": "0"})
 
     prompt_prefixes = ("❯",)
     prompt_suffixes = ("$", "%")

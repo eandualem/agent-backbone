@@ -1175,6 +1175,30 @@ class TestLaunchEnvFromRuntime:
         )
         assert "low" not in start.await_args.kwargs["command"]  # no flag carries it
 
+    @pytest.mark.parametrize(
+        ("runtime", "env", "expected"),
+        [
+            ("claude", {}, "0"),
+            ("claude", {"CLAUDE_CODE_SEND_FEEDBACK": "1"}, "1"),  # the agent opted in
+            ("codex", {}, None),
+            ("opencode", {}, None),
+        ],
+    )
+    async def test_claude_drafted_feedback_is_off_unless_the_agent_opts_in(
+        self, tmp_path, runtime, env, expected
+    ):
+        project = tmp_path / "project"
+        project.mkdir()
+        spec = AgentSpec(name="ike", dir=str(project), runtime=runtime, env=env)
+        config = bootstrap_config(tmp_path / "data")
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value=f"/bin/{runtime}"),
+        ):
+            assert (await start_agent(spec, config, wait=False)).ok
+        assert start.await_args.kwargs["environment"].get("CLAUDE_CODE_SEND_FEEDBACK") == expected
+
     async def test_the_selected_model_beats_a_model_in_the_agents_env(self, tmp_path):
         project = tmp_path / "project"
         project.mkdir()
