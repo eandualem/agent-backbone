@@ -74,6 +74,8 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 | `backbone.port` | `7120` | API port |
 | `backbone.session_name` | `backbone` | tmux session used by `backbone up --detach` |
 | `backbone.cors_origins` | `[]` | Browser origins allowed to call the API; empty disables CORS |
+| `backbone.log_max_mb` | `20` | Size in MB at which `backbone up --log-file` (what the macOS service runs) rotates its log; `0` never rotates. Applies at the next start |
+| `backbone.log_backups` | `3` | Rotated log files kept beside the current one (`backbone.log.1`, …) |
 | `backbone.restart_on_upgrade` | `true` | Restart the running backbone onto new code when the installed version (or, for a development checkout, the commit of the branch it started on) changes. Checked once a minute; waits until nothing is being routed; a checkout switched to another branch is left alone. Agents are untouched |
 
 ### `agents.*`
@@ -138,6 +140,17 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 | `timing.retry_interval_seconds` | `300` | `delivery-retry` job period (must be positive) |
 | `timing.start_timeout_seconds` | `60` | How long `agent start` waits for the prompt |
 | `timing.delivery_retention_days` | `30` | Deliveries, events, completed queue messages, diagnostics and report history are pruned every 6 h; diagnostics age from their last observation, queue age from completion; pending/leased messages and each author's latest progress report are retained |
+
+### `diagnostics.*` — performance evidence
+
+| Key | Default | Meaning |
+|---|---|---|
+| `diagnostics.slow_job_seconds` | `30` | Record a scheduled job run that takes this long or longer (`run_slow`); `0` disables |
+| `diagnostics.resource_sample_seconds` | `300` | How often memory pressure is checked; `0` disables. Applies at the next start |
+| `diagnostics.pressure_swap_percent` | `50` | Record a memory sample while swap use is at or above this percent of swap |
+| `diagnostics.pressure_free_percent` | `10` | Record a memory sample while available memory is at or below this percent |
+
+See [Slow jobs and memory pressure](diagnostics.md#slow-jobs-and-memory-pressure).
 
 ### `telegram.*`
 

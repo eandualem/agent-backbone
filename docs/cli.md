@@ -201,8 +201,11 @@ image — `install` says so and leaves nothing behind; `status` reports
 a restart).
 
 The service runs `backbone up` in the foreground with the data directory
-you installed it from; its log is `<data_dir>/backbone.log` on macOS and
-`journalctl --user -u agent-backbone` on Linux. Agents are still tmux
+you installed it from; its log is `<data_dir>/backbone.log` on macOS
+(timestamped and rotated by size, see `backbone.log_max_mb`) and
+`journalctl --user -u agent-backbone` on Linux. After upgrading from a
+release whose service wrote an unrotated log, run `backbone service install`
+again to adopt it. Agents are still tmux
 sessions and still need `backbone agent start` after a reboot.
 
 On macOS the LaunchAgent is an interactive job (`ProcessType`). The tmux

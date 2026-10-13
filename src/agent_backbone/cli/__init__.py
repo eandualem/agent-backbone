@@ -31,6 +31,7 @@ import argparse
 import logging
 import os
 import sys
+from pathlib import Path
 
 from agent_backbone import __version__
 from agent_backbone.cli.agents import (
@@ -126,6 +127,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("up", help="run the backbone")
     p.add_argument("--detach", "-d", action="store_true", help="run inside a tmux session")
     p.add_argument("--reload", action="store_true", help="auto-reload on code changes (dev)")
+    p.add_argument(
+        "--log-file",
+        type=Path,
+        default=None,
+        help="write the log to this file, rotated by size (the login service sets it)",
+    )
     p.set_defaults(func=cmd_up)
 
     p = sub.add_parser("down", help="stop a detached backbone")

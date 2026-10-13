@@ -15,6 +15,7 @@ from agent_backbone.services.terminal._core import (
     session_exists,
     set_window_size_mode,
 )
+from agent_backbone.services.terminal._memory import process_memory
 from agent_backbone.services.terminal._pty import PtyManager, PtySession
 from agent_backbone.services.terminal._sessions import (
     SESSION_FORMAT_STR,
@@ -45,6 +46,7 @@ __all__ = [
     "paste_message",
     "press_escape",
     "press_submit",
+    "process_memory",
     "query_environment_var",
     "query_format_vars",
     "resize_window",

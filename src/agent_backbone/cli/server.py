@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 from agent_backbone.cli import _common
@@ -22,9 +23,51 @@ from agent_backbone.config import (
 log = logging.getLogger(__name__)
 
 
-def _run_server(config: BackboneConfig, reload: bool = False) -> None:
+class UTCFormatter(logging.Formatter):
+    """``2026-10-13T12:50:01.123Z``: every log line can be placed in time."""
+
+    converter = time.gmtime
+    default_time_format = "%Y-%m-%dT%H:%M:%S"
+    default_msec_format = "%s.%03dZ"
+
+
+def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
+    """One timestamped format for the backbone and uvicorn (its access lines too),
+    written to ``log_file`` with size-based rotation, else to stderr."""
+    if log_file is None:
+        handler: dict = {"class": "logging.StreamHandler", "stream": "ext://sys.stderr"}
+    else:
+        handler = {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": str(log_file),
+            "maxBytes": max(0, config.settings.get("backbone.log_max_mb", 20)) * 1024 * 1024,
+            "backupCount": max(0, config.settings.get("backbone.log_backups", 3)),
+            "encoding": "utf-8",
+        }
+    return {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "utc": {
+                "()": UTCFormatter,
+                "format": "%(asctime)s %(levelname)s %(name)s: %(message)s",
+            }
+        },
+        "handlers": {"default": {**handler, "formatter": "utc"}},
+        # The root keeps the level `main` chose (--verbose); uvicorn's loggers
+        # get theirs from `log_level` and reach the same handler through it.
+        "root": {"handlers": ["default"], "level": logging.getLogger().level},
+        "loggers": {
+            name: {"handlers": [], "propagate": True}
+            for name in ("uvicorn", "uvicorn.error", "uvicorn.access")
+        },
+    }
+
+
+def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | None = None) -> None:
     import uvicorn
 
+    logging_config = log_config(config, log_file)
     if reload:
         uvicorn.run(
             "agent_backbone.api.app:create_app",
@@ -34,6 +77,7 @@ def _run_server(config: BackboneConfig, reload: bool = False) -> None:
             reload=True,
             reload_dirs=["src"],
             log_level="info",
+            log_config=logging_config,
         )
         return
 
@@ -42,7 +86,12 @@ def _run_server(config: BackboneConfig, reload: bool = False) -> None:
     app = create_app(config)
     server = uvicorn.Server(
         uvicorn.Config(
-            app, host=config.backbone.host, port=config.backbone.port, log_level="info", workers=1
+            app,
+            host=config.backbone.host,
+            port=config.backbone.port,
+            log_level="info",
+            log_config=logging_config,
+            workers=1,
         )
     )
     inner = getattr(app, "other_asgi_app", app)
@@ -95,7 +144,7 @@ def cmd_up(args: argparse.Namespace) -> int:
     config = asyncio.run(_common.load_config())
     if args.detach:
         return asyncio.run(_up_detached(config))
-    _run_server(config, reload=args.reload)
+    _run_server(config, reload=args.reload, log_file=args.log_file)
     return 0
 
 
