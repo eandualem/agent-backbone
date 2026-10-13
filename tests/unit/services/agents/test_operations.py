@@ -157,3 +157,21 @@ async def test_forget_waits_for_a_start_in_progress_and_then_refuses():
         with pytest.raises(RuntimeError):
             await task
     store.forget.assert_not_called()
+
+
+async def test_the_session_start_is_recorded_from_before_the_launch(db, tmp_path):
+    """#410: messages can reach the session while it starts; they belong to it."""
+    from agent_backbone.services.database import now_iso
+
+    store = await registered_store(db, tmp_path)
+    req = StartRequest(name="app")
+    spec = await resolve_agent(store, req)
+    during = []
+
+    async def launching(*args, **kwargs):
+        during.append(now_iso())  # a delivery made while the session starts
+        return StartResult(ok=True)
+
+    with patch(f"{_OPS}.launch.start_agent", side_effect=launching):
+        assert (await start_resolved(store, store.config, spec, req, db=db)).ok
+    assert await db.agents.started_at("app") <= during[0]

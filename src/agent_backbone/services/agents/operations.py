@@ -17,6 +17,7 @@ from agent_backbone.services.agents._locks import lifecycle_lock
 from agent_backbone.services.agents._validation import validate_agent_spec
 from agent_backbone.services.agents.launch import StartResult
 from agent_backbone.services.agents.store import check_agent_tags, refuse_case_twin
+from agent_backbone.services.database import now_iso
 from agent_backbone.services.runtimes import (
     RUNTIMES,
     install_hint,
@@ -270,6 +271,7 @@ async def start_resolved(
                     f"never launched: it reads messages with backbone inbox --agent {spec.name}",
                 ),
             )
+        launched_at = now_iso()  # the session may receive messages before it is ready
         result = await launch.start_agent(
             spec,
             config,
@@ -282,5 +284,5 @@ async def start_resolved(
             operation_id=req.operation_id,
         )
         if result.ok and not result.already_running:
-            await store.touch_started(spec.name)
+            await store.touch_started(spec.name, launched_at)
     return result

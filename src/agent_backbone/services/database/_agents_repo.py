@@ -157,11 +157,13 @@ class AgentRepo(Repo):
                 text("SELECT last_started_at FROM agents WHERE name = :name"), {"name": name}
             )
 
-    async def touch_started(self, name: str) -> None:
+    async def touch_started(self, name: str, at: str | None = None) -> None:
+        """Record when the agent's current session started: ``at``, taken before
+        the launch, since the session can receive messages while it starts."""
         async with self._tx() as conn:
             await conn.execute(
                 text("UPDATE agents SET last_started_at = :now WHERE name = :name"),
-                {"now": now_iso(), "name": name},
+                {"now": at or now_iso(), "name": name},
             )
 
     async def delete(self, name: str) -> bool:
