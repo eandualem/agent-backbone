@@ -283,6 +283,8 @@ async def start_resolved(
             wait=req.wait,
             operation_id=req.operation_id,
         )
-        if result.ok and not result.already_running:
+        # A resumed conversation keeps what it was sent: only a fresh one starts over.
+        resumed = req.resume or req.session_id is not None
+        if result.ok and not result.already_running and not resumed:
             await store.touch_started(spec.name, launched_at)
     return result

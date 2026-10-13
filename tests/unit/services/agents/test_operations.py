@@ -175,3 +175,14 @@ async def test_the_session_start_is_recorded_from_before_the_launch(db, tmp_path
     with patch(f"{_OPS}.launch.start_agent", side_effect=launching):
         assert (await start_resolved(store, store.config, spec, req, db=db)).ok
     assert await db.agents.started_at("app") <= during[0]
+
+
+async def test_a_resumed_conversation_keeps_its_start(db, tmp_path):
+    """#410: a resume continues the conversation that received earlier messages."""
+    store = await registered_store(db, tmp_path)
+    await db.agents.touch_started("app", "2026-10-13T19:59:43.000000Z")
+    req = StartRequest(name="app", resume=True)
+    spec = await resolve_agent(store, req)
+    with patch(f"{_OPS}.launch.start_agent", AsyncMock(return_value=StartResult(ok=True))):
+        assert (await start_resolved(store, store.config, spec, req, db=db)).ok
+    assert await db.agents.started_at("app") == "2026-10-13T19:59:43.000000Z"

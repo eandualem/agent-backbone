@@ -151,14 +151,14 @@ class AgentRepo(Repo):
             return bool(result.rowcount)
 
     async def started_at(self, name: str) -> str | None:
-        """When the agent's current session started, if it was ever started."""
+        """When the agent's current conversation started fresh, if it ever did."""
         async with self._tx() as conn:
             return await conn.scalar(
                 text("SELECT last_started_at FROM agents WHERE name = :name"), {"name": name}
             )
 
     async def touch_started(self, name: str, at: str | None = None) -> None:
-        """Record when the agent's current session started: ``at``, taken before
+        """Record when the agent's conversation started fresh: ``at``, taken before
         the launch, since the session can receive messages while it starts."""
         async with self._tx() as conn:
             await conn.execute(
