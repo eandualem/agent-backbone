@@ -707,13 +707,13 @@ def take_context(state_dir: Path, agent: str, launch_id: str | None = None) -> l
     ``BACKBONE_LAUNCH_ID``, so a steer written for another session of the
     same agent is never taken here. A steer offered to an earlier turn, or
     to an earlier conversation of this session, is marked ``.missed``
-    instead (see ``offer_steer``)."""
+    instead (see ``offer_steer``); so is an agent offer with a ``.turn``
+    naming an earlier conversation (the context-size note)."""
     launch_id = launch_id or os.environ.get("BACKBONE_LAUNCH_ID", "").strip()
     directories = [_context_dir(state_dir, agent)]
-    current: dict = {}
     if launch_id:
         directories.append(_steer_dir(state_dir, agent, launch_id))
-        current = read_current(state_dir, agent) or {}
+    current = read_current(state_dir, agent) or {}
     texts: list[str] = []
     for directory in directories:
         try:
@@ -730,7 +730,7 @@ def take_context(state_dir: Path, agent: str, launch_id: str | None = None) -> l
         except OSError:
             continue
         for offer in offers:
-            if directory is not directories[0] and _for_an_earlier_turn(offer, current):
+            if _for_an_earlier_turn(offer, current):
                 # That turn ended with no hook event (an interrupt, a provider
                 # failure): its steer is never the next task's.
                 with suppress(OSError):

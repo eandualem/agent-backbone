@@ -57,6 +57,12 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
   models remain unpriced. Keep existing entries when extending it. Stored
   historical price bases remain unchanged; `usage --reprice --cost` previews
   the configured catalog against retained tokens.
+- `usage.context_note_tokens` (default `200000`): when an agent's current
+  conversation reaches this many tokens of context, the backbone tells it so
+  and recommends a fresh session once its current task is done. `0` turns the
+  note off. See [Context-size note](token-usage.md#context-size-note).
+- `usage.context_note_step_tokens` (default `100000`): after the first note,
+  note again at each further step (300k, 400k, …). `0` notes only once.
 
 See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 

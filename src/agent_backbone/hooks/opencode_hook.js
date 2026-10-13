@@ -95,7 +95,7 @@ function takeContext(t) {
     for (const name of offers(dir).sort(order)) {
       const offer = path.join(dir, name);
       try {
-        if (dir !== directories[0] && forEarlierTurn(offer, current)) {
+        if (forEarlierTurn(offer, current)) {
           fs.renameSync(offer, `${offer.slice(0, -3)}.missed`);
           continue;
         }
