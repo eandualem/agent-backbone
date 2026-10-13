@@ -790,7 +790,7 @@ class TestSafeDeliver:
         mock_db.queue.has_uncertain.return_value = False
         mock_db.queue.has_brief_ahead.return_value = False
         delivered = {
-            "repo": "example/orchestration",
+            "repo": _REPO,
             "target_entity": "ike",
             "session_name": "ike",
             "outcome": "delivered",
@@ -825,7 +825,7 @@ class TestSafeDeliver:
         mock_db.queue.has_uncertain.return_value = False
         mock_db.queue.has_brief_ahead.return_value = False
         held = {
-            "repo": "example/orchestration",
+            "repo": _REPO,
             "issue_number": 41,
             "target_entity": "ike",
             "session_name": "ike",
