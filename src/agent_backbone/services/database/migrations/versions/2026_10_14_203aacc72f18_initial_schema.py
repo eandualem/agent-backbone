@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: d7cf6d44563b
+Revision ID: 203aacc72f18
 Revises:
-Create Date: 2026-10-13 16:11:26.463645
+Create Date: 2026-10-14 00:07:51.665914
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "d7cf6d44563b"
+revision: str = "203aacc72f18"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -133,6 +133,7 @@ def upgrade() -> None:
         sa.Column("preview", sa.Text(), server_default="", nullable=False),
         sa.Column("created_at", sa.Text(), nullable=False),
         sa.Column("settled_at", sa.Text(), nullable=True),
+        sa.Column("superseded_at", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_deliveries")),
     )
     with op.batch_alter_table("deliveries", schema=None) as batch_op:
@@ -145,10 +146,10 @@ def upgrade() -> None:
             ["repo", "issue_number", "session_name"],
             unique=True,
             postgresql_where=sa.text(
-                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
             sqlite_where=sa.text(
-                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
         )
 
@@ -678,10 +679,10 @@ def downgrade() -> None:
         batch_op.drop_index(
             "uq_deliveries_active_owner",
             postgresql_where=sa.text(
-                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
             sqlite_where=sa.text(
-                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
         )
         batch_op.drop_index("idx_deliveries_outcome")

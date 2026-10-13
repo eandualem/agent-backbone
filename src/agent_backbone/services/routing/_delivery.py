@@ -456,6 +456,7 @@ async def safe_deliver(
             repo=repo,
             preview=preview,
             operation_id=operation_id,
+            since=since,
         )
         if claim is None:
             return DeliveryReport(

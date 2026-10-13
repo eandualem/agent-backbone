@@ -226,6 +226,9 @@ class DeliveryORM(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     settled_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     """When a later outcome replaced the first (a steer's handoff time)."""
+    superseded_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """When the issue was delivered again to a later session of the agent, which
+    never saw this one; the row keeps its outcome but no longer owns the issue."""
 
     __table_args__ = (
         Index("idx_deliveries_issue", "repo", "issue_number"),
@@ -240,11 +243,11 @@ class DeliveryORM(Base):
             unique=True,
             postgresql_where=text(
                 "kind = 'issue' AND issue_number IS NOT NULL"
-                " AND outcome IN ('attempting','delivered','retried')"
+                " AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
             sqlite_where=text(
                 "kind = 'issue' AND issue_number IS NOT NULL"
-                " AND outcome IN ('attempting','delivered','retried')"
+                " AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
         ),
     )

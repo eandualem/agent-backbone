@@ -88,3 +88,31 @@ async def test_enqueue_retries_if_the_conflicting_row_completed_before_lookup(
     assert active["status"] == "pending"
     assert active["operation_id"] == second.operation_id
     assert await db.queue.pending_count("ike") == 1
+
+
+async def test_an_issue_delivered_to_an_earlier_session_can_be_claimed_by_the_next(db):
+    """#410, against the real unique index: a restart frees the earlier session's slot."""
+    issue = {
+        "issue_number": 7,
+        "target_entity": "desk",
+        "session_name": "desk",
+        "source": "agent-monitor",
+        "repo": "example/app",
+    }
+    common = {"dir": "/tmp/a", "runtime": "claude", "model": None, "repo": "", "tags": []}
+    await db.agents.upsert("desk", description="", unattended=False, env={}, **common)
+    earlier = await db.deliveries.claim(**issue)
+    await db.deliveries.finalize(earlier, "delivered")
+    assert await db.deliveries.claim(**issue) is None  # the same session: delivered once
+    await db.agents.touch_started("desk")
+    since = await db.agents.started_at("desk")
+    again = await db.deliveries.claim(**issue, since=since)
+    assert again is not None and again != earlier
+    async with db.deliveries._tx() as conn:
+        rows = (
+            await conn.execute(
+                text("SELECT id, outcome, superseded_at FROM deliveries ORDER BY id")
+            )
+        ).all()
+    assert rows[0][0] == earlier and rows[0][1] == "delivered" and rows[0][2]  # evidence kept
+    assert await db.deliveries.claim(**issue, since=since) is None  # and once per session
