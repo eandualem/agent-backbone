@@ -631,6 +631,8 @@ class Runtime:
                 data_dir=data_dir,
                 state_dir=state_dir,
             ),
+            # Last: a flag here may take several values (Claude Code's
+            # --disallowedTools) and would swallow a positional argument after it.
             *self.env_args(env or {}),
         ]
 
