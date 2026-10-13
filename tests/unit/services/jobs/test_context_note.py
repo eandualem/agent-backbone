@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from unittest.mock import patch
 
 import pytest
 
@@ -12,7 +13,7 @@ from agent_backbone.services.agents import AgentState, StateSnapshot
 from agent_backbone.services.jobs.context_note import note_context_size
 from agent_backbone.usage import UsageEvent
 from tests.conftest import make_config
-from tests.unit.hooks.test_context import _tool_call
+from tests.unit.hooks.test_context import _prompt, _tool_call
 
 T = "2026-10-13T10:00:00Z"
 
@@ -35,7 +36,7 @@ def _states(runtime="claude", session="s"):
     return {"desk": snapshot}
 
 
-async def _request(db, tokens, runtime="claude", session="s"):
+async def _request(db, tokens, runtime="claude", session="s", coverage="measured"):
     """One recorded request of the conversation, with its context size."""
     identity = await db.usage.remember("desk", runtime, session, at=T)
     row = await db.usage.session(identity)
@@ -46,7 +47,7 @@ async def _request(db, tokens, runtime="claude", session="s"):
         offset=row["offset"] + 1,
         cursor={},
         events=[event.model_copy(update={"context_tokens": tokens})],
-        coverage="measured",
+        coverage=coverage,
         detail="",
         prices={},
         observed_at=T,
@@ -135,7 +136,40 @@ async def test_the_runtimes_own_hook_hands_the_note_over(tmp_path, db, monkeypat
     config = _config(tmp_path, runtime=runtime)
     await _request(db, 250_000, runtime=runtime)
     assert await note_context_size(config, db, _states(runtime=runtime)) == ["desk"]
+    if runtime != "opencode":  # its driver starts the conversation itself
+        _prompt(runtime, config.state_dir, time.time())  # the same conversation, session "s"
     assert _tool_call(runtime, config.state_dir).startswith(
         "[via:backbone context] Your conversation is at 250k tokens."
     )
+    assert _tool_call(runtime, config.state_dir) == ""
+
+
+async def test_a_note_is_held_while_the_conversation_is_still_being_read(tmp_path, db):
+    config = _config(tmp_path)
+    await _request(db, 400_000, coverage="catching_up")  # compacted further on, perhaps
+    assert await note_context_size(config, db, _states()) == []
+    await _request(db, 90_000)
+    assert await note_context_size(config, db, _states()) == []
+
+
+async def test_a_note_that_could_not_be_written_is_tried_again(tmp_path, db):
+    config = _config(tmp_path)
+    await _request(db, 210_000)
+    with (
+        patch("agent_backbone.services.jobs.context_note._offer", side_effect=OSError),
+        pytest.raises(OSError),
+    ):
+        await note_context_size(config, db, _states())
+    assert await note_context_size(config, db, _states()) == ["desk"]
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_a_note_never_reaches_the_next_conversation(tmp_path, db, monkeypatch, runtime):
+    monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
+    config = _config(tmp_path, runtime=runtime)
+    await _request(db, 250_000, runtime=runtime, session="old")
+    assert await note_context_size(config, db, _states(runtime, session="old")) == ["desk"]
+    # `/clear` started another conversation (session "s") before the note was taken.
+    if runtime != "opencode":  # its driver starts the conversation itself
+        _prompt(runtime, config.state_dir, time.time())
     assert _tool_call(runtime, config.state_dir) == ""

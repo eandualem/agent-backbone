@@ -13,6 +13,8 @@ Nothing here restarts anything; the agent decides when to start fresh.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -39,12 +41,16 @@ def note_text(tokens: int) -> str:
     )
 
 
-def _offer(state_dir: Path, agent: str, level: int, text: str) -> None:
-    # Only the latest note matters: one not taken yet is superseded, and one
-    # taken in an earlier conversation must not block the same level in this one.
+def _offer(state_dir: Path, agent: str, key: str, session_id: str, text: str) -> None:
+    # Only the latest note matters: an earlier one not taken yet is superseded.
     for old in (state_dir / CONTEXT_DIR / agent).glob(f"{_KEY_PREFIX}*"):
-        old.unlink(missing_ok=True)
-    offer_context(state_dir, agent, f"{_KEY_PREFIX}{level}", text)
+        if old.name.partition(".")[0] != key:
+            old.unlink(missing_ok=True)
+    # The hook hands it over only in this conversation (not after a `/clear`).
+    turn = state_dir / CONTEXT_DIR / agent / f"{key}.turn"
+    turn.parent.mkdir(parents=True, exist_ok=True)
+    turn.write_text(json.dumps({"session_id": session_id}), encoding="utf-8")
+    offer_context(state_dir, agent, key, text)  # a key already taken is not offered again
 
 
 async def note_context_size(
@@ -59,6 +65,7 @@ async def note_context_size(
     step = int(config.settings.get("usage.context_note_step_tokens", 100_000))
     if first <= 0 or not config.settings.get("usage.enabled", True):
         return []
+    sessions = {s["id"]: s for s in await db.usage.sessions()}
     noted = []
     for name, snapshot in states.items():
         spec = config.agents.get(name)
@@ -68,13 +75,22 @@ async def note_context_size(
         if runtime is None or not runtime.hook_context:
             continue  # recorded as unavailable in the capability contract
         identity = usage_id(snapshot.runtime, snapshot.session_id)
+        session = sessions.get(identity)
+        # A source still being read may end in a smaller context (a compaction).
+        if session is None or session["coverage"] == "catching_up":
+            continue
         tokens = await db.usage.latest_context_tokens(identity)
         if tokens is None or tokens < first:
             continue
         level = first + (tokens - first) // step * step if step > 0 else first
-        if not await db.usage.note_context(identity, level):
+        if level <= session["context_noted"]:
             continue
-        await asyncio.to_thread(_offer, config.state_dir, name, level, note_text(tokens))
+        key = f"{_KEY_PREFIX}{hashlib.sha256(identity.encode()).hexdigest()[:12]}-{level}"
+        # Offered before it is recorded: a failed write is tried again next tick.
+        await asyncio.to_thread(
+            _offer, config.state_dir, name, key, snapshot.session_id, note_text(tokens)
+        )
+        await db.usage.note_context(identity, level)
         log.info("Context-size note offered to %s at %d tokens", name, tokens)
         noted.append(name)
     return noted

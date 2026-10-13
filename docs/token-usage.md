@@ -74,8 +74,10 @@ When it first reaches 200,000 tokens, the agent is told on its next turn:
 
 It is told again at each further 100,000 (300k, 400k, …). Each level is noted
 once per conversation, also across backbone restarts, and a fresh conversation
-starts over. The note arrives through the runtime's hook, like a steer: it
-never starts a turn and never interrupts the agent. Restarting stays the
+starts over; a note not yet taken is dropped then. Nothing is noted while the
+conversation's record is still being read. The note arrives through the
+runtime's hook, like a steer: it never starts a turn and never interrupts the
+agent. Restarting stays the
 agent's decision; the backbone never restarts it. Swarm members are not noted,
 since they end with their swarm. Claude Code, Codex and OpenCode receive the
 note; other runtimes don't yet (see [Runtime capabilities](runtime-capabilities.md)).
