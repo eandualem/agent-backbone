@@ -57,4 +57,4 @@ async def test_this_process_is_never_counted_in_a_session():
         patch(f"{_MEM}.os.getpid", return_value=101),  # the backbone runs in desk's pane
     ):
         sessions, own, _ = await process_memory()
-    assert sessions == {"desk": (500, 1)} and own == 2000
+    assert sessions == {"desk": (3500, 2)} and own == 2000  # its child 102 still counts

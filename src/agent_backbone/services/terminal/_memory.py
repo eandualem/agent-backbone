@@ -53,10 +53,10 @@ async def process_memory() -> tuple[dict[str, tuple[int, int]] | None, int, int]
         tree, pending = set(), [pane]
         while pending:
             pid = pending.pop()
-            # This process is counted on its own, even when it runs in a pane.
-            if pid in rss and pid not in tree and pid != os.getpid():
+            if pid in rss and pid not in tree:
                 tree.add(pid)
                 pending.extend(children.get(pid, ()))
+        tree.discard(os.getpid())  # counted on its own, even when it runs in a pane
         if not tree:
             continue  # the pane's process ended meanwhile
         kb = sum(rss[pid] for pid in tree)
