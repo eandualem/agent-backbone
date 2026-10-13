@@ -81,3 +81,11 @@ def test_a_log_keeps_at_least_one_backup():
 
     with pytest.raises(ValueError, match="positive"):
         validate_setting("backbone.log_backups", 0)
+
+
+@pytest.mark.parametrize("value", [-1, 101])
+def test_a_pressure_threshold_is_a_percentage(value):
+    from agent_backbone.config import validate_setting
+
+    with pytest.raises(ValueError, match="percentage"):
+        validate_setting("diagnostics.pressure_free_percent", value)

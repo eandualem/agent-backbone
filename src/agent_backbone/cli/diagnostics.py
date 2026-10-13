@@ -147,7 +147,7 @@ def _print_digest(data: dict) -> None:
             f" other processes {memory.get('other_rss_mb', '?')} MB"
         )
         if "agents_rss_mb" not in memory:
-            note("    agent sessions could not be read (tmux did not answer)")
+            note("    agent memory could not be read (ps or tmux was unavailable)")
         else:
             print_table(
                 "Largest agents",

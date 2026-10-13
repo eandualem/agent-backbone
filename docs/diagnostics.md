@@ -42,8 +42,8 @@ The local data directory contains several different kinds of evidence:
   acknowledgment. It is not an audit of every agent tool call.
 - **Service health and ordinary logs:** `/health` and
   `/api/status/services` report component and scheduler information. On
-  macOS the installed service writes `<data_dir>/backbone.log`, every line
-  starting with a UTC timestamp, rotated at `backbone.log_max_mb` with
+  macOS the installed service writes `<data_dir>/backbone.log`, every entry
+  starting with a UTC timestamp (a traceback's lines follow their entry), rotated at `backbone.log_max_mb` with
   `backbone.log_backups` older files kept (`backbone.log.1`, …); output from
   outside logging, such as a crash during startup, goes to
   `<data_dir>/backbone.out.log`. A service installed before this release

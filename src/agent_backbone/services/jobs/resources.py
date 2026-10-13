@@ -112,14 +112,6 @@ async def sample_resources(config: BackboneConfig, db: BackboneDB) -> dict:
         details["agents_rss_mb"] = agents_kb // 1024
         details["other_rss_mb"] = max(0, total_kb - agents_kb - own_kb) // 1024
     operation_id = uuid.uuid4().hex
-    await db.diagnostics.record(
-        operation_id=operation_id,
-        category="resource",
-        code="memory_pressure",
-        severity="warning",
-        source="resource-sample",
-        details=details,
-    )
     largest = sorted(agents.items(), key=lambda item: item[1][0], reverse=True)[:TOP_AGENTS]
     for name, (kb, count) in largest:
         spec = config.agents.get(name)
@@ -134,4 +126,13 @@ async def sample_resources(config: BackboneConfig, db: BackboneDB) -> dict:
             runtime=spec.runtime if spec else "",
             details={"rss_mb": kb // 1024, "processes": count},
         )
+    # Last: the digest reads a sample from this record, so its agents are all there.
+    await db.diagnostics.record(
+        operation_id=operation_id,
+        category="resource",
+        code="memory_pressure",
+        severity="warning",
+        source="resource-sample",
+        details=details,
+    )
     return {"sampled": True, "agents": len(largest)}
