@@ -378,6 +378,7 @@ async def _start_agent(
             unattended=unattended,
             writable_dirs=_writable_dirs(spec.path, section.writable_dirs),
             auto_review=section.auto_review,
+            env={**rt.default_env, **spec.env},
         )
     except RuntimeError as exc:
         details.update(reason="command_failed", error_type=type(exc).__name__)

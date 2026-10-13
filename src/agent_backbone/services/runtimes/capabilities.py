@@ -703,8 +703,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         cli_dependent=True,
         claude=_ok(
             "tests/unit/services/agents/test_launch.py",
-            "CLAUDE_CODE_SEND_FEEDBACK=0 at launch; set it to 1 in the agent's env to opt in. "
-            "The live check follows deployment",
+            "`--disallowedTools SendFeedback` and CLAUDE_CODE_SEND_FEEDBACK=0 at launch; "
+            "set the variable to 1 in the agent's env to opt in. The live check follows deployment",
             verified_on="2.1.296",
         ),
         codex=_na(_NO_FEEDBACK),

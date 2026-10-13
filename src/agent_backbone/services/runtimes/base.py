@@ -497,6 +497,10 @@ class Runtime:
         hooks.save_settings(path, hooks.remove_hooks(hooks.load_settings(path)))
         return path
 
+    def env_args(self, env: Mapping[str, str]) -> list[str]:
+        """Launch flags that depend on the agent's launch environment."""
+        return []
+
     def effort_args(self, effort: str | None) -> list[str]:
         """Arguments that set the reasoning effort for this launch.
 
@@ -579,8 +583,12 @@ class Runtime:
         unattended: bool = False,
         writable_dirs: tuple[str, ...] = (),
         auto_review: bool = False,
+        env: Mapping[str, str] | None = None,
     ) -> list[str] | None:
         """The launch command, or None for a plain shell.
+
+        ``env`` is the agent's launch environment, for flags that depend on it
+        (``env_args``).
 
         ``brief_file`` is only handed over when ``brief_mode`` injects at
         launch; on ``resume`` initial-prompt runtimes get none here. A
@@ -623,6 +631,7 @@ class Runtime:
                 data_dir=data_dir,
                 state_dir=state_dir,
             ),
+            *self.env_args(env or {}),
         ]
 
     # --- pane recognition ----------------------------------------------------

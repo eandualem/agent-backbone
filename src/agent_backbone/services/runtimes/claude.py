@@ -178,10 +178,16 @@ class ClaudeCode(Runtime):
     hook_timeout = 10  # seconds
     hook_context = True  # PostToolUse additionalContext
     # Claude-drafted feedback can send the session's transcript to Anthropic,
-    # which may hold private or third-party data. A launch default, off unless
-    # the agent's env sets CLAUDE_CODE_SEND_FEEDBACK itself (to 1, to opt in);
-    # the env of a project's Claude Code settings can still override it.
+    # which may hold private or third-party data. Off unless the agent's env
+    # sets CLAUDE_CODE_SEND_FEEDBACK=1: the variable defaults to 0, and the
+    # tool is disallowed at launch (`env_args`), which no settings file's env
+    # or allow rule can reopen.
     default_env = MappingProxyType({"CLAUDE_CODE_SEND_FEEDBACK": "0"})
+
+    def env_args(self, env):
+        if env.get("CLAUDE_CODE_SEND_FEEDBACK") == "1":
+            return []
+        return ["--disallowedTools", "SendFeedback"]
 
     prompt_prefixes = ("❯",)
     prompt_suffixes = ("$", "%")

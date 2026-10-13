@@ -1198,6 +1198,9 @@ class TestLaunchEnvFromRuntime:
         ):
             assert (await start_agent(spec, config, wait=False)).ok
         assert start.await_args.kwargs["environment"].get("CLAUDE_CODE_SEND_FEEDBACK") == expected
+        # and the tool itself is disallowed, which no settings file can reopen
+        disallowed = "SendFeedback" in start.await_args.kwargs["command"]
+        assert disallowed is (expected == "0")
 
     async def test_the_selected_model_beats_a_model_in_the_agents_env(self, tmp_path):
         project = tmp_path / "project"
