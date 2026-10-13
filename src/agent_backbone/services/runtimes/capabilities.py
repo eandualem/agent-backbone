@@ -167,6 +167,10 @@ _LAUNCH = "tests/unit/services/runtimes/test_launch_commands.py"
 _FLEET = "tests/unit/services/agents/test_fleet.py"
 _NO_MODEL = "a plain shell runs no model"
 _CONTEXT_NOTE = "tests/unit/services/jobs/test_context_note.py"
+_LIVE_AFTER_DEPLOY = (
+    "the hook-context path is live-checked with steers on this version; "
+    "the note's own live check follows deployment"
+)
 _SKILLS = "tests/unit/test_skills.py"
 _SKILLS_API = "tests/unit/api/routes/test_api_skills.py"
 _RELATIVE = "live-checked: follows a relative link between skill folders"
@@ -681,10 +685,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Check the conversation size with `backbone usage`; restart at a task boundary.",
         implemented=lambda rt: rt.usage_supported and rt.hook_context,
         cli_dependent=True,
-        claude=_ok(_CONTEXT_NOTE, verified_on="2.1.284"),
-        codex=_ok(_CONTEXT_NOTE, verified_on="0.157.1"),
+        claude=_ok(_CONTEXT_NOTE, _LIVE_AFTER_DEPLOY, verified_on="2.1.284"),
+        codex=_ok(_CONTEXT_NOTE, _LIVE_AFTER_DEPLOY, verified_on="0.157.1"),
         gemini=_gap(note="usage is recorded, but its hook takes no offered context"),
-        opencode=_ok(_CONTEXT_NOTE, verified_on="1.18.32"),
+        opencode=_ok(_CONTEXT_NOTE, _LIVE_AFTER_DEPLOY, verified_on="1.18.32"),
         deepcode=_gap(),
         aider=_gap(),
         shell=_na(_NO_MODEL),
