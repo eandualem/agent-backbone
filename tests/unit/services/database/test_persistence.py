@@ -672,6 +672,17 @@ class TestSwarmNameConflict:
         assert (await db.swarms.get("s"))["issue_number"] == 3
 
 
+class TestAgentStartedAt:
+    async def test_the_current_session_start_is_read_back(self, db):
+        common = {"dir": "/tmp/a", "runtime": "claude", "model": None, "repo": "", "tags": []}
+        await db.agents.upsert("desk", description="", unattended=False, env={}, **common)
+        assert await db.agents.started_at("desk") is None  # never started
+        await db.agents.touch_started("desk")
+        started = await db.agents.started_at("desk")
+        assert started and started.endswith("Z")
+        assert await db.agents.started_at("unknown") is None
+
+
 class TestAgentAlwaysOn:
     async def test_always_on_round_trips_and_defaults_off(self, db):
         from agent_backbone.config import agents_from_rows

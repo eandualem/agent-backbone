@@ -213,13 +213,23 @@ async def is_acknowledged(
     )
 
 
+def _in_session(row: dict, since: str | None) -> bool:
+    """Whether a delivery reached the agent's current session (started at ``since``).
+
+    A fresh session never saw what an earlier one received, so it can neither
+    acknowledge it nor be spared it as a duplicate."""
+    return since is None or (row.get("created_at") or "") >= since
+
+
 async def _has_successful_issue_delivery(
-    db: BackboneDB, repo: str, issue_number: int, session_name: str
+    db: BackboneDB, repo: str, issue_number: int, session_name: str, since: str | None = None
 ) -> bool:
     rows = await db.deliveries.query(
         issue_number=issue_number, session_name=session_name, limit=25, repo=repo, kind="issue"
     )
-    return any((row.get("outcome") or "") in SUCCESS_OUTCOMES for row in rows)
+    return any(
+        (row.get("outcome") or "") in SUCCESS_OUTCOMES and _in_session(row, since) for row in rows
+    )
 
 
 async def _get_unacknowledged_gate_issue(
@@ -228,8 +238,9 @@ async def _get_unacknowledged_gate_issue(
     repo: str,
     current_issue: int,
     queue_scope: Collection[tuple[str, int]] | None = None,
+    since: str | None = None,
 ) -> tuple[str, int] | None:
-    """The most recent successfully delivered issue still awaiting acknowledgment."""
+    """The most recent issue delivered to the current session still awaiting acknowledgment."""
     scope = {(r.casefold(), n) for r, n in (queue_scope or ())}
     rows = await db.deliveries.query(session_name=session_name, limit=100, kind="issue")
     for row in rows:
@@ -242,7 +253,7 @@ async def _get_unacknowledged_gate_issue(
             continue
         if issue_number == current_issue and row_repo.casefold() == repo.casefold():
             continue
-        if (row.get("outcome") or "") not in SUCCESS_OUTCOMES:
+        if (row.get("outcome") or "") not in SUCCESS_OUTCOMES or not _in_session(row, since):
             continue
         if await is_acknowledged(db, row_repo, issue_number, target_entity, session_name):
             continue
@@ -414,14 +425,15 @@ async def safe_deliver(
 
     # 1. Issue queue gate
     if kind == "issue" and trackable_issue:
-        if await _has_successful_issue_delivery(db, repo, issue_number, session_name):
+        since = await db.agents.started_at(session_name)
+        if await _has_successful_issue_delivery(db, repo, issue_number, session_name, since):
             log.info(
                 "Suppressed duplicate issue delivery %s#%s -> %s", repo, issue_number, session_name
             )
             return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED, operation_id=operation_id)
         if enforce_issue_queue:
             blocking = await _get_unacknowledged_gate_issue(
-                db, session_name, repo, issue_number, queue_scope
+                db, session_name, repo, issue_number, queue_scope, since
             )
             if blocking is not None:
                 log.info(
