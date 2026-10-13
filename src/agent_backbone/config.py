@@ -87,6 +87,8 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "backbone.session_name": "backbone",
     "backbone.cors_origins": [],
     "backbone.restart_on_upgrade": True,
+    "backbone.log_max_mb": 20,
+    "backbone.log_backups": 3,
     "agents.default_runtime": "claude",
     "agents.pre_trust": True,
     "agents.inject_brief": True,
@@ -115,6 +117,10 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "timing.retry_interval_seconds": 300,
     "timing.start_timeout_seconds": 60,
     "timing.delivery_retention_days": 30,
+    "diagnostics.slow_job_seconds": 30,
+    "diagnostics.resource_sample_seconds": 300,
+    "diagnostics.pressure_swap_percent": 50,
+    "diagnostics.pressure_free_percent": 10,
     "telegram.allowed_chat_ids": [],
     "telegram.notification_chat_id": None,
     "telegram.group_chat_id": None,
@@ -150,6 +156,22 @@ SETTINGS_HELP: dict[str, str] = {
         "the CLI reaches a non-loopback host over https)"
     ),
     "backbone.port": "API port",
+    "backbone.log_max_mb": (
+        "Rotate the service log (`backbone up --log-file`) at this size in MB (0: never)"
+    ),
+    "backbone.log_backups": "Rotated service logs kept beside the current one (at least 1)",
+    "diagnostics.slow_job_seconds": (
+        "Record a scheduled job run slower than this in diagnostics (0 disables)"
+    ),
+    "diagnostics.resource_sample_seconds": (
+        "How often to check memory pressure; applies at the next start (0 disables)"
+    ),
+    "diagnostics.pressure_swap_percent": (
+        "Record a memory sample while swap use is at or above this percent of swap"
+    ),
+    "diagnostics.pressure_free_percent": (
+        "Record a memory sample while available memory is at or below this percent"
+    ),
     "backbone.session_name": "tmux session used by `backbone up --detach`",
     "backbone.cors_origins": "Browser origins allowed to call the API (JSON list)",
     "backbone.restart_on_upgrade": (
@@ -261,8 +283,13 @@ _POSITIVE_SETTINGS = frozenset(
         "sources.poll_interval_seconds",
         "timing.monitor_interval_seconds",
         "timing.retry_interval_seconds",
+        "backbone.log_backups",  # RotatingFileHandler never rotates without one
     }
 )
+_PERCENT_SETTINGS = frozenset(
+    {"diagnostics.pressure_swap_percent", "diagnostics.pressure_free_percent"}
+)
+_NON_NEGATIVE_SETTINGS = frozenset({"backbone.log_max_mb"})  # 0: never rotate
 
 
 def _is_absolute(path: str) -> bool:
@@ -380,6 +407,10 @@ def validate_setting(key: str, value: Any) -> Any:
             raise ValueError(f"{key}: expected an integer") from exc
         if key in _POSITIVE_SETTINGS and coerced <= 0:
             raise ValueError(f"{key}: expected a positive integer")
+        if key in _NON_NEGATIVE_SETTINGS and coerced < 0:
+            raise ValueError(f"{key}: expected zero or a positive integer")
+        if key in _PERCENT_SETTINGS and not 0 <= coerced <= 100:
+            raise ValueError(f"{key}: expected a percentage from 0 to 100")
         return coerced
     if isinstance(default, float):
         try:

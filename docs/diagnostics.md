@@ -42,10 +42,15 @@ The local data directory contains several different kinds of evidence:
   acknowledgment. It is not an audit of every agent tool call.
 - **Service health and ordinary logs:** `/health` and
   `/api/status/services` report component and scheduler information. On
-  macOS the installed service writes `<data_dir>/backbone.log`; on Linux
-  use `journalctl --user -u agent-backbone`. Scheduler counters describe the
-  current process, and a running job loop does not establish that every
-  operation inside it succeeded.
+  macOS the installed service writes `<data_dir>/backbone.log`, every entry
+  starting with a UTC timestamp (a traceback's lines follow their entry), rotated at `backbone.log_max_mb` with
+  `backbone.log_backups` older files kept (`backbone.log.1`, …); output from
+  outside logging, such as a crash during startup, goes to
+  `<data_dir>/backbone.out.log`. A service installed before this release
+  keeps its single unrotated file until you run `backbone service install`
+  again. On Linux use `journalctl --user -u agent-backbone`. Scheduler
+  counters describe the current process, and a running job loop does not
+  establish that every operation inside it succeeded.
 
 `backbone agent inspect NAME` combines live state, evidence, terminal tail,
 last reply and recent delivery previews. Use it deliberately when that
@@ -120,6 +125,33 @@ text. It returns up to 100 records, with `count`, `truncated` and
 `next_before_id` metadata. Use `GET /api/diagnostics/records?operation_id=...`
 and `before_id` if more records exist. A missing ID means that reference was not established; it is not
 evidence that the message was successfully handled.
+
+## Slow jobs and memory pressure
+
+When the machine slows down, the digest shows what the backbone saw:
+
+- **Slow jobs:** a scheduled job run that takes `diagnostics.slow_job_seconds`
+  (30) or longer is recorded as `run_slow`. Consecutive slow runs of one job
+  are one record with its count and longest run; the next ordinary run ends
+  it. The digest lists each with its job name.
+- **Memory pressure:** every `diagnostics.resource_sample_seconds` (300) the
+  backbone reads available memory and swap (`sysctl` on macOS,
+  `/proc/meminfo` on Linux). Only while swap use reaches
+  `diagnostics.pressure_swap_percent` (50) or available memory falls to
+  `diagnostics.pressure_free_percent` (10) does it record a sample, so a
+  healthy machine stores nothing. A sample is one `memory_pressure` record
+  (swap, available memory, and the resident memory of the backbone, of all
+  agents and of every other process) and an `agent_memory` record for each
+  of the ten agents whose session process trees use the most.
+
+`backbone diagnostics --since 1h` then shows the slow jobs and the latest
+sample, with its largest agents, next to the problem groups. With `--agent`,
+the sample's machine figures stay and only that agent is listed; slow jobs,
+which belong to no agent, are left out. When tmux or `ps` does not answer,
+those shares are shown as unknown rather than as zero. Resident memory
+leaves out what the system compressed or swapped, so a process can hold more
+than it shows; a large share under "other processes" points outside the
+backbone and its agents.
 
 ## Runtime errors and model observations
 

@@ -116,6 +116,48 @@ def _print_digest(data: dict) -> None:
     )
     if data.get("has_more"):
         note("  More groups exist; narrow --since or --agent, or increase --limit.")
+    slow_jobs = data.get("slow_jobs") or []
+    if slow_jobs:
+        print_table(
+            "Slow jobs",
+            ("Job", "Longest run (s)", "Slow runs", "Last seen"),
+            [
+                (
+                    job["job"],
+                    f"{(job.get('longest_ms') or 0) / 1000:.1f}",
+                    job["runs"],
+                    job["last_seen_at"],
+                )
+                for job in slow_jobs
+            ],
+        )
+    if data.get("slow_jobs_more"):
+        note("  More slow-job records exist; narrow --since or increase --limit.")
+    memory = data.get("memory")
+    if memory:
+        note(f"  Memory pressure: {memory['samples']} sample(s), latest {memory['sampled_at']}")
+        note(
+            f"    swap {memory.get('swap_used_mb', '?')} of {memory.get('swap_total_mb', '?')} MB"
+            f" used; {memory.get('available_mb', '?')} of"
+            f" {memory.get('memory_total_mb', '?')} MB available"
+        )
+        note(
+            f"    resident: backbone {memory.get('backbone_rss_mb', '?')} MB,"
+            f" agents {memory.get('agents_rss_mb', '?')} MB,"
+            f" other processes {memory.get('other_rss_mb', '?')} MB"
+        )
+        if "agents_rss_mb" not in memory:
+            note("    agent memory could not be read (ps or tmux was unavailable)")
+        else:
+            print_table(
+                "Largest agents",
+                ("Agent", "Resident (MB)", "Processes"),
+                [
+                    (agent["agent_name"], agent.get("rss_mb", "?"), agent.get("processes", "?"))
+                    for agent in memory.get("agents", [])
+                ],
+                empty="No agent in this sample (only the ten largest are kept).",
+            )
     informational = data.get("informational", {})
     if informational:
         print_table(

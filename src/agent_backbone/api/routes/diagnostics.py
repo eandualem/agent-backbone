@@ -91,6 +91,12 @@ class DiagnosticDigest(BaseModel):
     informational: dict[str, int] = Field(default_factory=dict)
     deliveries: DeliveryHistory
     queue: QueueMetadata
+    slow_jobs: list[dict] = Field(default_factory=list)
+    """Job runs over ``diagnostics.slow_job_seconds``: one row per slow episode."""
+    slow_jobs_more: bool = False
+    """More slow episodes exist than ``limit`` returned."""
+    memory: dict | None = None
+    """The latest memory-pressure sample in the window, with its largest agents."""
 
 
 class DiagnosticRecords(BaseModel):
