@@ -1576,6 +1576,10 @@ async def test_a_launch_killed_after_its_hook_reported_stays_the_last_launch(tmp
     [
         ("claude", False, True),  # a fresh conversation starts over
         ("claude", True, False),  # a resumed one keeps what it was sent
+        ("codex", False, True),
+        ("codex", True, False),
+        ("opencode", False, True),
+        ("opencode", True, False),
         ("shell", True, True),  # a plain shell has no conversation to resume
     ],
 )
