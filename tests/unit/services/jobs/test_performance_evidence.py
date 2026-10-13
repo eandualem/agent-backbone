@@ -137,3 +137,11 @@ async def test_an_agents_digest_lists_only_that_agent_and_no_jobs(db, config):
     assert digest["slow_jobs"] == []
     assert [agent["agent_name"] for agent in digest["memory"]["agents"]] == [name]
     assert digest["memory"]["swap_used_mb"] == _SWAPPING["swap_used_mb"]  # machine context stays
+
+
+async def test_a_long_slow_job_list_says_it_is_cut_off(db):
+    for _ in range(3):  # three episodes: each ends with an ordinary run
+        await observe_duration(db, source="prune", duration_ms=40_000, threshold_ms=30_000)
+        await observe_duration(db, source="prune", duration_ms=1_000, threshold_ms=30_000)
+    digest = await db.diagnostics.digest(limit=2)
+    assert len(digest["slow_jobs"]) == 2 and digest["slow_jobs_more"]

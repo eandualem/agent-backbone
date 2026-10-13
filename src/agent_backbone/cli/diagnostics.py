@@ -131,6 +131,8 @@ def _print_digest(data: dict) -> None:
                 for job in slow_jobs
             ],
         )
+    if data.get("slow_jobs_more"):
+        note("  More slow-job records exist; narrow --since or increase --limit.")
     memory = data.get("memory")
     if memory:
         note(f"  Memory pressure: {memory['samples']} sample(s), latest {memory['sampled_at']}")
@@ -154,7 +156,7 @@ def _print_digest(data: dict) -> None:
                     (agent["agent_name"], agent.get("rss_mb", "?"), agent.get("processes", "?"))
                     for agent in memory.get("agents", [])
                 ],
-                empty="No agent sessions were running.",
+                empty="No agent in this sample (only the ten largest are kept).",
             )
     informational = data.get("informational", {})
     if informational:

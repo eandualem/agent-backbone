@@ -350,7 +350,7 @@ class DiagnosticRepo(Repo):
                     select(DiagnosticORM)
                     .where(*window, DiagnosticORM.code == "run_slow")
                     .order_by(DiagnosticORM.last_seen_at.desc(), DiagnosticORM.id.desc())
-                    .limit(limit)
+                    .limit(limit + 1)
                 )
             ).mappings()
             # Jobs belong to no agent: an agent's digest has none.
@@ -443,7 +443,8 @@ class DiagnosticRepo(Repo):
                 "outcomes": dict(delivery_counts),
             },
             "queue": queue,
-            "slow_jobs": slow_jobs,
+            "slow_jobs": slow_jobs[:limit],
+            "slow_jobs_more": len(slow_jobs) > limit,
             "memory": memory,
         }
 
