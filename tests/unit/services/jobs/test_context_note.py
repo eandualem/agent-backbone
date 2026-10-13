@@ -227,3 +227,12 @@ async def test_turning_the_note_off_withdraws_one_not_taken(tmp_path, db):
     config.settings["usage.context_note_tokens"] = 0
     assert await note_context_size(config, db, _states()) == []
     assert _offered(config) == []
+
+
+async def test_a_failed_request_with_no_tokens_is_not_a_compaction(tmp_path, db):
+    config = _config(tmp_path, runtime="opencode")
+    await _request(db, 250_000, runtime="opencode")
+    assert await note_context_size(config, db, _states("opencode")) == ["desk"]
+    await _request(db, 0, runtime="opencode")  # a failed request records all-zero counters
+    assert await note_context_size(config, db, _states("opencode")) == []
+    assert len(_offered(config)) == 1  # the note is still there

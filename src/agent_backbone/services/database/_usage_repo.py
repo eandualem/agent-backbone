@@ -229,7 +229,9 @@ class UsageRepo(Repo):
         ]
 
     async def latest_context_tokens(self, identity: str) -> int | None:
-        """The context size of the conversation's most recent request that reported one."""
+        """The context size of the conversation's most recent request that measured one.
+
+        Zero is not a measurement: a failed request (OpenCode) records no tokens."""
         async with self._tx() as conn:
             rows = await conn.execute(
                 select(_E.c.data)
@@ -239,7 +241,7 @@ class UsageRepo(Repo):
             )
             for (data,) in rows:
                 tokens = json.loads(data).get("context_tokens")
-                if tokens is not None:
+                if tokens:
                     return tokens
         return None
 
