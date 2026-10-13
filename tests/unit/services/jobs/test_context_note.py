@@ -197,6 +197,8 @@ async def test_one_agent_that_cannot_be_offered_holds_up_no_other(tmp_path, db):
 
     with patch("agent_backbone.services.jobs.context_note._offer", side_effect=offer):
         assert await note_context_size(config, db, states) == ["post"]
+    (failure,) = await db.diagnostics.query()
+    assert (failure["code"], failure["agent_name"]) == ("context_note_failed", "desk")
 
 
 @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])

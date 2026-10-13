@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.hooks.backbone_state import CONTEXT_DIR, offer_context
+from agent_backbone.services.jobs.diagnostics import observe_job
 from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.usage import usage_id
 
@@ -78,8 +79,17 @@ async def note_context_size(
         try:
             if await _note(config, db, name, snapshot, first, step):
                 noted.append(name)
-        except OSError:  # one agent's unwritable directory never holds up the rest
+        except OSError as exc:  # one agent's unwritable directory never holds up the rest
             log.warning("Context-size note for %s could not be offered", name, exc_info=True)
+            await observe_job(
+                db,
+                source="agent-monitor",
+                stage="context_note",
+                agent_name=name,
+                error_type=type(exc).__name__,
+            )
+        else:
+            await observe_job(db, source="agent-monitor", stage="context_note", agent_name=name)
     return noted
 
 
