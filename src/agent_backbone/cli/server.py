@@ -128,7 +128,7 @@ async def _up_detached(config: BackboneConfig, log_file: Path | None = None) -> 
         return 0
     command = [sys.executable, "-m", "agent_backbone.cli", "up"]
     if log_file is not None:
-        command += ["--log-file", str(log_file.expanduser().resolve())]
+        command += ["--log-file", str(log_file)]
     env = {"BACKBONE_DATA_DIR": str(config.data_dir)}
     ok = await start_session(session, working_dir=str(Path.cwd()), command=command, environment=env)
     if ok:
@@ -144,9 +144,11 @@ async def _up_detached(config: BackboneConfig, log_file: Path | None = None) -> 
 
 def cmd_up(args: argparse.Namespace) -> int:
     config = asyncio.run(_common.load_config())
+    # A quoted `~/…` reaches us unexpanded; a detached run starts elsewhere.
+    log_file = args.log_file.expanduser().resolve() if args.log_file else None
     if args.detach:
-        return asyncio.run(_up_detached(config, args.log_file))
-    _run_server(config, reload=args.reload, log_file=args.log_file)
+        return asyncio.run(_up_detached(config, log_file))
+    _run_server(config, reload=args.reload, log_file=log_file)
     return 0
 
 

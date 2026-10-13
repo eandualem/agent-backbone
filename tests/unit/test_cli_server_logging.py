@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import logging.config
 import re
+from pathlib import Path
 
 import pytest
 
@@ -73,7 +74,23 @@ async def test_a_detached_backbone_keeps_its_log_file(tmp_path):
     ):
         assert await _up_detached(make_config(tmp_path), tmp_path / "backbone.log") == 0
     command = start.call_args.kwargs["command"]
-    assert command[-3:] == ["up", "--log-file", str((tmp_path / "backbone.log").resolve())]
+    assert command[-3:] == ["up", "--log-file", str(tmp_path / "backbone.log")]
+
+
+def test_a_quoted_home_path_is_expanded_before_logging_starts(tmp_path, monkeypatch):
+    import argparse
+    from unittest.mock import AsyncMock, patch
+
+    from agent_backbone.cli import server
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    args = argparse.Namespace(detach=False, reload=False, log_file=Path("~/backbone.log"))
+    with (
+        patch.object(server._common, "load_config", AsyncMock(return_value=make_config(tmp_path))),
+        patch.object(server, "_run_server") as run,
+    ):
+        assert server.cmd_up(args) == 0
+    assert run.call_args.kwargs["log_file"] == (tmp_path / "backbone.log").resolve()
 
 
 def test_a_log_keeps_at_least_one_backup():
