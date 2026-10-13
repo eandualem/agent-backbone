@@ -29,6 +29,14 @@ class UsageRepo(Repo):
             row = (await conn.execute(select(_S).where(_S.c.id == identity))).mappings().one()
             return _session(row)
 
+    async def find(self, identity: str) -> dict | None:
+        """One conversation, or None when it was never recorded."""
+        async with self._tx() as conn:
+            row = (
+                (await conn.execute(select(_S).where(_S.c.id == identity))).mappings().one_or_none()
+            )
+            return _session(row) if row else None
+
     async def sessions(self) -> list[dict]:
         async with self._tx() as conn:
             return [_session(r) for r in (await conn.execute(select(_S))).mappings()]

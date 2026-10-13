@@ -25,6 +25,7 @@ from agent_backbone.usage import usage_id
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
+    from agent_backbone.services.agents import StateSnapshot
     from agent_backbone.services.database import BackboneDB
     from agent_backbone.services.jobs.monitor import AgentStates
 
@@ -72,38 +73,52 @@ async def note_context_size(
         for name in states:  # turned off: nothing offered earlier is handed over
             await asyncio.to_thread(_withdraw, config.state_dir, name)
         return []
-    sessions = {s["id"]: s for s in await db.usage.sessions()}
     noted = []
     for name, snapshot in states.items():
-        spec = config.agents.get(name)
-        runtime = RUNTIMES.get(snapshot.runtime or "")
-        if spec is None or spec.swarm is not None or not snapshot.session_id:
-            continue
-        if runtime is None or not runtime.hook_context:
-            continue  # recorded as unavailable in the capability contract
-        identity = usage_id(snapshot.runtime, snapshot.session_id)
-        session = sessions.get(identity)
-        # A source still being read may end in a smaller context (a compaction);
-        # ``detail`` names an incomplete read or an error, also on a partial record.
-        if session is None or session["coverage"] == "catching_up" or session["detail"]:
-            continue
-        tokens = await db.usage.latest_context_tokens(identity)
-        if tokens is None:
-            continue
-        if tokens < session["context_noted"]:
-            # Compacted since: a note not taken yet would name a size that is gone.
-            await asyncio.to_thread(_withdraw, config.state_dir, name)
-        if tokens < first:
-            continue
-        level = first + (tokens - first) // step * step if step > 0 else first
-        if level <= session["context_noted"]:
-            continue
-        key = f"{_KEY_PREFIX}{hashlib.sha256(identity.encode()).hexdigest()[:12]}-{level}"
-        # Offered before it is recorded: a failed write is tried again next tick.
-        await asyncio.to_thread(
-            _offer, config.state_dir, name, key, snapshot.session_id, note_text(tokens)
-        )
-        await db.usage.note_context(identity, level)
-        log.info("Context-size note offered to %s at %d tokens", name, tokens)
-        noted.append(name)
+        try:
+            if await _note(config, db, name, snapshot, first, step):
+                noted.append(name)
+        except OSError:  # one agent's unwritable directory never holds up the rest
+            log.warning("Context-size note for %s could not be offered", name, exc_info=True)
     return noted
+
+
+async def _note(
+    config: BackboneConfig,
+    db: BackboneDB,
+    name: str,
+    snapshot: StateSnapshot,
+    first: int,
+    step: int,
+) -> bool:
+    spec = config.agents.get(name)
+    runtime = RUNTIMES.get(snapshot.runtime or "")
+    if spec is None or spec.swarm is not None or not snapshot.session_id:
+        return False
+    if runtime is None or not runtime.hook_context:
+        return False  # recorded as unavailable in the capability contract
+    identity = usage_id(snapshot.runtime, snapshot.session_id)
+    session = await db.usage.find(identity)
+    # A source still being read may end in a smaller context (a compaction);
+    # ``detail`` names an incomplete read or an error, also on a partial record.
+    if session is None or session["coverage"] == "catching_up" or session["detail"]:
+        return False
+    tokens = await db.usage.latest_context_tokens(identity)
+    if tokens is None:
+        return False
+    if tokens < session["context_noted"]:
+        # Compacted since: a note not taken yet would name a size that is gone.
+        await asyncio.to_thread(_withdraw, config.state_dir, name)
+    if tokens < first:
+        return False
+    level = first + (tokens - first) // step * step if step > 0 else first
+    if level <= session["context_noted"]:
+        return False
+    key = f"{_KEY_PREFIX}{hashlib.sha256(identity.encode()).hexdigest()[:12]}-{level}"
+    # Offered before it is recorded: a failed write is tried again next tick.
+    await asyncio.to_thread(
+        _offer, config.state_dir, name, key, snapshot.session_id, note_text(tokens)
+    )
+    await db.usage.note_context(identity, level)
+    log.info("Context-size note offered to %s at %d tokens", name, tokens)
+    return True

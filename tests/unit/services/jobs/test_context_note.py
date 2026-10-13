@@ -10,6 +10,7 @@ import pytest
 from agent_backbone.config import AgentsConfig, AgentSpec
 from agent_backbone.hooks import backbone_state as bb
 from agent_backbone.services.agents import AgentState, StateSnapshot
+from agent_backbone.services.jobs import context_note as cn
 from agent_backbone.services.jobs.context_note import note_context_size
 from agent_backbone.usage import UsageEvent
 from tests.conftest import make_config
@@ -161,12 +162,41 @@ async def test_a_note_is_held_while_the_conversation_is_still_being_read(
 async def test_a_note_that_could_not_be_written_is_tried_again(tmp_path, db):
     config = _config(tmp_path)
     await _request(db, 210_000)
-    with (
-        patch("agent_backbone.services.jobs.context_note._offer", side_effect=OSError),
-        pytest.raises(OSError),
-    ):
-        await note_context_size(config, db, _states())
+    with patch("agent_backbone.services.jobs.context_note._offer", side_effect=OSError):
+        assert await note_context_size(config, db, _states()) == []
     assert await note_context_size(config, db, _states()) == ["desk"]
+
+
+async def test_one_agent_that_cannot_be_offered_holds_up_no_other(tmp_path, db):
+    agents = AgentsConfig(
+        specs={name: AgentSpec(name=name, dir=str(tmp_path)) for name in ("desk", "post")}
+    )
+    config = make_config(tmp_path, agents=agents)
+    await _request(db, 210_000)
+    identity = await db.usage.remember("post", "claude", "p", at=T)
+    row = await db.usage.session(identity)
+    event = UsageEvent(key="p0", at=T, context_tokens=230_000)
+    await db.usage.ingest(
+        row,
+        path="/p",
+        offset=1,
+        cursor={},
+        events=[event],
+        coverage="measured",
+        detail="",
+        prices={},
+        observed_at=T,
+    )
+    states = {**_states(), "post": _states(session="p")["desk"]}
+    real = cn._offer
+
+    def offer(state_dir, agent, *args):
+        if agent == "desk":
+            raise PermissionError
+        return real(state_dir, agent, *args)
+
+    with patch("agent_backbone.services.jobs.context_note._offer", side_effect=offer):
+        assert await note_context_size(config, db, states) == ["post"]
 
 
 @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
