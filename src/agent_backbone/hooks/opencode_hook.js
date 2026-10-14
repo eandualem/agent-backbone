@@ -267,7 +267,8 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
   const t = target();
   if (!t) return {};
   const children = new Set(); // subagent sessions, never the agent's own state
-  const pending = new Set(); // permission and plan requests waiting for an answer
+  const pending = new Map(); // permission and plan requests waiting for an answer -> who asked
+  const held = new Map(); // session whose turn ended while a request waited -> what worked then
   const planCalls = new Set(); // plan_exit calls whose question is still to come
   const turns = new Map(); // sessionID -> what drives its turn: agent, model, ...
   const roots = new Set(); // sessions known to have no parent
@@ -289,6 +290,8 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
           if (info?.parentID) {
             children.add(sessionID);
             working.delete(sessionID); // its idle is ignored from now on
+            held.delete(sessionID);
+            withdraw(sessionID);
           } else if (info?.id) roots.add(sessionID);
         } catch { /* unknown stays unknown */ }
         lookups.delete(sessionID);
@@ -334,6 +337,40 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
     turns.clear(); // the next turn's requests say what drives it
     record(t, event, STATE_IDLE, null, { session_id: sessionID });
     retireSteers(t);
+  };
+
+  // A turn's end waits while a request does; it counts once none waits.
+  const idle = (event, sessionID) => {
+    if (pending.size === 0) endTurn(event, sessionID);
+    else held.set(sessionID, new Set(working));
+  };
+
+  // Its requests answered, the agent's work goes on: a turn's end seen while
+  // they waited is not counted.
+  const resume = (event, sessionID) => {
+    if (pending.size > 0) return;
+    held.clear();
+    record(t, event, STATE_BUSY, null, { session_id: sessionID });
+  };
+
+  // A session that asked before it was known as a subagent: its requests were
+  // never the agent's, and a turn that ended while they waited ends now.
+  const withdraw = (sessionID) => {
+    const asked = [...pending].filter(([, by]) => by === sessionID);
+    if (asked.length === 0) return;
+    for (const [id] of asked) pending.delete(id);
+    if (pending.size > 0) return;
+    const ended = [...held.keys()];
+    for (const [id, was] of held) {
+      working.delete(id);
+      // Its subagents are done too; work begun since goes on.
+      if (roots.has(id)) for (const other of was) working.delete(other);
+    }
+    held.clear();
+    const own = (ids) => ids.find((id) => roots.has(id)) ?? ids[0];
+    const event = "session.subagent";
+    if (working.size === 0) endTurn(event, own(ended) ?? root ?? sessionID);
+    else record(t, event, STATE_BUSY, null, { session_id: own([...working]) });
   };
 
   let reloading = false;
@@ -404,17 +441,19 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
             // A turn starts when nothing was working: the steer check's receipt.
             const starts = working.size === 0;
             working.add(p.sessionID);
+            held.delete(p.sessionID);
+            for (const was of held.values()) was.delete(p.sessionID);
             learn(p.sessionID);
             record(t, event.type, STATE_BUSY, null, {
               session_id: p.sessionID,
               ...(starts ? { prompted_at: Date.now() / 1000 } : {}),
             });
-          } else if (type === "idle" && pending.size === 0) endTurn(event.type, p.sessionID);
+          } else if (type === "idle") idle(event.type, p.sessionID);
           return;
         }
         case "session.idle": {
           if (isChild(p.sessionID)) return;
-          if (pending.size === 0) endTurn(event.type, p.sessionID);
+          idle(event.type, p.sessionID);
           return;
         }
         case "message.updated": {
@@ -447,20 +486,21 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
         }
         case "permission.asked": {
           if (isChild(p.sessionID)) return;
-          pending.add(p.id ?? p.requestID ?? "?");
+          pending.set(p.id ?? p.requestID ?? "?", p.sessionID);
           record(t, event.type, STATE_WAITING, REASON_PERMISSION, { session_id: p.sessionID });
+          learn(p.sessionID); // a subagent's that is not known yet withdraws it
           return;
         }
         case "permission.replied": {
           if (isChild(p.sessionID)) return;
           pending.delete(p.requestID ?? p.id ?? "?");
-          if (pending.size === 0) record(t, event.type, STATE_BUSY, null, { session_id: p.sessionID });
+          resume(event.type, p.sessionID);
           return;
         }
         case "question.asked": {
           // Only plan_exit's question is a plan decision; the agent's own session asked it.
           if (!planCalls.delete(p.tool?.callID)) return;
-          pending.add(p.id);
+          pending.set(p.id, p.sessionID);
           const plan = savePlan(t, p.questions?.[0]?.question, worktree ?? directory ?? process.cwd());
           record(t, event.type, STATE_WAITING, REASON_PLAN, { session_id: p.sessionID, ...plan });
           return;
@@ -468,7 +508,7 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
         case "question.replied":
         case "question.rejected": {
           if (!pending.delete(p.requestID)) return;
-          if (pending.size === 0) record(t, event.type, STATE_BUSY, null, { session_id: p.sessionID });
+          resume(event.type, p.sessionID);
           return;
         }
         default:
