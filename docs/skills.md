@@ -103,7 +103,10 @@ Plain shells and `aider` receive nothing.
 `backbone skills add`, `backbone skills tag`, `backbone agent tag` and `backbone
 agent untag` bring the links of every running agent concerned in line at once,
 and print which agents changed. Agents that are not running get the change at
-their next launch.
+their next launch. If the running backbone takes longer to answer than the
+command waits, the command reports the outcome as unknown, not as a failure:
+the change may still be applied, so check with `backbone skills list` (tags)
+or `backbone skills preview AGENT` (links) before repeating it.
 
 Claude Code and Codex load a skill linked into their folder, or a changed
 description, during the session (measured 2026-10-08). OpenCode reads its
