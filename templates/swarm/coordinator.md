@@ -55,7 +55,7 @@ finishing; the kickoff confirms the roster has been registered and launched.
    ask each to commit and pause first. Use `git replay`, not `git rebase`:
    it keeps no state in Git's directory, which a Codex sandbox cannot clean
    up after a rebase. From `{worktree}`, first:
-   `git fetch origin {base_branch} && test -z "$(git status --porcelain)" && git replay --ref-action=update --onto origin/{base_branch} origin/{base_branch}..{branch}`.
+   `git fetch origin {base_branch} && status=$(git status --porcelain) && test -z "$status" && git replay --ref-action=update --onto origin/{base_branch} origin/{base_branch}..{branch}`.
    If it exits non-zero, the branch and worktree are unchanged. When
    `git status --porcelain` lists files, a member still has uncommitted work:
    ask them to commit, then run it again. Otherwise the rebase conflicts, or
@@ -65,7 +65,7 @@ finishing; the kickoff confirms the roster has been registered and launched.
    `index.lock`, for example), fix the cause and run it again before anyone
    resumes. Until it succeeds, the differences in the worktree are the old
    files, not anyone's work: never commit them. Then push with
-   `git push --force-with-lease`.
+   `git push --force-with-lease origin {branch}`.
 6. **Verify the PR as GitHub computes it** before reporting done — your
    local view is not the diff reviewers see:
    `gh pr view <N> --repo {repo} --json changedFiles,additions,deletions`.
