@@ -523,6 +523,23 @@ class TestDeliveryRetryQueueDrain:
         (notice,) = await db.queue.dequeue("leo")
         assert "- to ike, queued 13:24Z: " in notice["message"]
 
+    async def test_a_steer_to_the_working_agent_leaves_its_blocker_named(self, db, config):
+        for outcome, kind in (("agent_working", "direct_message"), ("offered", "steer")):
+            await db.deliveries.record(
+                issue_number=None,
+                target_entity="ike",
+                session_name="ike",
+                outcome=outcome,
+                kind=kind,
+            )
+        await self._expire(
+            db,
+            config,
+            [{"session_name": "ike", "sender": "leo", "message": "[via:backbone from:leo] hi"}],
+        )
+        (notice,) = await db.queue.dequeue("leo")
+        assert "- to ike, queued 13:24Z, blocked by agent_working: " in notice["message"]
+
     async def test_a_failed_notice_rolls_the_expiry_back(self, db, config):
         from sqlalchemy import text
 
