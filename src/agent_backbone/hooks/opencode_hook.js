@@ -268,7 +268,7 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
   if (!t) return {};
   const children = new Set(); // subagent sessions, never the agent's own state
   const pending = new Map(); // permission and plan requests waiting for an answer -> who asked
-  const held = new Set(); // sessions whose turn ended while a request waited
+  const held = new Map(); // session whose turn ended while a request waited -> what worked then
   const planCalls = new Set(); // plan_exit calls whose question is still to come
   const turns = new Map(); // sessionID -> what drives its turn: agent, model, ...
   const roots = new Set(); // sessions known to have no parent
@@ -342,7 +342,7 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
   // A turn's end waits while a request does; it counts once none waits.
   const idle = (event, sessionID) => {
     if (pending.size === 0) endTurn(event, sessionID);
-    else held.add(sessionID);
+    else held.set(sessionID, new Set(working));
   };
 
   // Its requests answered, the agent's work goes on: a turn's end seen while
@@ -360,15 +360,17 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
     if (asked.length === 0) return;
     for (const [id] of asked) pending.delete(id);
     if (pending.size > 0) return;
-    const ended = [...held];
-    held.clear();
-    for (const id of ended) {
+    const ended = [...held.keys()];
+    for (const [id, was] of held) {
       working.delete(id);
-      if (roots.has(id)) working.clear();
+      // Its subagents are done too; work begun since goes on.
+      if (roots.has(id)) for (const other of was) working.delete(other);
     }
+    held.clear();
+    const own = (ids) => ids.find((id) => roots.has(id)) ?? ids[0];
     const event = "session.subagent";
-    if (working.size === 0) endTurn(event, ended.at(-1) ?? root ?? sessionID);
-    else record(t, event, STATE_BUSY, null, { session_id: [...working][0] });
+    if (working.size === 0) endTurn(event, own(ended) ?? root ?? sessionID);
+    else record(t, event, STATE_BUSY, null, { session_id: own([...working]) });
   };
 
   let reloading = false;
@@ -440,6 +442,7 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
             const starts = working.size === 0;
             working.add(p.sessionID);
             held.delete(p.sessionID);
+            for (const was of held.values()) was.delete(p.sessionID);
             learn(p.sessionID);
             record(t, event.type, STATE_BUSY, null, {
               session_id: p.sessionID,

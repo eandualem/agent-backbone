@@ -452,6 +452,39 @@ await idle("root"); seen();
     ]
 
 
+def test_a_late_turn_end_names_the_agent_session_among_unknown_ones(tmp_path):
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "root"}});
+await status("root", "busy");
+await status("a", "busy");
+await status("b", "busy");
+await ask("a", "p");
+await idle("root");
+await idle("b");
+await answer("a", "root"); seen();
+""",
+    )
+    assert states == [["idle", "root"]]
+
+
+def test_a_late_turn_end_leaves_work_begun_since_running(tmp_path):
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "a"}});
+await status("a", "busy");
+await ask("sub", "p");
+await idle("a");
+await event("session.created", {info: {id: "b"}});
+await status("b", "busy");
+await answer("sub", "a"); seen();
+""",
+    )
+    assert states == [["busy", "b"]]
+
+
 def test_a_session_whose_lookup_never_answers_still_reports_its_turn(tmp_path):
     # The agent's own session resumed from an earlier run, its lookup pending.
     states = _sessions(
