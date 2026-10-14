@@ -310,6 +310,13 @@ const { AgentBackbone } = await import(process.argv[1]);
 const hook = await AgentBackbone({client: {instance: {dispose: async () => disposed.push(1)}}});
 const check = globalThis[Symbol.for("agent-backbone.skills-reload")].check;
 const marker = `${process.env.BACKBONE_STATE_DIR}/app.skills-reload`;
+// A change made after the plugin loaded. Dated explicitly: a coarse filesystem
+// clock (Linux before 6.13) can stamp a file just written as older than that.
+const change = () => {
+  fs.writeFileSync(marker, "");
+  const later = new Date(Date.now() + 1000);
+  fs.utimesSync(marker, later, later);
+};
 const status = (type) => hook.event({event: {type: "session.status", properties: {
     sessionID: "root", status: {type}}}});
 """
@@ -321,7 +328,7 @@ def test_changed_skills_are_reloaded_between_turns_only(tmp_path):
         _RELOAD
         + """
 await status("busy");
-fs.writeFileSync(marker, "");
+change();
 await check();
 const duringTurn = [disposed.length, fs.existsSync(marker)];
 await status("idle");
@@ -357,10 +364,10 @@ def test_a_failed_reload_does_not_block_the_next_one(tmp_path):
         + """
 const state = `${process.env.BACKBONE_STATE_DIR}/app.json`;
 fs.mkdirSync(state);  // the state file cannot be written
-fs.writeFileSync(marker, "");
+change();
 await check();
 fs.rmdirSync(state);
-fs.writeFileSync(marker, "");
+change();
 await check();
 console.log(JSON.stringify([disposed.length, fs.existsSync(marker)]));
 """,
