@@ -40,8 +40,9 @@ The swarm exists to complete one GitHub issue: **{repo}#{issue_number}**
   publishes the human-facing progress report. Historical saved reports remain
   readable, but swarm publication is refused by the service.
 - Inherited policies govern how members do the work. All outside contact
-  goes through the coordinator: the human owner, Chrome tabs or handoffs,
-  backbone reports, and messages outside the swarm.
+  goes through the coordinator to **{initiator}**, which owns it: the human
+  owner, Chrome tabs or handoffs, backbone reports, and messages outside the
+  swarm.
 
 Full playbooks for any backbone capability: `backbone help` lists the
 topics, `backbone help messaging` (etc.) prints one.
