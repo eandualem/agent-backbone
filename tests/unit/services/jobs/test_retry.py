@@ -523,8 +523,9 @@ class TestDeliveryRetryQueueDrain:
         (notice,) = await db.queue.dequeue("leo")
         assert "- to ike, queued 13:24Z: " in notice["message"]
 
-    async def test_a_later_paste_clears_the_named_blocker(self, db, config):
-        for outcome in ("unattended_copy_mode", "delivered"):
+    @pytest.mark.parametrize("later", ["delivered", "awaiting_ack"])
+    async def test_a_later_readiness_pass_clears_the_named_blocker(self, db, config, later):
+        for outcome in ("unattended_copy_mode", later):
             await db.deliveries.record(
                 issue_number=None,
                 target_entity="ike",

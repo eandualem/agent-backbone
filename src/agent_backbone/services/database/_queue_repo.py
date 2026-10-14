@@ -597,10 +597,17 @@ class QueueRepo(Repo):
             rows = [dict(row._mapping) for row in result.fetchall()]
             # Each session's last readiness check while its rows waited: the
             # sender's notice names its condition when that held the queue. A
-            # paste, delivered or failed, means it had cleared. A steer, a
+            # paste, delivered or failed, or a wait for an unconfirmed paste
+            # (awaiting_ack) means it had cleared. A steer, a
             # hook-context offer or an inbox acknowledgement reaches the agent
             # without a check, so those receipts do not count.
-            checks = [*sorted(BLOCKED_OUTCOMES), "delivered", "retried", "delivery_failed"]
+            checks = [
+                *sorted(BLOCKED_OUTCOMES),
+                "delivered",
+                "retried",
+                "delivery_failed",
+                "awaiting_ack",
+            ]
             last_check: dict[str, tuple[str, str] | None] = {}
             for session_name in {row.get("session_name") or "" for row in rows}:
                 since = min(
