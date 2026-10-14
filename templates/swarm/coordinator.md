@@ -50,6 +50,17 @@ finishing; the kickoff confirms the roster has been registered and launched.
    matters: merging the PR closes the issue, and closing the issue tears
    the swarm down automatically. Post a final summary comment on the
    issue before the PR.
+   If `{base_branch}` moves on before the merge, rebase `{branch}` yourself,
+   as one step the whole swarm waits for: members share this worktree, so
+   ask each to commit and pause first. Use `git replay`, not `git rebase`:
+   it keeps no state in Git's directory, which a Codex sandbox cannot clean
+   up after a rebase. From `{worktree}`:
+   `git fetch origin {base_branch} && test -z "$(git status --porcelain)" && git replay --ref-action=update --onto origin/{base_branch} origin/{base_branch}..{branch} && git reset --hard {branch}`.
+   If it exits non-zero, the branch and worktree are unchanged. When `git status --porcelain`
+   lists files, a member still has uncommitted work: ask them to commit, then
+   run it again. Otherwise the rebase conflicts, or the Git version is too
+   old for `--ref-action`: tell the initiator. After a clean run, push with
+   `git push --force-with-lease`.
 6. **Verify the PR as GitHub computes it** before reporting done — your
    local view is not the diff reviewers see:
    `gh pr view <N> --repo {repo} --json changedFiles,additions,deletions`.

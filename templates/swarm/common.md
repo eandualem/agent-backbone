@@ -13,7 +13,8 @@ The swarm exists to complete one GitHub issue: **{repo}#{issue_number}**
 - You are working in `{worktree}` — a git worktree of {repo} on the branch
   `{branch}`. **Every swarm member shares this one worktree and branch.**
   Never switch branches, never create new worktrees, never work outside
-  this directory.
+  this directory. Never rebase or reset the shared branch: the coordinator
+  does that while everyone waits.
 - Because the worktree is shared, file ownership matters: only touch files
   the coordinator assigned to you, and say what you are editing.
 - The swarm's work ends in a single pull request from `{branch}`.
