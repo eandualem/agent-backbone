@@ -506,6 +506,23 @@ class TestDeliveryRetryQueueDrain:
         assert "- to ike, queued 13:24Z, blocked by unattended_copy_mode: " in queued["leo"]
         assert "blocked by" not in queued["ike"]  # the recipient's own notice
 
+    async def test_a_cleared_condition_is_not_named_after_a_later_failure(self, db, config):
+        for outcome in ("unattended_copy_mode", "delivery_failed"):
+            await db.deliveries.record(
+                issue_number=None,
+                target_entity="ike",
+                session_name="ike",
+                outcome=outcome,
+                kind="direct_message",
+            )
+        await self._expire(
+            db,
+            config,
+            [{"session_name": "ike", "sender": "leo", "message": "[via:backbone from:leo] hi"}],
+        )
+        (notice,) = await db.queue.dequeue("leo")
+        assert "- to ike, queued 13:24Z: " in notice["message"]
+
     async def test_a_failed_notice_rolls_the_expiry_back(self, db, config):
         from sqlalchemy import text
 

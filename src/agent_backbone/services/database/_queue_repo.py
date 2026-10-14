@@ -597,22 +597,22 @@ class QueueRepo(Repo):
             rows = [dict(row._mapping) for row in result.fetchall()]
             for row in rows:
                 await self._ensure_operation_id(conn, row)
-                # The condition that last held the session's queue while this
-                # row waited: the sender's notice names it.
-                blocked = await conn.execute(
+                # The session's last attempt while this row waited: the sender's
+                # notice names its condition when that held the queue.
+                last = await conn.execute(
                     text(
                         """SELECT outcome FROM deliveries
-                           WHERE session_name = :session_name AND outcome IN :blocked
+                           WHERE session_name = :session_name AND outcome != 'expired'
                              AND created_at >= :enqueued_at
                            ORDER BY id DESC LIMIT 1"""
-                    ).bindparams(bindparam("blocked", expanding=True)),
+                    ),
                     {
                         "session_name": row.get("session_name") or "",
-                        "blocked": sorted(BLOCKED_OUTCOMES),
                         "enqueued_at": row.get("enqueued_at") or "",
                     },
                 )
-                row["blocked_by"] = blocked.scalar_one_or_none()
+                outcome = last.scalar_one_or_none()
+                row["blocked_by"] = outcome if outcome in BLOCKED_OUTCOMES else None
                 message = row.get("message") or ""
                 delivery = await conn.execute(
                     text(
