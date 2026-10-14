@@ -6,7 +6,7 @@ run by agent-backbone (a local control plane for terminal AI agents).
 ## The task
 
 The swarm exists to complete one GitHub issue: **{repo}#{issue_number}**
-({issue_url}). Read it before doing anything else (`gh issue view {issue_number} --repo {repo}`).
+({issue_url}). Read it before doing anything else (`gh issue view {issue_number} --repo {repo_shell}`).
 
 ## Your environment
 

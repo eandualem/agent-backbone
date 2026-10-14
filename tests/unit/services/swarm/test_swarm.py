@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -159,6 +160,8 @@ class TestBriefs:
             "base_branch": "v2",
             "worktree": "/x/.backbone/swarms/research",
             "members": "research-coordinator, research-scout-1",
+            "repo_shell": "acme/app",
+            "coordinator_shell": "research-coordinator",
         }
         brief = render_brief("scout", facts)
         assert "You are the agent **research-scout-1**" in brief
@@ -186,6 +189,20 @@ class TestBriefs:
         brief = render_brief("coordinator", facts)
         assert "git fetch origin refs/heads/'topic/$(id)' &&" in brief
         assert "--onto FETCH_HEAD FETCH_HEAD..swarm/research`" in brief
+
+    def test_template_commands_take_only_shell_quoted_values(self):
+        """A branch, repository or agent name in a command must not run as code (#424).
+
+        `{issue_number}` is always an integer."""
+        templates = Path(__file__).resolve().parents[4] / "templates"
+        raw = [
+            f"{path.relative_to(templates)}: {{{name}}}"
+            for path in sorted(templates.rglob("*.md"))
+            for command in re.findall(r"`((?:gh|git|backbone) [^`]*)`", path.read_text())
+            for name in re.findall(r"\{([a-z_]+)\}", command)
+            if not name.endswith("_shell") and name != "issue_number"
+        ]
+        assert raw == []
 
     def test_unknown_role_falls_back_to_worker(self):
         brief = render_brief("cartographer", {"role": "cartographer"})

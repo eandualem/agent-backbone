@@ -117,6 +117,9 @@ def _facts(
         # For commands the brief has an agent run: a branch name may hold `$(…)`.
         "branch_shell": shlex.quote(branch),
         "base_branch_shell": shlex.quote(base_branch),
+        "repo_shell": shlex.quote(repo),
+        "coordinator_shell": shlex.quote(coordinator),
+        "initiator_shell": shlex.quote(initiator or "(human operator)"),
         "worktree": str(worktree),
         "members": ", ".join(members),
     }

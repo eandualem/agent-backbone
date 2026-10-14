@@ -37,13 +37,13 @@ finishing; the kickoff confirms the roster has been registered and launched.
    **{initiator}**, who owns human-facing progress reports. Do not publish
    `backbone report` updates or send status reports directly to Telegram.
    Send all progress, blockers and questions directly with
-   `backbone tell {initiator} "..."`. Reserve issue comments for the PR
+   `backbone tell {initiator_shell} "..."`. Reserve issue comments for the PR
    handoff actions described below.
 5. **Finish**: when the work is complete and committed on `{branch}`, open
    the pull request yourself — **the base matters**: your branch was cut
    from `{base_branch}`, so the PR must target it or the diff will drag
    in unrelated history:
-   `gh pr create --repo {repo} --head {branch} --base {base_branch} --fill --body "Closes #{issue_number}"`.
+   `gh pr create --repo {repo_shell} --head {branch_shell} --base {base_branch_shell} --fill --body "Closes #{issue_number}"`.
    If `{base_branch}` does not exist on the remote, do NOT pick another
    base — comment on the issue that the PR is ready and blocked on the
    base branch being pushed, and tell the initiator. The `Closes` line
@@ -70,7 +70,7 @@ finishing; the kickoff confirms the roster has been registered and launched.
    `git push --force-with-lease origin {branch_shell}`.
 6. **Verify the PR as GitHub computes it** before reporting done — your
    local view is not the diff reviewers see:
-   `gh pr view <N> --repo {repo} --json changedFiles,additions,deletions`.
+   `gh pr view <N> --repo {repo_shell} --json changedFiles,additions,deletions`.
    If the numbers do not match the work you intended to ship, something
    is wrong (usually the base) — investigate and report honestly instead
    of declaring success.
