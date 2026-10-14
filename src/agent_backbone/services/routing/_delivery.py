@@ -642,20 +642,6 @@ async def safe_deliver(
         raise
     intel = profile.intelligence
 
-    if kind == "plan_response":
-        # A plan response is typed into the plan prompt itself, so it goes in
-        # exactly when the agent is waiting for a plan decision — the one
-        # condition every other kind must wait out — and never otherwise:
-        # at an idle prompt a bare "2" would become a new instruction, and by
-        # the time a queue drained the question would be gone. Never queued.
-        if intel == SessionIntelligence.OFFLINE:
-            return await finish(DeliveryOutcome.OFFLINE, queue=False)
-        if not (intel == SessionIntelligence.WAITING_FOR_HUMAN and profile.reason == "plan"):
-            return await finish(DeliveryOutcome.NOT_WAITING, queue=False)
-        if await submit():
-            return await finish(DeliveryOutcome.DELIVERED, queue=False)
-        return await finish(DeliveryOutcome.DELIVERY_FAILED, queue=False)
-
     if intel in BLOCKED_OUTCOMES:
         bypass = priority and intel in _BYPASSABLE
         if not bypass:

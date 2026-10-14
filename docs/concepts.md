@@ -130,12 +130,10 @@ knows where it came from:
 
 One attempt to hand a message to a session, recorded with its **kind**
 (`issue`, `comment`, `review`, `pull_request`, `direct_message`, `watch`,
-`escalation`, `plan_response`, `subscription`, `steer`), repository, outcome and a preview — direct
+`escalation`, `subscription`, `steer`), repository, outcome and a preview — direct
 messages included. A `steer` (`backbone tell --steer`) is never queued or
 pasted: it is offered to a working agent's hook and its record moves from
-`offered` to `handed_off`, `not_taken` or `cancelled`. A `plan_response` (an answer typed into a plan prompt)
-is the one kind that is **never queued**: it goes in only while the agent
-is waiting for a plan decision, and is refused as `not_waiting` otherwise. What cannot be delivered now is **queued** in the database and
+`offered` to `handed_off`, `not_taken` or `cancelled`. What cannot be delivered now is **queued** in the database and
 delivered by the background jobs — a message that waited at least two
 minutes is delivered with `(queued N min ago)` (`N h` from two hours) after
 its envelope, so a review or comment drained after a long busy stretch
