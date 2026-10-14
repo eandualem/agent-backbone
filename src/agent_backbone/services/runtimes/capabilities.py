@@ -704,7 +704,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok(
             "tests/unit/services/agents/test_launch.py",
             "`--disallowedTools SendFeedback` and CLAUDE_CODE_SEND_FEEDBACK=0 at launch; "
-            "set the variable to 1 in the agent's env to opt in. The live check follows deployment",
+            "set the variable to 1 in the agent's env to opt in",
             verified_on="2.1.296",
         ),
         codex=_na(_NO_FEEDBACK),
@@ -743,7 +743,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok(
             "tests/unit/services/agents/test_provider_failures.py",
             "from the terminal: Codex runs no hook for a failed turn",
-            verified_on="0.157.1",
+            verified_on="0.160.0",
         ),
         gemini=_gap(),
         opencode=_ok("tests/unit/services/agents/test_provider_failures.py", verified_on="1.18.32"),

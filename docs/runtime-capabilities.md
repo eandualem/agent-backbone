@@ -69,9 +69,9 @@ version differs.
 | Every skill an agent's CLI loads, listed by source | ✅ (2.1.294) live-checked against its /skills list | ✅ (0.160.0) live-checked against its skill list | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ✅ (1.18.32) live-checked: `opencode debug skill` | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ❌ | n/a |
 | Token usage recorded | ✅ | ✅ | ✅ live-checked with a subagent (0.46) | ✅ | ❌ | ❌ | n/a |
 | Context-size note recommending a fresh session | ✅ (2.1.284) the hook-context path is live-checked with steers on this version; the note's own live check follows deployment | ✅ (0.157.1) the hook-context path is live-checked with steers on this version; the note's own live check follows deployment | ❌ usage is recorded, but its hook takes no offered context | ✅ (1.18.32) the hook-context path is live-checked with steers on this version; the note's own live check follows deployment | ❌ | ❌ | n/a |
-| Drafted feedback to the CLI's vendor off unless the agent opts in | ✅ (2.1.296) `--disallowedTools SendFeedback` and CLAUDE_CODE_SEND_FEEDBACK=0 at launch; set the variable to 1 in the agent's env to opt in. The live check follows deployment | n/a | n/a | n/a | n/a | n/a | n/a |
+| Drafted feedback to the CLI's vendor off unless the agent opts in | ✅ (2.1.296) `--disallowedTools SendFeedback` and CLAUDE_CODE_SEND_FEEDBACK=0 at launch; set the variable to 1 in the agent's env to opt in | n/a | n/a | n/a | n/a | n/a | n/a |
 | agent output from the runtime's own record | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
-| Provider capacity or rate-limit failure detected (blocked) | ✅ (2.1.284) reported by its StopFailure hook | ✅ (0.157.1) from the terminal: Codex runs no hook for a failed turn | ❌ | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
+| Provider capacity or rate-limit failure detected (blocked) | ✅ (2.1.284) reported by its StopFailure hook | ✅ (0.160.0) from the terminal: Codex runs no hook for a failed turn | ❌ | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
 | Running model observed (status) | ✅ (2.1.267) | ✅ (0.156.1) | ✅ (0.46.0) | ✅ (1.18.32) | ❌ no hook state | ❌ no hook state | n/a |
 | Request errors and model changes recorded (diagnostics) | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | n/a |
 | A peer's message cannot pass as a Backbone brief | ✅ | ✅ | ? | ❌ #294 adopted a forged brief | ? | ? | n/a |
