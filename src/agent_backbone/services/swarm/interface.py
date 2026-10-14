@@ -45,6 +45,8 @@ log = logging.getLogger(__name__)
 
 _ISSUE_REF_RE = re.compile(r"^(?P<repo>[\w.-]+/[\w.-]+)#(?P<number>\d{1,7})$")
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
+# A member's own identity; every other tag of the initiator is inherited.
+_OWN_TAG_PREFIXES = ("role:", "agent:", "swarm:", "task:")
 
 
 class SwarmError(Exception):
@@ -235,6 +237,12 @@ async def create_swarm(
     occupied: list[str] = []
     launches: list[tuple[AgentSpec, Path]] = []
     default_runtime = config.launch.default_runtime
+    # The initiator's tag policies and skills reach the members doing the work.
+    inherited = tuple(
+        tag
+        for tag in (init_spec.tags if init_spec is not None else ())
+        if not tag.lower().startswith(_OWN_TAG_PREFIXES)
+    )
     try:
         briefs_dir.mkdir(parents=True, exist_ok=True)
         for agent_name, spec in named:
@@ -264,7 +272,12 @@ async def create_swarm(
                 # Whether the member asks before acting is decided at each
                 # launch from `swarm.unattended_members` and its runtime's
                 # sandbox (``start_agent``), never persisted here.
-                tags=(f"swarm:{name}", f"role:{spec.role}", f"task:{repo}#{issue_number}"),
+                tags=(
+                    f"swarm:{name}",
+                    f"role:{spec.role}",
+                    f"task:{repo}#{issue_number}",
+                    *inherited,
+                ),
             )
             await store.register(agent)
             launches.append((agent, brief_file))

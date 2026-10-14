@@ -93,7 +93,10 @@ not measure task completion. Open any member with `backbone agent attach NAME`,
 or watch from a separate terminal with `--read-only`.
 
 Startup role briefs compose global shared policies and policies selected by
-the member's `role:ROLE` or `swarm:NAME` tags. Inspect the exact content and source
+the member's tags: its `role:ROLE` and `swarm:NAME` tags, and every tag of the
+initiating agent except `role:`, `agent:`, `swarm:` and `task:`, which members
+inherit. Shared skills follow the same tags, and `swarm status --details` lists
+them. Inspect the exact content and source
 paths with `backbone instructions preview MEMBER`. A fresh member restart reuses
 its saved role brief; see [instruction management](cli.md#backbone-instructions-).
 
@@ -138,7 +141,7 @@ role) to create an override in `<data_dir>/templates/swarm/`. Canonical defaults
 live in the repository's top-level `templates/swarm/` and ship in the package.
 New role files use the same layout. `swarm:common` edits the shared preamble and
 `swarm:kickoff` edits the coordinator's initial message. Tag policies can target
-`role:scout`, `role:coordinator`, or `swarm:NAME`. See [Templates](templates.md).
+`role:scout`, `role:coordinator`, `swarm:NAME`, or a tag the members inherit. See [Templates](templates.md).
 
 ## What a swarm is, and is not
 
