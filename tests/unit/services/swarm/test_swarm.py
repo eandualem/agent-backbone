@@ -490,8 +490,9 @@ class TestCreateSwarm:
     ):
         repo_dir = tmp_path / "checkout"
         repo_dir.mkdir()
+        own = ("role:lead", "agent:x", "swarm:old", "task:acme/app#1")
         initiator = AgentSpec(
-            name="alice", dir=str(repo_dir), repo="acme/app", tags=("coder", "role:lead", "agent:x")
+            name="alice", dir=str(repo_dir), repo="acme/app", tags=("coder", *own)
         )
         config = make_config(
             tmp_path,
@@ -518,8 +519,9 @@ class TestCreateSwarm:
 
         assert len(store.registered) == 3
         for member in store.registered:
-            assert "coder" in member.tags and f"role:{member.name[9:]}" in member.tags
-            assert "role:lead" not in member.tags and "agent:x" not in member.tags
+            role = member.name.removeprefix("research-")
+            identity = {"swarm:research", f"role:{role}", "task:acme/app#7"}
+            assert set(member.tags) == identity | {"coder"}
             assert "Rule: smallest change" in instruction_preview(member, config)["content"]
 
     @patch(
