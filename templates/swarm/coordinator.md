@@ -55,7 +55,7 @@ finishing; the kickoff confirms the roster has been registered and launched.
    ask each to commit and pause first. Use `git replay`, not `git rebase`:
    it keeps no state in Git's directory, which a Codex sandbox cannot clean
    up after a rebase. From `{worktree}`, first:
-   `git fetch origin {base_branch_shell} && changes=$(git status --porcelain) && test -z "$changes" && git replay --ref-action=update --onto FETCH_HEAD FETCH_HEAD..{branch_shell}`.
+   `git fetch origin refs/heads/{base_branch_shell} && changes=$(git status --porcelain) && test -z "$changes" && git replay --ref-action=update --onto FETCH_HEAD FETCH_HEAD..{branch_shell}`.
    If it exits non-zero, the branch and worktree are unchanged. When
    `git status --porcelain` lists files, a member still has uncommitted work:
    ask them to commit, then run it again. Otherwise read the error:

@@ -184,7 +184,7 @@ class TestBriefs:
             base_branch="topic/$(id)",
         )
         brief = render_brief("coordinator", facts)
-        assert "git fetch origin 'topic/$(id)' &&" in brief
+        assert "git fetch origin refs/heads/'topic/$(id)' &&" in brief
         assert "--onto FETCH_HEAD FETCH_HEAD..swarm/research`" in brief
 
     def test_unknown_role_falls_back_to_worker(self):
