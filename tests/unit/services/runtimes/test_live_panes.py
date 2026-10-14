@@ -276,6 +276,26 @@ CLAUDE_PERMISSION_DIALOG = (
     " Esc to cancel · Tab to amend · ctrl+e to explain\n"
 )
 
+# Captured live on 2026-10-14, read-only, from a working agent's Claude Code
+# 2.1.296 (--permission-mode default): a Bash call the CLI flagged as risky, so
+# it offers no "always allow", and it denies the request itself if nobody
+# answers. The command's own lines are replaced with a neutral one.
+CLAUDE_PERMISSION_DIALOG_2_1_296 = (
+    " │ rm $d/$f.md\n"
+    "╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n"
+    " │ Dangerous rm operation on possibly-empty variable path: $d/$f.md in `rm $d/$f.md`"
+    ' (rewrite it as "${d:?}"/"${f:?}".md or use a literal path)\n'
+    " ⚠ Claude Code will automatically deny this request in 1:44, to avoid blocking progress"
+    " on an unattended session\n"
+    "\n"
+    "\n"
+    " Do you want to proceed?\n"
+    " ❯ 1. Yes\n"
+    "   2. No\n"
+    "\n"
+    " Esc to cancel · Tab to amend\n"
+)
+
 CODEX_PERMISSION_DIALOG = (
     "• Running printf 'hi\\n' > hello.txt\n"
     "  Would you like to run the following command?\n"
@@ -357,10 +377,11 @@ class TestUnknownDialogs:
 
 
 class TestPermissionDialogs:
-    def test_claude_permission_dialog_is_waiting(self):
+    @pytest.mark.parametrize("dialog", [CLAUDE_PERMISSION_DIALOG, CLAUDE_PERMISSION_DIALOG_2_1_296])
+    def test_claude_permission_dialog_is_waiting(self, dialog):
         adapter = RUNTIMES["claude"]
-        assert adapter.detect_waiting_for_human(CLAUDE_PERMISSION_DIALOG)
-        assert not adapter.detect_idle(CLAUDE_PERMISSION_DIALOG)
+        assert adapter.detect_waiting_for_human(dialog)
+        assert not adapter.detect_idle(dialog)
         assert adapter.approve_keys == ("Enter",)
 
     def test_codex_permission_dialog_is_waiting(self):
