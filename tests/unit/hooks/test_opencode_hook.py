@@ -422,13 +422,14 @@ await status("root", "busy");
 await status("sub", "busy");
 await ask("sub", "p"); seen();
 await idle("root"); seen();
+await idle("sub");
 await answer("sub", "root"); seen();
 """,
     )
     assert states == [
         ["waiting_for_human", "sub"],  # unknown yet: it may be the agent's own
         ["waiting_for_human", "sub"],
-        ["idle", "root"],
+        ["idle", "root"],  # the agent's session, never the subagent's
     ]
 
 

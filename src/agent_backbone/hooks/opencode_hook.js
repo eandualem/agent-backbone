@@ -290,6 +290,7 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
           if (info?.parentID) {
             children.add(sessionID);
             working.delete(sessionID); // its idle is ignored from now on
+            held.delete(sessionID);
             withdraw(sessionID);
           } else if (info?.id) roots.add(sessionID);
         } catch { /* unknown stays unknown */ }
