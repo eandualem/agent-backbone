@@ -101,6 +101,7 @@ Derived from the state plus the terminal, right before anything is pasted:
 | `waiting_for_human` | agent is asking a person something | no — queued |
 | `agent_working` | starting, busy, or blocked on a usage limit or provider failure | no — queued (never bypassed) |
 | `human_reading` | someone is selecting text or reading tmux scrollback | no — queued, even with `priority` |
+| `unattended_copy_mode` | the pane is in tmux copy mode and no client is viewing it | no — queued, even with `priority`, until someone attaches and presses `q` |
 | `human_typing` | someone typed text into the prompt | no — queued, unless `priority` |
 | `settling` | hook reported idle less than `timing.grace_period_seconds` ago, or a fresh session's brief (Codex, aider) is not delivered yet | not yet, unless `priority`; the brief goes first even then |
 | `ready` | idle, empty prompt | **yes** |
@@ -111,6 +112,13 @@ without cancelling it: otherwise-ready agents report `human_reading`, and
 messages wait until the human leaves copy mode (normally `q` or Escape).
 Monitoring and priority delivery never clear a selection. The agent's own state
 still takes precedence: a busy agent remains `agent_working` while you read.
+
+tmux keeps a pane in copy mode after its last client detaches. When no client
+is viewing the pane's window, the agent reports `unattended_copy_mode` instead:
+messages still wait, and `backbone agent inspect` and `backbone doctor` say to
+attach to the session and press `q`. A sender whose message expires in the
+queue is told the condition that held it, so they can tell whether a resend
+would meet it too.
 
 ## Message
 

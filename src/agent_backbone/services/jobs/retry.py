@@ -69,8 +69,11 @@ def _expired_line(row: dict, *, to_recipient: bool) -> str:
         else f"to {row.get('session_name')}"
     )
     queued = str(row.get("enqueued_at") or "")[11:16]
+    # A sender can tell whether a resend would meet the same condition.
+    blocked = row.get("blocked_by") if not to_recipient else None
+    held = f", blocked by {blocked}" if blocked else ""
     preview = " ".join(str(row.get("message") or "").split())[:100]
-    return f"- {who}, queued {queued}Z: {preview}"
+    return f"- {who}, queued {queued}Z{held}: {preview}"
 
 
 _MORE = re.compile(r"^- … and \d+ more, (?:from|to) (.+?): ")

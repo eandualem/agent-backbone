@@ -314,7 +314,7 @@ sequenceDiagram
         B->>T: paste-buffer; Enter
         B->>T: re-read pane: submitted? still in the box?
         B-->>C: delivered
-    else offline / waiting_for_human / agent_working / human_reading / human_typing / settling
+    else offline / waiting_for_human / agent_working / human_reading / unattended_copy_mode / human_typing / settling
         B->>Q: enqueue (direct messages, comments, notices)
         B-->>C: agent_working (etc.)
         Note over Q: delivered by agent-monitor (60 s) or delivery-retry (5 min)
@@ -360,7 +360,8 @@ sequenceDiagram
   when the agent is ready; priority does not bypass these conditions.
 - **Human selection.** Copy mode is preserved during monitoring and readiness
   checks. Messages wait with `human_reading` until the human exits copy mode;
-  priority does not bypass it.
+  priority does not bypass it. With no client viewing the pane, they wait with
+  `unattended_copy_mode` until someone attaches and presses `q`.
 - **Queue hygiene.** Ordinary pending messages expire after `timing.queue_expiry_minutes`
   (30). Active swarm coordination, inbox holds and startup briefs are retained, and a session
   held by an unconfirmed (`uncertain`) delivery keeps its queue until the hold is

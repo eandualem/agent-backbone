@@ -485,6 +485,27 @@ class TestDeliveryRetryQueueDrain:
         assert "- to ike" in to_leo and "github" not in to_leo
         assert {row["source"] for row in queued.values()} == {"queue-expiry"}
 
+    async def test_the_senders_notice_names_what_held_the_message(self, db, config):
+        """#388: a resend meets the same condition, so the sender is told which."""
+        await db.deliveries.record(
+            issue_number=None,
+            target_entity="ike",
+            session_name="ike",
+            outcome="unattended_copy_mode",
+            kind="direct_message",
+        )
+        await self._expire(
+            db,
+            config,
+            [{"session_name": "ike", "sender": "leo", "message": "[via:backbone from:leo] hi"}],
+        )
+        queued = {
+            row["session_name"]: row["message"]
+            for row in await db.queue.dequeue("ike") + await db.queue.dequeue("leo")
+        }
+        assert "- to ike, queued 13:24Z, blocked by unattended_copy_mode: " in queued["leo"]
+        assert "blocked by" not in queued["ike"]  # the recipient's own notice
+
     async def test_a_failed_notice_rolls_the_expiry_back(self, db, config):
         from sqlalchemy import text
 
