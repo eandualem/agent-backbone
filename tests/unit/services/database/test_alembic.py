@@ -54,6 +54,7 @@ _EXPECTED_INDEXES = {
     "idx_reports_telegram",
     "idx_reports_audio",
     "uq_events_delivery_id",
+    "idx_events_delivery_id_lower",
     "idx_events_received",
     "idx_events_repo",
     "idx_outbox_pending",

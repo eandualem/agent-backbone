@@ -96,9 +96,28 @@ class EventRepo(Repo):
         issue_number: int | None = None,
         sender: str = "",
         summary: str = "",
+        ignore_case: bool = False,
     ) -> int | None:
-        """Insert an event; returns the row id, or None if the delivery id was already stored."""
+        """Insert an event; returns the row id, or None if the delivery id was already stored.
+
+        ``ignore_case`` also takes a stored id that differs only in letter case
+        as this one: comment and review ids stored before #394 spell the
+        repository as GitHub sent it. Stored ids are never rewritten.
+        """
         async with self._tx() as conn:
+            if ignore_case:
+                stored = await conn.execute(
+                    text(
+                        "SELECT id, processed_at FROM events"
+                        " WHERE lower(delivery_id) = lower(:delivery_id)"
+                        " ORDER BY delivery_id = :delivery_id DESC, id LIMIT 1"
+                    ),
+                    {"delivery_id": delivery_id},
+                )
+                if (stored_row := stored.fetchone()) is not None:
+                    if stored_row._mapping["processed_at"] is None:
+                        return stored_row._mapping["id"]
+                    return None
             result = await conn.execute(
                 text(
                     """INSERT INTO events
