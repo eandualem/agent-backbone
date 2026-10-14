@@ -27,6 +27,7 @@ from agent_backbone.services.agents._file_reader import (
 from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.instructions import instruction_preview
 from agent_backbone.services.agents.models import AgentState
+from agent_backbone.services.database import now_iso
 from agent_backbone.services.runtimes import (
     AGENT_ENV_KEY,
     RUNTIME_ENV_KEY,
@@ -453,6 +454,7 @@ async def _start_agent(
     write_starting_marker(
         config.state_dir, spec.name, launched_at, launch_id=environment["BACKBONE_LAUNCH_ID"]
     )
+    session_started = now_iso()  # it may receive messages before it is ready
     ok = await start_session(
         spec.name,
         working_dir=str(spec.path),
@@ -465,6 +467,16 @@ async def _start_agent(
         details["reason"] = "session_failed"
         clear_starting_marker(config.state_dir, spec.name)
         return StartResult(ok=False, evidence=("tmux could not create the session",))
+    if db is not None and (not resume_target or command is None):
+        # A fresh conversation (a plain shell has none to resume): what earlier
+        # ones received no longer counts for it. Recorded before the readiness
+        # wait, which a backbone restart can cut short. The session is already
+        # up, so a failed write must not fail the start (a swarm would roll
+        # back a member that keeps running).
+        try:
+            await db.agents.conversation_started(spec.name, session_started)
+        except Exception:
+            log.warning("Could not record the start of '%s'", spec.name, exc_info=True)
     if isinstance(resume_target, str):
         # Recorded once the session runs: the conversation this launch holds
         # until its hook reports. A launch that never ran records none.

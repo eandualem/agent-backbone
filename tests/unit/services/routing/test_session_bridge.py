@@ -730,6 +730,7 @@ class TestSafeDeliver:
 
     async def test_enforce_issue_queue_blocks_duplicate_issue(self, config):
         mock_db = AsyncMock()
+        mock_db.agents.started_at.return_value = None
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
         mock_db.queue.has_brief_ahead.return_value = False
@@ -752,6 +753,7 @@ class TestSafeDeliver:
 
     async def test_enforce_issue_queue_blocks_until_acknowledged(self, config):
         mock_db = AsyncMock()
+        mock_db.agents.started_at.return_value = None
         mock_db.queue.held_receipt.return_value = None
         mock_db.queue.has_uncertain.return_value = False
         mock_db.queue.has_brief_ahead.return_value = False
@@ -775,6 +777,70 @@ class TestSafeDeliver:
         ).outcome
         assert result == "awaiting_ack"
         mock_db.deliveries.record.assert_not_called()
+
+    @pytest.mark.parametrize("delivered_at", ["2026-10-13T19:28:35Z", "2026-10-13T20:05:00Z"])
+    async def test_an_issue_delivered_to_an_earlier_session_neither_holds_nor_repeats(
+        self, config, delivered_at
+    ):
+        """#410: a fresh session never saw what an earlier one received."""
+        earlier = delivered_at < "2026-10-13T19:59:43Z"
+        mock_db = AsyncMock()
+        mock_db.agents.started_at.return_value = "2026-10-13T19:59:43Z"
+        mock_db.queue.held_receipt.return_value = None
+        mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
+        delivered = {
+            "repo": _REPO,
+            "target_entity": "ike",
+            "session_name": "ike",
+            "outcome": "delivered",
+            "created_at": delivered_at,
+        }
+        mock_db.deliveries.query.side_effect = [
+            [{**delivered, "issue_number": 42}],  # this issue, delivered once already
+            [{**delivered, "issue_number": 41}],  # another one, never acknowledged
+        ]
+        mock_db.acks.exists.return_value = False
+        with _online(), _patch_send_message(True):
+            result = (
+                await safe_deliver(
+                    "ike", "Hello", config, db=mock_db, enforce_issue_queue=True, **_issue_kwargs()
+                )
+            ).outcome
+        assert result == ("delivered" if earlier else "already_delivered")
+
+    @pytest.mark.parametrize(
+        ("created_at", "expected"),
+        [
+            ("2026-10-13T19:28:35Z", "delivered"),  # the earlier session's: no longer holds
+            ("2026-10-13T20:05:00Z", "awaiting_ack"),  # this session's: still holds
+        ],
+    )
+    async def test_an_unacknowledged_issue_of_an_earlier_session_does_not_hold_the_queue(
+        self, config, created_at, expected
+    ):
+        mock_db = AsyncMock()
+        mock_db.agents.started_at.return_value = "2026-10-13T19:59:43Z"
+        mock_db.queue.held_receipt.return_value = None
+        mock_db.queue.has_uncertain.return_value = False
+        mock_db.queue.has_brief_ahead.return_value = False
+        held = {
+            "repo": _REPO,
+            "issue_number": 41,
+            "target_entity": "ike",
+            "session_name": "ike",
+            "outcome": "delivered",
+            "created_at": created_at,
+        }
+        mock_db.deliveries.query.side_effect = [[], [held]]
+        mock_db.acks.exists.return_value = False
+        with _online(), _patch_send_message(True):
+            result = (
+                await safe_deliver(
+                    "ike", "Hello", config, db=mock_db, enforce_issue_queue=True, **_issue_kwargs()
+                )
+            ).outcome
+        assert result == expected
 
     async def test_same_number_in_other_repo_does_not_block(self, config):
         mock_db = AsyncMock()

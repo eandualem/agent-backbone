@@ -1569,3 +1569,54 @@ async def test_a_launch_killed_after_its_hook_reported_stays_the_last_launch(tmp
         result = await start_agent(spec, config, resume=True, wait=False)
     assert "Z" in start.await_args.kwargs["command"]
     assert any("the last launch reported: Z" in line for line in result.evidence)
+
+
+@pytest.mark.parametrize(
+    ("runtime", "resume", "moves"),
+    [
+        ("claude", False, True),  # a fresh conversation starts over
+        ("claude", True, False),  # a resumed one keeps what it was sent
+        ("codex", False, True),
+        ("codex", True, False),
+        ("opencode", False, True),
+        ("opencode", True, False),
+        ("shell", True, True),  # a plain shell has no conversation to resume
+    ],
+)
+async def test_a_fresh_start_is_recorded_before_the_readiness_wait(
+    tmp_path, db, runtime, resume, moves
+):
+    """#410: messages can reach the session before it is ready, and a backbone
+    restart can cut the wait short."""
+    common = {"runtime": runtime, "model": None, "repo": "", "tags": [], "env": {}}
+    await db.agents.upsert("ike", dir=str(tmp_path), description="", unattended=False, **common)
+    await db.agents.conversation_started("ike", "2026-10-13T19:59:43.000000Z")
+    config = bootstrap_config(tmp_path / "data")
+    spec = AgentSpec(name="ike", dir=str(tmp_path), runtime=runtime)
+    seen = {}
+
+    async def waiting(*args, **kwargs):
+        seen["at"] = await db.agents.started_at("ike")
+        return "ready", []
+
+    with (
+        patch(f"{_MOD}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_MOD}.start_session", AsyncMock(return_value=True)),
+        patch(f"{_BASE}.resolve_command", return_value=f"/bin/{runtime}"),
+        patch(f"{_MOD}.wait_until_ready", side_effect=waiting),
+    ):
+        assert (await start_agent(spec, config, resume=resume, db=db, wait=True)).ok
+    assert (seen["at"] != "2026-10-13T19:59:43.000000Z") is moves
+
+
+async def test_a_failed_start_record_never_fails_a_running_session(tmp_path):
+    db = AsyncMock()
+    db.agents.conversation_started.side_effect = RuntimeError("database is locked")
+    config = bootstrap_config(tmp_path / "data")
+    spec = AgentSpec(name="ike", dir=str(tmp_path), runtime="claude")
+    with (
+        patch(f"{_MOD}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_MOD}.start_session", AsyncMock(return_value=True)),
+        patch(f"{_BASE}.resolve_command", return_value="/bin/claude"),
+    ):
+        assert (await start_agent(spec, config, db=db, wait=False)).ok

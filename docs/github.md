@@ -143,9 +143,10 @@ The `from:` sender never receives its own issue. Editing an existing issue
 
 For each agent, issue delivery is gated:
 
-1. An issue already delivered to this agent is not delivered again.
-2. A new issue is held (`awaiting_ack`) while a previously delivered issue
-   in the agent's current open queue has not been acknowledged.
+1. An issue already delivered to this agent's current conversation is not
+   delivered again.
+2. A new issue is held (`awaiting_ack`) while an issue delivered to the
+   current conversation, in the agent's open queue, has not been acknowledged.
 3. Delivery is claimed atomically per `(repository, number, session)`, so
    the webhook path, the poller and the monitor cannot double-deliver.
 
@@ -155,8 +156,11 @@ For each agent, issue delivery is gated:
 - a comment whose body starts with `[from:app]`,
 - comments fetched from GitHub by the monitor.
 
-An issue is delivered **once**. If the agent never acknowledges it, the
-queue stays blocked on it (`awaiting_ack`) until a comment appears. Watch
+An issue is delivered **once** per session. If the agent never
+acknowledges it, the queue stays blocked on it (`awaiting_ack`) until a
+comment appears or the agent starts a fresh session: a fresh conversation
+never saw what an earlier one received, so it is offered that issue again. A
+resumed conversation keeps what it was sent. Watch
 `backbone agent inspect`, `/api/deliveries` or `/queue` on Telegram.
 
 ### The agent's queue and its order
