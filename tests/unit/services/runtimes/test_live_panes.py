@@ -380,6 +380,7 @@ class TestPermissionDialogs:
     @pytest.mark.parametrize("dialog", [CLAUDE_PERMISSION_DIALOG, CLAUDE_PERMISSION_DIALOG_2_1_296])
     def test_claude_permission_dialog_is_waiting(self, dialog):
         adapter = RUNTIMES["claude"]
+        assert adapter.detect_permission_prompt(dialog)
         assert adapter.detect_waiting_for_human(dialog)
         assert not adapter.detect_idle(dialog)
         assert adapter.approve_keys == ("Enter",)
