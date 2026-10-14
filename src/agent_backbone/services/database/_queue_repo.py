@@ -595,27 +595,42 @@ class QueueRepo(Repo):
                 },
             )
             rows = [dict(row._mapping) for row in result.fetchall()]
-            for row in rows:
-                await self._ensure_operation_id(conn, row)
-                # The session's last terminal attempt while this row waited (a
-                # steer or a hook-context offer reaches a working agent and
-                # clears nothing): the sender's notice names its condition when
-                # that held the queue.
+            # Each session's last readiness check while its rows waited: the
+            # sender's notice names its condition when that held the queue. A
+            # paste, delivered or failed, means it had cleared. A steer, a
+            # hook-context offer or an inbox acknowledgement reaches the agent
+            # without a check, so those receipts do not count.
+            checks = [*sorted(BLOCKED_OUTCOMES), "delivered", "retried", "delivery_failed"]
+            last_check: dict[str, tuple[str, str] | None] = {}
+            for session_name in {row.get("session_name") or "" for row in rows}:
+                since = min(
+                    row.get("enqueued_at") or ""
+                    for row in rows
+                    if (row.get("session_name") or "") == session_name
+                )
                 last = await conn.execute(
                     text(
-                        """SELECT outcome FROM deliveries
-                           WHERE session_name = :session_name AND outcome != 'expired'
-                             AND kind != 'steer' AND source != 'hook-context'
-                             AND created_at >= :enqueued_at
+                        """SELECT outcome, created_at FROM deliveries
+                           WHERE session_name = :session_name AND outcome IN :checks
+                             AND source NOT IN
+                                 ('hook-context', 'agent-checkpoint', 'uncertain-acknowledged')
+                             AND created_at >= :since
                            ORDER BY id DESC LIMIT 1"""
-                    ),
-                    {
-                        "session_name": row.get("session_name") or "",
-                        "enqueued_at": row.get("enqueued_at") or "",
-                    },
+                    ).bindparams(bindparam("checks", expanding=True)),
+                    {"session_name": session_name, "checks": checks, "since": since},
                 )
-                outcome = last.scalar_one_or_none()
-                row["blocked_by"] = outcome if outcome in BLOCKED_OUTCOMES else None
+                found = last.first()
+                last_check[session_name] = (found[0], found[1]) if found else None
+            for row in rows:
+                await self._ensure_operation_id(conn, row)
+                check = last_check[row.get("session_name") or ""]
+                row["blocked_by"] = (
+                    check[0]
+                    if check
+                    and check[0] in BLOCKED_OUTCOMES
+                    and check[1] >= (row.get("enqueued_at") or "")
+                    else None
+                )
                 message = row.get("message") or ""
                 delivery = await conn.execute(
                     text(

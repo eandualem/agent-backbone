@@ -178,7 +178,7 @@ def queue_detail(
     if report.outcome == DeliveryOutcome.DELIVERED:
         return f"Delivered to {session_name}."
     why = (
-        "in tmux copy mode with no one viewing it"
+        "in tmux copy mode with no one viewing it (attach to its session and press q)"
         if report.outcome == DeliveryOutcome.UNATTENDED_COPY_MODE
         else report.outcome.value.replace("_", " ")
     )

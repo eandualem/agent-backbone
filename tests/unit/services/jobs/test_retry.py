@@ -523,14 +523,38 @@ class TestDeliveryRetryQueueDrain:
         (notice,) = await db.queue.dequeue("leo")
         assert "- to ike, queued 13:24Z: " in notice["message"]
 
-    async def test_a_steer_to_the_working_agent_leaves_its_blocker_named(self, db, config):
-        for outcome, kind in (("agent_working", "direct_message"), ("offered", "steer")):
+    async def test_a_later_paste_clears_the_named_blocker(self, db, config):
+        for outcome in ("unattended_copy_mode", "delivered"):
+            await db.deliveries.record(
+                issue_number=None,
+                target_entity="ike",
+                session_name="ike",
+                outcome=outcome,
+                kind="direct_message",
+                source="backbone",
+            )
+        await self._expire(
+            db,
+            config,
+            [{"session_name": "ike", "sender": "leo", "message": "[via:backbone from:leo] hi"}],
+        )
+        (notice,) = await db.queue.dequeue("leo")
+        assert "- to ike, queued 13:24Z: " in notice["message"]
+
+    async def test_receipts_without_a_readiness_check_leave_the_blocker_named(self, db, config):
+        receipts = (
+            ("agent_working", "direct_message", ""),
+            ("offered", "steer", "api-steer"),
+            ("delivered", "direct_message", "agent-checkpoint"),  # an inbox acknowledgement
+        )
+        for outcome, kind, source in receipts:
             await db.deliveries.record(
                 issue_number=None,
                 target_entity="ike",
                 session_name="ike",
                 outcome=outcome,
                 kind=kind,
+                source=source,
             )
         await self._expire(
             db,
