@@ -89,7 +89,7 @@ def _event_sender(event: IssueEvent) -> str:
 
 def _source_key(event: IssueEvent, kind: str) -> str | None:
     """The originating event's identity, so a queued copy is never stored twice."""
-    repo = event.issue.repo_full_name
+    repo = event.issue.repo_full_name.casefold()
     if kind == "comment" and event.comment and event.comment.id:
         return f"comment:{repo}#{event.issue.number}:{event.comment.id}"
     if kind == "review" and event.review and event.event_type == EventType.REVIEW_STARTED:
