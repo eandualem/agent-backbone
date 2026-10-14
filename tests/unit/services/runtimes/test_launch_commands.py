@@ -20,6 +20,7 @@ _STANDARD_TIER = ["-c", "service_tier=default"]
 _NO_UPDATE_PROMPT = ["-c", "check_for_update_on_startup=false"]
 # Unattended Codex: never ask, and pin the sandbox the promise rests on.
 _NEVER_ASK = ["-a", "never", "-s", "workspace-write"]
+_NO_FEEDBACK = ["--disallowedTools", "SendFeedback"]  # Claude Code, unless the agent opts in
 
 
 def _resolve(binary: str):
@@ -72,14 +73,20 @@ class TestBuildCommand:
 
     def test_claude_without_dirs_has_no_settings(self):
         with _resolve("/usr/bin/claude"):
-            assert RUNTIMES["claude"].build_command() == ["/usr/bin/claude"]
+            assert RUNTIMES["claude"].build_command() == ["/usr/bin/claude", *_NO_FEEDBACK]
 
     def test_claude_brief_is_a_system_prompt_file(self, tmp_path):
         brief = tmp_path / "brief.md"
         brief.write_text("You are agent x.")
         with _resolve("/usr/bin/claude"):
             command = RUNTIMES["claude"].build_command(brief_file=brief, resume=True)
-        assert command == ["/usr/bin/claude", "--resume", "--append-system-prompt-file", str(brief)]
+        assert command == [
+            "/usr/bin/claude",
+            "--resume",
+            "--append-system-prompt-file",
+            str(brief),
+            *_NO_FEEDBACK,
+        ]
 
     def test_shell_stays_none(self, tmp_path):
         assert RUNTIMES["shell"].build_command(data_dir=tmp_path, state_dir=tmp_path) is None
@@ -403,7 +410,7 @@ class TestEffort:
     def test_claude_effort_is_a_flag(self):
         with _resolve("/usr/bin/claude"):
             command = RUNTIMES["claude"].build_command(model="opus:xhigh")
-        assert command == ["/usr/bin/claude", "--effort", "xhigh", "--model", "opus"]
+        assert command == ["/usr/bin/claude", "--effort", "xhigh", "--model", "opus", *_NO_FEEDBACK]
 
     def test_no_effort_leaves_the_command_untouched(self):
         with _resolve("/bin/codex"):
@@ -522,6 +529,7 @@ class TestUnattended:
                 "--dangerously-skip-permissions",
                 "--model",
                 "opus",
+                *_NO_FEEDBACK,
             ]
 
     def test_attended_is_the_default_and_adds_nothing(self):
@@ -533,3 +541,20 @@ class TestUnattended:
         # The shell included: it would otherwise start silently as a plain shell.
         with _resolve("/bin/x"), pytest.raises(RuntimeError, match="no unattended switch"):
             RUNTIMES[runtime].build_command(unattended=True)
+
+
+@pytest.mark.parametrize(
+    ("runtime", "env", "flag"),
+    [
+        ("claude", {}, True),
+        ("claude", {"CLAUDE_CODE_SEND_FEEDBACK": "0"}, True),
+        ("claude", {"CLAUDE_CODE_SEND_FEEDBACK": "1"}, False),  # the agent opted in
+        ("codex", {}, False),
+        ("opencode", {}, False),
+    ],
+)
+def test_drafted_feedback_is_disallowed_unless_the_agent_opts_in(runtime, env, flag):
+    with _resolve(f"/bin/{runtime}"):
+        command = RUNTIMES[runtime].build_command(env=env)
+    assert (" ".join(_NO_FEEDBACK) in " ".join(command)) is flag
+    assert command.count("--disallowedTools") == int(flag)  # one flag, never two
