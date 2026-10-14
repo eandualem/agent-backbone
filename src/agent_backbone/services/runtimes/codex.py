@@ -196,6 +196,9 @@ class Codex(Runtime):
         r"^(?:error:\s*)?you(?:'ve| have) hit your usage limit\b",
         r"^(?:error:\s*)?rate limit (?:reached|exceeded)\b",
         r"^(?:error:\s*)?(?:too many requests|insufficient_quota)\b",
+        # A turn whose retries ran out (0.160.0, live): "exceeded retry limit,
+        # last status: 429 Too Many Requests".
+        r"^(?:error:\s*)?exceeded retry limit, last status: \d{3}\b",
     )
     provider_error_prefixes = ("■",)
     prompt_markers = (
