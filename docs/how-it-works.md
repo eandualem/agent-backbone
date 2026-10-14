@@ -414,8 +414,8 @@ Routing for an issue in repository R:
 1. `for:<agent>` labels → those agents' queues (explicit always wins).
 2. Otherwise, if R has one owner → its queue. Several owners → all of them
    get an "unassigned issue — comment to claim it" notice, nobody is queued.
-3. Watchers of R get an informational notice (kind `watch`, never queued as
-   work, expires like any queued message).
+3. Watchers of R get an informational notice when the issue is opened (kind
+   `watch`, never queued as work, expires like any queued message).
 4. The sender (`from:`) never gets its own issue.
 
 An **edit** of an existing issue (`labeled` events without a new `for:`
