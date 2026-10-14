@@ -190,6 +190,8 @@ class EventORM(Base):
 
     __table_args__ = (
         Index("uq_events_delivery_id", "delivery_id", unique=True),
+        # Comment and review ids stored before #394 are matched ignoring case.
+        Index("idx_events_delivery_id_lower", text("lower(delivery_id)")),
         Index("idx_events_received", "received_at"),
         Index("idx_events_repo", "repo"),
     )
