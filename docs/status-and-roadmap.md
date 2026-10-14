@@ -19,7 +19,8 @@ every later CLI version or account.
 - State-gated delivery: a message sent while the agent is busy is queued
   and retried when it is free, until expiry; `priority` never interrupts a
   busy or provider-blocked agent. Current-issue comments obey the same gate.
-  Copy mode is preserved and blocks delivery as `human_reading`; delivery
+  Copy mode is preserved and blocks delivery as `human_reading`, or as
+  `unattended_copy_mode` when no client is viewing the pane; delivery
   attempts are recorded.
   A crash after terminal submission but before receipt storage can repeat a
   message; see [delivery receipts](github.md#delivery-receipts-and-retries).

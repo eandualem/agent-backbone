@@ -14,6 +14,7 @@ from agent_backbone.services.runtimes import RUNTIMES
 
 _DETECT_REPO = "agent_backbone.services.agents.store.detect_repo"
 _INSTALLED_VERSION = "agent_backbone.services.runtimes.base.Runtime.installed_version"
+_TERMINAL = "agent_backbone.services.terminal"
 
 
 def _run(argv: list[str]) -> int:
@@ -106,8 +107,50 @@ class TestDoctor:
     @pytest.fixture(autouse=True)
     def _no_cli_runs(self):
         # doctor reads each installed CLI's version; no real CLI runs under test.
-        with patch(_INSTALLED_VERSION, return_value=None):
+        with (
+            patch(_INSTALLED_VERSION, return_value=None),
+            patch(f"{_TERMINAL}.list_sessions", new_callable=AsyncMock, return_value=[]),
+        ):
             yield
+
+    def test_names_an_agent_held_in_copy_mode_with_no_one_viewing_it(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """#388: messages wait for it, and only someone attaching can end it."""
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        assert _run(["init"]) == 0
+        with (
+            patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
+            patch(
+                "agent_backbone.services.agents.launch.start_agent",
+                new_callable=AsyncMock,
+                return_value=StartResult(ok=True, ready="ready", evidence=()),
+            ),
+            patch(_DETECT_REPO, new_callable=AsyncMock, return_value=None),
+        ):
+            for name in ("reader", "away"):
+                (tmp_path / name).mkdir()
+                assert _run(["agent", "start", name, "--dir", str(tmp_path / name)]) == 0
+        capsys.readouterr()
+        with (
+            patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                f"{_TERMINAL}.list_sessions",
+                new_callable=AsyncMock,
+                return_value=["reader", "away"],
+            ),
+            patch(f"{_TERMINAL}.in_copy_mode", new_callable=AsyncMock, return_value=True),
+            patch(
+                f"{_TERMINAL}.window_viewers",
+                new_callable=AsyncMock,
+                side_effect=lambda name: 0 if name == "away" else 1,
+            ),
+        ):
+            _run(["doctor"])
+        out = " ".join(capsys.readouterr().out.split())  # a long note wraps
+        assert "'away' is in tmux copy mode with no one viewing it" in out
+        assert "attach to its session and press q" in out
+        assert "'reader' is in tmux copy mode" not in out
 
     def test_reports_missing_pieces(self, tmp_path, capsys):
         assert _run(["init"]) == 0

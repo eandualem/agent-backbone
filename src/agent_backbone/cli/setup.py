@@ -245,6 +245,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         unavailable,
         verified_versions,
     )
+    from agent_backbone.services.terminal import in_copy_mode, list_sessions, window_viewers
 
     ok = True
 
@@ -295,6 +296,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         note("Agents")
         if not config.agents:
             note("  - none yet (run `backbone agent start` from a project directory)")
+        sessions = set(await list_sessions()) if shutil.which("tmux") else set()
         for spec in config.agents:
             check(f"'{spec.name}' dir exists: {spec.path}", spec.path.is_dir())
             installed = spec.runtime in REGISTRY and REGISTRY[spec.runtime].available()
@@ -305,6 +307,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 note(f"  ! '{spec.name}': {needs}")
             if not spec.repo:
                 note(f"  ! '{spec.name}' has no GitHub remote — issue routing is off for it")
+            # tmux keeps copy mode after its last client detaches; messages wait for it.
+            if (
+                spec.name in sessions
+                and not spec.inbox_only
+                and await in_copy_mode(spec.name)
+                and await window_viewers(spec.name) == 0
+            ):
+                note(
+                    f"  ! '{spec.name}' is in tmux copy mode with no one viewing it — "
+                    "messages wait: attach to its session and press q"
+                )
 
         note("Tools")
         check("tmux on PATH", shutil.which("tmux") is not None, "install tmux")

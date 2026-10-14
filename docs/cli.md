@@ -171,7 +171,9 @@ settings leave it on, such as Claude Code's auto-memory, with the setting
 that turns it off where there is one; Backbone does not change it. It names each
 OpenCode agent whose environment (its `env`, then the shell) lacks
 `OPENCODE_EXPERIMENTAL_PLAN_MODE`: without it OpenCode's plan agent asks for no
-approval, so there is no plan to approve remotely. These are notes, not
+approval, so there is no plan to approve remotely. It names each running
+agent whose pane is in tmux copy mode with no client viewing it: messages wait
+until someone attaches to its session and presses `q`. These are notes, not
 failures. `doctor` resolves `CODEX_HOME`,
 `CLAUDE_CONFIG_DIR` and similar variables from the shell it runs in; the
 running backbone uses its own environment, which can differ when it runs as a

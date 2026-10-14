@@ -3,7 +3,7 @@ knows sessions, panes and keys, never which program runs inside."""
 
 from agent_backbone.services.terminal._attach import attach_session
 from agent_backbone.services.terminal._callers import CallerUnknown, caller_sessions
-from agent_backbone.services.terminal._copy_mode import in_copy_mode
+from agent_backbone.services.terminal._copy_mode import in_copy_mode, window_viewers
 from agent_backbone.services.terminal._core import (
     active_pane_size,
     capture_pane,
@@ -55,4 +55,5 @@ __all__ = [
     "set_window_size_mode",
     "start_session",
     "stop_session",
+    "window_viewers",
 ]

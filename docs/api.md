@@ -231,7 +231,7 @@ Everything the backbone knows about one agent, with the evidence:
 ```
 
 `delivery` is the delivery condition: `ready`, `settling`, `human_typing`, `human_reading`,
-`agent_working`, `waiting_for_human`, `offline` or `unknown`.
+`unattended_copy_mode`, `agent_working`, `waiting_for_human`, `offline` or `unknown`.
 `session_id` is the conversation id the agent's hook reported; for a running
 agent, only one reported by the current session. A resume opens it only when
 the agent's runtime still matches the one that reported it and can open a
@@ -453,7 +453,8 @@ false, "queue": null, "detail": "Delivered to web."}`. The target must be a
 registered agent or an active swarm (404 otherwise — the backbone never
 types into a tmux session that is not one of its agents). Outcomes:
 `delivered`, `agent_working`, `waiting_for_human`, `offline`, `expired`,
-`human_typing`, `human_reading`, `settling`, `delivery_failed`, `awaiting_ack` (blocked
+`human_typing`, `human_reading`, `unattended_copy_mode`, `settling`, `delivery_failed`,
+`awaiting_ack` (blocked
 by an unconfirmed delivery, or a copy is already queued or held).
 
 The reply also includes `operation_id`, `delivery_id` and `queue_id` (nullable).

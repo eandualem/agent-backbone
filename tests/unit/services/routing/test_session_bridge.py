@@ -245,6 +245,24 @@ class TestGetSessionIntelligence:
         assert any("preserving" in line for line in profile.evidence)
         tmux.assert_not_awaited()
 
+    @pytest.mark.parametrize(
+        ("viewers", "expected"),
+        [
+            ("1", SessionIntelligence.HUMAN_READING),
+            ("0", SessionIntelligence.UNATTENDED_COPY_MODE),
+        ],
+    )
+    async def test_copy_mode_is_reading_only_while_someone_views_the_pane(
+        self, config, viewers, expected
+    ):
+        """#388: tmux keeps copy mode after its last client detaches."""
+        vars_ = {"pane_in_mode": "1", "window_active_clients": viewers}
+        with _online(), _patch_query_format_vars(vars_):
+            profile = await get_session_intelligence("ike", config)
+        assert profile.intelligence == expected
+        if expected == SessionIntelligence.UNATTENDED_COPY_MODE:
+            assert any("attach to the session and press q" in line for line in profile.evidence)
+
     async def test_human_typing_when_prompt_has_buffered_input(self, config):
         with _online(), _patch_capture_pane("› Review the routing fallback logic"):
             profile = await get_session_intelligence("ike", config)
@@ -484,11 +502,16 @@ class TestSafeDeliver:
         mock_db.queue.enqueue.assert_called_once()
 
     @pytest.mark.parametrize("priority", [False, True])
-    async def test_selection_queues_messages_until_reading_finishes(self, config, db, priority):
+    @pytest.mark.parametrize(
+        ("viewers", "condition"), [("1", "human_reading"), ("0", "unattended_copy_mode")]
+    )
+    async def test_selection_queues_messages_until_reading_finishes(
+        self, config, db, priority, viewers, condition
+    ):
         from agent_backbone.services.jobs.retry import drain_message_queue
 
         with _online(), _patch_send_message(True) as send:
-            with _patch_query_format_vars({"pane_in_mode": "1"}):
+            with _patch_query_format_vars({"pane_in_mode": "1", "window_active_clients": viewers}):
                 receipt = await safe_deliver(
                     "ike",
                     "Wait for my selection",
@@ -498,7 +521,7 @@ class TestSafeDeliver:
                     sender="leo",
                     priority=priority,
                 )
-                assert receipt.outcome == "human_reading"
+                assert receipt.outcome == condition
                 assert receipt.queued and receipt.queue_id is not None
                 await drain_message_queue(config, db, None, active_sessions={"ike"})
                 send.assert_not_awaited()

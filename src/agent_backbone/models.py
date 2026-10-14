@@ -253,6 +253,7 @@ class DeliveryOutcome(StrEnum):
     AGENT_WORKING = "agent_working"
     HUMAN_TYPING = "human_typing"
     HUMAN_READING = "human_reading"
+    UNATTENDED_COPY_MODE = "unattended_copy_mode"
     SETTLING = "settling"
     DELIVERY_FAILED = "delivery_failed"
     EXPIRED = "expired"
@@ -277,6 +278,7 @@ BLOCKED_OUTCOMES = frozenset(
         DeliveryOutcome.AGENT_WORKING,
         DeliveryOutcome.HUMAN_TYPING,
         DeliveryOutcome.HUMAN_READING,
+        DeliveryOutcome.UNATTENDED_COPY_MODE,
         DeliveryOutcome.SETTLING,
     }
 )
