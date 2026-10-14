@@ -188,6 +188,22 @@ async def test_a_turn_that_starts_while_the_pane_is_read_keeps_its_record(tmp_pa
     assert snapshot.state == AgentState.BUSY
 
 
+async def test_a_record_written_while_the_pane_is_read_is_the_state_returned(tmp_path):
+    # Escape refused the dialog (no hook ran), then a new prompt was submitted (#369).
+    (tmp_path / "desk.json").write_text(
+        json.dumps({"state": "waiting_for_human", "reason": "permission", "ts": time.time() - 10})
+    )
+
+    async def new_turn_meanwhile(session):
+        _busy(tmp_path, 0)
+        return CLAUDE_REFUSED
+
+    with patch(f"{_INF}.capture_pane", new_turn_meanwhile):
+        snapshot = await get_agent_state(tmp_path, "desk", runtime_hint="claude")
+    assert snapshot.state == AgentState.BUSY
+    assert snapshot.reason is None
+
+
 async def test_the_runtime_named_by_the_hook_record_is_enough(tmp_path):
     _busy(tmp_path, 10, runtime="claude")
     with patch(f"{_INF}.capture_pane", AsyncMock(return_value=CLAUDE_INTERRUPTED)):

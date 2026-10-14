@@ -318,7 +318,13 @@ async def _get_agent_state(
                     # A turn that began while the pane was read keeps its
                     # record: its hook writes before the runtime redraws.
                     latest = read_state_file(state_dir, session, current_launch=True)
-                if latest is not None and latest.timestamp == push.timestamp:
+                # That newer record is the state: read it with a new screen.
+                # Being new, it is too young for this override.
+                if latest is not None and latest.timestamp != push.timestamp:
+                    return await _get_agent_state(
+                        state_dir, session, stale_threshold, runtime_hint=runtime_hint, since=since
+                    )
+                if latest is not None:
                     interrupted = replace(
                         push,
                         state=AgentState.IDLE,
