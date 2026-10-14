@@ -120,6 +120,7 @@ class TestDoctor:
         monkeypatch.setenv("BACKBONE_API_KEY", "k")
         assert _run(["init"]) == 0
         with (
+            patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
             patch(
                 "agent_backbone.services.agents.launch.start_agent",
                 new_callable=AsyncMock,
