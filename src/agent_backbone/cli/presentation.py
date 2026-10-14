@@ -43,8 +43,11 @@ def record_view(title: str, fields: Iterable[tuple[str, object]], *, width: int)
         for label, value in fields:
             parts.extend([Text(clean(label) + ":", "bold"), Text(clean(value) or "-")])
         return Group(*parts, Text())
+    fields = list(fields)
+    # A label longer than the usual column widens it, up to a third of the screen.
+    longest = max((cell_len(clean(label)) + 1 for label, _ in fields), default=0)
     table = Table.grid(padding=(0, 1), expand=True)
-    table.add_column(width=max(6, min(18, width // 3)), style="bold", overflow="fold")
+    table.add_column(width=max(6, min(max(18, longest), width // 3)), style="bold", overflow="fold")
     table.add_column(ratio=1, overflow="fold")
     for label, value in fields:
         table.add_row(Text(clean(label) + ":"), Text(clean(value) or "-"))
