@@ -373,3 +373,123 @@ console.log(JSON.stringify([disposed.length, fs.existsSync(marker)]));
 """,
     )
     assert json.loads(out) == [1, False]
+
+
+_SESSIONS = """
+import fs from "node:fs";
+const { AgentBackbone } = await import(process.argv[1]);
+// Each parent lookup waits until the script answers it, or fails it.
+const lookups = {};
+const client = {session: {get: ({path}) => new Promise((resolve, reject) => {
+  lookups[path.id] = {resolve, reject};
+})}};
+const hook = await AgentBackbone({client});
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+const answer = async (id, parentID) => {
+  lookups[id].resolve({data: {id, parentID}});
+  await settle();
+};
+const fail = async (id) => { lookups[id].reject(new Error("unavailable")); await settle(); };
+const event = (type, properties) => hook.event({event: {type, properties}});
+const status = (sessionID, type) => event("session.status", {sessionID, status: {type}});
+const idle = async (sessionID) => {
+  await status(sessionID, "idle");
+  await event("session.idle", {sessionID});
+};
+const ask = (sessionID, id) => event("permission.asked", {sessionID, id});
+const reply = (sessionID, requestID) => event("permission.replied", {sessionID, requestID});
+const states = [];
+const seen = () => {
+  const record = JSON.parse(fs.readFileSync(`${process.env.BACKBONE_STATE_DIR}/app.json`, "utf8"));
+  states.push([record.state, record.session_id]);
+};
+"""
+
+
+def _sessions(tmp_path, script) -> list[list[str]]:
+    """Drive the plugin through ``script``; the state and session after each ``seen()``."""
+    out = _run_plugin(tmp_path, _SESSIONS + script + "console.log(JSON.stringify(states));")
+    return json.loads(out)
+
+
+def test_a_subagent_permission_found_late_does_not_hold_the_turn(tmp_path):
+    # A subagent resumed from an earlier run (no session.created) asks before its
+    # parent lookup answers, and the agent's own session ends its turn meanwhile.
+    states = _sessions(
+        tmp_path,
+        """
+await status("root", "busy");
+await status("sub", "busy");
+await ask("sub", "p"); seen();
+await idle("root"); seen();
+await answer("sub", "root"); seen();
+""",
+    )
+    assert states == [
+        ["waiting_for_human", "sub"],  # unknown yet: it may be the agent's own
+        ["waiting_for_human", "sub"],
+        ["idle", "root"],
+    ]
+
+
+def test_a_subagent_permission_found_during_the_turn_leaves_it_busy(tmp_path):
+    states = _sessions(
+        tmp_path,
+        """
+await status("root", "busy");
+await ask("sub", "p"); seen();
+await answer("sub", "root"); seen();
+await reply("sub", "p"); seen();
+await idle("root"); seen();
+""",
+    )
+    assert states == [
+        ["waiting_for_human", "sub"],
+        ["busy", "root"],
+        ["busy", "root"],
+        ["idle", "root"],
+    ]
+
+
+def test_a_session_whose_lookup_never_answers_still_reports_its_turn(tmp_path):
+    # The agent's own session resumed from an earlier run, its lookup pending.
+    states = _sessions(
+        tmp_path,
+        """
+await status("old", "busy"); seen();
+await ask("old", "p"); seen();
+await reply("old", "p"); seen();
+await idle("old"); seen();
+""",
+    )
+    assert states == [
+        ["busy", "old"],
+        ["waiting_for_human", "old"],
+        ["busy", "old"],
+        ["idle", "old"],
+    ]
+
+
+def test_a_second_session_after_a_subagent_was_created_still_counts(tmp_path):
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "a"}});
+await event("session.created", {info: {id: "sub", parentID: "a"}});
+await status("b", "busy"); seen();
+await answer("b"); seen();
+""",
+    )
+    assert states == [["busy", "b"], ["busy", "b"]]
+
+
+def test_a_failed_lookup_keeps_the_session_counted(tmp_path):
+    states = _sessions(
+        tmp_path,
+        """
+await status("b", "busy");
+await fail("b"); seen();
+await event("session.error", {sessionID: "b"}); seen();
+""",
+    )
+    assert states == [["busy", "b"], ["idle", "b"]]
