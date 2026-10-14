@@ -114,7 +114,8 @@ braces in examples. Keep them short and review them with `preview`.
 The base brief supports `{agent_name}`, `{repo}` and `{policy_maintainer}`. Swarm role/common templates
 support `{swarm_name}`, `{agent_name}`, `{role}`, `{repo}`, `{issue_number}`, `{issue_url}`,
 `{branch}`, `{worktree}`, `{base_branch}`, `{coordinator}`, `{initiator}`,
-and `{members}`. The kickoff supports `{swarm}`, `{repo}`, `{issue_number}`, `{title}`,
+and `{members}`, plus `{branch_shell}` and `{base_branch_shell}`: the same
+names quoted for a shell, for commands the brief has an agent run. The kickoff supports `{swarm}`, `{repo}`, `{issue_number}`, `{title}`,
 and `{issue_url}`. Other braces remain literal.
 
 `{shared_policy}` optionally chooses where policies appear in the base or combined
