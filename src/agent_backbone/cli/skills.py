@@ -246,14 +246,19 @@ async def _skills(args: argparse.Namespace) -> int:
         return 0
     if sub == "tag":
         if await _common.api_up(config):
+            path = f"/api/skills/{args.name}/tags"
             response = await _common.api(
-                config,
-                "PUT",
-                f"/api/skills/{args.name}/tags",
-                json_body={"tags": args.tags, "actor": _actor()},
+                config, "PUT", path, json_body={"tags": args.tags, "actor": _actor()}
             )
-            if not response or response[0] != 200:
-                detail = response[1] if response else "API unreachable"
+            if not response:
+                # Relinking running agents can outlast the wait: the backbone
+                # may have applied the change after this request gave up.
+                raise ValueError(
+                    f"{_common.unreachable(path)}; `backbone skills list` shows its tags "
+                    "and `backbone skills preview AGENT` an agent's links"
+                )
+            if response[0] != 200:
+                detail = response[1]
                 detail = detail.get("detail", detail) if isinstance(detail, dict) else detail
                 raise ValueError(f"could not retag skill: {detail}")
             tags, relinked = response[1]["tags"], response[1].get("relinked", [])

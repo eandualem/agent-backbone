@@ -90,6 +90,20 @@ def test_add_moves_and_tag_rewrites(config, capsys, tmp_path, monkeypatch):
     assert run(["skills", "tag", "nope", "x"]) == 1
 
 
+def test_a_retag_without_an_answer_has_an_unknown_outcome(config, capsys):
+    """A slow backbone can apply the retag after the request gave up (#402)."""
+    import httpx
+
+    with (
+        patch.object(_common, "api_up", AsyncMock(return_value=True)),
+        patch("httpx.AsyncClient.request", AsyncMock(side_effect=httpx.ReadTimeout("slow"))),
+    ):
+        assert run(["skills", "tag", "backend", "python"]) == 1
+    err = capsys.readouterr().err
+    assert "did not answer within 10s; its outcome is unknown" in err
+    assert "`backbone skills list` shows its tags" in err
+
+
 def test_add_goes_through_the_api_when_the_backbone_runs(config, capsys, tmp_path):
     source = _skill(tmp_path / "project" / ".agents" / "skills", "draft")
     with (
