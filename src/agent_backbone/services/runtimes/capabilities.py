@@ -419,7 +419,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Watch the session (`agent attach`) for dialogs.",
         implemented=lambda rt: bool(rt.prompt_markers),
         cli_dependent=True,
-        claude=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="2.1.284"),
+        claude=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="2.1.296"),
         codex=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.157.1"),
         gemini=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.46.0"),
         opencode=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="1.18.32"),
