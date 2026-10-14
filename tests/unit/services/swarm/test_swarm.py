@@ -166,6 +166,27 @@ class TestBriefs:
         assert "Your role: scout" in brief
         assert "{" not in brief.replace("{worktree}", "")  # placeholders all filled
 
+    def test_the_coordinators_rebase_command_quotes_the_base_branch(self):
+        """A branch name may hold `$(...)`: the command an agent runs must not run it."""
+        from agent_backbone.services.swarm.interface import _facts
+
+        facts = _facts(
+            swarm="research",
+            agent_name="research-coordinator",
+            role="coordinator",
+            coordinator="research-coordinator",
+            initiator="app",
+            repo="acme/app",
+            issue_number=7,
+            branch="swarm/research",
+            worktree=Path("/x/.backbone/swarms/research"),
+            members=["research-coordinator"],
+            base_branch="topic/$(id)",
+        )
+        brief = render_brief("coordinator", facts)
+        assert "git fetch origin refs/heads/'topic/$(id)' &&" in brief
+        assert "--onto FETCH_HEAD FETCH_HEAD..swarm/research`" in brief
+
     def test_unknown_role_falls_back_to_worker(self):
         brief = render_brief("cartographer", {"role": "cartographer"})
         assert "Your role: cartographer" in brief

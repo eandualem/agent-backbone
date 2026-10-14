@@ -60,8 +60,11 @@ and worktree remain available for inspection.
 ## The lifecycle
 
 The coordinator opens a pull request from the swarm
-branch with `Closes #N` in the body. When the PR's base is the
-repository's default branch, merging it closes the issue automatically;
+branch with `Closes #N` in the body. If the base branch moves first, the
+coordinator rebases the shared branch while members wait, with `git replay`
+rather than `git rebase`, which a Codex sandbox cannot clean up after; its
+brief has the command, which refuses to run over uncommitted changes. When
+the PR's base is the repository's default branch, merging it closes the issue automatically;
 for any other base branch GitHub does not auto-close, so the
 coordinator (or you) closes the issue after the merge. Either way, the
 backbone sees the issue-closed event and tears the swarm down:

@@ -50,6 +50,24 @@ finishing; the kickoff confirms the roster has been registered and launched.
    matters: merging the PR closes the issue, and closing the issue tears
    the swarm down automatically. Post a final summary comment on the
    issue before the PR.
+   If `{base_branch}` moves on before the merge, rebase `{branch}` yourself,
+   as one step the whole swarm waits for: members share this worktree, so
+   ask each to commit and pause first. Use `git replay`, not `git rebase`:
+   it keeps no state in Git's directory, which a Codex sandbox cannot clean
+   up after a rebase. From `{worktree}`, first:
+   `git fetch origin refs/heads/{base_branch_shell} && changes=$(git status --porcelain) && test -z "$changes" && git replay --ref-action=update --onto FETCH_HEAD FETCH_HEAD..{branch_shell}`.
+   If it exits non-zero, the branch and worktree are unchanged. When
+   `git status --porcelain` lists files, a member still has uncommitted work:
+   ask them to commit, then run it again. Otherwise read the error:
+   `git replay` exits 1 when the rebase conflicts; anything else (a failed
+   fetch, or an unknown `--ref-action` option on an older Git) is a failure
+   to start. Tell the initiator which it was.
+   If it succeeds, the branch has moved but the files have not: run
+   `git reset --hard {branch_shell}` straight away. If that fails (a leftover
+   `index.lock`, for example), fix the cause and run it again before anyone
+   resumes. Until it succeeds, the differences in the worktree are the old
+   files, not anyone's work: never commit them. Then push with
+   `git push --force-with-lease origin {branch_shell}`.
 6. **Verify the PR as GitHub computes it** before reporting done — your
    local view is not the diff reviewers see:
    `gh pr view <N> --repo {repo} --json changedFiles,additions,deletions`.
