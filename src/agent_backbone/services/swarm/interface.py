@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -113,6 +114,9 @@ def _facts(
         "issue_url": _issue_url(repo, issue_number),
         "branch": branch,
         "base_branch": base_branch,
+        # For commands the brief has an agent run: a branch name may hold `$(…)`.
+        "branch_shell": shlex.quote(branch),
+        "base_branch_shell": shlex.quote(base_branch),
         "worktree": str(worktree),
         "members": ", ".join(members),
     }
