@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -133,6 +134,12 @@ def isolated_backbone_environment(monkeypatch):
     for key in list(os.environ):
         if key.startswith("BACKBONE_") or key in ("TMUX", "TMUX_PANE"):
             monkeypatch.delenv(key)
+
+
+@pytest.fixture(autouse=True)
+def isolated_temp_dir(tmp_path_factory, monkeypatch):
+    """Temporary files the code writes (a session's environment file) stay in the test tree."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path_factory.mktemp("tmp")))
 
 
 @pytest.fixture(autouse=True)

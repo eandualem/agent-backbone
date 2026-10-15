@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import shlex
+import re
 import signal
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -27,15 +28,16 @@ def mock_subprocess():
 
 
 def _new_session(mock_subprocess) -> list[str]:
-    """The ``new-session`` command ``start_session`` hands tmux on stdin.
+    """The ``new-session`` command ``start_session`` hands tmux on stdin, as arguments.
 
-    shlex reads it back: the test values hold no ``~`` or control character,
-    where tmux's quoting and the shell's differ.
+    Each argument is a double-quoted word with backslash escapes; the test
+    values hold no control character, which would be an octal escape.
     """
     start = ("tmux", "start-server", ";", "source-file", "-")
     assert mock_subprocess.call_args_list[0].args == start
     stdin = mock_subprocess.return_value.communicate.await_args_list[0].kwargs["input"]
-    return shlex.split(stdin.decode())
+    words = re.findall(r'"((?:\\.|[^"\\])*)"', stdin.decode())
+    return [re.sub(r"\\(.)", r"\1", word) for word in words]
 
 
 class TestSessionExists:
@@ -285,9 +287,38 @@ class TestStartSessionEnvironment:
                 assert not any("s3cret" in arg for arg in call.args)
             new_session = _new_session(mock_subprocess)
             assert "API_TOKEN=s3cret value" in new_session  # the session environment
-            # The pane's start command, which tmux keeps, carries no value either.
+            # The pane's start command, which tmux keeps, names the file the
+            # process reads its values from (after tmux sets TERM, SHELL, PATH).
             launched = new_session[new_session.index("env") :]
-            assert launched == ["env", "-uGITHUB_TOKEN", "claude", "--model", "opus"]
+            env_file = Path(launched[5])
+            assert launched == [
+                "env",
+                "-uGITHUB_TOKEN",
+                "/bin/sh",
+                "-c",
+                '. "$0"; rm -f "$0"; exec "$@"',
+                str(env_file),
+                "claude",
+                "--model",
+                "opus",
+            ]
+            assert env_file.read_text() == "export API_TOKEN='s3cret value'\n"
+            assert env_file.stat().st_mode & 0o777 == 0o600
+
+    async def test_env_file_is_removed_when_tmux_refuses(self, mock_subprocess):
+        with patch(
+            "agent_backbone.services.terminal._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            proc = AsyncMock()
+            proc.returncode = 1
+            proc.communicate = AsyncMock(return_value=(b"", b"duplicate session"))
+            mock_subprocess.return_value = proc
+            assert not await start_session("test", environment={"API_TOKEN": "s3cret"})
+            new_session = _new_session(mock_subprocess)
+            env_file = Path(new_session[new_session.index("/bin/sh") + 3])
+            assert not env_file.exists()
 
     async def test_env_vars_are_session_environment_from_the_start(self, mock_subprocess):
         """`new-session -e` sets the session environment atomically with the session."""

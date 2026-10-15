@@ -133,7 +133,10 @@ Two mechanisms, because either alone leaves a hole:
    are set the same way), and `set-environment -r` for later panes. If that last step fails the session is killed rather
    than handed back. tmux reads the `new-session` command on its standard
    input, so no value appears in a process's arguments, which `ps` shows to
-   every user, or in the pane's start command. This catches what mechanism 1 cannot: variables *you*
+   every user, or in the pane's start command. Because tmux sets `TERM`,
+   `SHELL` and `PATH` over the session environment when it starts the pane,
+   the launched process reads the values again from a private file in the
+   temporary directory (mode 0600, removed once read). This catches what mechanism 1 cannot: variables *you*
    exported in the shell you ran `backbone up` from, and a long-lived tmux
    server that was polluted by an older backbone before you upgraded.
 

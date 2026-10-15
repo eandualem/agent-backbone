@@ -34,7 +34,7 @@ async def main() -> None:
     value = f"$HOME ~ 'q' \"d\" \\ {marker[:8]}"
     program = (
         "import os, sys\n"
-        "print('smoke-ready:' + os.environ['BACKBONE_SMOKE'], flush=True)\n"
+        "print('smoke-ready:' + os.environ['BACKBONE_SMOKE'] + os.environ['SHELL'], flush=True)\n"
         "for line in sys.stdin:\n"
         "    print('received:' + line.strip(), flush=True)\n"
     )
@@ -50,10 +50,11 @@ async def main() -> None:
                 session,
                 working_dir=directory,
                 command=[sys.executable, "-u", "-c", program],
-                environment={"BACKBONE_SMOKE": value},
+                # tmux sets SHELL in the pane; the agent's own value must win.
+                environment={"BACKBONE_SMOKE": value, "SHELL": "/smoke/sh"},
             ):
                 raise RuntimeError("could not start the smoke session")
-            await wait_for_output(session, f"smoke-ready:{value}")
+            await wait_for_output(session, f"smoke-ready:{value}/smoke/sh")
             fields = await query_format_vars(
                 session,
                 "session_name=#{session_name}\nsocket_path=#{socket_path}\n"
@@ -61,6 +62,10 @@ async def main() -> None:
             )
             if marker[:8] in fields.get("start", ""):
                 raise RuntimeError(f"an environment value is in the start command: {fields!r}")
+            if any(
+                Path(word).exists() for word in fields["start"].split() if "backbone-env-" in word
+            ):
+                raise RuntimeError(f"the environment file outlived its reading: {fields!r}")
             if fields.get("session_name") != session:
                 raise RuntimeError(f"display-message targeted the wrong session: {fields!r}")
             server = Path(fields.get("socket_path", "")).resolve()

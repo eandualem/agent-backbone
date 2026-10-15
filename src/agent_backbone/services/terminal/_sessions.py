@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
+import shlex
 import signal
+import tempfile
 from collections.abc import Sequence
 
 from agent_backbone.services.terminal._core import _run_tmux, exact_target, session_exists
@@ -17,8 +20,8 @@ def _default_shell() -> list[str]:
     """The login shell tmux starts when given no command.
 
     Spelled out explicitly because the ``env`` prefix, which scrubs variables,
-    needs something to exec. ``-l`` keeps tmux's
-    own semantics: it runs ``default-shell`` as a login shell, so the user's
+    and the ``sh`` that reads the environment file need something to exec.
+    ``-l`` keeps tmux's own semantics: it runs ``default-shell`` as a login shell, so the user's
     profile (and the PATH it sets) still applies.
     """
     return [os.environ.get("SHELL") or "/bin/sh", "-l"]
@@ -36,6 +39,10 @@ def _tmux_quote(arg: str) -> str:
         for ch in arg
     )
     return f'"{escaped}"'
+
+
+_SOURCE_AND_EXEC = '. "$0"; rm -f "$0"; exec "$@"'
+"""Run by ``/bin/sh -c`` with the environment file as ``$0``: read it, remove it, exec."""
 
 
 SESSION_FORMAT_STR = "pane_in_mode=#{pane_in_mode}"
@@ -67,10 +74,12 @@ async def start_session(
     """Start a detached tmux session running ``command`` (or a shell).
 
     ``environment`` is the tmux session environment (``new-session -e``),
-    which the initial command inherits, so hooks and later shells see it
-    from the session's first instant. tmux reads the ``new-session``
-    command on stdin: no value appears in a process's arguments (``ps``)
-    or in the pane's start command.
+    so later shells see it from the session's first instant. tmux sets
+    ``TERM``, ``SHELL``, ``PATH`` and its own variables over it when it
+    starts the pane, so the launched process reads the values again from a
+    private file (mode 0600, removed once read). tmux reads the
+    ``new-session`` command on stdin: no value appears in a process's
+    arguments (``ps``) or in the pane's start command.
 
     ``scrub`` names variables the session must **not** inherit from the tmux
     server (the backbone's secrets — issue #81). They are removed three
@@ -102,6 +111,14 @@ async def start_session(
     for key in removals:
         args.extend(["-e", f"{key}="])
     launch = list(command) if command else _default_shell()
+    env_file = None
+    if environment:
+        fd, env_file = tempfile.mkstemp(prefix="backbone-env-", suffix=".sh")
+        with os.fdopen(fd, "w") as fh:
+            fh.writelines(
+                f"export {key}={shlex.quote(value)}\n" for key, value in environment.items()
+            )
+        launch = ["/bin/sh", "-c", _SOURCE_AND_EXEC, env_file, *launch]
     if environment or removals:
         args.append("env")
         args.extend(f"-u{key}" for key in removals)
@@ -113,6 +130,7 @@ async def start_session(
         "start-server", ";", "source-file", "-", stdin_data=line.encode()
     )
     if rc != 0:
+        _remove(env_file)
         log.error("Failed to start session '%s': %s", session_name, stderr.decode())
         return False
     log.info("Started tmux session '%s'", session_name)
@@ -131,6 +149,7 @@ async def start_session(
                 stderr.decode().strip(),
             )
             await _run_tmux("kill-session", "-t", exact_target(session_name))
+            _remove(env_file)
             return False
     if mouse:
         rc, _, stderr = await _run_tmux(
@@ -141,6 +160,13 @@ async def start_session(
                 "Could not enable mouse scrolling for '%s': %s", session_name, stderr.decode()
             )
     return True
+
+
+def _remove(path: str | None) -> None:
+    """Remove an environment file no process will read."""
+    if path:
+        with contextlib.suppress(OSError):
+            os.unlink(path)
 
 
 async def stop_session(session_name: str) -> bool:
