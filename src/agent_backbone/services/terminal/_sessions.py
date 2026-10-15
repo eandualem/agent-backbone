@@ -135,9 +135,13 @@ async def start_session(
 
     # ``source-file`` starts no server of its own, hence ``start-server``.
     line = " ".join(_tmux_quote(arg) for arg in args) + "\n"
-    rc, _, stderr = await _run_tmux(
-        "start-server", ";", "source-file", "-", stdin_data=line.encode()
-    )
+    try:
+        rc, _, stderr = await _run_tmux(
+            "start-server", ";", "source-file", "-", stdin_data=line.encode()
+        )
+    except BaseException:  # a canceled launch (shutdown) leaves no file either
+        _remove(env_file)
+        raise
     if rc != 0:
         _remove(env_file)
         log.error("Failed to start session '%s': %s", session_name, stderr.decode())

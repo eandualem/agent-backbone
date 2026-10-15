@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -313,6 +315,19 @@ class TestStartSessionEnvironment:
         ).stdout.splitlines()
         assert {"UID=123", f"PATH={tmp_path}", "K=a b"} <= set(out)
         assert not env_file.exists()
+
+    async def test_env_file_is_removed_when_the_launch_is_canceled(self, tmp_path):
+        tempfile_dir = tempfile.gettempdir()
+        with (
+            patch("agent_backbone.services.terminal._sessions.session_exists", return_value=False),
+            patch(
+                "agent_backbone.services.terminal._sessions._run_tmux",
+                side_effect=asyncio.CancelledError,
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await start_session("test", environment={"API_TOKEN": "s3cret"})
+        assert not list(Path(tempfile_dir).glob("backbone-env-*"))
 
     async def test_env_file_is_removed_when_tmux_refuses(self, mock_subprocess):
         with patch(

@@ -44,6 +44,7 @@ async def main() -> None:
         os.environ.pop("TMUX", None)
         os.environ.pop("TMUX_PANE", None)
         os.environ["TMUX_TMPDIR"] = directory
+        tempfile.tempdir = directory  # where start_session writes the environment file
         socket = Path(directory) / f"tmux-{os.getuid()}" / "default"
         try:
             if not await start_session(
@@ -62,10 +63,8 @@ async def main() -> None:
             )
             if marker[:8] in fields.get("start", ""):
                 raise RuntimeError(f"an environment value is in the start command: {fields!r}")
-            if any(
-                Path(word).exists() for word in fields["start"].split() if "backbone-env-" in word
-            ):
-                raise RuntimeError(f"the environment file outlived its reading: {fields!r}")
+            if leftover := list(Path(directory).glob("backbone-env-*")):
+                raise RuntimeError(f"the environment file outlived its reading: {leftover!r}")
             if fields.get("session_name") != session:
                 raise RuntimeError(f"display-message targeted the wrong session: {fields!r}")
             server = Path(fields.get("socket_path", "")).resolve()
