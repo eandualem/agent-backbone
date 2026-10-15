@@ -347,7 +347,7 @@ class Codex(Runtime):
         args: list[str] = []
         for directory in dirs:
             path = Path(directory).expanduser()
-            if _DIRECTORY_ROOTS_ONLY and path.is_absolute() and not path.is_dir():
+            if _DIRECTORY_ROOTS_ONLY and path.is_absolute() and not os.path.isdir(path):
                 continue
             args.extend(["--add-dir", str(path)])
         return args

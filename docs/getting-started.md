@@ -358,8 +358,8 @@ validates Git's reciprocal pointers before opening shared and private commit
 paths. Codex normally protects `.git` even inside a writable checkout; these grants let
 ordinary `git add` and `git commit` run inside the sandbox. On Linux, Codex's
 sandbox accepts only directories, so the backbone opens just `objects`, `refs`
-and `logs` there; `git commit` still fails inside the sandbox on Linux, because
-Git creates its lock files directly in the Git directory. Source files,
+and `logs` there; `git add` and `git commit` still fail inside the sandbox on
+Linux, because Git creates its lock files directly in the Git directory. Source files,
 configured tooling directories (`agents.writable_dirs`) and the network are
 also available. Git hooks and configuration, `.codex`, `.agents`, and unrelated
 directories keep their existing protection. A `.git` symlink or unverified
