@@ -85,7 +85,8 @@ global one). `backbone agent untag api python` removes the tag from that agent. 
 `python-example` policy ships as an optional starting point and is **not assigned**.
 
 For swarm roles, assign policies with `--tag role:scout` or `--tag role:coordinator`.
-Swarm members automatically receive their role and `swarm:NAME` tags. The tag/untag
+Swarm members automatically receive their role and `swarm:NAME` tags, and inherit
+every other tag of the agent that started the swarm. The tag/untag
 commands cannot change these identity tags. New rules apply when a new conversation
 starts; tagging does not interrupt or send messages to an existing session.
 

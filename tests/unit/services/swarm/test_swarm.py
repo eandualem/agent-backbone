@@ -10,9 +10,15 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.config import AgentsConfig, AgentSpec
+from agent_backbone.config import AgentsConfig, AgentSpec, LaunchConfig
 from agent_backbone.models import DeliveryOutcome
-from agent_backbone.services.agents import AgentState, AgentStore, StartResult, StateSnapshot
+from agent_backbone.services.agents import (
+    AgentState,
+    AgentStore,
+    StartResult,
+    StateSnapshot,
+    instruction_preview,
+)
 from agent_backbone.services.routing import DeliveryReport
 from agent_backbone.services.swarm import (
     SwarmError,
@@ -26,6 +32,7 @@ from agent_backbone.services.swarm import (
     teardown_swarm,
 )
 from agent_backbone.services.swarm._roster import MemberSpec, member_names
+from agent_backbone.skills import read_store, select_skills
 from agent_backbone.templates import TemplateDirs
 from tests.conftest import make_config
 
@@ -468,6 +475,63 @@ class TestCreateSwarm:
         assert (await db.swarms.get("research"))["status"] == (
             "active" if occupied else "disbanded"
         )
+
+    @patch(
+        f"{_IFACE}.safe_deliver",
+        new_callable=AsyncMock,
+        return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
+    )
+    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
+    @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
+    @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
+    @patch(f"{_IFACE}.current_branch", new_callable=AsyncMock, return_value="main")
+    @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
+    async def test_members_inherit_a_coder_initiators_policies(
+        self, _git, _branch, mock_wt, _exists, _start, _deliver, db, tmp_path
+    ):
+        repo_dir = tmp_path / "checkout"
+        repo_dir.mkdir()
+        own = ("role:lead", "agent:x", "swarm:old", "task:acme/app#1")
+        initiator = AgentSpec(
+            name="alice", dir=str(repo_dir), repo="acme/app", tags=("coder", *own)
+        )
+        config = make_config(
+            tmp_path,
+            agents=AgentsConfig(specs={"alice": initiator}),
+            launch=LaunchConfig(tag_policy={"coder": ("minimal-change",)}),
+        )
+        (config.data_dir / "policies").mkdir()
+        (config.data_dir / "policies" / "minimal-change.md").write_text("Rule: smallest change")
+        skill = tmp_path / "skills" / "review"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: review\ndescription: d\nmetadata:\n  backbone-tags: coder\n---\n# x\n"
+        )
+        mock_wt.return_value = (repo_dir / ".backbone" / "swarms" / "research", "swarm/research")
+        store = _FakeStore(config)
+        gh = AsyncMock()
+        gh.get_issue = AsyncMock(return_value=AsyncMock(state="open", title="t"))
+
+        await create_swarm(
+            config,
+            db,
+            store,
+            gh,
+            name="research",
+            issue_ref="acme/app#7",
+            member_specs=["coder@codex", "scout@opencode"],
+            initiator="alice",
+        )
+
+        assert len(store.registered) == 3
+        for member in store.registered:
+            role = member.name.removeprefix("research-")
+            identity = {"swarm:research", f"role:{role}", "task:acme/app#7"}
+            assert set(member.tags) == identity | {"coder"}
+            assert "Rule: smallest change" in instruction_preview(member, config)["content"]
+            # The selection launch links into the worktree.
+            selected = select_skills(read_store(tmp_path / "skills"), member.tags, member.name)
+            assert [s.name for s in selected] == ["review"]
 
     @patch(
         f"{_IFACE}.safe_deliver",
