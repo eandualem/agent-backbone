@@ -75,9 +75,13 @@ launch modes. Their unattended switches (`--auto`,
 with the machine and its credentials. This remains an explicit per-agent
 choice; a swarm leaves these members asking for approval. Claude Code also
 requires its one-time bypass acceptance. An explicitly unattended launch
-pre-records that consent in `~/.claude.json`; ordinary launches never do.
-If the dialog still appears with *No, exit* preselected, `agent approve`
-refuses to confirm it and a person must answer in the terminal.
+carries that consent in its own settings file,
+`<data_dir>/hooks/claude-settings-unattended.json`
+(`skipDangerousModePermissionPrompt`), so it applies to that launch only.
+Ordinary launches never get it, and Backbone writes it to neither
+`~/.claude.json` nor `~/.claude/settings.json`, so your own Claude Code
+sessions still ask. If the dialog still appears with *No, exit* preselected,
+`agent approve` refuses to confirm it and a person must answer in the terminal.
 
 `agents.writable_dirs` is machine-wide by design and applies to every Codex
 agent the backbone starts. Use it for deliberately shared tooling directories:

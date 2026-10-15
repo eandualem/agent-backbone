@@ -43,7 +43,9 @@ This page follows real requests through the system. Read
    For Claude Code the command also carries
    `--settings <data_dir>/hooks/claude-settings.json` — a backbone-owned
    settings file, replaced atomically at every start, that wires the state hooks
-   without touching the repository or `~/.claude/settings.json`.
+   without touching the repository or `~/.claude/settings.json`. An unattended
+   launch gets `claude-settings-unattended.json` instead: the same hooks plus
+   Claude Code's one-time bypass consent.
    Codex starts and resumes with `-c service_tier=default`, independently of
    the selected model and reasoning effort. This selects standard processing
    even when inherited settings prefer Fast mode. It sets the launch default;
@@ -63,9 +65,9 @@ This page follows real requests through the system. Read
    selection cursor are recognized generically; Claude also recognizes its
    unnumbered option block with the Enter/Esc footer. Startup always ends as
    `ready`, `waiting_for_human`, `exited` or `timeout`.
-   An explicitly unattended Claude launch pre-records bypass consent in
-   `~/.claude.json`; ordinary launches never do. The runtime's bypass flag still
-   controls its mode. Folder trust remains controlled by `agents.pre_trust`.
+   Only an explicitly unattended Claude launch carries the bypass consent, in
+   its own settings file (step 4). The runtime's bypass flag still controls its
+   mode. Folder trust remains controlled by `agents.pre_trust`.
 6. Broadcast a fresh snapshot on Socket.IO `/sessions`.
 
 Startup readiness uses the same state reconciliation as inspection and delivery,

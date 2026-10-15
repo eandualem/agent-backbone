@@ -76,6 +76,20 @@ class TestBuildCommand:
         assert command[3] == "--settings"
         assert command[4].endswith("claude-settings.json")
 
+    def test_claude_unattended_settings_carry_the_bypass_consent(self, tmp_path):
+        with _resolve("/usr/bin/claude"):
+            command = RUNTIMES["claude"].build_command(
+                data_dir=tmp_path, state_dir=tmp_path / "state", unattended=True
+            )
+        assert "--dangerously-skip-permissions" in command and command.count("--settings") == 1
+        path = tmp_path / "hooks" / "claude-settings-unattended.json"
+        assert command[command.index("--settings") + 1] == str(path)
+        saved = json.loads(path.read_text())
+        assert saved["skipDangerousModePermissionPrompt"] is True
+        assert "SessionStart" in saved["hooks"]
+        attended = json.loads((tmp_path / "hooks" / "claude-settings.json").read_text())
+        assert "skipDangerousModePermissionPrompt" not in attended
+
     def test_claude_without_dirs_has_no_settings(self):
         with _resolve("/usr/bin/claude"):
             assert RUNTIMES["claude"].build_command() == ["/usr/bin/claude", *_NO_FEEDBACK]

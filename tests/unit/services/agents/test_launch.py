@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -1272,24 +1273,23 @@ class TestLaunchEnvFromRuntime:
 
 
 @pytest.mark.parametrize("unattended", [False, True])
-async def test_claude_consent_is_preaccepted_only_for_explicit_unattended(tmp_path, unattended):
+async def test_claude_consent_rides_only_in_an_unattended_launch(tmp_path, monkeypatch, unattended):
     from dataclasses import replace
 
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     config = bootstrap_config(tmp_path / "data")
     config = replace(config, launch=replace(config.launch, pre_trust=False))
     spec = replace(TestStartAgentBrief._spec(tmp_path, "claude"), unattended=unattended)
     exists, start, command, trust, wait = TestStartAgentBrief._launch()
-    with (
-        exists,
-        start,
-        command,
-        trust,
-        wait,
-        patch("agent_backbone.services.runtimes.claude.pre_accept_bypass") as consent,
-    ):
+    with exists, start as started, command, trust, wait:
         result = await start_agent(spec, config, db=AsyncMock())
     assert result.ok
-    assert consent.call_count == int(unattended)
+    launched = started.await_args.kwargs["command"]
+    assert launched.count("--settings") == 1
+    settings = json.loads(Path(launched[launched.index("--settings") + 1]).read_text())
+    assert "SessionStart" in settings["hooks"]
+    assert settings.get("skipDangerousModePermissionPrompt", False) is unattended
+    assert not (tmp_path / "home").exists()  # nothing written to ~/.claude.json
 
 
 @pytest.mark.parametrize("hook", [None, "idle"])

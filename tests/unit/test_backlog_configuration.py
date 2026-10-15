@@ -1,7 +1,6 @@
 """Behavioral regressions for the consolidated configuration backlog."""
 
 import asyncio
-import json
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
@@ -13,7 +12,6 @@ from agent_backbone.config import AgentsConfig, AgentSpec, build_config, validat
 from agent_backbone.services.agents import AgentStore, approve_agent
 from agent_backbone.services.integrations import Integration, Integrations
 from agent_backbone.services.runtimes import RUNTIMES
-from agent_backbone.services.runtimes.claude import pre_accept_bypass
 from agent_backbone.services.scheduler import PeriodicScheduler
 from agent_backbone.templates import TemplateDirs, render_agent_brief
 
@@ -33,18 +31,6 @@ async def test_unnumbered_choices_block_delivery_and_approval(question):
     assert outcome == "not_permission"
     keys.assert_not_called()
     assert not rt.detect_active_dialog(pane + "\n❯ ")
-
-
-def test_bypass_consent_preserves_config_and_handles_invalid_json(tmp_path):
-    path = tmp_path / "claude.json"
-    path.write_text('{"projects":{"a":{"hasTrustDialogAccepted":true}},"other":42}')
-    assert pre_accept_bypass(claude_config=path)
-    saved = json.loads(path.read_text())
-    assert saved["bypassPermissionsModeAccepted"] is True
-    assert saved["other"] == 42 and saved["projects"]["a"]["hasTrustDialogAccepted"]
-    path.write_text("broken")
-    assert not pre_accept_bypass(claude_config=path)
-    assert path.read_text() == "broken"
 
 
 def test_policy_order_literal_content_and_full_override(tmp_path):

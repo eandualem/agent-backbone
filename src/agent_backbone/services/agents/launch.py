@@ -387,9 +387,6 @@ async def _start_agent(
         return StartResult(ok=False, evidence=(str(exc),))
 
     details["stage"] = "preparation"
-    if unattended:
-        rt.prepare_unattended()
-
     extra_env = {**rt.default_env, **spec.env, **rt.launch_env(*rt.split_model(effective_model))}
     resume_evidence.extend(
         f"user-level instructions: {path}" for path in rt.user_instructions(extra_env, spec.path)
