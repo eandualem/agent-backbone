@@ -10,12 +10,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
-from agent_backbone.models import EventType
+from agent_backbone.models import EventType, IssueEvent
 from agent_backbone.services.jobs.github_poll import (
     GitHubPoller,
     comment_event_from_api,
     issue_event_from_api,
 )
+from agent_backbone.services.routing import dispatch_event
 from tests.conftest import TEST_REPO, make_agents, make_config
 
 
@@ -28,6 +29,21 @@ def _issue(number: int, *, state="open", created="2026-08-31T10:00:00Z", updated
         "updated_at": updated or created,
         "html_url": f"https://github.com/{TEST_REPO}/issues/{number}",
         "labels": [{"name": name} for name in labels],
+    }
+
+
+def _listed_pull(number: int, *, state="open", created="2026-08-31T10:00:00Z", updated=None):
+    """A pull request as the issues listing returns it."""
+    item = _issue(number, state=state, created=created, updated=updated)
+    return {**item, "pull_request": {"url": "x"}}
+
+
+def _pull(number: int):
+    """A pull request as the pulls endpoint (and the webhook) returns it."""
+    return {
+        **_issue(number),
+        "body": "Closes #1",
+        "head": {"ref": "fix/thing", "repo": {"full_name": TEST_REPO}},
     }
 
 
@@ -209,6 +225,53 @@ class TestGitHubPoller:
 
         assert summary == {"deduped": 1}
         assert dispatch.issue_dispatcher.await_count == 1
+
+    async def test_pull_request_opened_in_window_is_announced(self, config, db, dispatch):
+        gh = AsyncMock()
+        gh.list_issues_since = AsyncMock(
+            return_value=[
+                _listed_pull(5),
+                _listed_pull(6, created="2026-08-31T08:00:00Z", updated="2026-08-31T10:00:00Z"),
+                _listed_pull(7, state="closed"),
+            ]
+        )
+        gh.list_comments_since = AsyncMock(return_value=[])
+        gh.get_pull_raw = AsyncMock(return_value=_pull(5))
+        poller = GitHubPoller(config, db, gh)
+        poller._since[TEST_REPO] = "2026-08-31T09:00:00Z"
+
+        assert await poller.run() == {"dispatch": 1}
+
+        gh.get_pull_raw.assert_awaited_once_with(5, TEST_REPO)
+        event = dispatch.issue_dispatcher.await_args.args[0]
+        assert event.event_type == EventType.PULL_REQUEST_OPENED
+        assert (event.issue.number, event.issue.head_ref) == (5, "fix/thing")
+
+    @pytest.mark.parametrize("webhook_first", [True, False])
+    async def test_webhook_and_poll_announce_a_pull_request_once(
+        self, config, db, dispatch, webhook_first
+    ):
+        gh = AsyncMock()
+        gh.list_issues_since = AsyncMock(return_value=[_listed_pull(5)])
+        gh.list_comments_since = AsyncMock(return_value=[])
+        gh.get_pull_raw = AsyncMock(return_value=_pull(5))
+        poller = GitHubPoller(config, db, gh)
+        poller._since[TEST_REPO] = "2026-08-31T09:00:00Z"
+
+        def webhook(action, guid):
+            payload = {"pull_request": _pull(5), "repository": {"full_name": TEST_REPO.upper()}}
+            return IssueEvent.from_webhook("pull_request", action, payload, guid)
+
+        if webhook_first:
+            await dispatch_event(webhook("opened", "guid-1"), config, db, gh)
+            await poller.run()
+        else:
+            await poller.run()
+            await dispatch_event(webhook("opened", "guid-1"), config, db, gh)
+        assert dispatch.issue_dispatcher.await_count == 1
+        # A reopen is a new event, as before.
+        await dispatch_event(webhook("reopened", "guid-2"), config, db, gh)
+        assert dispatch.issue_dispatcher.await_count == 2
 
     async def test_initial_boundary_is_independent_of_receipt_time(self, config, db, dispatch):
         await db.events.record(
