@@ -325,7 +325,7 @@ is touched:
 
 | Runtime | How the hooks reach the session |
 |---|---|
-| Claude Code | `--settings <data_dir>/hooks/claude-settings.json` |
+| Claude Code | `--settings <data_dir>/hooks/claude-settings.json`; an unattended launch gets `claude-settings-unattended.json`, which also carries the one-time bypass consent |
 | Codex | `-c hooks.<Event>=…` overrides, with the hook-trust prompt bypassed for the backbone's own hooks |
 | Gemini CLI | `GEMINI_CLI_SYSTEM_SETTINGS_PATH=<data_dir>/hooks/gemini-settings.json` |
 | OpenCode | `OPENCODE_CONFIG_CONTENT` loading the `opencode_hook.js` plugin |

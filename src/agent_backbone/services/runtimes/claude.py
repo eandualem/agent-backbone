@@ -78,26 +78,6 @@ def _runs(
     return runs, foreground
 
 
-def pre_accept_bypass(*, claude_config: Path | None = None) -> bool:
-    """Record the owner's explicit unattended choice; never enable bypass mode.
-
-    Claude 2.1.261 still reads this legacy consent field and migrates it to
-    skipDangerousModePermissionPrompt. The launch flag remains the mode gate.
-    """
-    config_file = claude_config or (Path.home() / ".claude.json")
-    try:
-        data = json.loads(config_file.read_text()) if config_file.is_file() else {}
-        if not isinstance(data, dict):
-            return False
-        if data.get("bypassPermissionsModeAccepted") is not True:
-            data["bypassPermissionsModeAccepted"] = True
-            atomic_write_text(config_file, json.dumps(data, indent=2))
-        return True
-    except (OSError, ValueError):
-        log.warning("Could not record bypass consent; the launch dialog will appear")
-        return False
-
-
 def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = None) -> bool:
     """Mark a directory as trusted in Claude Code's per-project state.
 
@@ -157,7 +137,7 @@ class ClaudeCode(Runtime):
     # "--dangerously-skip-permissions  Bypass all permission checks." No OS
     # sandbox behind it: trust on the machine. Claude Code asks once per
     # machine to accept bypass mode; only an explicit unattended launch
-    # records consent before starting.
+    # carries that consent, in its own settings file (`hook_launch_args`).
     unattended_args = ("--dangerously-skip-permissions",)
 
     # An empty matcher means every tool; None omits the matcher.
@@ -248,9 +228,6 @@ class ClaudeCode(Runtime):
 
     def pre_trust(self, directory: Path | str) -> None:
         pre_trust_directory(directory)
-
-    def prepare_unattended(self) -> None:
-        pre_accept_bypass()
 
     @staticmethod
     def _unnumbered_dialog(pane_content: str) -> bool:
@@ -386,7 +363,11 @@ class ClaudeCode(Runtime):
         return Path("~/.claude/settings.json").expanduser()
 
     def hook_launch_args(
-        self, data_dir: Path | str | None, state_dir: Path | str | None
+        self,
+        data_dir: Path | str | None,
+        state_dir: Path | str | None,
+        *,
+        unattended: bool = False,
     ) -> list[str]:
         """``--settings <data_dir>/hooks/claude-settings.json``.
 
@@ -395,12 +376,23 @@ class ClaudeCode(Runtime):
         session it starts reports state without the user configuring hooks
         per repository (or at all). Nothing outside ``<data_dir>/hooks/`` is
         touched.
+
+        An ``unattended`` launch gets ``claude-settings-unattended.json``: the
+        same hooks plus ``skipDangerousModePermissionPrompt``, the one-time
+        bypass consent. Claude Code 2.1.300 honours that key in a
+        ``--settings`` file and ignores the legacy ``bypassPermissionsModeAccepted``
+        in ``~/.claude.json`` (measured, #438). A file of its own keeps the
+        consent to these launches; with two ``--settings`` flags only the
+        last one counts, so it carries the hooks too.
         """
         if data_dir is None or state_dir is None:
             return []
+        name = "claude-settings-unattended.json" if unattended else "claude-settings.json"
         try:
             _, settings = self.hook_settings(data_dir, state_dir)
-            path = Path(data_dir) / "hooks" / "claude-settings.json"
+            if unattended:
+                settings["skipDangerousModePermissionPrompt"] = True
+            path = Path(data_dir) / "hooks" / name
             save_settings(path, settings)
         except OSError as exc:
             log.warning("Could not write the launch hook settings: %s", exc)
@@ -424,6 +416,16 @@ class ClaudeCode(Runtime):
             args.extend(["--append-system-prompt-file", str(brief_file)])
         args.extend(self.hook_launch_args(data_dir, state_dir))
         return args
+
+    def build_command(self, *, unattended=False, **kwargs):
+        command = super().build_command(unattended=unattended, **kwargs)
+        # launch_args cannot tell an unattended launch: its hook file is
+        # swapped here for the one that also carries the consent.
+        if command is not None and unattended and "--settings" in command:
+            data_dir, state_dir = kwargs.get("data_dir"), kwargs.get("state_dir")
+            if consent := self.hook_launch_args(data_dir, state_dir, unattended=True):
+                command[command.index("--settings") + 1] = consent[1]
+        return command
 
     def user_instructions(self, env, project=None):
         home = Path(
