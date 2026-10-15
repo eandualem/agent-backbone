@@ -129,11 +129,12 @@ backbone agent attach app               # read its reply; Ctrl-b d detaches
 
 The folder supplies the agent name. If startup reports a prompt or a timeout,
 `backbone agent inspect app` shows what needs attention. `tell` reports
-whether the message was delivered or queued; a queued message is delivered
-when the agent is ready, so do not resend it while it waits. If `backbone` is not on your PATH,
-run `uv tool update-shell` and open a new terminal. In a container without a
-login service, use `backbone up --detach`. `ab` is a short alias; on macOS,
-use `backbone` if Apache Bench shadows it.
+whether the message was delivered or queued; delivery does not mean the agent
+has finished answering. A queued message is delivered when the agent is
+ready, so do not resend a message the queue accepted. If `backbone` is not on
+your PATH, run `uv tool update-shell` and open a new terminal. In a container
+without a login service, use `backbone up --detach`. `ab` is a short alias;
+on macOS, use `backbone` if Apache Bench shadows it.
 
 [Getting started](docs/getting-started.md) walks through a second agent,
 GitHub and Telegram. [Quick usage](USAGE.md) is the everyday command guide.
