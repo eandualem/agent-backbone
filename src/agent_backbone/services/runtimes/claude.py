@@ -377,6 +377,12 @@ class ClaudeCode(Runtime):
         per repository (or at all). Nothing outside ``<data_dir>/hooks/`` is
         touched.
 
+        Every file pins ``tui`` to ``default``, the inline renderer Backbone
+        reads panes from (as Codex's launch pins inline output). An explicit
+        ``tui`` also stops Claude Code's one-time fullscreen-renderer offer,
+        which otherwise parks a fresh agent at startup (2.1.300, measured,
+        #440). It outranks the user's own ``tui`` only in Backbone's launches.
+
         An ``unattended`` launch gets ``claude-settings-unattended.json``: the
         same hooks plus ``skipDangerousModePermissionPrompt``, the one-time
         bypass consent. Claude Code 2.1.300 honours that key in a
@@ -390,6 +396,7 @@ class ClaudeCode(Runtime):
         name = "claude-settings-unattended.json" if unattended else "claude-settings.json"
         try:
             _, settings = self.hook_settings(data_dir, state_dir)
+            settings["tui"] = "default"
             if unattended:
                 settings["skipDangerousModePermissionPrompt"] = True
             path = Path(data_dir) / "hooks" / name
