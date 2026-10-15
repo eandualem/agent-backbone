@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -272,6 +273,34 @@ class TestGitHubPoller:
         # A reopen is a new event, as before.
         await dispatch_event(webhook("reopened", "guid-2"), config, db, gh)
         assert dispatch.issue_dispatcher.await_count == 2
+
+    async def test_a_late_replay_still_recognises_the_opener(self, config, db):
+        # ike ran `gh pr create` when the pull request was created, weeks before this replay.
+        entry = {
+            "ts": datetime(2026, 8, 31, 10, tzinfo=UTC).timestamp(),
+            "session": "ike",
+            "action": "pull_request",
+            "phase": "succeeded",
+            "repo": TEST_REPO,
+            "head_repo": TEST_REPO,
+            "branch": "fix/thing",
+        }
+        config.action_log_path.parent.mkdir(parents=True, exist_ok=True)
+        config.action_log_path.write_text(json.dumps(entry) + "\n")
+        gh = AsyncMock()
+        gh.list_issues_since = AsyncMock(return_value=[_listed_pull(5)])
+        gh.list_comments_since = AsyncMock(return_value=[])
+        gh.get_pull_raw = AsyncMock(return_value=_pull(5))
+        poller = GitHubPoller(config, db, gh)
+        poller._since[TEST_REPO] = "2026-08-31T09:00:00Z"
+
+        with patch(
+            "agent_backbone.services.routing._router.safe_deliver", new_callable=AsyncMock
+        ) as deliver:
+            await poller.run()
+
+        deliver.assert_not_called()  # the opener is not told about its own pull request
+        assert await db.acks.exists(1, "ike", repo=TEST_REPO)  # "Closes #1"
 
     async def test_initial_boundary_is_independent_of_receipt_time(self, config, db, dispatch):
         await db.events.record(
