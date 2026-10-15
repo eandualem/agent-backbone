@@ -382,7 +382,7 @@ sequenceDiagram
 
 | Intake | When | How |
 |---|---|---|
-| `poll` | `GITHUB_TOKEN` (or App credentials) and no webhook secret | every `github.poll_interval_seconds`, list issues and comments from the durable replay cursor for each tracked repository |
+| `poll` | `GITHUB_TOKEN` (or App credentials) and no webhook secret | every `github.poll_interval_seconds`, list issues, pull requests and comments from the durable replay cursor for each tracked repository; a pull request opened since the last poll gets the same notice the webhook sends, never twice |
 | `webhook` | `GITHUB_WEBHOOK_SECRET` is set | GitHub posts to `/webhooks/github`; signature verified; startup backfill catches downtime and retries unfinished repositories through the delivery-retry job |
 | `off` | no credentials, or `github.intake = off` | — |
 

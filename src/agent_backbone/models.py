@@ -436,6 +436,8 @@ class IssueEvent(BaseModel):
     comment: CommentData | None = None
     review: ReviewData | None = None
     delivery_id: str = ""
+    action: str = ""
+    """GitHub's action (``opened``, ``reopened``, …); one event type covers several."""
 
     @classmethod
     def from_webhook(
@@ -496,4 +498,5 @@ class IssueEvent(BaseModel):
             comment=comment,
             review=review,
             delivery_id=delivery_id,
+            action=action,
         )

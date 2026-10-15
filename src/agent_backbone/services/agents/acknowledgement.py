@@ -86,8 +86,10 @@ def find_outgoing_pull_request(
     *,
     base_repo: str = "",
     include_intent: bool = True,
+    at: float | None = None,
 ) -> str | None:
-    """Session that recently ran ``gh pr create`` from this head repository and branch.
+    """Session that ran ``gh pr create`` from this head repository and branch
+    within ``recency_seconds`` of ``at`` (default now).
 
     Log format: ``{"ts": …, "session": "app", "action": "pull_request",
     "repo": "owner/name", "head_repo": "forker/name", "branch": "feat/x"}``.
@@ -103,7 +105,7 @@ def find_outgoing_pull_request(
     """
     if not head_ref or not (head_repo or base_repo):
         return None
-    now = time.time()
+    now = time.time() if at is None else at
     for entry in _read_tail(action_log, max_lines):
         if entry.get("action") != "pull_request":
             continue
@@ -118,7 +120,7 @@ def find_outgoing_pull_request(
             continue
         if (entry.get("branch") or "") != head_ref:
             continue
-        if now - float(entry.get("ts", 0)) <= recency_seconds:
+        if abs(now - float(entry.get("ts", 0))) <= recency_seconds:
             return entry.get("session")
     return None
 
