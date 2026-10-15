@@ -45,7 +45,11 @@ This page follows real requests through the system. Read
    settings file, replaced atomically at every start, that wires the state hooks
    without touching the repository or `~/.claude/settings.json`. An unattended
    launch gets `claude-settings-unattended.json` instead: the same hooks plus
-   Claude Code's one-time bypass consent.
+   Claude Code's one-time bypass consent. Both files set `tui` to `default`, so
+   Backbone-launched agents always use Claude Code's inline renderer, the one
+   Backbone reads their screens from, and its one-time fullscreen-renderer offer
+   never stops them at startup. If you chose the fullscreen renderer for your
+   own sessions, this is why agents look different; your own sessions keep it.
    Codex starts and resumes with `-c service_tier=default`, independently of
    the selected model and reasoning effort. This selects standard processing
    even when inherited settings prefer Fast mode. It sets the launch default;

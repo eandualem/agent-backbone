@@ -87,7 +87,7 @@ class TestBuildCommand:
         assert command[command.index("--settings") + 1] == str(path)
         saved = json.loads(path.read_text())
         assert saved["skipDangerousModePermissionPrompt"] is True
-        assert "SessionStart" in saved["hooks"]
+        assert "SessionStart" in saved["hooks"] and saved["tui"] == "default"
         attended = json.loads((tmp_path / "hooks" / "claude-settings.json").read_text())
         assert "skipDangerousModePermissionPrompt" not in attended
 
