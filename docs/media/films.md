@@ -19,9 +19,3 @@ three CLIs building a product together: issues in the right repository, a swarm
 on one branch, a review by a second model, and answers from a phone.
 
 https://github.com/user-attachments/assets/4218fdbe-e581-49bd-879f-288d41c9f72f
-
-## The real thing
-
-The films are animations. For an unedited recording of installation and two
-agents reviewing each other's work, see
-[the recording in the README](../../README.md#see-the-real-thing).

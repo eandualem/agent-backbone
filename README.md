@@ -24,7 +24,6 @@ https://github.com/user-attachments/assets/695a6096-4196-4115-911c-a0043d632088
 
 <p align="center"><b>Up next</b>&nbsp;&nbsp;›<br>
 <a href="docs/media/films.md#why-backbone"><img src="docs/media/film-why-backbone.jpg" width="49%" alt="Why Backbone, 2 minutes 23: from 'set up Backbone for me' to a team on three CLIs"></a>
-<a href="#see-the-real-thing"><img src="docs/media/film-recording.jpg" width="49%" alt="The real thing: an unedited recording of installation and two agents reviewing each other's work"></a>
 </p>
 
 ## Why Backbone
@@ -138,14 +137,6 @@ on macOS, use `backbone` if Apache Bench shadows it.
 
 [Getting started](docs/getting-started.md) walks through a second agent,
 GitHub and Telegram. [Quick usage](USAGE.md) is the everyday command guide.
-
-## See the real thing
-
-The films above are animations. This is an unedited recording: installation
-from PyPI, then a Claude Code agent and an OpenCode agent reviewing each
-other's work on Linux, at 3× speed.
-
-![Two agents started through Backbone review each other's work](docs/media/demo.gif)
 
 ## Built to be relied on
 
