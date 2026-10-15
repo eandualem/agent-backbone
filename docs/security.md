@@ -45,7 +45,7 @@ The backbone can type into your agents' terminals. Treat it accordingly.
 - **Per-agent `env` is for settings, not secrets.** Values you attach to
   an agent with `agent set env=` are stored in plain text in the database
   so they can be exported into its session, and `agent set` warns about
-  names that look like secrets. Credentials stay in each tool's own
+  entries that look like secrets. Credentials stay in each tool's own
   credential store.
 - **Agents do not hold the backbone's keys.** An agent session gets the
   launch contract and nothing else; see below.
@@ -172,7 +172,7 @@ agents need it to find the same backbone you are running.
 | Terminal streaming | Read-only, registered agents only; the Socket.IO `/terminal` namespace has no input event | — |
 | Agent output (`agent output`, `GET /api/sessions/{name}/output`) | Read-only, registered agents only; reads the agent's user-facing messages, complete, from the runtime's own transcript for Claude Code, Codex, Gemini CLI and OpenCode (including messages that scrolled off or never showed on screen), a bounded page at a time with explicit offsets to read further; tool activity and thinking are not exposed; else the visible screen | — |
 | Steering (`tell --steer`, `POST /api/steer`) | Text reaches a working agent mid-turn as hook context on Claude Code and Codex, or as a user message in the running turn on OpenCode, with a provenance envelope; no keystrokes, so it cannot overwrite a draft or answer a dialog; refused (nothing queued) when the agent is not working or the runtime has no hook context. Same credential as `tell`: the API key, all-or-nothing | — |
-| Secrets | Backbone secrets live only in `<data_dir>/.env` (mode 0600) or the environment — never in the database. Per-agent `env` is for settings: its values are stored in plain text in the database, and `agent set` warns about names that look like secrets | — |
+| Secrets | Backbone secrets live only in `<data_dir>/.env` (mode 0600) or the environment — never in the database. Per-agent `env` is for settings: its values are stored in plain text in the database, and `agent set` warns about entries that look like secrets | — |
 | Secrets in agent sessions | Stripped: an agent inherits `BACKBONE_AGENT`/`BACKBONE_RUNTIME`/`BACKBONE_STATE_DIR` and its own `env`, never the backbone's `.env` | an agent that calls the API reads the key from `<data_dir>/.env`; other credentials stay in each tool's own store |
 | Hook script | Standard library only, runs as your user, writes only under `<data_dir>/state` | — |
 | Busy agents | Never interrupted: `priority` only bypasses "someone is typing" and the settle window | — |

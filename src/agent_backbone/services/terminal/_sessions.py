@@ -125,8 +125,12 @@ async def start_session(
     env_file = None
     if environment:
         fd, env_file = tempfile.mkstemp(prefix="backbone-env-", suffix=".json")
-        with os.fdopen(fd, "w") as fh:
-            json.dump(environment, fh)
+        try:
+            with os.fdopen(fd, "w") as fh:
+                json.dump(environment, fh)
+        except BaseException:
+            _remove(env_file)
+            raise
         launch = [sys.executable, "-I", "-c", _LOAD_AND_EXEC, env_file, *launch]
     if environment or removals:
         args.append("env")

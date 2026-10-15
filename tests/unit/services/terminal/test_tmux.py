@@ -316,6 +316,15 @@ class TestStartSessionEnvironment:
         assert {"UID=123", f"PATH={tmp_path}", "K=a b"} <= set(out)
         assert not env_file.exists()
 
+    async def test_env_file_is_removed_when_it_cannot_be_written(self):
+        with (
+            patch("agent_backbone.services.terminal._sessions.session_exists", return_value=False),
+            patch("agent_backbone.services.terminal._sessions.json.dump", side_effect=OSError),
+            pytest.raises(OSError),
+        ):
+            await start_session("test", environment={"API_TOKEN": "s3cret"})
+        assert not list(Path(tempfile.gettempdir()).glob("backbone-env-*"))
+
     async def test_env_file_is_removed_when_the_launch_is_canceled(self, tmp_path):
         tempfile_dir = tempfile.gettempdir()
         with (

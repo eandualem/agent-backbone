@@ -88,10 +88,16 @@ _SECRET_WORDS = {"KEY", "APIKEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD"}
 
 
 def _secret_looking(env: object) -> list[str]:
-    """Names in an ``env`` value that read as credentials (``API_KEY``, ``GITHUB_TOKEN``)."""
+    """Names in an ``env`` value that read as credentials (``API_KEY``, ``GITHUB_TOKEN``),
+    or whose value is a URL carrying a password (``postgresql://app:pw@db/app``)."""
     if not isinstance(env, dict):
         return []
-    return [key for key in env if _SECRET_WORDS & set(str(key).upper().split("_"))]
+    return [
+        key
+        for key, value in env.items()
+        if _SECRET_WORDS & set(str(key).upper().split("_"))
+        or re.search(r"://[^/@\s]*:[^/@\s]*@", str(value))
+    ]
 
 
 _DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -747,7 +753,7 @@ async def _agent(args: argparse.Namespace) -> int:
             changes[key] = _common.parse_value(raw) if key in json_keys else raw
         if names := _secret_looking(changes.get("env")):
             print(
-                f"warning: env names that look like secrets: {', '.join(names)}. Values are "
+                f"warning: env entries that look like secrets: {', '.join(names)}. Values are "
                 "stored in plain text in the backbone's database; keep credentials in the "
                 "tool's own credential store (docs/security.md)",
                 file=sys.stderr,
