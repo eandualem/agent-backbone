@@ -274,6 +274,10 @@ class Runtime:
     a sandbox, ``unattended`` means free inside a wall; without one it means
     free on the machine — which is why a swarm only makes sandboxed members
     unattended by default."""
+    sandbox_commit_block: str = ""
+    """Why ``git add`` and ``git commit`` fail inside this runtime's sandbox on
+    this machine; empty when they work. An unattended member cannot ask to
+    commit outside it, so ``swarm create`` refuses one (#437)."""
     mouse_scroll: bool = False
     """Enable tmux mouse handling for this runtime's session so wheel events
     scroll terminal history. False leaves the user's tmux setting alone."""

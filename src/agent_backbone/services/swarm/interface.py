@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 from agent_backbone.config import AgentSpec
 from agent_backbone.services.agents import agent_state, lifecycle_lock, start_agent
 from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.swarm._roster import (
     COORDINATOR_ROLE,
     member_names,
@@ -208,6 +209,16 @@ async def create_swarm(
     for agent_name in all_names:
         if config.agents.get(agent_name) is not None or await session_exists(agent_name):
             raise SwarmError(f"agent name '{agent_name}' is already in use")
+    # An unattended member cannot ask to commit outside its sandbox: refuse it
+    # here rather than let the swarm stall at its first commit.
+    for agent_name, spec in named:
+        rt = RUNTIMES.get(spec.runtime or config.launch.default_runtime)
+        if rt is not None and rt.sandbox_commit_block and config.swarm.unattended_members:
+            raise SwarmError(
+                f"member '{agent_name}' would run unattended on {rt.id}: "
+                f"{rt.sandbox_commit_block}. Give it another runtime (role@runtime), "
+                "or set swarm.unattended_members false so it can ask"
+            )
 
     try:
         base_branch = await current_branch(repo_dir)

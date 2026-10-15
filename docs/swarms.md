@@ -195,7 +195,10 @@ backbone reports the failure and never restarts the blocked agent.
 
 With `swarm.unattended_members` enabled (the default), sandboxed Codex
 members run without permission prompts. Other runtimes retain their approval
-policy. The setting is evaluated at each member's next launch.
+policy. The setting is evaluated at each member's next launch. On Linux,
+`git add` and `git commit` fail inside Codex's sandbox, so `swarm create`
+refuses an unattended Codex member there before creating anything; give
+that member another runtime (#437).
 
 The full [permission boundaries and cache options](security.md#unattended-agents-and-writable-directories)
 explain the Git grants, machine-wide `agents.writable_dirs`, and the

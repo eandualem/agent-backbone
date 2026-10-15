@@ -20,6 +20,7 @@ from agent_backbone.services.agents import (
     instruction_preview,
 )
 from agent_backbone.services.routing import DeliveryReport
+from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.swarm import (
     SwarmError,
     create_swarm,
@@ -512,16 +513,18 @@ class TestCreateSwarm:
         gh = AsyncMock()
         gh.get_issue = AsyncMock(return_value=AsyncMock(state="open", title="t"))
 
-        await create_swarm(
-            config,
-            db,
-            store,
-            gh,
-            name="research",
-            issue_ref="acme/app#7",
-            member_specs=["coder@codex", "scout@opencode"],
-            initiator="alice",
-        )
+        # Where Codex cannot commit in its sandbox (Linux), the guard's own test covers it.
+        with patch.object(RUNTIMES["codex"], "sandbox_commit_block", ""):
+            await create_swarm(
+                config,
+                db,
+                store,
+                gh,
+                name="research",
+                issue_ref="acme/app#7",
+                member_specs=["coder@codex", "scout@opencode"],
+                initiator="alice",
+            )
 
         assert len(store.registered) == 3
         for member in store.registered:
@@ -856,4 +859,43 @@ async def test_missing_kickoff_fails_before_creating_worktree(db, tmp_path):
                 initiator="simon",
             )
     create.assert_not_called()
+    assert await db.swarms.get("research") is None
+
+
+@pytest.mark.parametrize("unattended", [True, False])
+async def test_a_member_that_cannot_commit_unattended_is_refused_first(db, tmp_path, unattended):
+    # Codex on Linux: git add and commit fail inside its sandbox (#437).
+    from agent_backbone.config import SwarmConfig
+
+    repo_dir = tmp_path / "checkout"
+    repo_dir.mkdir()
+    initiator = AgentSpec(name="alice", dir=str(repo_dir), repo="acme/app")
+    config = make_config(
+        tmp_path,
+        agents=AgentsConfig(specs={"alice": initiator}),
+        swarm=SwarmConfig(unattended_members=unattended),
+    )
+    gh = AsyncMock()
+    gh.get_issue.return_value = AsyncMock(state="open", title="Research")
+    reached = SwarmError("reached the worktree")
+    with (
+        patch.object(RUNTIMES["codex"], "sandbox_commit_block", "no commits here"),
+        patch(f"{_IFACE}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_IFACE}.is_git_repo", AsyncMock(return_value=True)),
+        patch(f"{_IFACE}.current_branch", AsyncMock(return_value="main")),
+        patch(f"{_IFACE}.create_worktree", AsyncMock(side_effect=reached)) as create,
+    ):
+        expected = "'research-scout' would run unattended on codex: no commits here"
+        with pytest.raises(SwarmError, match=expected if unattended else "reached"):
+            await create_swarm(
+                config,
+                db,
+                _FakeStore(config),
+                gh,
+                name="research",
+                issue_ref="acme/app#7",
+                member_specs=["scout@codex"],
+                initiator="alice",
+            )
+    assert create.called is not unattended
     assert await db.swarms.get("research") is None
