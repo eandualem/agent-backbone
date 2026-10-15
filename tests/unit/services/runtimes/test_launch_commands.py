@@ -27,6 +27,11 @@ def _resolve(binary: str):
     return patch(f"{_BASE}.resolve_command", return_value=binary)
 
 
+def _codex_on_macos():
+    """File roots and paths that do not exist yet are passed as given (#433)."""
+    return patch("agent_backbone.services.runtimes.codex._DIRECTORY_ROOTS_ONLY", False)
+
+
 class TestHookLaunchArgs:
     def test_claude_gets_backbone_owned_settings(self, tmp_path):
         args = RUNTIMES["claude"].hook_launch_args(tmp_path, tmp_path / "state")
@@ -496,7 +501,7 @@ class TestUnattended:
 
     def test_codex_switch_and_writable_dirs_survive_resume(self):
         # Global options, valid before the `resume` subcommand like `-c`.
-        with _resolve("/bin/codex"):
+        with _resolve("/bin/codex"), _codex_on_macos():
             command = RUNTIMES["codex"].build_command(
                 resume="sess-1", unattended=True, writable_dirs=("~/.cache/uv",)
             )
@@ -505,7 +510,7 @@ class TestUnattended:
 
     def test_writable_dirs_open_only_a_sandbox(self):
         # A runtime without a sandbox has nothing to open: everything already is.
-        with _resolve("/bin/codex"):
+        with _resolve("/bin/codex"), _codex_on_macos():
             codex = RUNTIMES["codex"].build_command(writable_dirs=("/a", "/b"))
         assert codex[1:5] == ["--add-dir", "/a", "--add-dir", "/b"]
         with _resolve("/bin/opencode"):

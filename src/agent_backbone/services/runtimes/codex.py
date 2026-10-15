@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import re
+import sys
 import time
 import tomllib
 from pathlib import Path
@@ -27,6 +28,10 @@ from agent_backbone.services.runtimes.base import (
 from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
+# Codex's Linux sandbox (bubblewrap) mounts every writable root as a directory:
+# a file root panics it at the first command, and a missing root under the
+# protected `.git` stops it (#433, codex-cli 0.160 measured in Debian 13).
+_DIRECTORY_ROOTS_ONLY = sys.platform == "linux"
 _usage_lineage: dict[str, tuple[float, dict[str, list[tuple[str, Path]]]]] = {}
 
 
@@ -334,10 +339,16 @@ class Codex(Runtime):
         """``--add-dir <path>`` per writable root, including Git bookkeeping
         files and their locks. What a project's
         tooling keeps outside the checkout — uv's cache under `~/.cache`, the
-        one wall a member hit live — is opened here, nothing else."""
+        one wall a member hit live — is opened here, nothing else.
+
+        On Linux only existing directories: Git's files are left out, so
+        commits stay blocked inside the sandbox there (#433)."""
         args: list[str] = []
         for directory in dirs:
-            args.extend(["--add-dir", str(Path(directory).expanduser())])
+            path = Path(directory).expanduser()
+            if _DIRECTORY_ROOTS_ONLY and not path.is_dir():
+                continue
+            args.extend(["--add-dir", str(path)])
         return args
 
     def effort_args(self, effort: str | None) -> list[str]:

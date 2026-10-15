@@ -60,7 +60,9 @@ each launch from the current setting and runtime, not persisted on the member.
 **Codex** uses `-a never -s workspace-write`: its workspace sandbox is pinned,
 and its working directory, temporary directories and network are available.
 Validated Git commit paths (objects, refs, logs, index and bookkeeping files
-and locks) are also writable, including linked-worktree commit state. Git
+and locks) are also writable, including linked-worktree commit state. On
+Linux, Codex's sandbox accepts only directories, so only `objects`, `refs` and
+`logs` are opened and commits fail inside the sandbox there. Git
 hooks and configuration stay protected. The backbone validates reciprocal
 worktree metadata and rejects `.git` symlinks, unverified pointers and directory
 resolution failures. A write outside the allowed paths fails and is reported

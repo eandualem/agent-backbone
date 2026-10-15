@@ -26,6 +26,11 @@ _MOD = "agent_backbone.services.agents.launch"
 _BASE = "agent_backbone.services.runtimes.base"
 
 
+def _codex_sandbox(*, linux: bool):
+    """Codex on macOS takes file roots; on Linux only directories (#433)."""
+    return patch("agent_backbone.services.runtimes.codex._DIRECTORY_ROOTS_ONLY", linux)
+
+
 class TestApproveAgent:
     DIALOG = " Do you want to proceed?\n ❯ 1. Yes\n   2. No\n"
     IDLE = "❯ \n  ? for shortcuts\n"
@@ -774,7 +779,7 @@ class TestStartAgentBrief:
         config = replace(config, launch=replace(config.launch, writable_dirs=("/cache",)))
         spec = replace(self._spec(tmp_path, "codex"), unattended=True)
         exists, start, _cmd, _trust, _wait = self._launch()
-        with exists, start as started, _cmd, _trust, _wait:
+        with exists, start as started, _cmd, _trust, _wait, _codex_sandbox(linux=False):
             result = await start_agent(spec, config, db=AsyncMock())
         assert result.ok
         command = started.await_args.kwargs["command"]
@@ -793,7 +798,7 @@ class TestStartAgentBrief:
         (main_git / "worktrees" / "wt" / "commondir").write_text("../..")
         spec = AgentSpec(name="ike", dir=str(worktree), runtime="codex", repo="acme/app")
         exists, start, _cmd, _trust, _wait = self._launch()
-        with exists, start as started, _cmd, _trust, _wait:
+        with exists, start as started, _cmd, _trust, _wait, _codex_sandbox(linux=False):
             assert (await start_agent(spec, config, db=AsyncMock())).ok
         command = started.await_args.kwargs["command"]
         assert command[1:3] == ["--add-dir", str(main_git / "objects")]
@@ -811,13 +816,30 @@ class TestStartAgentBrief:
         spec = replace(self._spec(tmp_path, "codex"), unattended=unattended)
         (spec.path / ".git").mkdir()
         exists, start, _cmd, _trust, _wait = self._launch()
-        with exists, start as started, _cmd, _trust, _wait:
+        with exists, start as started, _cmd, _trust, _wait, _codex_sandbox(linux=False):
             assert (await start_agent(spec, config, db=AsyncMock())).ok
         command = started.await_args.kwargs["command"]
         grant = command.index("--add-dir")
         assert command[grant + 1] == str((spec.path / ".git" / "objects").resolve())
         assert str(spec.path / ".git" / "index.lock") in command
         assert str(spec.path / ".git") not in command
+
+    async def test_on_linux_no_git_file_becomes_a_codex_root(self, tmp_path):
+        # Codex's Linux sandbox mounts each root as a directory: a file root
+        # panics it at the first command, a missing one under .git stops it.
+        config = bootstrap_config(tmp_path / "data")
+        spec = self._spec(tmp_path, "codex")
+        git = spec.path / ".git"
+        for name in ("objects", "refs", "logs"):
+            (git / name).mkdir(parents=True)
+        (git / "HEAD").write_text("ref: refs/heads/main\n")
+        (git / "index").write_bytes(b"")
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait, _codex_sandbox(linux=True):
+            assert (await start_agent(spec, config, db=AsyncMock())).ok
+        command = started.await_args.kwargs["command"]
+        roots = [command[i + 1] for i, arg in enumerate(command) if arg == "--add-dir"]
+        assert roots == [str((git / name).resolve()) for name in ("objects", "refs", "logs")]
 
     @pytest.mark.parametrize("runtime", ["codex", "claude", "shell"])
     async def test_mouse_scrolling_follows_the_runtime(self, tmp_path, runtime):
