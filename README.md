@@ -38,8 +38,9 @@ carry every message between them. Backbone turns them into a team.
 
 **Never typed into a busy agent**<br>
 Agents reach each other by name. When the recipient is working or waiting
-for you, the message waits in a durable queue and arrives as soon as the
-agent is ready, marked with who sent it.
+for you, the message is queued and delivered when the agent is ready, marked
+with who sent it. Ordinary messages expire after 30 minutes by default, and
+the sender is told.
 
 </td>
 <td width="50%" valign="top">
@@ -55,7 +56,8 @@ projects.
 <td valign="top">
 
 **GitHub Issues are the task list**<br>
-Label an issue `for:worker` and it lands in worker's queue, one at a time.
+In a repository worker owns or watches, label an issue `for:worker` and it
+lands in worker's queue, one at a time.
 To hand work on, an agent opens an issue for another. The issue stays as the
 record.
 
@@ -74,8 +76,9 @@ review the change.
 
 **In the loop from anywhere**<br>
 Watch any agent, step into its terminal, or answer from your phone. With
-Telegram connected, every agent gets its own topic, with Allow and Deny on
-permission prompts.
+[Telegram set up](docs/telegram.md#one-topic-per-agent) in a group with
+topics, every agent outside a swarm gets its own topic, with Allow and Deny
+on permission prompts.
 
 </td>
 <td valign="top">
@@ -126,8 +129,8 @@ backbone agent attach app               # read its reply; Ctrl-b d detaches
 
 The folder supplies the agent name. If startup reports a prompt or a timeout,
 `backbone agent inspect app` shows what needs attention. `tell` reports
-whether the message was delivered or queued; a queued message arrives when
-the agent is ready, so do not resend it. If `backbone` is not on your PATH,
+whether the message was delivered or queued; a queued message is delivered
+when the agent is ready, so do not resend it while it waits. If `backbone` is not on your PATH,
 run `uv tool update-shell` and open a new terminal. In a container without a
 login service, use `backbone up --detach`. `ab` is a short alias; on macOS,
 use `backbone` if Apache Bench shadows it.
