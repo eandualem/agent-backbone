@@ -199,6 +199,7 @@ def _gh_arguments(argv: list[str]) -> tuple[list[str], dict[str, str]] | None:
         "-T": "template",
         "--template": "template",
         "--recover": "recover",
+        "--attach": "attach",  # gh 2.99+: an image or video to upload (#434)
     }
     flags = {
         "--draft",

@@ -118,6 +118,16 @@ def test_numbers_and_repository_in_body_are_not_flags():
     assert (action["issue"], action["repo"]) == (5, "acme/app")
 
 
+def test_attached_files_do_not_hide_the_action():
+    # gh 2.99+ uploads an image or a video with --attach <file> (#434).
+    (comment,) = bb.shell_actions("gh pr comment 6 -R acme/app -b done --attach a.mp4", None, 1)
+    assert comment["issue"] == 6
+    (created,) = bb.shell_actions(
+        "gh pr create -R acme/app -H feat/x -t t --attach a.png --attach=b.mp4", None, 1
+    )
+    assert (created["action"], created["branch"]) == ("pull_request", "feat/x")
+
+
 def test_non_shell_tool_command_field_is_not_executed():
     assert bb.tool_actions("Write", {"command": COMMAND}, None, 1) == []
 
