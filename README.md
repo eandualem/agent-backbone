@@ -18,7 +18,7 @@ They use the logins you already have, and core use needs no setup in your reposi
 
 ## Watch
 
-VIDEO_OVERVIEW_URL
+https://github.com/user-attachments/assets/695a6096-4196-4115-911c-a0043d632088
 
 <p align="center"><sub>The overview, 1:23, captioned. Unmute for the narration.</sub></p>
 

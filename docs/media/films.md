@@ -10,7 +10,7 @@ in them (`app`, `worker`, `acme/api` and so on) are examples.
 their folders, messages that never interrupt a busy agent, GitHub issues one at
 a time, and you in the loop from anywhere.
 
-VIDEO_OVERVIEW_URL
+https://github.com/user-attachments/assets/695a6096-4196-4115-911c-a0043d632088
 
 ## Why Backbone
 
@@ -18,7 +18,7 @@ VIDEO_OVERVIEW_URL
 three CLIs building a product together: issues in the right repository, a swarm
 on one branch, a review by a second model, and answers from a phone.
 
-VIDEO_WHY_URL
+https://github.com/user-attachments/assets/4218fdbe-e581-49bd-879f-288d41c9f72f
 
 ## The real thing
 
