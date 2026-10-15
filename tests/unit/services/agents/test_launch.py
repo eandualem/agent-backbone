@@ -827,7 +827,9 @@ class TestStartAgentBrief:
     async def test_on_linux_no_git_file_becomes_a_codex_root(self, tmp_path):
         # Codex's Linux sandbox mounts each root as a directory: a file root
         # panics it at the first command, a missing one under .git stops it.
+        # A relative configured root is Codex's to resolve in the agent's dir.
         config = bootstrap_config(tmp_path / "data")
+        config = replace(config, launch=replace(config.launch, writable_dirs=("../cache",)))
         spec = self._spec(tmp_path, "codex")
         git = spec.path / ".git"
         for name in ("objects", "refs", "logs"):
@@ -839,7 +841,8 @@ class TestStartAgentBrief:
             assert (await start_agent(spec, config, db=AsyncMock())).ok
         command = started.await_args.kwargs["command"]
         roots = [command[i + 1] for i, arg in enumerate(command) if arg == "--add-dir"]
-        assert roots == [str((git / name).resolve()) for name in ("objects", "refs", "logs")]
+        git_roots = [str((git / name).resolve()) for name in ("objects", "refs", "logs")]
+        assert roots == ["../cache", *git_roots]
 
     @pytest.mark.parametrize("runtime", ["codex", "claude", "shell"])
     async def test_mouse_scrolling_follows_the_runtime(self, tmp_path, runtime):

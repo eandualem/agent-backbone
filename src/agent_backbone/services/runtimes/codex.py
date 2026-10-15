@@ -342,11 +342,12 @@ class Codex(Runtime):
         one wall a member hit live — is opened here, nothing else.
 
         On Linux only existing directories: Git's files are left out, so
-        commits stay blocked inside the sandbox there (#433)."""
+        commits stay blocked inside the sandbox there (#433). A relative
+        entry is Codex's to resolve in the agent's directory, as before."""
         args: list[str] = []
         for directory in dirs:
             path = Path(directory).expanduser()
-            if _DIRECTORY_ROOTS_ONLY and not path.is_dir():
+            if _DIRECTORY_ROOTS_ONLY and path.is_absolute() and not path.is_dir():
                 continue
             args.extend(["--add-dir", str(path)])
         return args
