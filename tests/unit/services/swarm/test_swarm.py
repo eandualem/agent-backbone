@@ -32,6 +32,7 @@ from agent_backbone.services.swarm import (
     teardown_swarm,
 )
 from agent_backbone.services.swarm._roster import MemberSpec, member_names
+from agent_backbone.skills import read_store, select_skills
 from agent_backbone.templates import TemplateDirs
 from tests.conftest import make_config
 
@@ -501,6 +502,11 @@ class TestCreateSwarm:
         )
         (config.data_dir / "policies").mkdir()
         (config.data_dir / "policies" / "minimal-change.md").write_text("Rule: smallest change")
+        skill = tmp_path / "skills" / "review"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: review\ndescription: d\nmetadata:\n  backbone-tags: coder\n---\n# x\n"
+        )
         mock_wt.return_value = (repo_dir / ".backbone" / "swarms" / "research", "swarm/research")
         store = _FakeStore(config)
         gh = AsyncMock()
@@ -523,6 +529,9 @@ class TestCreateSwarm:
             identity = {"swarm:research", f"role:{role}", "task:acme/app#7"}
             assert set(member.tags) == identity | {"coder"}
             assert "Rule: smallest change" in instruction_preview(member, config)["content"]
+            # The selection launch links into the worktree.
+            selected = select_skills(read_store(tmp_path / "skills"), member.tags, member.name)
+            assert [s.name for s in selected] == ["review"]
 
     @patch(
         f"{_IFACE}.safe_deliver",
