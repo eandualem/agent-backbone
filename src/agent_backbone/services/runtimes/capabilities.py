@@ -577,7 +577,11 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Run unattended agents only on a sandboxed runtime (Codex).",
         implemented=lambda rt: rt.sandboxed,
         claude=_gap(285),
-        codex=_ok(_LAUNCH, "OS sandbox"),
+        codex=_ok(
+            _LAUNCH,
+            "OS sandbox; on Linux, git add and commit fail inside it, "
+            "so swarms refuse unattended Codex members there (#437)",
+        ),
         gemini=_gap(),
         opencode=_gap(285),
         deepcode=_gap(),

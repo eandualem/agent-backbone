@@ -159,6 +159,12 @@ class Codex(Runtime):
     # before `resume`.
     unattended_args = ("-a", "never", "-s", "workspace-write")
     sandboxed = True
+    sandbox_commit_block = (
+        "Codex's sandbox on Linux takes only directories, so git add and git commit "
+        "fail inside it (#437)"
+        if _DIRECTORY_ROOTS_ONLY
+        else ""
+    )
     mouse_scroll = True
     # Codex 0.153.4: on-request approvals go to its automatic reviewer,
     # with workspace-write enforced by this switch (verified with --help).
