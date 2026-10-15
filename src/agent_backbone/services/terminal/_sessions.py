@@ -16,12 +16,26 @@ log = logging.getLogger(__name__)
 def _default_shell() -> list[str]:
     """The login shell tmux starts when given no command.
 
-    Spelled out explicitly because scrubbing and exporting variables needs an
-    ``env`` prefix, and ``env`` needs something to exec. ``-l`` keeps tmux's
+    Spelled out explicitly because the ``env`` prefix, which scrubs variables,
+    needs something to exec. ``-l`` keeps tmux's
     own semantics: it runs ``default-shell`` as a login shell, so the user's
     profile (and the PATH it sets) still applies.
     """
     return [os.environ.get("SHELL") or "/bin/sh", "-l"]
+
+
+def _tmux_quote(arg: str) -> str:
+    """``arg`` as one double-quoted word of tmux's command syntax.
+
+    Backslash, double quote, ``$`` (a variable) and ``~`` (a home directory)
+    are escaped. Control characters become octal escapes: tmux drops the
+    whitespace that starts a line, even inside quotes.
+    """
+    escaped = "".join(
+        "\\" + ch if ch in '\\"$~' else f"\\{ord(ch):03o}" if ch < " " or ch == "\x7f" else ch
+        for ch in arg
+    )
+    return f'"{escaped}"'
 
 
 SESSION_FORMAT_STR = "pane_in_mode=#{pane_in_mode}"
@@ -52,9 +66,11 @@ async def start_session(
 ) -> bool:
     """Start a detached tmux session running ``command`` (or a shell).
 
-    ``environment`` is exported into the initial command (via ``env``) and
-    into the tmux session environment (``new-session -e``), so hooks and
-    later shells see it from the session's first instant.
+    ``environment`` is the tmux session environment (``new-session -e``),
+    which the initial command inherits, so hooks and later shells see it
+    from the session's first instant. tmux reads the ``new-session``
+    command on stdin: no value appears in a process's arguments (``ps``)
+    or in the pane's start command.
 
     ``scrub`` names variables the session must **not** inherit from the tmux
     server (the backbone's secrets — issue #81). They are removed three
@@ -89,10 +105,13 @@ async def start_session(
     if environment or removals:
         args.append("env")
         args.extend(f"-u{key}" for key in removals)
-        args.extend(f"{key}={value}" for key, value in environment.items())
     args.extend(launch)
 
-    rc, _, stderr = await _run_tmux(*args)
+    # ``source-file`` starts no server of its own, hence ``start-server``.
+    line = " ".join(_tmux_quote(arg) for arg in args) + "\n"
+    rc, _, stderr = await _run_tmux(
+        "start-server", ";", "source-file", "-", stdin_data=line.encode()
+    )
     if rc != 0:
         log.error("Failed to start session '%s': %s", session_name, stderr.decode())
         return False

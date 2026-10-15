@@ -30,9 +30,11 @@ async def wait_for_output(session: str, expected: str) -> None:
 async def main() -> None:
     session = f"backbone-smoke-{uuid.uuid4().hex}"
     marker = uuid.uuid4().hex
+    # Characters tmux's command syntax treats specially, handed over on stdin.
+    value = f"$HOME ~ 'q' \"d\" \\ {marker[:8]}"
     program = (
-        "import sys\n"
-        "print('smoke-ready', flush=True)\n"
+        "import os, sys\n"
+        "print('smoke-ready:' + os.environ['BACKBONE_SMOKE'], flush=True)\n"
         "for line in sys.stdin:\n"
         "    print('received:' + line.strip(), flush=True)\n"
     )
@@ -45,13 +47,20 @@ async def main() -> None:
         socket = Path(directory) / f"tmux-{os.getuid()}" / "default"
         try:
             if not await start_session(
-                session, working_dir=directory, command=[sys.executable, "-u", "-c", program]
+                session,
+                working_dir=directory,
+                command=[sys.executable, "-u", "-c", program],
+                environment={"BACKBONE_SMOKE": value},
             ):
                 raise RuntimeError("could not start the smoke session")
-            await wait_for_output(session, "smoke-ready")
+            await wait_for_output(session, f"smoke-ready:{value}")
             fields = await query_format_vars(
-                session, "session_name=#{session_name}\nsocket_path=#{socket_path}"
+                session,
+                "session_name=#{session_name}\nsocket_path=#{socket_path}\n"
+                "start=#{pane_start_command}",
             )
+            if marker[:8] in fields.get("start", ""):
+                raise RuntimeError(f"an environment value is in the start command: {fields!r}")
             if fields.get("session_name") != session:
                 raise RuntimeError(f"display-message targeted the wrong session: {fields!r}")
             server = Path(fields.get("socket_path", "")).resolve()
@@ -68,7 +77,7 @@ async def main() -> None:
             subprocess.run(["tmux", "-S", str(socket), "kill-server"], capture_output=True)
             if not removed:
                 raise RuntimeError(f"could not remove smoke session {session}")
-    print("tmux smoke passed: paste, keys, capture, display and cleanup")
+    print("tmux smoke passed: environment, paste, keys, capture, display and cleanup")
 
 
 if __name__ == "__main__":

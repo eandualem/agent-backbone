@@ -42,10 +42,11 @@ The backbone can type into your agents' terminals. Treat it accordingly.
    owner-confirmed marker — anything else is a 422. The exception is a
    [signed sender](owner-confirmed-messages.md): once a name has an enrolled
    key, every request made as it must carry a valid signature.
-- **Per-agent `env` lives in the database.** "Secrets only in `.env`" is
-  true for the backbone's own secrets; values you attach to an agent with
-  `agent set env=` are stored with the agent record so they can be
-  exported into its session. Treat them like `.env` contents.
+- **Per-agent `env` is for settings, not secrets.** Values you attach to
+  an agent with `agent set env=` are stored in plain text in the database
+  so they can be exported into its session, and `agent set` warns about
+  names that look like secrets. Credentials stay in each tool's own
+  credential store.
 - **Agents do not hold the backbone's keys.** An agent session gets the
   launch contract and nothing else; see below.
 
@@ -130,7 +131,9 @@ Two mechanisms, because either alone leaves a hole:
    for the process, `new-session -e NAME=` so the session's own environment
    shadows the server's from the first instant (an agent's own `env` values
    are set the same way), and `set-environment -r` for later panes. If that last step fails the session is killed rather
-   than handed back. This catches what mechanism 1 cannot: variables *you*
+   than handed back. tmux reads the `new-session` command on its standard
+   input, so no value appears in a process's arguments, which `ps` shows to
+   every user, or in the pane's start command. This catches what mechanism 1 cannot: variables *you*
    exported in the shell you ran `backbone up` from, and a long-lived tmux
    server that was polluted by an older backbone before you upgraded.
 
@@ -140,15 +143,14 @@ else you exported (an `ANTHROPIC_API_KEY`, a `GITHUB_OAUTH_TOKEN` of your
 own) reaches the agent as it always did; that is your environment, not
 the backbone's.
 
-An agent that genuinely needs one of these names — a reviewer with its own
-`GITHUB_TOKEN`, or an agent you want to be able to call the API — gets it
-through its own record, which wins over the strip:
-
-```bash
-backbone agent set app env='{"BACKBONE_API_KEY":"…"}'
-```
-
-That is the deliberate act described under "One key, full admin" above.
+An agent's own `env` still wins over the strip, but it holds settings,
+not credentials: its values are stored in plain text in the database. An
+agent that calls the HTTP API directly, rather than through the CLI, reads
+the key from `<data_dir>/.env` as the CLI does (`backbone secrets path`
+prints where it is). Handing it the key is the deliberate act described
+under "One key, full admin" above. Tools such as `gh`, `claude` and `codex`
+keep their sign-in in their own credential store, which a session uses
+without any variable.
 Note that `BACKBONE_DATA_DIR` is *not* stripped: it is not a secret, and
 agents need it to find the same backbone you are running.
 
@@ -167,8 +169,8 @@ agents need it to find the same backbone you are running.
 | Terminal streaming | Read-only, registered agents only; the Socket.IO `/terminal` namespace has no input event | — |
 | Agent output (`agent output`, `GET /api/sessions/{name}/output`) | Read-only, registered agents only; reads the agent's user-facing messages, complete, from the runtime's own transcript for Claude Code, Codex, Gemini CLI and OpenCode (including messages that scrolled off or never showed on screen), a bounded page at a time with explicit offsets to read further; tool activity and thinking are not exposed; else the visible screen | — |
 | Steering (`tell --steer`, `POST /api/steer`) | Text reaches a working agent mid-turn as hook context on Claude Code and Codex, or as a user message in the running turn on OpenCode, with a provenance envelope; no keystrokes, so it cannot overwrite a draft or answer a dialog; refused (nothing queued) when the agent is not working or the runtime has no hook context. Same credential as `tell`: the API key, all-or-nothing | — |
-| Secrets | Backbone secrets live only in `<data_dir>/.env` (mode 0600) or the environment — never in the database. **Exception:** per-agent `env` values are stored with the agent record and exported into that agent's session, so anything you put there needs the same care as `.env` | `backbone agent set app env='{"BACKBONE_API_KEY":"…"}'` for an agent that should call the API |
-| Secrets in agent sessions | Stripped: an agent inherits `BACKBONE_AGENT`/`BACKBONE_RUNTIME`/`BACKBONE_STATE_DIR` and its own `env`, never the backbone's `.env` | give the agent its own value with `agent set env=` |
+| Secrets | Backbone secrets live only in `<data_dir>/.env` (mode 0600) or the environment — never in the database. Per-agent `env` is for settings: its values are stored in plain text in the database, and `agent set` warns about names that look like secrets | — |
+| Secrets in agent sessions | Stripped: an agent inherits `BACKBONE_AGENT`/`BACKBONE_RUNTIME`/`BACKBONE_STATE_DIR` and its own `env`, never the backbone's `.env` | an agent that calls the API reads the key from `<data_dir>/.env`; other credentials stay in each tool's own store |
 | Hook script | Standard library only, runs as your user, writes only under `<data_dir>/state` | — |
 | Busy agents | Never interrupted: `priority` only bypasses "someone is typing" and the settle window | — |
 
@@ -204,7 +206,9 @@ every comment. The `[from:<agent>]` prefix and the `from:<agent>` label are
 conventions, not authentication. With the shipped hooks installed, an
 agent's own `gh issue comment` calls are logged locally and used for
 acknowledgement, which does not depend on the prefix. If you need real
-per-agent identity, give each agent its own token in its `env`.
+per-agent identity, each agent needs its own GitHub account. Keep its token
+out of the agent's `env`, which is stored in plain text in the database;
+there is no per-agent credential store yet.
 
 ## Known limitations
 

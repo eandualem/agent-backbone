@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import signal
 from unittest.mock import AsyncMock, patch
 
@@ -23,6 +24,18 @@ def mock_subprocess():
     mock = AsyncMock()
     with patch("agent_backbone.services.terminal._core.asyncio.create_subprocess_exec", mock):
         yield mock
+
+
+def _new_session(mock_subprocess) -> list[str]:
+    """The ``new-session`` command ``start_session`` hands tmux on stdin.
+
+    shlex reads it back: the test values hold no ``~`` or control character,
+    where tmux's quoting and the shell's differ.
+    """
+    start = ("tmux", "start-server", ";", "source-file", "-")
+    assert mock_subprocess.call_args_list[0].args == start
+    stdin = mock_subprocess.return_value.communicate.await_args_list[0].kwargs["input"]
+    return shlex.split(stdin.decode())
 
 
 class TestSessionExists:
@@ -151,7 +164,7 @@ class TestStartSession:
                 command=["claude"],
             )
             assert result is True
-            call_args = mock_subprocess.call_args_list[0][0]  # first call positional args
+            call_args = _new_session(mock_subprocess)
             assert "-c" in call_args
             assert "/tmp/wd" in call_args
             assert "claude" in call_args
@@ -179,7 +192,7 @@ class TestStartSession:
             mock_subprocess.return_value = proc
             result = await start_session("test")
             assert result is True
-            call_args = mock_subprocess.call_args_list[0][0]
+            call_args = _new_session(mock_subprocess)
             assert "-c" not in call_args
 
     async def test_start_with_multi_arg_command(self, mock_subprocess):
@@ -200,7 +213,7 @@ class TestStartSession:
                 command=["claude", "--model", "opus"],
             )
             assert result is True
-            call_args = mock_subprocess.call_args_list[0][0]
+            call_args = _new_session(mock_subprocess)
             assert "claude" in call_args
             assert "--model" in call_args
             assert "opus" in call_args
@@ -247,8 +260,8 @@ class TestQueryFormatVars:
 
 
 class TestStartSessionEnvironment:
-    async def test_initial_command_receives_env_vars(self, mock_subprocess):
-        """The initial tmux command inherits env vars when a command is supplied."""
+    async def test_env_values_never_appear_in_a_process_argument(self, mock_subprocess):
+        """Every user can read a process's arguments with ``ps`` (#289)."""
         with patch(
             "agent_backbone.services.terminal._sessions.session_exists",
             new_callable=AsyncMock,
@@ -263,15 +276,18 @@ class TestStartSessionEnvironment:
             result = await start_session(
                 "test",
                 command=["claude", "--model", "opus"],
-                environment={"BACKBONE_AGENT": "app"},
+                environment={"API_TOKEN": "s3cret value"},
+                scrub=["GITHUB_TOKEN"],
             )
 
             assert result is True
-            new_session_call = mock_subprocess.call_args_list[0][0]
-            assert "new-session" in new_session_call
-            assert "env" in new_session_call
-            assert "BACKBONE_AGENT=app" in new_session_call
-            assert "claude" in new_session_call
+            for call in mock_subprocess.call_args_list:
+                assert not any("s3cret" in arg for arg in call.args)
+            new_session = _new_session(mock_subprocess)
+            assert "API_TOKEN=s3cret value" in new_session  # the session environment
+            # The pane's start command, which tmux keeps, carries no value either.
+            launched = new_session[new_session.index("env") :]
+            assert launched == ["env", "-uGITHUB_TOKEN", "claude", "--model", "opus"]
 
     async def test_env_vars_are_session_environment_from_the_start(self, mock_subprocess):
         """`new-session -e` sets the session environment atomically with the session."""
@@ -291,7 +307,7 @@ class TestStartSessionEnvironment:
                 environment={"MY_VAR": "hello", "OTHER": "world"},
             )
             assert result is True
-            new_session = mock_subprocess.call_args_list[0][0]
+            new_session = _new_session(mock_subprocess)
             e_flags = [new_session[i + 1] for i, a in enumerate(new_session) if a == "-e"]
             assert e_flags == ["MY_VAR=hello", "OTHER=world"]
             assert not [c for c in mock_subprocess.call_args_list if "set-environment" in c[0]]
@@ -457,10 +473,10 @@ class TestSessionSecretScrub:
                 scrub=["BACKBONE_API_KEY", "GITHUB_TOKEN"],
             )
             assert result is True
-            new_session = mock_subprocess.call_args_list[0][0]
+            new_session = _new_session(mock_subprocess)
             assert "-uBACKBONE_API_KEY" in new_session
             assert "-uGITHUB_TOKEN" in new_session
-            # `env -u` comes before the assignments and the command itself.
+            # `env -u` comes before the command itself.
             assert new_session.index("env") < new_session.index("-uGITHUB_TOKEN")
             assert new_session.index("-uGITHUB_TOKEN") < new_session.index("claude")
             # ...and the session environment shadows the server's from the start,
@@ -518,7 +534,7 @@ class TestSessionSecretScrub:
                 environment={"GITHUB_TOKEN": "agent-own"},
                 scrub=["GITHUB_TOKEN", "BACKBONE_API_KEY"],
             )
-            new_session = mock_subprocess.call_args_list[0][0]
+            new_session = _new_session(mock_subprocess)
             assert "GITHUB_TOKEN=agent-own" in new_session
             assert "-uGITHUB_TOKEN" not in new_session
             assert "-uBACKBONE_API_KEY" in new_session
@@ -540,7 +556,7 @@ class TestSessionSecretScrub:
                 environment={"BACKBONE_AGENT": "app"},
                 scrub=["BACKBONE_API_KEY"],
             )
-            new_session = mock_subprocess.call_args_list[0][0]
+            new_session = _new_session(mock_subprocess)
             assert "-uBACKBONE_API_KEY" in new_session
             assert "BACKBONE_AGENT=app" in new_session
             # A login shell, so the user's profile (and PATH) still applies.
@@ -554,6 +570,6 @@ class TestSessionSecretScrub:
         ):
             mock_subprocess.return_value = self._ok_proc()
             await start_session("test", command=["claude"])
-            new_session = mock_subprocess.call_args_list[0][0]
+            new_session = _new_session(mock_subprocess)
             assert "env" not in new_session
             assert new_session[-1] == "claude"

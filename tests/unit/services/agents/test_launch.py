@@ -460,6 +460,31 @@ class TestStartAgentScrubsSecrets:
         # The launch contract itself is untouched.
         assert start.await_args.kwargs["environment"]["BACKBONE_AGENT"] == "ike"
 
+    @pytest.mark.parametrize("runtime", sorted(RUNTIMES))
+    async def test_env_values_are_on_no_command_line(self, tmp_path, runtime):
+        """The agent's own env reaches its session, never a process argument (#289)."""
+        spec = AgentSpec(name="ike", dir=str(tmp_path), runtime=runtime, env={"API_TOKEN": "s3c"})
+        config = bootstrap_config(tmp_path / "data")
+        proc = AsyncMock(returncode=0)
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        with (
+            patch(f"{_MOD}.session_exists", AsyncMock(return_value=False)),
+            patch(
+                "agent_backbone.services.terminal._sessions.session_exists",
+                AsyncMock(return_value=False),
+            ),
+            patch(f"{_BASE}.resolve_command", return_value=f"/usr/bin/{runtime}"),
+            patch(
+                "agent_backbone.services.terminal._core.asyncio.create_subprocess_exec",
+                AsyncMock(return_value=proc),
+            ) as tmux,
+        ):
+            assert (await start_agent(spec, config, wait=False)).ok
+        assert not any("s3c" in arg for call in tmux.call_args_list for arg in call.args)
+        new_session = proc.communicate.await_args_list[0].kwargs["input"].decode()
+        assert '"API_TOKEN=s3c"' in new_session  # the session environment, on stdin
+        assert new_session.count("s3c") == 1
+
 
 class TestStartAgentContext:
     async def test_offers_left_for_the_previous_session_are_cleared_before_launch(self, tmp_path):

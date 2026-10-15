@@ -84,6 +84,16 @@ def _print_inspection(data: dict) -> None:
         )
 
 
+_SECRET_WORDS = {"KEY", "APIKEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD"}
+
+
+def _secret_looking(env: object) -> list[str]:
+    """Names in an ``env`` value that read as credentials (``API_KEY``, ``GITHUB_TOKEN``)."""
+    if not isinstance(env, dict):
+        return []
+    return [key for key in env if _SECRET_WORDS & set(str(key).upper().split("_"))]
+
+
 _DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
@@ -735,6 +745,13 @@ async def _agent(args: argparse.Namespace) -> int:
             key, raw = item.split("=", 1)
             json_keys = ("tags", "env", "always_on", "unattended", "inbox_only")
             changes[key] = _common.parse_value(raw) if key in json_keys else raw
+        if names := _secret_looking(changes.get("env")):
+            print(
+                f"warning: env names that look like secrets: {', '.join(names)}. Values are "
+                "stored in plain text in the backbone's database; keep credentials in the "
+                "tool's own credential store (docs/security.md)",
+                file=sys.stderr,
+            )
         if api_up:
             result = await _common.api(boot, "PATCH", f"/api/agents/{args.name}", json_body=changes)
             if result and result[0] == 200:
