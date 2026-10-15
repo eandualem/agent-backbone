@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 import signal
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -17,6 +20,7 @@ from agent_backbone.services.terminal import (
     session_exists,
     start_session,
 )
+from agent_backbone.services.terminal._sessions import _LOAD_AND_EXEC
 
 
 @pytest.fixture
@@ -290,20 +294,25 @@ class TestStartSessionEnvironment:
             # The pane's start command, which tmux keeps, names the file the
             # process reads its values from (after tmux sets TERM, SHELL, PATH).
             launched = new_session[new_session.index("env") :]
-            env_file = Path(launched[5])
-            assert launched == [
-                "env",
-                "-uGITHUB_TOKEN",
-                "/bin/sh",
-                "-c",
-                '. "$0"; rm -f "$0"; exec "$@"',
-                str(env_file),
-                "claude",
-                "--model",
-                "opus",
-            ]
-            assert env_file.read_text() == "export API_TOKEN='s3cret value'\n"
+            env_file = Path(launched[6])
+            assert launched[:5] == ["env", "-uGITHUB_TOKEN", sys.executable, "-I", "-c"]
+            assert launched[7:] == ["claude", "--model", "opus"]
+            assert json.loads(env_file.read_text()) == {"API_TOKEN": "s3cret value"}
             assert env_file.stat().st_mode & 0o777 == 0o600
+
+    def test_env_file_loader_sets_any_name_and_removes_the_file(self, tmp_path):
+        """Read-only shell names (``UID``) work, and a configured ``PATH`` without
+        ``rm`` still leaves no file behind."""
+        env_file = tmp_path / "env.json"
+        env_file.write_text(json.dumps({"UID": "123", "PATH": str(tmp_path), "K": "a b"}))
+        out = subprocess.run(
+            [sys.executable, "-I", "-c", _LOAD_AND_EXEC, str(env_file), "/usr/bin/env"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.splitlines()
+        assert {"UID=123", f"PATH={tmp_path}", "K=a b"} <= set(out)
+        assert not env_file.exists()
 
     async def test_env_file_is_removed_when_tmux_refuses(self, mock_subprocess):
         with patch(
@@ -317,7 +326,7 @@ class TestStartSessionEnvironment:
             mock_subprocess.return_value = proc
             assert not await start_session("test", environment={"API_TOKEN": "s3cret"})
             new_session = _new_session(mock_subprocess)
-            env_file = Path(new_session[new_session.index("/bin/sh") + 3])
+            env_file = Path(new_session[new_session.index("-I") + 3])
             assert not env_file.exists()
 
     async def test_env_vars_are_session_environment_from_the_start(self, mock_subprocess):

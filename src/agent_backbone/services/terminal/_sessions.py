@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
-import shlex
 import signal
+import sys
 import tempfile
 from collections.abc import Sequence
 
@@ -20,7 +21,7 @@ def _default_shell() -> list[str]:
     """The login shell tmux starts when given no command.
 
     Spelled out explicitly because the ``env`` prefix, which scrubs variables,
-    and the ``sh`` that reads the environment file need something to exec.
+    and the program that reads the environment file need something to exec.
     ``-l`` keeps tmux's own semantics: it runs ``default-shell`` as a login shell, so the user's
     profile (and the PATH it sets) still applies.
     """
@@ -41,8 +42,18 @@ def _tmux_quote(arg: str) -> str:
     return f'"{escaped}"'
 
 
-_SOURCE_AND_EXEC = '. "$0"; rm -f "$0"; exec "$@"'
-"""Run by ``/bin/sh -c`` with the environment file as ``$0``: read it, remove it, exec."""
+_LOAD_AND_EXEC = (
+    "import json, os, sys\n"
+    "path = sys.argv[1]\n"
+    "with open(path) as fh:\n"
+    "    os.environ.update(json.load(fh))\n"
+    "os.unlink(path)\n"
+    "os.execvp(sys.argv[2], sys.argv[2:])\n"
+)
+"""Run by ``python -I -c`` with the environment file first: read it, remove it, exec.
+
+Python rather than a shell: a shell refuses read-only names (``UID``), and a
+configured ``PATH`` would decide which ``rm`` removes the file."""
 
 
 SESSION_FORMAT_STR = "pane_in_mode=#{pane_in_mode}"
@@ -113,12 +124,10 @@ async def start_session(
     launch = list(command) if command else _default_shell()
     env_file = None
     if environment:
-        fd, env_file = tempfile.mkstemp(prefix="backbone-env-", suffix=".sh")
+        fd, env_file = tempfile.mkstemp(prefix="backbone-env-", suffix=".json")
         with os.fdopen(fd, "w") as fh:
-            fh.writelines(
-                f"export {key}={shlex.quote(value)}\n" for key, value in environment.items()
-            )
-        launch = ["/bin/sh", "-c", _SOURCE_AND_EXEC, env_file, *launch]
+            json.dump(environment, fh)
+        launch = [sys.executable, "-I", "-c", _LOAD_AND_EXEC, env_file, *launch]
     if environment or removals:
         args.append("env")
         args.extend(f"-u{key}" for key in removals)
