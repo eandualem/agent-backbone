@@ -122,6 +122,8 @@ def test_attached_files_do_not_hide_the_action():
     # gh 2.99+ uploads an image or a video with --attach <file> (#434).
     (comment,) = bb.shell_actions("gh pr comment 6 -R acme/app -b done --attach a.mp4", None, 1)
     assert comment["issue"] == 6
+    (comment,) = bb.shell_actions("gh issue comment 5 -R acme/app --attach=a.png -b x", None, 1)
+    assert comment["issue"] == 5
     (created,) = bb.shell_actions(
         "gh pr create -R acme/app -H feat/x -t t --attach a.png --attach=b.mp4", None, 1
     )
