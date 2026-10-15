@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from agent_backbone.hooks.install import save_settings
 from agent_backbone.services.runtimes import RUNTIMES, split_model_effort
 from agent_backbone.services.runtimes.claude import pre_trust_directory
 from agent_backbone.services.runtimes.codex import pre_trust_codex_directory
@@ -89,6 +90,23 @@ class TestBuildCommand:
         assert "SessionStart" in saved["hooks"]
         attended = json.loads((tmp_path / "hooks" / "claude-settings.json").read_text())
         assert "skipDangerousModePermissionPrompt" not in attended
+
+    def test_claude_unattended_keeps_the_hooks_when_its_file_cannot_be_written(self, tmp_path):
+        def save(path, settings):
+            if path.name == "claude-settings-unattended.json":
+                raise OSError("read-only")
+            save_settings(path, settings)
+
+        with (
+            _resolve("/usr/bin/claude"),
+            patch("agent_backbone.services.runtimes.claude.save_settings", side_effect=save),
+        ):
+            command = RUNTIMES["claude"].build_command(
+                data_dir=tmp_path, state_dir=tmp_path / "state", unattended=True
+            )
+        path = tmp_path / "hooks" / "claude-settings.json"
+        assert command[command.index("--settings") + 1] == str(path)
+        assert "SessionStart" in json.loads(path.read_text())["hooks"]
 
     def test_claude_without_dirs_has_no_settings(self):
         with _resolve("/usr/bin/claude"):
