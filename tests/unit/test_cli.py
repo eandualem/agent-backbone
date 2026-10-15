@@ -695,7 +695,11 @@ class TestAgentCommands:
             assert _run(["agent", "start", "--dir", str(project), "--no-wait"]) == 0
         assert _run(["agent", "watch", "orch", "acme/app", "acme/web"]) == 0
         assert _run(["agent", "set", "orch", "description=Coordinates", "repo=acme/orch"]) == 0
-        capsys.readouterr()
+        assert "warning" not in capsys.readouterr().err
+        # A secret-looking env name is warned about (#289), and still set.
+        env = '{"UV_CACHE_DIR": ".uv", "GITHUB_TOKEN": "x", "DB": "postgresql://app:pw@db/app"}'
+        assert _run(["agent", "set", "orch", f"env={env}"]) == 0
+        assert "look like secrets: GITHUB_TOKEN, DB." in capsys.readouterr().err
         assert _run(["agent", "list"]) == 0
         assert "orch" in capsys.readouterr().out
         assert _run(["agent", "unwatch", "orch", "acme/web"]) == 0

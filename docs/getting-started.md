@@ -161,9 +161,10 @@ OS user and one key — see [Security](security.md)). Every backbone-started
 agent is also briefed at launch on `tell`, `agent inspect`, `agent start`
 and `backbone help`, so it knows this without being told.
 
-The only reason to give an agent the key explicitly
-(`backbone agent set app env='{"BACKBONE_API_KEY":"…"}'`) is an agent that
-calls the HTTP API directly (`POST /api/messages`) rather than the CLI.
+An agent that calls the HTTP API directly (`POST /api/messages`) rather
+than the CLI reads the same key from `<data_dir>/.env`. Don't copy the key
+into the agent's `env`: those values are stored in plain text in the
+database.
 
 > **What the key delegates**: there is one key and it is full-admin — an
 > agent holding it can start, stop and reconfigure every agent, read every
