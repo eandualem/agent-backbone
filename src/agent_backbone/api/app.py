@@ -50,12 +50,12 @@ def _register_jobs(app: FastAPI):
         SourcesPoller,
         UpgradeWatch,
         delivery_retry,
-        last_pass_steps,
         monitor_agents,
         observe_duration,
         observe_job,
         run_transitions,
         sample_resources,
+        take_pass_steps,
     )
     from agent_backbone.services.jobs.transitions import INTERVAL_SECONDS as _TRANSITION_TICK
     from agent_backbone.services.routing import routing_in_flight, settle_steers
@@ -73,7 +73,7 @@ def _register_jobs(app: FastAPI):
             source=name,
             duration_ms=duration_ms,
             threshold_ms=int(slow * 1000),
-            steps=last_pass_steps() if name == "agent-monitor" else None,
+            steps=take_pass_steps() if name == "agent-monitor" else None,
         )
 
     scheduler = PeriodicScheduler(on_result=_job_result)

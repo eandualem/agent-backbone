@@ -45,9 +45,14 @@ _last_steps: dict[str, int] = {}
 """Milliseconds each step of the latest pass took, for its slow-run record."""
 
 
-def last_pass_steps() -> dict[str, int]:
-    """Each step of the latest monitor pass, in order, with its milliseconds."""
-    return dict(_last_steps)
+def take_pass_steps() -> dict[str, int]:
+    """Each step of the latest monitor pass, in order, with its milliseconds.
+
+    Taking them clears them, so a run that never reached a pass (a failed
+    refresh) does not pick up the previous pass's steps."""
+    steps = dict(_last_steps)
+    _last_steps.clear()
+    return steps
 
 
 def _step_clock() -> Callable[[str], None]:
