@@ -393,6 +393,7 @@ async def safe_deliver(
     operation_id: str | None = None,
     queue_id: int | None = None,
     event_id: int | None = None,
+    once: bool = False,
 ) -> DeliveryReport:
     """Deliver ``message`` to ``session_name`` if the agent can take it, else queue it.
 
@@ -402,11 +403,21 @@ async def safe_deliver(
     together they decide what counts as *the same* queued message.
     A queue drain sets ``requeue=False``: its existing leased row
     already holds the message, even when the displayed text gains an age note.
+    ``once``: a success already recorded under ``operation_id`` in the agent's
+    current conversation (a queued copy's included) answers ``already_delivered``.
     """
     kind = delivery_kind
     operation_id = operation_id or uuid.uuid4().hex
     trackable_issue = db is not None and issue_number is not None and target_entity is not None
     preview = message[:200]
+
+    if once and db is not None:
+        # Checked under the session lock, so a drain pasting a queued copy
+        # cannot slip between this check and the paste below.
+        since = await db.agents.started_at(session_name)
+        rows = await db.deliveries.query(session_name=session_name, operation_id=operation_id)
+        if any(row["outcome"] in SUCCESS_OUTCOMES and _in_session(row, since) for row in rows):
+            return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED, operation_id=operation_id)
 
     if db is not None and requeue:
         held = await db.queue.held_receipt(

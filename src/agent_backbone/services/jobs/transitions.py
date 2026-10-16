@@ -18,7 +18,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import launch, lifecycle_lock
 from agent_backbone.services.agents.operations import StartRequest, resolve_agent, start_resolved
 from agent_backbone.services.agents.transitions import SOURCE, due_after
@@ -145,12 +144,7 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         outcome["reason"] = "the replacement did not start"
         await db.transitions.finish(row["id"], "failed", outcome)
         return "failed"
-    # One identity per transition, so a later process can see this message's paste.
-    message_op = uuid.uuid5(uuid.NAMESPACE_URL, f"backbone:transition:{row['id']}").hex
-    if row["message"] and result.already_running and await _submitted(db, message_op):
-        # The earlier process pasted it into this same session before exiting.
-        outcome["message"] = DeliveryOutcome.DELIVERED.value
-    elif row["message"]:
+    if row["message"]:
         sender = row["requested_by"] or "backbone"
         report = await safe_deliver(
             name,
@@ -160,7 +154,10 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
             delivery_kind="direct_message",
             source=SOURCE,
             sender=sender,
-            operation_id=message_op,
+            # One identity per transition: what an earlier process delivered
+            # to this conversation before exiting is not delivered again.
+            operation_id=uuid.uuid5(uuid.NAMESPACE_URL, f"backbone:transition:{row['id']}").hex,
+            once=True,
         )
         outcome["message"] = report.outcome.value
         if report.queue is not None:
@@ -196,12 +193,6 @@ async def _recovered_launch(db: BackboneDB, operation_id: str) -> str | None:
     # not observation order: the latest sighting decides.
     newest = max(outcomes, key=lambda record: record["last_seen_at"])["code"]
     return None if newest in {"failed", "exited"} else newest
-
-
-async def _submitted(db: BackboneDB, operation_id: str) -> bool:
-    """Whether a delivery under this identity was already submitted to the agent."""
-    records = await db.diagnostics.query(operation_id=operation_id, category="delivery", limit=20)
-    return any(record["code"] == "submitted" for record in records)
 
 
 async def _session_is_launch(name: str, operation_id: str) -> bool:
