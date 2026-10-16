@@ -99,7 +99,7 @@ specialists on request.
 **Let your agent do it.** Open the coding agent you already use and say:
 
 ```text
-Install agent-backbone with uv tool install "agent-backbone[github-app]",
+Install agent-backbone with uv tool install agent-backbone,
 then run backbone help setup and follow it.
 ```
 
