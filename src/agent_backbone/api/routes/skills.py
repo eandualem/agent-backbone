@@ -99,13 +99,15 @@ async def _changed(skill, config, failure: str | None) -> SkillChangeView:
 async def add_to_store(body: SkillAddRequest, config=Depends(get_config)):
     """Move a skill directory into the store and tag it (a move, never a copy)."""
     store = _store_or_400(config)
-    if not _inside_a_registered_directory(config, body.path):
-        raise HTTPException(
-            status_code=422,
-            detail="the skill must live inside a registered agent's directory; "
-            "run `backbone skills add --local` from the terminal for other paths",
-        )
     async with store_lock(config.data_dir, store):
+        # Checked once the lock is held, right before the move: the path may
+        # have changed while this request waited.
+        if not _inside_a_registered_directory(config, body.path):
+            raise HTTPException(
+                status_code=422,
+                detail="the skill must live inside a registered agent's directory; "
+                "run `backbone skills add --local` from the terminal for other paths",
+            )
         try:
             skill = add_skill(
                 store, body.path, name=body.name, tags=tuple(body.tags), replace=body.replace

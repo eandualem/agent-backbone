@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -247,3 +248,25 @@ async def test_disabled_store_refuses_writes(api_client, auth_headers, api_app):
     resp = await api_client.post("/api/skills", headers=auth_headers, json={"path": "/x"})
     assert resp.status_code == 400
     assert (await api_client.get("/api/skills", headers=auth_headers)).json()["items"] == []
+
+
+async def test_a_path_changed_while_waiting_for_the_store_is_checked_again(
+    api_client, auth_headers, store, api_app, tmp_path
+):
+    from agent_backbone.skills import store_lock
+
+    project = tmp_path / "project" / ".claude" / "skills"
+    source = _skill(project, "mine")
+    outside = _skill(tmp_path / "elsewhere", "theirs")
+    async with store_lock(api_app.state.config.data_dir, store):
+        request = asyncio.create_task(
+            api_client.post(
+                "/api/skills", headers=auth_headers, json={"path": str(source), "tags": ["all"]}
+            )
+        )
+        await asyncio.sleep(0.1)  # the request has passed its first look and waits
+        shutil.rmtree(source)
+        source.symlink_to(outside)
+    response = await request
+    assert response.status_code == 422
+    assert (outside / "SKILL.md").is_file() and not (store / "theirs").exists()
