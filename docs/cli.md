@@ -11,9 +11,10 @@ terminal behavior and machine-readable output contracts.
 
 Starting an existing agent reuses its saved CLI and model and begins a **new
 conversation**. Continuing the previous one is your call: `backbone agent resume
-NAME` (or `start --resume`; API `resume: true`) reopens the session the backbone
-last saw for that runtime, or the runtime's own last conversation when no ID is
-saved. A fresh start says when a previous conversation is available. Starts are
+NAME` (or `start --resume`; API `resume: true`) reopens the conversation the
+agent's last launch held (the session id its hook reported, or the one it was
+resumed on), or the runtime's own last conversation when there is none. An id
+left by an earlier launch is not reused. A fresh start says when a previous conversation is available. Starts are
 fresh by default because a resumed agent trusts its own context over whatever
 happened in the checkout since — another CLI, a swarm, the shared memory.
 The project's handoff and shared memory carry progress across fresh sessions,
@@ -35,11 +36,8 @@ the server’s port precedence: process `BACKBONE_PORT`, then the data directory
 `.env`, then `backbone.port`. Commands that need local agent configuration load
 it explicitly; offline database operations retain their normal initialization.
 
-Resuming by saved ID requires an adapter that can address the session exactly.
-Codex, Claude Code, Gemini and OpenCode pass the saved ID; for other adapters
-`--resume` falls back to the runtime's own latest session, as it does for every
-runtime when no ID is saved. Gemini's [session guide](https://geminicli.com/docs/cli/session-management/)
-and OpenCode's [CLI guide](https://opencode.ai/docs/cli/) describe their ID flags.
+[Resuming a previous conversation](#resuming-a-previous-conversation) explains
+how a resume chooses the conversation and how to check which one it used.
 
 ## Quick reference and Tab completion
 
@@ -153,9 +151,33 @@ removes one, `list` shows which known secrets are present (names only),
 ## `backbone doctor`
 
 Checks and prints ✓/✗ for: data dir and `.env`, database reachable, each
-known agent's directory and runtime binary, tmux on PATH, installed
-runtimes, API key, GitHub credentials and effective intake, Telegram
-allowlist, whether the API is up. Exit code 1 if anything failed.
+known agent's directory and runtime binary, tmux on PATH, at least one agent
+CLI on PATH (with none, it fails and names the supported CLIs; `agent start`
+would fail next), API key, GitHub credentials and effective intake, Telegram
+allowlist, whether the API is up, and any stored setting the current rules reject (an older release may have accepted it; it is ignored in favour of the default until fixed). Exit code 1 if anything failed. For each
+installed agent CLI it also lists the capabilities that runtime lacks, with the
+issue tracking each where one exists ([runtime capabilities](runtime-capabilities.md)); these are
+reported, not failed. It also lists, for each installed agent CLI, the
+capabilities that depend on that CLI's dialogs, keys or hooks, with the CLI
+version each was verified on: after upgrading past that version, check them
+again. It reads the installed version from the CLI's `--version` and notes each
+recorded version that differs from it, or that it could not read it; notes,
+not failures. It also names each user-level instruction file an
+installed CLI adds to its sessions, such as a non-empty `~/.codex/AGENTS.md`
+or `~/.claude/CLAUDE.md`, so its content never reaches agents unnoticed; `agent
+start` lists them for the agent it starts, with the agent's own environment
+applied. Both also name a CLI's own memory across sessions while its
+settings leave it on, such as Claude Code's auto-memory, with the setting
+that turns it off where there is one; Backbone does not change it. It names each
+OpenCode agent whose environment (its `env`, then the shell) lacks
+`OPENCODE_EXPERIMENTAL_PLAN_MODE`: without it OpenCode's plan agent asks for no
+approval, so there is no plan to approve remotely. It names each running
+agent whose pane is in tmux copy mode with no client viewing it: messages wait
+until someone attaches to its session and presses `q`. These are notes, not
+failures. `doctor` resolves `CODEX_HOME`,
+`CLAUDE_CONFIG_DIR` and similar variables from the shell it runs in; the
+running backbone uses its own environment, which can differ when it runs as a
+login service.
 
 ## `backbone up [--detach] [--reload]` · `backbone down`
 
@@ -181,9 +203,27 @@ image — `install` says so and leaves nothing behind; `status` reports
 a restart).
 
 The service runs `backbone up` in the foreground with the data directory
-you installed it from; its log is `<data_dir>/backbone.log` on macOS and
-`journalctl --user -u agent-backbone` on Linux. Agents are still tmux
+you installed it from; its log is `<data_dir>/backbone.log` on macOS
+(timestamped and rotated by size, see `backbone.log_max_mb`) and
+`journalctl --user -u agent-backbone` on Linux. After upgrading from a
+release whose service wrote an unrotated log, run `backbone service install`
+again to adopt it. A backbone you start yourself with `up --detach --log-file`
+is restarted by `backbone upgrade` without the flag; start it again with it. Agents are still tmux
 sessions and still need `backbone agent start` after a reboot.
+
+On macOS the LaunchAgent is an interactive job (`ProcessType`). The tmux
+server and every agent the service starts inherit its scheduling, and
+launchd's default for a LaunchAgent would throttle them below ordinary
+apps, so their screens fall behind when the machine is busy. An older
+install lacks the key: run `backbone service install` again to rewrite it,
+which restarts the service. A tmux server that is already running keeps its
+old priority until it restarts, and all its sessions with it. To apply it
+now: let your agents save their work, stop them (`backbone agent stop
+NAME…`), end the old server with `tmux kill-server` (this closes every
+session still on it), then start the same agents again by name
+(`backbone agent start NAME…`, a fresh conversation; `backbone agent resume
+NAME` continues the previous one); the service starts a new tmux server with
+the new scheduling.
 
 ## `backbone upgrade [--check] [--no-restart]`
 
@@ -224,7 +264,8 @@ member; the runtime's own model picker is the authority.
 
 Each line also prints the reasoning-effort levels that runtime accepts —
 `low, medium, high, xhigh, max` for Claude Code, the same plus `ultra`
-for Codex, `-` for a CLI with no effort setting. Unlike model ids, these
+for Codex, `low, high, max` for Deep Code, `-` for a CLI with no effort
+setting. Unlike model ids, these
 are checked: a level the runtime does not have is refused at start.
 
 OpenCode and Aider use literal colon tags in model IDs. Their model values,
@@ -249,13 +290,13 @@ without its owner; `--details` includes full model/repository names, tags,
 replies and activity times.
 
 Model is the model the agent is **actually answering with** when its runtime's
-hook could observe it (Claude Code: read from the transcript after each reply;
-shown bold), otherwise the saved selection, otherwise `default` — the CLI's own
-choice, which the backbone has not seen. `--details` names the source. Tags are
-the group tags that select policies and skills (`backbone agent tag`); swarm
-identity tags are implied by the grouping. Work shows the current issue,
-repository, configured description or, failing those, the directory name; an
-offline agent's saved issue is labelled `Last:`.
+hook could observe it (Claude Code and Gemini CLI: read from the transcript
+after each reply; shown bold), otherwise the saved selection, otherwise
+`default` — the CLI's own choice, which the backbone has not seen. `--details`
+names the source. Tags are the group tags that select policies and skills
+(`backbone agent tag`); swarm identity tags are implied by the grouping. Work
+shows the current issue, repository, configured description or, failing those,
+the directory name; an offline agent's saved issue is labelled `Last:`.
 
 Agents needing attention appear first, then busy, starting and idle agents.
 A divider separates offline agents. States have colors as well as text labels;
@@ -341,22 +382,22 @@ backbone config set escalation.target orch
 
 | Command | Effect |
 |---|---|
-| `agent start [NAME…] [--dir D] [--runtime R] [--model M] [--resume \| --fresh] [--watch REPO]… [--no-wait] [--attach]` | Discover the agent from `--dir` (default: cwd), record it, start its tmux session and **wait until it is at its prompt**. A bare known `NAME` starts from its recorded directory; a bare unknown `NAME` registers the cwd under that name. A `NAME` that differs from a registered one only in letter case (`alfred` beside `Alfred`) is refused, naming the registered agent, rather than registered as a second agent that messages to the first never reach. Several names start a group of known agents (`ab agent start app web orch`). `--attach` opens a single session afterwards |
+| `agent start [NAME…] [--dir D] [--runtime R] [--model M] [--resume \| --fresh] [--watch REPO]… [--tag TAG]… [--no-wait] [--attach]` | Discover the agent from `--dir` (default: cwd), record it, start its tmux session and **wait until it is at its prompt**. A bare known `NAME` starts from its recorded directory; a bare unknown `NAME` registers the cwd under that name. A `NAME` that differs from a registered one only in letter case (`builder` beside `Builder`) is refused, naming the registered agent, rather than registered as a second agent that messages to the first never reach. Several names start a group of known agents (`ab agent start app web orch`). `--attach` opens a single session afterwards |
 | `agent resume NAME… [--attach]` | Start known agents continuing their saved runtime conversations (the same as `agent start --resume`); a bare `agent start` is always a fresh conversation. An already running session is left running |
 | `agent attach NAME [--read-only]` | Open a session in your terminal. Detach with Ctrl-b, then d. From inside tmux, switch the current client; read-only viewing requires a separate terminal |
 | `agent list [--tag TAG] [--json]` | Known agents with runtime, model, directory and tags |
-| `agent output [NAME] [--lines N] [--before OFFSET \| --since OFFSET [--end OFFSET]] [--screen] [--json]` | What the agent has **said**, **reads only**: its user-facing messages — progress, commentary and replies — complete and never shortened, out of the runtime's own transcript for Claude Code (`~/.claude/projects/*/<session>.jsonl`) and Codex (`~/.codex/sessions/**/rollout-*<session>.jsonl`), located from the session id its hook recorded. Tool calls, tool results and thinking are not messages and are not shown. A page is `--lines` messages (default 20, max 200): the last ones by default; `--before OFFSET` the ones ending at or before an offset (go back); `--since OFFSET` the ones starting at or after it (continue), `--end OFFSET` bounding a range. Every page prints its offsets and whether more lies before or after, so nothing is dropped silently; a page never cuts a message. Other runtimes, `--screen`, or a missing transcript show the visible terminal instead, ANSI stripped, and the first line says which you got. `NAME` defaults to `$BACKBONE_AGENT`; works through the API, or directly when the backbone is down |
+| `agent output [NAME] [--lines N] [--before OFFSET \| --since OFFSET [--end OFFSET]] [--screen] [--json]` | What the agent has **said**, **reads only**: its user-facing messages — progress, commentary and replies — complete and never shortened, out of the runtime's own transcript for Claude Code (`~/.claude/projects/*/<session>.jsonl`), Codex (`~/.codex/sessions/**/rollout-*<session>.jsonl`), Gemini CLI (`~/.gemini/tmp/*/chats/session-*.jsonl`, the one whose first line carries the session id) and OpenCode (its database, `~/.local/share/opencode/opencode.db`), located from the session id its hook recorded. Offsets are byte offsets into the transcript file (for Gemini CLI, which records a message again when it changes, those of the message's first record); for OpenCode, a message's position in its database (its creation time in milliseconds × 1000, plus its order within that millisecond). Pass them back as printed. Tool calls, tool results and thinking are not messages and are not shown. A page is `--lines` messages (default 20, max 200): the last ones by default; `--before OFFSET` the ones ending at or before an offset (go back); `--since OFFSET` the ones starting at or after it (continue), `--end OFFSET` bounding a range. Every page prints its offsets and whether more lies before or after, so nothing is dropped silently; a page never cuts a message. Other runtimes, `--screen`, or a missing transcript show the visible terminal instead, ANSI stripped, and the first line says which you got. `NAME` defaults to `$BACKBONE_AGENT`; works through the API, or directly when the backbone is down |
 | `agent inspect NAME [--json]` | State, reason, current issue, delivery condition, the runtime's session id and the agent's last reply (when its hook reports them), the evidence, the terminal tail, recent deliveries, watches and subscriptions |
 | `agent stop NAME…` | Kill the session(s) |
 | `agent restart [NAME] [--runtime R] [--model M] [--resume \| --fresh] [--in DURATION \| --at TIME] [--message TEXT] [--stop-only] [--from WHO] [--json]` | Stop the session and start its replacement after a wait. The backbone owns the transition — it accepts and validates the request (registered agent, installed runtime, model and effort, same-CLI resume), stops the session on its next tick and starts the replacement `DURATION` after the stop (default `1m`; `90s`, `20m`, `3h20m`) or `--at` an ISO 8601 time, through the same launch as `agent start` with the normal instructions — so an agent can ask for its own session and lose nothing. `--message` reaches the replacement once it is at its prompt and never expires while it waits. `--stop-only` stops and starts nothing. One open transition per agent. The result (`pending`, `completed` with the launch's readiness, `failed` with the reason) is in `agent inspect`. `NAME` defaults to `$BACKBONE_AGENT`; needs the running backbone. See [how it works](how-it-works.md#1-starting-an-agent) |
-| `agent approve NAME [--from WHO]` | Answer the permission prompt the agent's runtime is showing (Claude Code, Codex, OpenCode — each verified against a live dialog; other runtimes report `unsupported`). Checks the terminal at the moment of the call and types only if the dialog is on screen *then* — otherwise reports `not_waiting` with the terminal tail. (tmux has no check-and-send: a dialog a human answers in that same instant can receive one extra key at an empty prompt; the response says whether the dialog actually cleared.) Needs the backbone running (`backbone up`): there is no direct-tmux fallback, so every approval goes through the API and is recorded as an `approval` event. Disable with `security.allow_remote_approval false` |
-| `agent deny NAME [--from WHO]` | Refuse the prompt with the runtime's refusing key (Escape for Claude Code and Codex), under the same gate and audit as `approve`. The right answer to a *choice* dialog — Codex's rate-limit "switch to gpt-5.6-luna?" has Switch preselected, so `approve` refuses it (`not_permission`) and Escape keeps the model |
-| `agent set NAME key=value…` | Change `dir`, `runtime`, `model`, `repo`, `description`, `tags` (JSON list), `env` (JSON object), `always_on` and `unattended` (`true`/`false`; `unattended` launches the runtime with its own no-approval switch — see [configuration](configuration.md#agents)) |
+| `agent approve NAME [--from WHO]` | Answer the permission prompt the agent's runtime is showing (Claude Code, Codex, Gemini CLI, OpenCode, Deep Code — each verified against a live dialog; other runtimes report `unsupported`). Checks the terminal at the moment of the call and types only if the dialog is on screen *then* — otherwise reports `not_waiting` with the terminal tail. (tmux has no check-and-send: a dialog a human answers in that same instant can receive one extra key at an empty prompt; the response says whether the dialog actually cleared.) Needs the backbone running (`backbone up`): there is no direct-tmux fallback, so every approval goes through the API and is recorded as an `approval` event. Disable with `security.allow_remote_approval false` |
+| `agent deny NAME [--from WHO]` | Refuse the prompt with the runtime's refusing key (Escape for Claude Code, Codex, Gemini CLI, OpenCode and Deep Code), under the same gate and audit as `approve`. The right answer to a *choice* dialog — Codex's rate-limit "switch to gpt-5.6-luna?" has Switch preselected, so `approve` refuses it (`not_permission`) and Escape keeps the model |
+| `agent set NAME key=value…` | Change `dir`, `runtime`, `model`, `repo`, `description`, `tags` (JSON list), `env` (JSON object of settings, not secrets: entries that look like secrets, by name or as a URL with a password, are warned about), `always_on`, `unattended` and `inbox_only` (`true`/`false`; `unattended` launches the runtime with its own no-approval switch, `inbox_only` marks a client that is never launched — see [configuration](configuration.md#agents)) |
 | `agent watch [NAME] REPO…` / `agent unwatch [NAME] REPO…` | Add / remove watched repositories. Inside an agent session `NAME` defaults to the agent itself (`$BACKBONE_AGENT`), so an agent can subscribe on its own |
-| `agent subscribe [NAME] SOURCE FILTER [--priority normal\|high]` / `agent unsubscribe [NAME] ID` | Subscribe to inbound events from a [source](sources.md) (`gmail`) matching a filter in the source's own query language (`"from:upwork.com subject:job"`); `high` reaches a working Claude Code or Codex agent on its next tool call through hook context (other runtimes: first when ready), `normal` waits for its prompt, batched. `agent inspect` lists subscriptions with their ids. `NAME` defaults to `$BACKBONE_AGENT` inside a session |
+| `agent subscribe [NAME] SOURCE FILTER [--priority normal\|high]` / `agent unsubscribe [NAME] ID` | Subscribe to inbound events from a [source](sources.md) (`gmail`) matching a filter in the source's own query language (`"from:alerts@example.com subject:outage"`); `high` reaches a working Claude Code, Codex or OpenCode agent on its next tool call through hook context, or on Codex when a long-running command exits (other runtimes: first when ready), `normal` waits for its prompt, batched. `agent inspect` lists subscriptions with their ids. `NAME` defaults to `$BACKBONE_AGENT` inside a session |
 | `agent forget NAME` | Remove a stopped agent from the backbone (refuses while its session is still running) |
 | `agent tag NAME TAG…` / `agent untag NAME TAG…` | Add/remove tags, retaining other tags. `swarm:`, `role:` and `task:` tags are managed by the swarm lifecycle |
-| `agent rename NAME NEW_NAME` | Rename a stopped non-swarm agent, preserving its directory, settings, watches, resume ID, queue and routing receipts. Refuses occupied names or names with existing history, active deliveries and agents participating in an active swarm |
+| `agent rename NAME NEW_NAME` | Rename a stopped non-swarm agent, preserving its directory, settings, watches, resume ID, queue, pending restart and routing receipts. Refuses occupied names or names with existing history, active deliveries and agents participating in an active swarm |
 
 `agent set` rejects unknown field names both online and in direct mode. A typo in
 a mixed update rejects the entire request; no valid fields are partially applied.
@@ -381,11 +422,13 @@ an orchestrator that should spin up workers runs these commands itself.
 | `--runtime R` | Which CLI runs the agent: `claude` (default via `agents.default_runtime`), `codex`, `gemini`, `opencode`, `deepcode`, `aider`, or `shell` | yes — later bare starts reuse it |
 | `--model M` | Passed to the runtime as `--model M` (e.g. `opus`, `sonnet`, or a full model id — whatever that CLI accepts). Use it to run cheaper models per agent. Write it as `M:EFFORT` (e.g. `gpt-6-astra:high`, `opus:max`) to set the reasoning effort too — such a spec is **not** passed verbatim: it is split, and the CLI gets the bare model plus its own effort switch. A level the runtime does not have, or an effort with no model (`:high`), is refused rather than dropped | yes — later bare starts reuse it |
 | `--watch OWNER/REPO` | Also subscribe to a repository (repeatable) | yes |
+| `--tag TAG` | Add a tag before launching (repeatable), so the first session already has the skills and policies it selects. Tags are only added here; `agent untag` removes one | yes |
 | `--resume` | Continue the conversation the backbone last saw for this runtime (the runtime's own last conversation when no ID is saved); same as `agent resume` | no |
 | `--fresh` | New conversation, keeping saved CLI and model — the default, spelled out | no |
 | `--always-on` | Instead of names: start every agent marked `always_on` (after a reboot, with `--resume`) | — |
 | `--no-wait` | Return immediately instead of waiting for the prompt | no |
 | `--attach` | Open this one session after startup; an interactive terminal is required | no |
+| `--inbox-only` | Register a client without a terminal instead of launching anything: it reads its messages with `backbone inbox --agent NAME` (see [configuration](configuration.md#agents)). Takes one agent and no launch options | yes |
 
 Examples:
 
@@ -393,8 +436,9 @@ Examples:
 backbone agent start                                  # this repo, defaults
 backbone agent start --runtime claude --model opus    # this repo, explicit Claude model
 backbone agent start orch --dir ~/ws/orch --watch acme/app
+backbone agent start --dir ~/code/site --tag coder --tag web   # tagged from its first session
 backbone agent start --dir ~/ws/api --runtime codex --model gpt-5.2
-backbone agent start recruiter-desk                   # known agent, recorded settings
+backbone agent start docs-writer                      # known agent, recorded settings
 ```
 
 Recorded settings are changed later with `agent set NAME model=sonnet`
@@ -416,6 +460,100 @@ app: started, waiting for you — claude repo acme/app   # e.g. Claude's folder-
 app: started but not at its prompt yet                 # timeout; the last terminal lines are shown
 app: already running
 ```
+
+### Resuming a previous conversation
+
+```bash
+backbone agent inspect app                  # Session: the conversation id on record
+backbone agent resume app                   # the same as: agent start app --resume
+backbone agent resume app web orch          # several known agents, one after another
+backbone agent start --always-on --resume   # every always_on agent, e.g. after a reboot
+```
+
+Over the API, send `{"resume": true}` to `POST /api/agents/{name}/start` (or
+`POST /api/agents/start`). Leave it out, or send `false`, for a fresh conversation.
+
+The conversation is chosen like this. The start's evidence lines show the result:
+
+| Situation | What starts | Evidence line |
+|---|---|---|
+| The agent's last launch reported a session id through its runtime hook, or resumed one by id, and the runtime can open a session by id (Claude Code, Codex, Gemini CLI, OpenCode) | That exact conversation | `resuming the session the last launch reported: ID (AGE old)` (`… opened: …` when it resumed that id and had not reported yet) |
+| The last launch ended before its hook reported an id, and did not resume one, so the id on record is from an earlier session | The runtime's own latest conversation | `the last launch reported no session id; ID (AGE old) is from an earlier session, so using claude's own resume` |
+| The recorded id belongs to another runtime (the agent switched CLI since) | The current runtime's own latest conversation | `last session id belongs to codex; using claude's own resume` |
+| No id recorded, or Deep Code, which cannot open a session by id | The runtime's own latest conversation for the directory | none |
+| The agent is already running | Nothing; the session is left as it is | `app: already running` (API: `already_existed: true`) |
+
+Aider has no supported resume: start it fresh (`backbone agent start NAME`, without
+`--resume`) and let its handoff carry the context. The
+[runtime capabilities](runtime-capabilities.md) page lists this per runtime.
+
+The recorded id is the one the runtime's hook last wrote to the agent's state
+file. `agent inspect` shows the id and `Hook age (seconds)`, how long ago the
+hook last wrote. For a running agent, it shows only an id reported by the
+current session. The start's
+[diagnostics](api.md#get-apidiagnosticsrecords) record the choice as
+`resume_selection`: `fresh`, `known_session` or `runtime_latest`. Read the
+start's final record (`ready`, `timeout` or a failure code), not `requested`.
+The `requested` record is written before the choice is made.
+
+A fresh start that could have resumed adds `fresh conversation; the previous
+one (AGE old) is still available: backbone agent resume app`. Gemini's
+[session guide](https://geminicli.com/docs/cli/session-management/) and
+OpenCode's [CLI guide](https://opencode.ai/docs/cli/) describe their id flags.
+
+## `backbone fleet save|list|show|resume`
+
+Save the agents running now, stop them for the night, and bring the same
+conversations back later. A snapshot is kept in the database, so it survives
+a backbone restart, and every resume of it is recorded with it.
+
+```bash
+backbone fleet save --stop            # save every running agent, then stop the idle ones
+backbone fleet save --stop --force    # also stop agents that are busy or waiting for you
+backbone fleet list                   # snapshots, newest first
+backbone fleet show [ID|latest]       # one snapshot: who was saved, stopped, resumable
+backbone fleet resume [ID|latest]     # start each saved agent on its saved conversation
+```
+
+`save` records, for every running agent, its runtime, model, directory and
+the session id of its **current** session: the one its hook reported or, before
+the first report, the one it was resumed on by id. An id left by an earlier
+session is never saved. A plain `save` stops nothing.
+`--stop` stops each saved agent afterwards. Agents that are busy or waiting for
+you are saved but left running unless you add `--force`. When an agent runs
+the command itself, its own session is stopped last. With no agent running,
+nothing is saved, so a second save in one night never replaces the real
+snapshot as `latest`. `--note TEXT` is kept with the snapshot.
+
+The table shows each agent's state at the save, its stop (`stopped`,
+`skipped_busy`, `stop_failed` or `not_requested`) and whether it can be
+resumed. `no_session_reported` means its session had not reported an id yet.
+`exact_resume_unsupported` means its runtime cannot open a session by id
+(Deep Code, Aider).
+
+`resume` is exact. Each agent starts on its saved conversation with its saved
+model, never the runtime's latest one and never a fresh one. Every agent ends
+with one outcome:
+
+| Outcome | Meaning |
+|---|---|
+| `resumed_known_session` | Started on the saved conversation. `Session` says whether its hook reported the same id (`confirmed`) or another one. Claude Code reports at startup, OpenCode a moment after its prompt appears and Codex at its first turn, so it can show `-` right after a resume |
+| `already_running` | The agent was running; it is left as it is |
+| `not_resumed` | Not started, with the reason: `no_saved_session`, `exact_resume_unsupported`, `agent_unknown` (forgotten since), `dir_changed` or `runtime_changed` (switched to another CLI since the save; reported, not reverted) |
+| `failed` | The launch failed or the runtime exited, as it does when it rejects the id; the evidence says why |
+
+A few agents start at a time. Running `resume` again is safe: agents that are
+up come back as `already_running`. The command exits 1 when any agent failed.
+`--json` prints the API response. It needs the running backbone.
+
+A resumed conversation carries what the runtime itself recorded: the messages,
+tool calls and results in its transcript. It does not carry a tool call or
+command that was running at the stop, an unanswered permission prompt or
+dialog, the terminal screen and scrollback, or text typed but not sent.
+Messages sent to an agent while it was stopped wait in the queue and expire
+as usual (`timing.queue_expiry_minutes`, 30 by default), so overnight messages
+are reported as expired rather than delivered at the resume. Whether a resumed agent receives
+the current brief depends on its runtime ([runtime capabilities](runtime-capabilities.md)).
 
 ## `backbone swarm create|list|status|disband`
 
@@ -541,14 +679,18 @@ was submitted.
 task and not queue-jumping. It goes through `POST /api/steer` as a transient
 offer to the agent's runtime hook, never as a queue row and never as a paste:
 Claude Code and Codex hand it to the model as context on the agent's next tool
-call, so it cannot overwrite a draft or answer a dialog. It is accepted only
+call (on Codex, a command still running when its call returns hands it over
+when it exits), and OpenCode's plugin adds it to the running turn as a user message after
+that call, so it cannot overwrite a draft or answer a dialog. It is accepted only
 while the agent is `agent_working` on one of those runtimes in a session the
-backbone started; otherwise it is **refused with the reason** (`not_working`,
+backbone started, and not once its turn failed at the provider (`blocked` /
+`provider`); otherwise it is **refused with the reason** (`not_working`,
 `unsupported_runtime`, `offline`, `no_launch_id`) and nothing is queued — send
 an ordinary message instead. The guarantee is at-most-once handoff, not
 incorporation: the delivery record (`kind` `steer`, in `agent inspect`) moves
 from `offered` to `handed_off` when the hook took it, `not_taken` when the turn
-ended first or no tool call took it within five minutes, or `cancelled` when the
+ended first or nothing took it within five minutes (checked every 15 seconds), or
+`cancelled` when the
 session was replaced first. Exit 0 when offered, 1 otherwise.
 
 ## `backbone reply TEXT… [--agent NAME]`
@@ -559,6 +701,26 @@ every enabled integration — on Telegram, the forum topic mapped to that
 agent. Inside an agent session `--agent` defaults to `$BACKBONE_AGENT`.
 Exit 1 with the reason when no integration is configured or none has a
 surface for the agent yet. See [Integrations](integrations.md).
+
+## `backbone signing owner USER_ID [--json]`
+
+Sets the Telegram user who approves key changes for [signed
+senders](owner-confirmed-messages.md) with `/approve_key`. `USER_ID` is the
+numeric Telegram user id; `/approve_key` tells you yours when no owner is set.
+It can be set once; running it again records a change that the current owner
+approves in Telegram with `/approve_owner USER_ID`. Both are alerted.
+
+## `backbone message validate CONFIRMATION_ID [--done] [--json]`
+
+Run by an agent that received an [owner-confirmed
+message](owner-confirmed-messages.md#validating-a-confirmation-agents)
+(`owner-confirmed:<id>` in its envelope). It claims the confirmation for the
+calling agent and prints the exact confirmed text; claiming again, after a
+restart for example, prints the same text marked as a recovery, which is not
+fresh authority. `--done` closes the claim when the task is finished. Backbone
+identifies the caller from the process that runs the command, so it works only
+from the agent's own session. Exit 0 when validated, 1 with the reason
+otherwise; `--json` prints the API's answer.
 
 ## `backbone hooks install|uninstall claude|codex|gemini [--dir PROJECT]`
 
@@ -625,22 +787,26 @@ or `policy:NAME`. See [Templates](templates.md) for examples and adoption rules.
 ## `backbone skills`
 
 One shared store of skills (`skills.store`, default `~/skills`), each tagged
-with the agents it is for; at launch the backbone links the right ones into the
-directory the agent's CLI reads. `list [--tag TAG] [--json]` shows store skills,
+with the agents it is for; at launch, and for running agents whenever a skill or
+their tags change, the backbone links the right ones into the directory the
+agent's CLI reads. `list [--tag TAG] [--json]` shows store skills,
 tags and the agents each reaches; `show NAME` prints one; `path [NAME]` locates
 the store or a skill; `add PATH [--name N] [--tag T]… [--replace]` moves a skill
-directory into the store and tags it; `tag NAME [TAG…]` replaces its tags;
-`preview AGENT [--json]` — or just `backbone skills AGENT` — shows what the next
-launch links and where;
+directory into the store and tags it; `tag NAME [TAG…]` replaces its tags (both
+name the running agents whose links changed at once);
+`preview AGENT [--json]` — or just `backbone skills AGENT` — shows every skill
+the agent's CLI loads, by source (shared, the repository's own, user-level),
+and where each comes from;
 `validate [AGENT]` checks the store and every selection. See [Skills](skills.md).
 
 `backbone agent tag NAME TAG...` adds persistent group tags;
 `backbone agent untag NAME TAG...` removes them. Swarm/role identity tags cannot
-be changed with these commands. Changes take effect at the next fresh launch.
+be changed with these commands. A running session gets the skills its new tags
+select at once; policies follow at its next fresh launch.
 
 ## Cooperative message checkpoints
 
-`backbone inbox [--agent NAME]` reads up to ten direct messages at a worker's own
+`backbone inbox [--agent NAME]` reads up to ten direct messages (for an inbox-only agent, escalation notices too) at a worker's own
 checkpoint without terminal injection; `backbone inbox --ack TOKEN ...` confirms
 application or deliberate supersession. Unacknowledged receipts are replayed on later
 reads, including after a lost response/restart. Do not repeat work for an

@@ -57,6 +57,12 @@ the ones you changed. Values are JSON (`7999`, `true`, `'["a","b"]'`,
   models remain unpriced. Keep existing entries when extending it. Stored
   historical price bases remain unchanged; `usage --reprice --cost` previews
   the configured catalog against retained tokens.
+- `usage.context_note_tokens` (default `200000`): when an agent's current
+  conversation reaches this many tokens of context, the backbone tells it so
+  and recommends a fresh session once its current task is done. `0` turns the
+  note off. See [Context-size note](token-usage.md#context-size-note).
+- `usage.context_note_step_tokens` (default `100000`): after the first note,
+  note again at each further step (300k, 400k, …). `0` notes only once.
 
 See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 
@@ -68,6 +74,8 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 | `backbone.port` | `7120` | API port |
 | `backbone.session_name` | `backbone` | tmux session used by `backbone up --detach` |
 | `backbone.cors_origins` | `[]` | Browser origins allowed to call the API; empty disables CORS |
+| `backbone.log_max_mb` | `20` | Size in MB at which `backbone up --log-file` (what the macOS service runs) rotates its log; `0` never rotates. Applies at the next start |
+| `backbone.log_backups` | `3` | Rotated log files kept beside the current one (`backbone.log.1`, …); at least 1 |
 | `backbone.restart_on_upgrade` | `true` | Restart the running backbone onto new code when the installed version (or, for a development checkout, the commit of the branch it started on) changes. Checked once a minute; waits until nothing is being routed; a checkout switched to another branch is left alone. Agents are untouched |
 
 ### `agents.*`
@@ -80,13 +88,13 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 | `agents.auto_review` | `false` | Use automatic permission review where the runtime supports it (currently Codex, `--approve-for-me`, with its workspace sandbox). Routine requests can proceed after review; refusals return to the agent. Applies on the next start/resume. Unattended agents keep their no-prompt policy; other runtimes are unaffected. Set `false` to use your own runtime approval configuration |
 | `agents.shared_policy` | `[]` | Ordered policy names under `<templates.dir>/policies/`, composed with base and swarm briefs; see [templates](templates.md) |
 | `agents.tag_policy` | `{}` | Policy names by agent tag, as a JSON object of ordered lists; global policies apply first, then matching tags alphabetically, deduplicated |
-| `agents.inject_brief` | `true` | Give each agent the backbone's common brief at launch — who it is, how to message other agents, and where to get details (`backbone help`). Claude Code appends it to the system prompt (complementing the project's CLAUDE.md); Gemini and OpenCode receive it as the session's initial prompt (not re-sent on `--resume`); Codex and `aider` receive it as their first delivered message (a Codex launch command is capped at 16 KB by tmux, so the brief cannot ride on it); plain shells get none. Override the text with `base.md` in `templates.dir` (`backbone templates edit base`) |
+| `agents.inject_brief` | `true` | Give each agent the backbone's common brief at launch — who it is, how to message other agents, and where to get details (`backbone help`). Claude Code appends it to the system prompt (complementing the project's CLAUDE.md); Gemini, OpenCode and Deep Code receive it as the session's initial prompt; Codex and `aider` receive it as their first delivered message (a Codex launch command is capped at 16 KB by tmux, so the brief cannot ride on it; a brief an earlier launch never delivered is dropped at the next launch); plain shells get none. A resumed session keeps the brief it started with on every runtime (Claude Code keeps its stored system prompt). On resume, Claude Code and Codex are handed the current brief through their `SessionStart` hook, saying that it supersedes earlier Backbone briefs; on the other runtimes a changed brief applies only to a fresh start (`agent start --fresh`). Override the text with `base.md` in `templates.dir` (`backbone templates edit base`) |
 
 ### `skills.*`
 
 | Key | Default | Meaning |
 |---|---|---|
-| `skills.store` | `~/skills` | Directory holding the one copy of every shared skill. At launch each agent gets the skills tagged for it as symlinks in the directory its CLI reads; `backbone skills` manages the store. Empty disables materialisation. See [Skills](skills.md) |
+| `skills.store` | `~/skills` | Directory holding the one copy of every shared skill (an absolute path; `~` is expanded). At launch (and at once for running agents when a skill or their tags change) each agent gets the skills tagged for it as symlinks in the directory its CLI reads; `backbone skills` manages the store. Empty disables materialisation. See [Skills](skills.md) |
 
 ### `templates.*`
 
@@ -125,13 +133,24 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 |---|---|---|
 | `timing.stale_threshold_seconds` | `300` | Hook state older than this is verified against the terminal |
 | `timing.grace_period_seconds` | `5` | Settle time from the hook-written idle timestamp before delivering (`settling`); terminal-only idle readings have no transition timestamp |
-| `timing.queue_expiry_minutes` | `30` | Expiry for ordinary queued messages; active swarm coordination, inbox holds, queues held by an unconfirmed delivery and [subscription](sources.md) batches are retained. Recipients and registered senders are notified of what expired |
+| `timing.queue_expiry_minutes` | `30` | Expiry for ordinary queued messages; active swarm coordination, inbox holds, startup briefs, queues held by an unconfirmed delivery and [subscription](sources.md) batches are retained. Recipients and registered senders are notified of what expired |
 | `timing.stall_threshold_seconds` | `5400` | Busy on one issue for longer than this is a stall |
 | `timing.escalation_dedup_seconds` | `1800` | Do not repeat the same escalation within this window |
 | `timing.monitor_interval_seconds` | `60` | `agent-monitor` job period (must be positive) |
 | `timing.retry_interval_seconds` | `300` | `delivery-retry` job period (must be positive) |
 | `timing.start_timeout_seconds` | `60` | How long `agent start` waits for the prompt |
 | `timing.delivery_retention_days` | `30` | Deliveries, events, completed queue messages, diagnostics and report history are pruned every 6 h; diagnostics age from their last observation, queue age from completion; pending/leased messages and each author's latest progress report are retained |
+
+### `diagnostics.*` — performance evidence
+
+| Key | Default | Meaning |
+|---|---|---|
+| `diagnostics.slow_job_seconds` | `30` | Record a scheduled job run that takes this long or longer (`run_slow`); `0` disables |
+| `diagnostics.resource_sample_seconds` | `300` | How often memory pressure is checked; `0` disables. Applies at the next start |
+| `diagnostics.pressure_swap_percent` | `50` | Record a memory sample while swap use is at or above this percent of swap |
+| `diagnostics.pressure_free_percent` | `10` | Record a memory sample while available memory is at or below this percent |
+
+See [Slow jobs and memory pressure](diagnostics.md#slow-jobs-and-memory-pressure).
 
 ### `telegram.*`
 
@@ -147,7 +166,7 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `escalation.target` | — | Agent that receives stall / offline / plan-waiting messages. Empty disables agent escalation (Telegram alerts still happen) |
+| `escalation.target` | — | Agent that receives stall / offline / plan-waiting messages. An [inbox-only](#agents) agent reads them in its inbox. Empty disables agent escalation (Telegram alerts still happen) |
 
 ### `priority.*` — "which issue is next"
 
@@ -164,7 +183,7 @@ Score = type weight + blocking bonus + dependents bonus + age tie-breaker.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `security.allow_remote_plan_control` | `false` | Enable approve/reject/respond on plans via API and Telegram (injects keystrokes) |
+| `security.allow_remote_plan_control` | `false` | Enable approve/reject on plans via API and Telegram (injects keystrokes) |
 | `security.allow_remote_approval` | `true` | Let `agent approve` / `POST /api/agents/{name}/approve` answer a permission prompt. On by default because the action is bounded — a fixed affirmative key, sent only while the runtime's dialog is on screen, to a registered agent, recorded as an event — and because swarm coordinators need it to unblock members. Set `false` to keep every approval on a keyboard |
 | `security.allow_unauthenticated` | `false` | Serve the API without an API key. Dev boxes only |
 
@@ -189,7 +208,8 @@ Recorded per agent (`backbone agent list`, `GET /api/config/agents`):
 | `tags`, `description` | `agent set` | Free-form, returned by the API. A `swarm:<name>` tag marks a swarm member: internal to the agent running the swarm, no Telegram topic |
 | `always_on` | `agent set NAME always_on=true` | Expected to stay up: a dead session is reported at once. Off by default — an absent agent is reported only when messages are queued for it |
 | `unattended` | `agent set NAME unattended=true` | Select the runtime's no-approval mode. Off by default for ordinary agents; sandboxed swarm members follow `swarm.unattended_members` at launch. Changing `runtime` clears this flag unless set again in the same command. Unsupported runtimes refuse unattended startup. See [runtime switches, permission boundaries and Claude's one-time acceptance](security.md#unattended-agents-and-writable-directories) |
-| `env` | `agent set env='{"K":"V"}'` | Extra environment exported into the session (e.g. an API key). Values are stored with the agent record — treat them like `.env` contents |
+| `inbox_only` | `agent start --inbox-only` / `agent set NAME inbox_only=true` | A client without a terminal, such as a service that reads the API: registered but never launched, restarted, stopped or typed into (approve, deny, steer and plan answers are refused). It reads its messages with `backbone inbox --agent NAME`; direct messages and escalation notices to it (it can be the `escalation.target`) wait there without expiring, anything else queued for it (which it cannot read) expires, and it raises no offline alerts. It takes no part in GitHub routing: no `repo`, no watches, and `for:`/`from:` labels naming it are ignored. A running agent cannot be made inbox-only: stop it first; `always_on`, `unattended` and subscriptions do not apply, and a swarm member cannot be inbox-only. Off by default |
+| `env` | `agent set env='{"K":"V"}'` | Extra environment exported into the session, for settings such as a cache or configuration directory. Not for secrets: values are stored in plain text in the database and returned by the API, and `agent set` warns about entries that look like secrets. Keep credentials in each tool's own credential store ([security](security.md#what-an-agent-session-inherits)) |
 
 Exported into every session the backbone starts: `BACKBONE_RUNTIME`,
 `BACKBONE_AGENT`, `BACKBONE_STATE_DIR` (an agent's `env` cannot override
@@ -197,6 +217,15 @@ these reserved keys). That is the whole contract — the backbone's own
 secrets are stripped from the session, including anything you added to
 `.env` yourself. See
 [What an agent session inherits](security.md#what-an-agent-session-inherits).
+
+A Claude Code agent starts with drafted feedback off: Claude can't draft
+feedback reports to Anthropic, which would include the session's transcript
+when sent. The launch disallows the `SendFeedback` tool and sets
+`CLAUDE_CODE_SEND_FEEDBACK=0`; no settings file, the project's or your own, can
+turn the tool back on. An agent whose work may be shared opts in with
+`CLAUDE_CODE_SEND_FEEDBACK=1` in its `env` (keep its other variables, since
+`env` is replaced as a whole); it applies at the agent's next start. The other
+runtimes draft no such reports.
 
 ## Secrets (`.env` / environment)
 

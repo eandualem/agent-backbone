@@ -3,13 +3,14 @@
 import asyncio
 import time
 from dataclasses import replace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from sqlalchemy import text
 
 from agent_backbone.config import AgentsConfig, AgentSpec
-from agent_backbone.hooks.backbone_state import issue_from_text
+from agent_backbone.hooks.backbone_state import issue_from_text, prompt_digest
+from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import (
     AgentState,
     StateSnapshot,
@@ -50,6 +51,173 @@ async def test_uncertain_submission_is_held_and_never_retried(db, config):
     assert held[0]["status"] == "uncertain"
     await db.queue.acknowledge_checkpoint("ike", [f"{first.queue_id}:{first.operation_id}"])
     assert await db.queue.checkpoint("ike") == []
+
+
+@pytest.mark.parametrize("event", ["UserPromptSubmit", "PreToolUse", "Stop"])
+async def test_an_unconfirmed_paste_the_prompt_hook_reports_is_delivered(db, config, event):
+    """The screen check can miss a redraw; the runtime's UserPromptSubmit hook is its
+    receipt, and the prompt's time survives the turn's later records (a quick Stop,
+    Codex's PreToolUse)."""
+    import json
+    import time
+
+    def submitted(*_args, **_kwargs):
+        config.state_dir.mkdir(parents=True, exist_ok=True)
+        (config.state_dir / "ike.json").write_text(
+            json.dumps(
+                {
+                    "state": "busy",
+                    "event": event,
+                    "ts": time.time(),
+                    "prompted_at": time.time(),
+                    "prompt_digest": prompt_digest("correction"),
+                }
+            )
+        )
+        raise SubmissionUnconfirmed("prompt box still showed text")
+
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(
+                return_value=SessionProfile("ike", SessionIntelligence.READY, runtime="codex")
+            ),
+        ),
+        patch(
+            "agent_backbone.services.routing._delivery.send_message",
+            AsyncMock(side_effect=submitted),
+        ),
+    ):
+        report = await safe_deliver(
+            "ike", "correction", config, db=db, delivery_kind="direct_message", sender="lead"
+        )
+    assert report.outcome == DeliveryOutcome.DELIVERED and not report.unconfirmed
+    assert await db.queue.checkpoint("ike") == []  # nothing held
+
+
+@pytest.mark.parametrize("runtime", ["codex", "unknown"])  # unknown: identified only at the paste
+async def test_a_prompt_hook_receipt_after_the_first_poll_is_delivered(
+    db, config, monkeypatch, runtime
+):
+    """The hook can report a moment after the screen check gives up: delivery keeps polling."""
+    import json
+
+    from agent_backbone.services.agents import read_state_file
+
+    monkeypatch.setattr("agent_backbone.services.routing._delivery.PROMPT_HOOK_WAIT_SECONDS", 2.0)
+    polls = []
+
+    def read_then_hook_reports(state_dir, session, **kwargs):
+        snapshot = read_state_file(state_dir, session, **kwargs)
+        if not polls:
+            config.state_dir.mkdir(parents=True, exist_ok=True)
+            (config.state_dir / "ike.json").write_text(
+                json.dumps(
+                    {
+                        "state": "busy",
+                        "event": "UserPromptSubmit",
+                        "ts": time.time(),
+                        "prompted_at": time.time(),
+                        "prompt_digest": prompt_digest("correction"),
+                    }
+                )
+            )
+        polls.append(snapshot)
+        return snapshot
+
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(
+                return_value=SessionProfile("ike", SessionIntelligence.READY, runtime=runtime)
+            ),
+        ),
+        patch(
+            "agent_backbone.services.routing._delivery.send_message",
+            AsyncMock(side_effect=SubmissionUnconfirmed("prompt box still showed text")),
+        ),
+        patch(
+            "agent_backbone.services.routing._delivery.read_state_file",
+            side_effect=read_then_hook_reports,
+        ),
+    ):
+        report = await safe_deliver(
+            "ike", "correction", config, db=db, delivery_kind="direct_message", sender="lead"
+        )
+    assert len(polls) >= 2  # the receipt was not there at the first poll
+    assert report.outcome == DeliveryOutcome.DELIVERED and not report.unconfirmed
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {
+            "state": "busy",
+            "event": "UserPromptSubmit",
+            "ts": 1.0,
+            "prompted_at": 1.0,
+            "prompt_digest": prompt_digest("correction"),
+        },
+        # someone else's prompt, one sharing the opening, or this one with more typed in
+        *(
+            {
+                "state": "busy",
+                "event": "UserPromptSubmit",
+                "ts": 4102444800.0,
+                "prompted_at": 4102444800.0,
+                "prompt_digest": prompt_digest(other),
+            }
+            for other in ("fix the login page", "correction and more", '<pasted_content id="1">')
+        ),
+        # a turn that was already running goes on after the paste: no new prompt
+        {"state": "idle", "event": "Stop", "ts": 4102444800.0, "prompted_at": 1.0},
+        {"state": "idle", "event": "Notification", "ts": 4102444800.0},
+    ],
+)
+async def test_what_is_not_a_receipt(db, config, record):
+    import json
+
+    config.state_dir.mkdir(parents=True, exist_ok=True)
+    (config.state_dir / "ike.json").write_text(json.dumps(record))
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(
+                return_value=SessionProfile("ike", SessionIntelligence.READY, runtime="codex")
+            ),
+        ),
+        patch(
+            "agent_backbone.services.routing._delivery.send_message",
+            AsyncMock(side_effect=SubmissionUnconfirmed("no receipt")),
+        ),
+    ):
+        report = await safe_deliver(
+            "ike", "correction", config, db=db, delivery_kind="direct_message", sender="lead"
+        )
+    assert report.unconfirmed
+
+
+async def test_a_runtime_without_a_prompt_hook_does_not_wait_for_one(db, config):
+    """Only Claude Code and Codex hooks see UserPromptSubmit: elsewhere nothing is polled."""
+    reads = Mock()
+    with (
+        patch(
+            "agent_backbone.services.routing._delivery.get_session_intelligence",
+            AsyncMock(
+                return_value=SessionProfile("ike", SessionIntelligence.READY, runtime="gemini")
+            ),
+        ),
+        patch(
+            "agent_backbone.services.routing._delivery.send_message",
+            AsyncMock(side_effect=SubmissionUnconfirmed("no receipt")),
+        ),
+        patch("agent_backbone.services.routing._delivery.read_state_file", reads),
+    ):
+        report = await safe_deliver(
+            "ike", "correction", config, db=db, delivery_kind="direct_message", sender="lead"
+        )
+    assert report.unconfirmed
+    reads.assert_not_called()
 
 
 async def test_checkpoint_survives_read_response_loss_and_retains_sender(db):
@@ -379,19 +547,10 @@ async def test_claude_explanation_is_not_provider_block(config, reply):
         "The color scheme is off; please look at `#123`",
         "Use background #444444; then review #123",
         "Theme issue #123",
-    ],
-)
-def test_color_context_does_not_hide_later_issue(message):
-    assert issue_from_text(message) == (123, None)
-
-
-@pytest.mark.parametrize(
-    "message",
-    [
         "Set the color to #444444; then review issue #123",
         "The background is #444444; review #123",
         'Set {"color": "#444444"}; review #123',
     ],
 )
-def test_color_connectors_and_quotes_preserve_real_issue(message):
+def test_color_context_does_not_hide_later_issue(message):
     assert issue_from_text(message) == (123, None)

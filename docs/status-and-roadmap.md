@@ -19,7 +19,8 @@ every later CLI version or account.
 - State-gated delivery: a message sent while the agent is busy is queued
   and retried when it is free, until expiry; `priority` never interrupts a
   busy or provider-blocked agent. Current-issue comments obey the same gate.
-  Copy mode is preserved and blocks delivery as `human_reading`; delivery
+  Copy mode is preserved and blocks delivery as `human_reading`, or as
+  `unattended_copy_mode` when no client is viewing the pane; delivery
   attempts are recorded.
   A crash after terminal submission but before receipt storage can repeat a
   message; see [delivery receipts](github.md#delivery-receipts-and-retries).
@@ -27,8 +28,8 @@ every later CLI version or account.
   `backbone config`; secrets only in `.env`.
 - Event subscriptions ([sources](sources.md)): agents subscribe to Gmail
   with Gmail search filters and a priority; normal events batch in the queue
-  until the agent is ready, high events reach a working Claude Code or Codex
-  agent through its hook context. Unit-tested end to end with the IMAP
+  until the agent is ready, high events reach a working Claude Code, Codex or
+  OpenCode agent through its hook context. Unit-tested end to end with the IMAP
   client mocked; live mailbox validation is still pending.
 - GitHub per repository: owner / `for:` / `from:` / watch routing,
   one-issue-at-a-time with acknowledgement, close-then-next, sub-issue
@@ -58,20 +59,11 @@ every later CLI version or account.
 
 ## Runtimes
 
-These adapters are shipped. “Verified” records live checks performed during
-development; use `backbone runtimes` to see which binaries are installed locally.
-
-| Runtime | Unattended start | Brief at launch | State detection | Delivery | Approve |
-|---|---|---|---|---|---|
-| `claude` (Claude Code) | ✅ | ✅ system prompt | ✅ hooks + terminal | ✅ verified | ✅ |
-| `codex` | ✅ | ✅ first message | ✅ hooks + terminal | ✅ verified | ✅ |
-| `opencode` | ✅ (no trust dialog) | ✅ first prompt | ✅ hooks + terminal | ✅ verified | ✅ |
-| `deepcode` (Deep Code, DeepSeek) | ✅ (no trust dialog) | ✅ `-p` | ✅ terminal | ✅ verified | pending |
-| `gemini` | ✅ `--skip-trust` | ✅ first prompt | ✅ hooks + terminal | unverified¹ | — |
-| `aider` | — | first message | terminal, best effort | untested | — |
-| `shell` | — | none | terminal, best effort | — | — |
-
-¹ In a test with Gemini CLI 0.46, Google OAuth completed but the tested personal account was refused ("no longer supported for Gemini Code Assist for individuals"); the backbone reports such a session as `waiting_for_human`. Delivery to a signed-in Gemini session (e.g. `GEMINI_API_KEY`) has not been tested yet. Deep Code is `@vegamo/deepcode-cli`, the community CLI DeepSeek's docs point to; its permission dialog has not been captured yet, so `agent approve` refuses it until then.
+Seven adapters are shipped: `claude`, `codex`, `gemini`, `opencode`,
+`deepcode`, `aider` and `shell`. Which capabilities work on each, and the issue
+tracking each gap where one exists, is in [runtime capabilities](runtime-capabilities.md),
+generated from the capability contract; `backbone doctor` reports from the
+same source. Use `backbone runtimes` to see which CLIs are installed locally.
 
 ## Current limits
 

@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.database import format_iso, parse_iso
-from agent_backbone.services.runtimes import RUNTIMES
+from agent_backbone.services.runtimes import RUNTIMES, install_hint
 
 if TYPE_CHECKING:
     from agent_backbone.config import AgentSpec, BackboneConfig
@@ -69,6 +69,8 @@ def validate_transition(config: BackboneConfig, spec: AgentSpec, req: Transition
     """Refuse a request that could not work, before anything is torn down (``ValueError``)."""
     if spec.name == config.backbone.session_name:
         raise ValueError("refusing to restart the backbone's own session")
+    if spec.inbox_only:
+        raise ValueError(f"'{spec.name}' is inbox-only: it has no session to restart")
     if req.delay_seconds is not None and req.start_at is not None:
         raise ValueError("give a delay or a start time, not both")
     if req.delay_seconds is not None and not 0 <= req.delay_seconds <= MAX_DELAY_SECONDS:
@@ -84,7 +86,7 @@ def validate_transition(config: BackboneConfig, spec: AgentSpec, req: Transition
         raise ValueError(f"Unknown runtime: {runtime}")
     rt = RUNTIMES[runtime]
     if not rt.available():
-        raise ValueError(f"Runtime '{runtime}' binary not found")
+        raise ValueError(f"Runtime '{runtime}' binary not found: {install_hint()}")
     if req.resume and runtime != spec.runtime:
         raise ValueError(
             f"resume continues a conversation in the same CLI: the agent runs {spec.runtime}, "

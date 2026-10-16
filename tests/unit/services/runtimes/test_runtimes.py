@@ -397,13 +397,30 @@ class TestPaneLinePairing:
 
 
 class TestPlanControlCapability:
-    def test_only_claude_code_has_a_plan_mode_the_backbone_drives(self):
+    def test_claude_code_codex_and_opencode_have_a_plan_mode_the_backbone_drives(self):
         from agent_backbone.services.runtimes import RUNTIMES, get_runtime
 
         supported = {name for name in RUNTIMES if get_runtime(name).supports_plan_control}
-        assert supported == {"claude"}
-        assert get_runtime("claude").plan_approve_keys == ("Escape", "[Z")
-        assert get_runtime("claude").plan_reject_keys == ("Escape",)
+        assert supported == {"claude", "codex", "opencode"}
+
+    @pytest.mark.parametrize(
+        ("env", "asks"),
+        [
+            ({}, False),
+            ({"OPENCODE_EXPERIMENTAL_PLAN_MODE": "1"}, True),
+            ({"OPENCODE_EXPERIMENTAL_PLAN_MODE": "TRUE"}, False),  # read case-sensitively
+            ({"OPENCODE_EXPERIMENTAL": "true"}, True),  # the flag's fallback
+            ({"OPENCODE_EXPERIMENTAL": "true", "OPENCODE_EXPERIMENTAL_PLAN_MODE": "0"}, False),
+        ],
+    )
+    def test_opencode_asks_to_approve_a_plan_only_with_its_flag(self, monkeypatch, env, asks):
+        from agent_backbone.services.runtimes import get_runtime
+
+        for flag in ("OPENCODE_EXPERIMENTAL_PLAN_MODE", "OPENCODE_EXPERIMENTAL"):
+            monkeypatch.delenv(flag, raising=False)
+        needs = get_runtime("opencode").plan_approval_needs(env)
+        assert (needs is None) is asks
+        assert get_runtime("claude").plan_approval_needs({}) is None
 
     async def test_unsupported_runtime_sends_nothing(self):
         from unittest.mock import AsyncMock, patch
@@ -413,8 +430,8 @@ class TestPlanControlCapability:
         with patch(
             "agent_backbone.services.runtimes.base.send_keys", new_callable=AsyncMock
         ) as keys:
-            approved = await get_runtime("codex").approve_plan("x")
-            rejected = await get_runtime("codex").reject_plan("x")
+            approved = await get_runtime("gemini").approve_plan("x")
+            rejected = await get_runtime("gemini").reject_plan("x")
         assert type(approved) is int and approved == 0  # a count, not a bool
         assert type(rejected) is int and rejected == 0
         keys.assert_not_awaited()

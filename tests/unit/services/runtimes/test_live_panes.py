@@ -64,6 +64,76 @@ GEMINI_AUTH_SCREEN = (
     "│   (Use Enter to select)\n"
 )
 
+# Gemini CLI 0.46.0 against a local API stub (no model call), 2026-09-28: the
+# input box is drawn in half blocks and its placeholder is plain grey text.
+_GEMINI_INPUT_FOOTER = (
+    " workspace (/directory)                      sandbox                     /model\n"
+    " /tmp/rt-test                                no sandbox          gemini-2.5-pro\n"
+)
+
+GEMINI_IDLE = (
+    "                                                                ? for shortcuts\n"
+    "────────────────────────────────────────\n"
+    " Shift+Tab to accept edits\n"
+    "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n"
+    " >   Type your message or @path/to/file\n"
+    "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n" + _GEMINI_INPUT_FOOTER
+)
+
+GEMINI_TYPED_INPUT = GEMINI_IDLE.replace(">   Type your message or @path/to/file", "> hello")
+
+GEMINI_BUSY = (
+    "✦ word0 word1 word2\n"
+    " ⠇ Thinking... (esc to cancel, 3s)                               ? for shortcuts\n"
+    + GEMINI_IDLE.split("\n", 1)[1]
+)
+
+GEMINI_PERMISSION_DIALOG = (
+    "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n"
+    " > make it\n"
+    "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+    "╭──────────────────────────────────────╮\n"
+    "│ ? Shell  touch probe.txt             │\n"
+    "│ ╭──────────────────────────────────╮ │\n"
+    "│ │ touch probe.txt                  │ │\n"
+    "│ ╰──────────────────────────────────╯ │\n"
+    "│ Allow execution of [Shell]?          │\n"
+    "│                                      │\n"
+    "│ ● 1. Allow once                      │\n"
+    "│   2. Allow for this session          │\n"
+    "│   3. No, suggest changes (esc)       │\n"
+    "╰──────────────────────────────────────╯\n"
+)
+
+# A file edit asks "Apply this change?"; on a session's first dialog the
+# update notice can be drawn below it (live, 0.46).
+GEMINI_EDIT_DIALOG = (
+    "╭──────────────────────────────────────╮\n"
+    "│ ? WriteFile  Writing to new.txt      │\n"
+    "│ ╭──────────────────────────────────╮ │\n"
+    "│ │ 1 written                        │ │\n"
+    "│ ╰──────────────────────────────────╯ │\n"
+    "│ Apply this change?                   │\n"
+    "│                                      │\n"
+    "│ ● 1. Allow once                      │\n"
+    "│   2. Allow for this session          │\n"
+    "│   3. Modify with external editor     │\n"
+    "│   4. No, suggest changes (esc)       │\n"
+    "╰──────────────────────────────────────╯\n"
+    "╭──────────────────────────────────────╮\n"
+    "│ Gemini CLI update available!         │\n"
+    "╰──────────────────────────────────────╯\n"
+)
+
+# The same dialog declined with Esc: the tool box stays, the input is back.
+GEMINI_DIALOG_DECLINED = (
+    "╭──────────────────────────────────────╮\n"
+    "│ -  Shell touch probe.txt             │\n"
+    "│                                      │\n"
+    "╰──────────────────────────────────────╯\n"
+    "ℹ Request cancelled.\n" + GEMINI_IDLE
+)
+
 
 class TestCodexAdapter:
     adapter = RUNTIMES["codex"]
@@ -141,6 +211,55 @@ class TestGeminiAdapter:
         assert not self.adapter.detect_idle(GEMINI_AUTH_SCREEN)
         assert detect_runtime(GEMINI_AUTH_SCREEN).id == "gemini"
 
+    def test_idle_prompt_detected(self):
+        assert infer_state_from_pane(GEMINI_IDLE, "gemini").state == AgentState.IDLE
+        assert not self.adapter.prompt_has_pending_input(GEMINI_IDLE)
+        assert detect_runtime(GEMINI_IDLE).id == "gemini"
+
+    def test_typed_text_is_pending_input(self):
+        assert self.adapter.detect_idle(GEMINI_TYPED_INPUT)
+        assert self.adapter.prompt_has_pending_input(GEMINI_TYPED_INPUT)
+
+    def test_busy_detected(self):
+        assert infer_state_from_pane(GEMINI_BUSY, "gemini").state == AgentState.BUSY
+
+    def test_permission_dialog_detected_and_summarised(self):
+        snapshot = infer_state_from_pane(GEMINI_PERMISSION_DIALOG, "gemini")
+        assert snapshot.state == AgentState.WAITING_FOR_HUMAN
+        assert snapshot.reason == "permission"
+        assert self.adapter.detect_active_dialog(GEMINI_PERMISSION_DIALOG)
+        # The frame's sides and whatever is above it are not the dialog.
+        assert self.adapter.dialog_summary(GEMINI_PERMISSION_DIALOG) == (
+            "? Shell  touch probe.txt touch probe.txt Allow execution of [Shell]?"
+        )
+
+    def test_edit_dialog_detected_and_summarised_above_the_update_notice(self):
+        snapshot = infer_state_from_pane(GEMINI_EDIT_DIALOG, "gemini")
+        assert snapshot.state == AgentState.WAITING_FOR_HUMAN
+        assert snapshot.reason == "permission"
+        assert self.adapter.detect_active_dialog(GEMINI_EDIT_DIALOG)
+        assert not self.adapter.detect_choice_dialog(GEMINI_EDIT_DIALOG)
+        assert self.adapter.dialog_summary(GEMINI_EDIT_DIALOG) == (
+            "? WriteFile  Writing to new.txt 1 written Apply this change?"
+        )
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Apply this change?",
+            "Do you want to proceed?",
+            "Its options: 1. Allow once\n2. Allow for this session\n3. No, suggest changes (esc)",
+        ],
+    )
+    def test_a_reply_quoting_a_dialog_is_still_idle(self, text):
+        pane = f"✦ The fix is ready. {text}\n" + GEMINI_IDLE
+        assert infer_state_from_pane(pane, "gemini").state == AgentState.IDLE
+        assert not self.adapter.detect_waiting_for_human(pane)
+
+    def test_declined_dialog_is_idle(self):
+        assert infer_state_from_pane(GEMINI_DIALOG_DECLINED, "gemini").state == AgentState.IDLE
+        assert not self.adapter.detect_active_dialog(GEMINI_DIALOG_DECLINED)
+
 
 # Permission dialogs captured live on 2026-09-01: Claude Code 2.1.252
 # (--permission-mode default), codex-cli 0.152.0 (--sandbox read-only),
@@ -155,6 +274,26 @@ CLAUDE_PERMISSION_DIALOG = (
     "   3. Yes, and switch to auto mode · auto mode handles these prompts for you\n"
     "   4. No\n"
     " Esc to cancel · Tab to amend · ctrl+e to explain\n"
+)
+
+# Captured live on 2026-10-14, read-only, from a working agent's Claude Code
+# 2.1.296 (--permission-mode default): a Bash call the CLI flagged as risky, so
+# it offers no "always allow", and it denies the request itself if nobody
+# answers. The command's own lines are replaced with a neutral one.
+CLAUDE_PERMISSION_DIALOG_2_1_296 = (
+    " │ rm $d/$f.md\n"
+    "╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n"
+    " │ Dangerous rm operation on possibly-empty variable path: $d/$f.md in `rm $d/$f.md`"
+    ' (rewrite it as "${d:?}"/"${f:?}".md or use a literal path)\n'
+    " ⚠ Claude Code will automatically deny this request in 1:44, to avoid blocking progress"
+    " on an unattended session\n"
+    "\n"
+    "\n"
+    " Do you want to proceed?\n"
+    " ❯ 1. Yes\n"
+    "   2. No\n"
+    "\n"
+    " Esc to cancel · Tab to amend\n"
 )
 
 CODEX_PERMISSION_DIALOG = (
@@ -238,10 +377,12 @@ class TestUnknownDialogs:
 
 
 class TestPermissionDialogs:
-    def test_claude_permission_dialog_is_waiting(self):
+    @pytest.mark.parametrize("dialog", [CLAUDE_PERMISSION_DIALOG, CLAUDE_PERMISSION_DIALOG_2_1_296])
+    def test_claude_permission_dialog_is_waiting(self, dialog):
         adapter = RUNTIMES["claude"]
-        assert adapter.detect_waiting_for_human(CLAUDE_PERMISSION_DIALOG)
-        assert not adapter.detect_idle(CLAUDE_PERMISSION_DIALOG)
+        assert adapter.detect_permission_prompt(dialog)
+        assert adapter.detect_waiting_for_human(dialog)
+        assert not adapter.detect_idle(dialog)
         assert adapter.approve_keys == ("Enter",)
 
     def test_codex_permission_dialog_is_waiting(self):
@@ -260,9 +401,54 @@ class TestPermissionDialogs:
         assert not adapter.detect_waiting_for_human(OPENCODE_IDLE_AFTER_RESPONSE)
         assert adapter.approve_keys == ("Enter",)
 
+    def test_deepcode_permission_dialog_is_waiting(self):
+        adapter = RUNTIMES["deepcode"]
+        assert adapter.detect_waiting_for_human(DEEPCODE_PERMISSION_DIALOG)
+        assert not adapter.detect_idle(DEEPCODE_PERMISSION_DIALOG)
+        assert not adapter.detect_busy(DEEPCODE_PERMISSION_DIALOG)
+        assert not adapter.detect_waiting_for_human(DEEPCODE_IDLE_AFTER_DIALOG)
+        assert adapter.detect_idle(DEEPCODE_IDLE_AFTER_DIALOG)
+        # Framed like Gemini's: the summary is the text inside the frame.
+        assert adapter.dialog_summary(DEEPCODE_PERMISSION_DIALOG) == (
+            "Permission required 1/1 bash echo probe Print a probe line Do you want to proceed?"
+        )
+
     def test_shell_has_no_answer(self):
         assert RUNTIMES["shell"].approve_keys == ()
 
+
+# deepcode 0.3.1 (permissions.defaultMode = "askAll"); the dialog replaces
+# the input box.
+DEEPCODE_PERMISSION_DIALOG = (
+    " > Run the probe.\n"
+    "status: ask_permission · 14/1M [░░░░░░░░░░] 0% · deepseek-v4-flash max\n"
+    "╭────────────────────────────────────────────────────────────╮\n"
+    "│ Permission required 1/1                                    │\n"
+    "│                                                            │\n"
+    "│ bash                                                       │\n"
+    "│ echo probe                                                 │\n"
+    "│ Print a probe line                                         │\n"
+    "│                                                            │\n"
+    "│ Do you want to proceed?                                    │\n"
+    "│                                                            │\n"
+    "│ > 1. Yes                                                   │\n"
+    "│   2. No                                                    │\n"
+    "│                                                            │\n"
+    "│ ↑/↓ move · Enter select · Esc interrupt                    │\n"
+    "╰────────────────────────────────────────────────────────────╯\n"
+)
+
+# The same session once the dialog was answered: back at its input.
+DEEPCODE_IDLE_AFTER_DIALOG = (
+    " > Run the probe.\n"
+    " ✧ Bash echo probe  # Print a probe line\n"
+    " ✦ done\n"
+    "status: completed · 14/1M [░░░░░░░░░░] 0% · deepseek-v4-flash max\n"
+    "────────────────────────────────────────────────────────────────────────────────\n"
+    ">   Type your message...\n"
+    "────────────────────────────────────────────────────────────────────────────────\n"
+    "enter send · shift+enter newline · @ files · ctrl+v image · / commands · ctrl+d exit\n"
+)
 
 # The same dialogs a moment after they were answered: the text is still in
 # the last 15 lines, but the runtime is back at its input. A state reading
@@ -291,6 +477,8 @@ class TestActiveDialogGate:
         assert RUNTIMES["claude"].detect_active_dialog(CLAUDE_PERMISSION_DIALOG)
         assert RUNTIMES["codex"].detect_active_dialog(CODEX_PERMISSION_DIALOG)
         assert RUNTIMES["opencode"].detect_active_dialog(OPENCODE_PERMISSION_DIALOG)
+        assert RUNTIMES["deepcode"].detect_active_dialog(DEEPCODE_PERMISSION_DIALOG)
+        assert not RUNTIMES["deepcode"].detect_active_dialog(DEEPCODE_IDLE_AFTER_DIALOG)
 
     def test_answered_dialogs_are_not_active(self):
         # Stale "Press enter to confirm" above an idle prompt: Enter here would
@@ -304,7 +492,6 @@ class TestActiveDialogGate:
         assert not opencode.detect_active_dialog(OPENCODE_DIALOG_ANSWERED)
 
     def test_unverified_runtimes_have_no_answer(self):
-        assert RUNTIMES["gemini"].approve_keys == ()
         assert RUNTIMES["aider"].approve_keys == ()
 
 

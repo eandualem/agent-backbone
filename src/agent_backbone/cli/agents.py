@@ -84,6 +84,22 @@ def _print_inspection(data: dict) -> None:
         )
 
 
+_SECRET_WORDS = {"KEY", "APIKEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD"}
+
+
+def _secret_looking(env: object) -> list[str]:
+    """Names in an ``env`` value that read as credentials (``API_KEY``, ``GITHUB_TOKEN``),
+    or whose value is a URL carrying a password (``postgresql://app:pw@db/app``)."""
+    if not isinstance(env, dict):
+        return []
+    return [
+        key
+        for key, value in env.items()
+        if _SECRET_WORDS & set(str(key).upper().split("_"))
+        or re.search(r"://[^/@\s]*:[^/@\s]*@", str(value))
+    ]
+
+
 _DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
@@ -154,8 +170,12 @@ async def _agent_output(args: argparse.Namespace) -> int:
         from agent_backbone.services.agents.transcript import output_page
 
         config = await _common.read_config()
-        if config.agents.get(name) is None:
+        spec = config.agents.get(name)
+        if spec is None:
             print(f"unknown agent '{name}'")
+            return 1
+        if spec.inbox_only:
+            print(f"'{name}' is inbox-only: it has no terminal")
             return 1
         page = await output_page(
             config,
@@ -296,6 +316,11 @@ def _print_start_result(data: dict) -> None:
         return
     ready = data.get("ready", "not_waited")
     repo = f" repo {data['repo']}" if data.get("repo") else " (no GitHub remote)"
+    if ready == "inbox_only":
+        print(f"{name}: registered inbox-only —{repo}")
+        print(f"  dir: {data.get('working_directory')}")
+        print(f"  messages: backbone inbox --agent {name}")
+        return
     label = {
         "ready": "ready",
         "waiting_for_human": "started, waiting for you",
@@ -323,6 +348,20 @@ async def _agent_start(args: argparse.Namespace) -> int:
     ):
         print("--attach requires a single agent")
         return 1
+    if getattr(args, "inbox_only", False) and (
+        len(args.names) > 1
+        or args.attach
+        or args.always_on
+        or args.resume
+        or args.runtime
+        or args.model
+        or args.watch
+    ):
+        print(
+            "--inbox-only registers one agent without launching it: "
+            "drop the launch and watch options"
+        )
+        return 1
     boot = await _common.read_client_config()
     if getattr(args, "always_on", False):
         if args.names or args.dir:
@@ -337,8 +376,8 @@ async def _agent_start(args: argparse.Namespace) -> int:
         if len(names) == 1:
             return await _agent_start(argparse.Namespace(**{**vars(args), "group": True}))
     if len(args.names) > 1:
-        if args.dir or args.watch:
-            print("--dir/--watch apply to a single agent; start a group by name only")
+        if args.dir or args.watch or getattr(args, "tag", None):
+            print("--dir/--watch/--tag apply to a single agent; start a group by name only")
             return 1
         # A group start: each name must already be a known agent.
         worst = 0
@@ -370,7 +409,9 @@ async def _agent_start(args: argparse.Namespace) -> int:
         "model": args.model,
         "resume": args.resume,
         "watch": args.watch or [],
+        "tags": getattr(args, "tag", None) or [],
         "wait": not args.no_wait,
+        "inbox_only": getattr(args, "inbox_only", False),
     }
 
     if await _common.api_up(boot):
@@ -402,8 +443,12 @@ async def _agent_start(args: argparse.Namespace) -> int:
             model=args.model,
             resume=args.resume,
             watch=tuple(args.watch or ()),
+            tags=tuple(body["tags"]),
             wait=not args.no_wait,
+            inbox_only=body["inbox_only"],
         )
+        # The brief below shares the start's timeout with the readiness wait.
+        deadline = asyncio.get_running_loop().time() + direct.config.timing.start_timeout_seconds
         try:
             spec = await resolve_agent(direct.store, req)
             result = await start_resolved(direct.store, direct.config, spec, req, db=direct.db)
@@ -430,11 +475,50 @@ async def _agent_start(args: argparse.Namespace) -> int:
                 "evidence": list(result.evidence),
             }
         )
+        # A runtime briefed by its first message gets it now, as the service
+        # would; a dialog, a timeout or --no-wait leaves it for the service.
+        if result.ready == "ready" and not result.already_running:
+            try:
+                await _brief_offline(direct, spec.name, deadline)
+            except Exception as exc:  # the agent is up; the lines below say where the brief is
+                print(f"  - could not deliver the brief from here ({type(exc).__name__})")
+        try:
+            await _report_offline_brief(direct, spec.name)
+        except Exception as exc:  # the agent is up; only the brief's state is unknown
+            print(f"  - could not read where the brief is ({type(exc).__name__})")
         args.attach_name = spec.name
         print(
             "note: the backbone is not running — start it with `backbone up --detach` for routing"
         )
         return 0 if result.ready != "exited" else 1
+
+
+async def _report_offline_brief(direct: _common.Direct, name: str) -> None:
+    """Say what is still in the way of the brief, if anything."""
+    if await direct.db.queue.has_uncertain(name):
+        print(
+            "  - a delivery could not be confirmed, so messages to this agent are held "
+            "until it is acknowledged: check the session "
+            f"(`backbone agent attach {name}`); the agent reads and acknowledges it "
+            "with `backbone inbox`"
+        )
+    elif await direct.db.queue.has_brief_ahead(name):
+        print("  - the brief is not delivered yet: it goes first once the backbone runs")
+
+
+async def _brief_offline(direct: _common.Direct, name: str, deadline: float) -> None:
+    """Deliver a queued brief through the service's own drain: at least one
+    attempt, then more until ``deadline`` (the start's own timeout)."""
+    from agent_backbone.services.jobs import drain_agent
+
+    timing = direct.config.timing
+    while await direct.db.queue.has_brief_ahead(name):
+        await drain_agent(direct.config, direct.db, name)
+        if not await direct.db.queue.has_brief_ahead(name):
+            return
+        if asyncio.get_running_loop().time() >= deadline:
+            return
+        await asyncio.sleep(timing.grace_period_seconds)
 
 
 async def _agent(args: argparse.Namespace) -> int:
@@ -482,6 +566,7 @@ async def _agent(args: argparse.Namespace) -> int:
             if sub == "rename"
             else {"tags": args.tags, "remove": sub == "untag"}
         )
+        relinked: list[str] = []
         if api_up:
             endpoint = "rename" if sub == "rename" else "tags"
             response = await _common.api(
@@ -490,13 +575,18 @@ async def _agent(args: argparse.Namespace) -> int:
             if not response or response[0] != 200:
                 print(f"error: {response[1] if response else 'API unreachable'}")
                 return 1
+            if isinstance(response[1], dict):
+                relinked = response[1].get("relinked", [])
         else:
             async with _common.Direct(boot) as direct:
                 try:
                     if sub == "rename":
                         await direct.store.rename(args.name, args.new_name)
                     else:
-                        await direct.store.tag(args.name, args.tags, remove=sub == "untag")
+                        from agent_backbone.services.agents.operations import relink_skills
+
+                        spec = await direct.store.tag(args.name, args.tags, remove=sub == "untag")
+                        relinked = await relink_skills(direct.store.config, [spec])
                 except (KeyError, ValueError, OSError) as exc:
                     print(f"error: {exc}")
                     return 1
@@ -506,6 +596,9 @@ async def _agent(args: argparse.Namespace) -> int:
             print(f"Update external for:{args.name} labels and scripts to use {args.new_name}.")
         else:
             print(f"{args.name}: tags updated")
+            for line in relinked:
+                print(f"  {line}")
+            print("Policies follow at its next fresh launch; so do skills if it is not running.")
         return 0
 
     if sub == "restart":
@@ -594,9 +687,10 @@ async def _agent(args: argparse.Namespace) -> int:
             print(f"tmux: {denied}")
             return 1
         config = await _common.read_config()
-        online = await session_exists(args.name)
-        snapshot = await agent_state(config, args.name)
         spec = config.agents.get(args.name)
+        # An inbox-only agent has no session: one with its name is not its own.
+        online = not (spec is not None and spec.inbox_only) and await session_exists(args.name)
+        snapshot = await agent_state(config, args.name)
         if args.json:
             from dataclasses import asdict
 
@@ -655,8 +749,15 @@ async def _agent(args: argparse.Namespace) -> int:
                 print(f"expected key=value, got {item!r}")
                 return 1
             key, raw = item.split("=", 1)
-            json_keys = ("tags", "env", "always_on", "unattended")
+            json_keys = ("tags", "env", "always_on", "unattended", "inbox_only")
             changes[key] = _common.parse_value(raw) if key in json_keys else raw
+        if names := _secret_looking(changes.get("env")):
+            print(
+                f"warning: env entries that look like secrets: {', '.join(names)}. Values are "
+                "stored in plain text in the backbone's database; keep credentials in the "
+                "tool's own credential store (docs/security.md)",
+                file=sys.stderr,
+            )
         if api_up:
             result = await _common.api(boot, "PATCH", f"/api/agents/{args.name}", json_body=changes)
             if result and result[0] == 200:
@@ -706,6 +807,9 @@ async def _agent(args: argparse.Namespace) -> int:
                             await direct.store.unwatch(name, repo)
                     except KeyError:
                         print(f"unknown agent '{name}'")
+                        return 1
+                    except ValueError as exc:
+                        print(f"error: {exc}")
                         return 1
             print(f"{name}: {'now watching' if sub == 'watch' else 'stopped watching'} {repo}")
         return 0
@@ -979,6 +1083,7 @@ async def _inbox(args: argparse.Namespace) -> int:
             "session": args.agent,
             "acknowledge": args.ack,
         },
+        timeout=30.0,  # waits behind a delivery to the same session (up to ~12 s)
     )
     if result is None:
         print(_common.unreachable())

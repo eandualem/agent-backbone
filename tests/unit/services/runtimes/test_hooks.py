@@ -25,7 +25,8 @@ class TestClaude:
         args = RUNTIMES["claude"].hook_launch_args(tmp_path, tmp_path / "state")
         assert args[0] == "--settings"
         saved = json.loads((tmp_path / "hooks" / "claude-settings.json").read_text())
-        assert set(saved) == {"hooks"}
+        assert set(saved) == {"hooks", "tui"}
+        assert saved["tui"] == "default"  # inline panes, no fullscreen offer (#440)
         assert set(saved["hooks"]) == {e for e, _ in RUNTIMES["claude"].hook_events}
         command = saved["hooks"]["Stop"][0]["hooks"][0]["command"]
         assert f"--state-dir {tmp_path / 'state'}" in command

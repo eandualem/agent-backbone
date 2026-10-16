@@ -148,6 +148,8 @@ def parse_tags(value: object) -> tuple[str, ...]:
 
 
 def validate_tags(tags: tuple[str, ...]) -> tuple[str, ...]:
+    """The tags, lowercased as ``parse_tags`` reads them (``agent:Builder`` → ``agent:builder``)."""
+    tags = tuple(dict.fromkeys(tag.lower() for tag in tags))
     for tag in tags:
         if not TAG_RE.match(tag):
             raise ValueError(f"invalid tag {tag!r}: lowercase letters, digits, and : . _ -")
@@ -207,7 +209,7 @@ def read_store(store: Path) -> list[Skill]:
 
 def select_skills(skills: list[Skill], tags: tuple[str, ...], agent_name: str) -> list[Skill]:
     """The valid skills an agent with ``tags`` receives, in store order."""
-    mine = {tag.lower() for tag in tags} | {ALL_TAG, f"{AGENT_TAG_PREFIX}{agent_name}"}
+    mine = {tag.lower() for tag in tags} | {ALL_TAG, f"{AGENT_TAG_PREFIX}{agent_name.lower()}"}
     return [skill for skill in skills if skill.valid and set(skill.tags) & mine]
 
 
@@ -220,7 +222,7 @@ def write_tags(skill_dir: Path, tags: tuple[str, ...]) -> None:
 
 def _edit_frontmatter(text: str, tags: tuple[str, ...], *, name: str | None = None) -> str:
     """Prepare a complete edit before a skill is moved or its file is replaced."""
-    validate_tags(tags)
+    tags = validate_tags(tags)
     parts = _split_frontmatter(text)
     if parts is None:
         raise ValueError("SKILL.md has no frontmatter")
@@ -293,7 +295,7 @@ def add_skill(
     target_name = name or source.name
     if not NAME_RE.match(target_name):
         raise ValueError(f"invalid skill name {target_name!r}")
-    validate_tags(tags)
+    tags = validate_tags(tags)
     target = store / target_name
     if (target.exists() or target.is_symlink()) and not replace:
         raise ValueError(f"skill {target_name!r} already exists in the store (use --replace)")
@@ -392,6 +394,8 @@ class Materialization:
 
     linked: list[str] = field(default_factory=list)
     """``<dir>/<name>`` links present after the run (created or kept)."""
+    mirrored: dict[str, str] = field(default_factory=dict)
+    """``<dir>/<name>`` → ``<source>/<name>``: a repository skill linked where the CLI reads."""
     removed: list[str] = field(default_factory=list)
     conflicts: list[str] = field(default_factory=list)
     """Selected skills the repository already owns under that name."""
@@ -416,15 +420,69 @@ def _read_manifest(path: Path) -> list[str]:
     return [str(item) for item in links] if isinstance(links, list) else []
 
 
-def _write_manifest(path: Path, repo_dir: Path, links: list[str]) -> None:
+def manifest_links(path: Path) -> set[str]:
+    """The ``<dir>/<name>`` links a manifest records."""
+    return set(_read_manifest(path))
+
+
+def _manifest_path(path: Path, key: str) -> Path | None:
+    """A path a manifest records (``repo``: the checkout its links are in,
+    ``store``: the store they point into), or None."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = data.get(key) if isinstance(data, dict) else None
+    return Path(value) if isinstance(value, str) else None
+
+
+def _write_manifest(path: Path, repo_dir: Path, links: list[str], store: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not links:
         path.unlink(missing_ok=True)
         return
     tmp = path.with_suffix(".json.tmp")
-    body = {"repo": str(repo_dir), "links": sorted(links)}
+    body = {"repo": str(repo_dir), "store": str(store), "links": sorted(links)}
     tmp.write_text(json.dumps(body, indent=1) + "\n", encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    if a == b:
+        return True
+    try:
+        return a.samefile(b)
+    except OSError:
+        return False
+
+
+def _links_of_others(manifest: Path, repo_dir: Path) -> set[str]:
+    """The links other agents' manifests record in this same checkout."""
+    links: set[str] = set()
+    for path in manifest.parent.glob("*.json") if manifest.parent.is_dir() else ():
+        if _same_file(path, manifest):  # its own, however the filesystem spells it
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if (
+            isinstance(data, dict)
+            and isinstance(data.get("repo"), str)
+            and Path(data["repo"]).resolve() == repo_dir.resolve()
+        ):
+            recorded = data.get("links")
+            if isinstance(recorded, list):
+                links.update(item for item in recorded if isinstance(item, str))
+    return links
+
+
+def recorded_links(manifest: Path, repo_dir: Path) -> set[str]:
+    """Every link the backbone made in ``repo_dir``: this manifest's, while it
+    records that checkout, and other agents' there."""
+    own = _manifest_path(manifest, "repo")
+    mine = set(_read_manifest(manifest)) if own is not None and _same_file(own, repo_dir) else set()
+    return mine | _links_of_others(manifest, repo_dir)
 
 
 def _links_sharing_git_dir(manifest_dir: Path, git_dir: Path) -> set[str]:
@@ -442,7 +500,9 @@ def _links_sharing_git_dir(manifest_dir: Path, git_dir: Path) -> set[str]:
             continue
         other = _common_git_dir(Path(data["repo"]))
         if other is not None and other == git_dir:
-            links.update(str(item) for item in data.get("links", []) if isinstance(item, str))
+            recorded = data.get("links")
+            if isinstance(recorded, list):
+                links.update(item for item in recorded if isinstance(item, str))
     return links
 
 
@@ -464,36 +524,134 @@ def _points_into(link: Path, store: Path) -> bool:
         return False
 
 
+def _mirrors_into(link: Path, repo_dir: Path) -> bool:
+    """Whether ``link`` is a relative symlink to the same-named skill in
+    another directory of ``repo_dir``: a repository skill linked where a CLI
+    reads. Only links a manifest records are ever judged by this."""
+    if not link.is_symlink():
+        return False
+    try:
+        target = Path(os.readlink(link))
+    except OSError:
+        return False
+    if target.is_absolute():
+        return False
+    resolved = Path(os.path.normpath(link.parent / target))
+    return (
+        resolved.name == link.name
+        and resolved.parent != link.parent
+        and Path(os.path.normpath(repo_dir)) in resolved.parents
+    )
+
+
+def repository_skills(
+    repo_dir: Path, sources: tuple[str, ...], store: Path | None, recorded: set[str] = frozenset()
+) -> dict[str, list[str]]:
+    """The repository's own skills: ``name -> [directories it is in]``.
+
+    Every entry with a ``SKILL.md`` under one of ``sources`` that the
+    backbone did not make: not a link into ``store`` and not a link a
+    manifest records (``recorded``, as ``<dir>/<name>``).
+    """
+    owned: dict[str, list[str]] = {}
+    for source in sources:
+        folder = Path(repo_dir) / source
+        if not folder.is_dir():
+            continue
+        for entry in sorted(folder.iterdir()):
+            rel = f"{source}/{entry.name}"
+            if entry.name.startswith(".") or rel in recorded:
+                continue
+            if store is not None and _points_into(entry, store):
+                continue
+            if (entry / "SKILL.md").is_file():
+                owned.setdefault(entry.name, []).append(source)
+    return owned
+
+
 def materialize(
     store: Path,
     repo_dir: Path,
     dirs: tuple[str, ...],
     selected: list[Skill],
     manifest: Path,
+    *,
+    read: tuple[str, ...] = (),
+    sources: tuple[str, ...] = (),
 ) -> Materialization:
     """Bring ``<repo>/<dir>/<name>`` links in line with ``selected``.
 
     Links are created for selected skills, links recorded in the manifest
     but no longer selected are removed (only while they still point into
-    the store), and nothing else in those directories is touched.
+    the store), and nothing else in those directories is touched. When the
+    manifest records another checkout (the agent's directory changed), its
+    links there are released first, except those another agent there has.
+    A link into the store the manifest records is the backbone's too, so
+    moving the store relinks what it made.
+
+    ``read`` lists every directory the CLI loads skills from (``dirs`` when
+    empty); ``sources`` every directory any CLI does. A repository skill in
+    a source the CLI does not read is linked into ``dirs`` by a relative
+    link, so it reaches whichever CLI runs the agent, and it wins over a
+    store skill of the same name.
     """
     store = Path(store).expanduser()
     repo_dir = Path(repo_dir)
     result = Materialization()
     previous = set(_read_manifest(manifest))
-    wanted = {f"{directory}/{skill.name}": skill for directory in dirs for skill in selected}
-    for rel in sorted(previous - set(wanted)):
+    old_store = _manifest_path(manifest, "store")
+
+    def ours(link: Path, repo: Path) -> bool:
+        return (
+            _points_into(link, store)
+            or (old_store is not None and _points_into(link, old_store))
+            or _mirrors_into(link, repo)
+        )
+
+    old_repo = _manifest_path(manifest, "repo")
+    old_git: Path | None = None
+    if previous and old_repo is not None and not _same_file(old_repo, repo_dir):
+        for rel in sorted(previous - _links_of_others(manifest, old_repo)):
+            link = old_repo / rel
+            if ours(link, old_repo):
+                link.unlink()
+        old_git = _common_git_dir(old_repo)
+        previous = set()
+    # Another agent in this checkout may still be given the same link.
+    shared = _links_of_others(manifest, repo_dir)
+    read_dirs = set(read) | set(dirs)
+    scan = tuple(dict.fromkeys((*sources, *read, *dirs)))
+    owned = repository_skills(repo_dir, scan, store, previous | shared) if dirs else {}
+    wanted: dict[str, str] = {}
+    for directory in dirs:
+        for skill in selected:
+            rel = f"{directory}/{skill.name}"
+            places = owned.get(skill.name, [])
+            if places and directory not in places:
+                own = f"{places[0]}/{skill.name}"
+                result.conflicts.append(f"{rel}: the repository's own {own} wins")
+                continue
+            wanted[rel] = str(store / skill.name)
+    for name, places in owned.items():
+        if read_dirs & set(places):
+            continue  # the CLI already reads it where it is
+        for directory in dirs:
+            rel = f"{directory}/{name}"
+            wanted[rel] = os.path.relpath(repo_dir / places[0] / name, repo_dir / directory)
+            result.mirrored[rel] = f"{places[0]}/{name}"
+    for rel in sorted(previous - set(wanted) - shared):
         link = repo_dir / rel
-        if _points_into(link, store):
+        if ours(link, repo_dir):
             link.unlink()
             result.removed.append(rel)
     kept: list[str] = []
-    for rel, skill in sorted(wanted.items()):
+    for rel, target in sorted(wanted.items()):
         link = repo_dir / rel
-        target = store / skill.name
         if link.is_symlink():
-            if _points_into(link, store):
-                if os.readlink(link) != str(target):
+            # A link recorded here, by this agent or another, is the backbone's.
+            recorded = rel in previous or rel in shared
+            if _points_into(link, store) or (recorded and ours(link, repo_dir)):
+                if os.readlink(link) != target:
                     link.unlink()
                     link.symlink_to(target, target_is_directory=True)
             else:
@@ -511,10 +669,12 @@ def materialize(
         else:
             result.broken.append(f"{rel} -> {target} has no SKILL.md")
             kept.append(rel)
-    _write_manifest(manifest, repo_dir, kept)
+    _write_manifest(manifest, repo_dir, kept, store)
     git_dir = _common_git_dir(repo_dir)
     if git_dir is not None:
         _update_exclude(git_dir, _links_sharing_git_dir(manifest.parent, git_dir))
+    if old_git is not None and old_git != git_dir:
+        _update_exclude(old_git, _links_sharing_git_dir(manifest.parent, old_git))
     return result
 
 

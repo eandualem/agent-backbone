@@ -31,6 +31,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0",
     "alembic>=1.13",
     "rich>=14.1",
+    "cryptography>=44.0",
 ]
 
 [project.optional-dependencies]

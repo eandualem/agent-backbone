@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import math
 import time
-from typing import Generic, TypeVar
+import unicodedata
+from datetime import datetime
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -38,8 +40,12 @@ class AgentStartRequest(BaseModel):
     resume: bool = False
     """Continue the saved conversation (the runtime's latest when none is saved); default fresh."""
     watch: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    """Added to the agent's tags before it launches (skills and policies follow tags)."""
     wait: bool = True
     """Block until the agent is at its prompt (or the start timeout passes)."""
+    inbox_only: bool = False
+    """Register the agent as inbox-only instead of launching it."""
 
 
 class AgentStartResponse(BaseModel):
@@ -58,7 +64,8 @@ class AgentStartResponse(BaseModel):
     repo: str = ""
     already_existed: bool = False
     ready: str = "unknown"
-    """``ready`` | ``waiting_for_human`` | ``timeout`` | ``exited`` | ``not_waited``."""
+    """``ready`` | ``waiting_for_human`` | ``timeout`` | ``exited`` | ``not_waited`` |
+    ``inbox_only`` (registered, not launched)."""
     evidence: list[str] = Field(default_factory=list)
 
 
@@ -81,6 +88,13 @@ class AgentRestartRequest(BaseModel):
     message: str | None = None
     """Continuation message delivered to the replacement once it is up."""
     from_entity: str = ""
+
+    @field_validator("from_entity")
+    @classmethod
+    def _sender_must_fit_the_envelope(cls, value: str) -> str:
+        """The continuation is delivered as ``[via:backbone from:<sender>]``;
+        empty means ``backbone``."""
+        return envelope_sender(value) if value else value
 
 
 class AgentTransitionView(BaseModel):
@@ -153,6 +167,7 @@ class AgentUpdateRequest(BaseModel):
     description: str | None = None
     always_on: bool | None = None
     unattended: bool | None = None
+    inbox_only: bool | None = None
 
 
 class WatchRequest(BaseModel):
@@ -430,11 +445,52 @@ class PlanRejectRequest(BaseModel):
     feedback: str
 
 
-class PlanRespondRequest(BaseModel):
-    input: str
-
-
 # --- Messages ---
+
+
+def envelope_sender(value: str) -> str:
+    """Check a sender name that is interpolated into ``[via:backbone from:<sender>]``.
+
+    It must not contain the envelope's delimiters, whitespace (which would let
+    a name carry a second word into the envelope), or anything that reads as
+    the ``owner-confirmed:<id>`` marker Backbone writes for confirmed messages.
+    This bounds what a name can make an envelope say. It does not authenticate
+    the sender: the API key authenticates caller access, never the
+    ``from_entity`` identity."""
+    if len(value) > 64:
+        raise ValueError("from_entity must be at most 64 characters")
+    if any(c in "[]" or c.isspace() for c in value):
+        raise ValueError("from_entity must not contain whitespace or [ ]")
+    folded = unicodedata.normalize("NFKC", value).casefold()
+    if "ownerconfirmed" in "".join(c for c in folded if c.isalnum()):
+        raise ValueError("from_entity must not contain 'owner-confirmed'")
+    return value
+
+
+class OwnerConfirmation(BaseModel):
+    """The owner confirmed exactly this text for this recipient in the app
+    (docs/owner-confirmed-messages.md). Only a signed request may carry it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation_id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    )
+    text_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirmed_at: str
+    """ISO 8601 with an offset, compared as the exact string sent."""
+    source: Literal["button", "typed", "voice"]
+
+    @field_validator("confirmed_at")
+    @classmethod
+    def _with_offset(cls, value: str) -> str:
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("confirmed_at is ISO 8601") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("confirmed_at needs an offset")
+        return value
 
 
 class MessageRequest(BaseModel):
@@ -444,22 +500,14 @@ class MessageRequest(BaseModel):
     from_entity: str
     message: str
     priority: bool = False
+    owner_confirmation: OwnerConfirmation | None = None
 
     @field_validator("from_entity")
     @classmethod
     def _sender_must_fit_the_envelope(cls, value: str) -> str:
-        """The sender is interpolated into ``[via:backbone from:<sender>]``,
-        so it must not contain the envelope's delimiters or a newline that
-        would forge a second envelope. This bounds parsing ambiguity — it
-        does not authenticate the sender: the API key authenticates caller
-        access, never the ``from_entity`` identity."""
         if not value.strip():
             raise ValueError("from_entity must not be empty")
-        if len(value) > 64:
-            raise ValueError("from_entity must be at most 64 characters")
-        if any(c in value for c in "[]\n\r"):
-            raise ValueError("from_entity must not contain newlines or [ ]")
-        return value
+        return envelope_sender(value)
 
 
 class SteerRequest(BaseModel):
@@ -468,6 +516,7 @@ class SteerRequest(BaseModel):
     target_session: str
     from_entity: str
     message: str = Field(min_length=1, max_length=4000)
+    owner_confirmation: OwnerConfirmation | None = None
 
     _sender = field_validator("from_entity")(MessageRequest._sender_must_fit_the_envelope.__func__)
 
@@ -484,6 +533,8 @@ class SteerResponse(BaseModel):
     launch_id: str | None = None
     evidence: list[str] = Field(default_factory=list)
     detail: str = ""
+    confirmation_id: str | None = None
+    receipt: dict | None = None
 
 
 class MessageResponse(BaseModel):
@@ -501,6 +552,9 @@ class MessageResponse(BaseModel):
     not be stored — not queued), or None when nothing needed queueing."""
     detail: str = ""
     """One plain sentence for the sender, whoever they are."""
+    confirmation_id: str | None = None
+    receipt: dict | None = None
+    """The confirmation's immutable receipt, for an owner-confirmed message."""
 
 
 class IntegrationReplyRequest(BaseModel):
@@ -607,6 +661,13 @@ class SkillView(BaseModel):
         )
 
 
+class SkillChangeView(SkillView):
+    """A store skill after ``add`` or ``tag``, with what reached running agents."""
+
+    relinked: list[str] = Field(default_factory=list)
+    """Evidence, one line per running agent whose links were brought in line now."""
+
+
 class SkillAddRequest(BaseModel):
     """Move a skill directory into the store."""
 
@@ -621,3 +682,77 @@ class SkillAddRequest(BaseModel):
 class SkillTagsRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     actor: str = "unknown"
+
+
+class FleetSaveRequest(BaseModel):
+    """Save the running agents; with ``stop``, stop them afterwards."""
+
+    stop: bool = False
+    force: bool = False
+    """Also stop agents that are busy or waiting for a person."""
+    note: str | None = None
+    from_entity: str = ""
+
+
+class FleetSnapshotAgent(BaseModel):
+    name: str
+    runtime: str
+    model: str | None = None
+    dir: str
+    session_id: str | None = None
+    session_reported_at: str | None = None
+    resumable: bool
+    not_resumable_reason: str | None = None
+    """``no_session_reported`` | ``exact_resume_unsupported``."""
+    state_at_save: str
+    stop: str
+    """``stopped`` | ``skipped_busy`` | ``stop_failed`` | ``not_requested``."""
+    stop_error: str | None = None
+
+
+class FleetResumeAgent(BaseModel):
+    name: str
+    outcome: str
+    """``resumed_known_session`` | ``already_running`` | ``not_resumed`` | ``failed``."""
+    reason: str | None = None
+    session_id: str | None = None
+    runtime: str
+    model: str | None = None
+    ready: str | None = None
+    session_confirmed: bool | None = None
+    evidence: list[str] = Field(default_factory=list)
+
+
+class FleetResumeRun(BaseModel):
+    snapshot_id: int
+    resumed_at: str
+    resumed_by: str = ""
+    agents: list[FleetResumeAgent]
+    counts: dict[str, int]
+
+
+class FleetSnapshotView(BaseModel):
+    id: int
+    created_at: str
+    created_by: str = ""
+    note: str | None = None
+    stop: bool
+    force: bool = False
+    agents: list[FleetSnapshotAgent]
+    counts: dict[str, int]
+    resumes: list[FleetResumeRun] = Field(default_factory=list)
+
+
+class FleetSnapshotSummary(BaseModel):
+    id: int
+    created_at: str
+    created_by: str = ""
+    note: str | None = None
+    stop: bool
+    counts: dict[str, int]
+    last_resume: dict | None = None
+
+
+class FleetResumeRequest(BaseModel):
+    from_entity: str = ""
+    wait: bool = True

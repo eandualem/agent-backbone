@@ -14,7 +14,7 @@ steps 1–6 and says where it needs you.
 - [uv](https://docs.astral.sh/uv/) (or `pipx`)
 - At least one agent CLI on your `PATH`: `claude`, `codex`, `gemini`,
   `opencode`, `deepcode`, `aider`. Sign in through that CLI before starting it
-  here. See [runtime support](status-and-roadmap.md#runtimes) for limits.
+  here. See [runtime capabilities](runtime-capabilities.md) for what works on each.
 
 ## 1. Install the CLI
 
@@ -161,9 +161,10 @@ OS user and one key — see [Security](security.md)). Every backbone-started
 agent is also briefed at launch on `tell`, `agent inspect`, `agent start`
 and `backbone help`, so it knows this without being told.
 
-The only reason to give an agent the key explicitly
-(`backbone agent set app env='{"BACKBONE_API_KEY":"…"}'`) is an agent that
-calls the HTTP API directly (`POST /api/messages`) rather than the CLI.
+An agent that calls the HTTP API directly (`POST /api/messages`) rather
+than the CLI reads the same key from `<data_dir>/.env`. Don't copy the key
+into the agent's `env`: those values are stored in plain text in the
+database.
 
 > **What the key delegates**: there is one key and it is full-admin — an
 > agent holding it can start, stop and reconfigure every agent, read every
@@ -324,7 +325,7 @@ is touched:
 
 | Runtime | How the hooks reach the session |
 |---|---|
-| Claude Code | `--settings <data_dir>/hooks/claude-settings.json` |
+| Claude Code | `--settings <data_dir>/hooks/claude-settings.json`; an unattended launch gets `claude-settings-unattended.json`, which also carries the one-time bypass consent |
 | Codex | `-c hooks.<Event>=…` overrides, with the hook-trust prompt bypassed for the backbone's own hooks |
 | Gemini CLI | `GEMINI_CLI_SYSTEM_SETTINGS_PATH=<data_dir>/hooks/gemini-settings.json` |
 | OpenCode | `OPENCODE_CONFIG_CONTENT` loading the `opencode_hook.js` plugin |
@@ -355,7 +356,10 @@ The backbone grants Codex access to Git commit data: objects, refs, logs,
 the index, and commit bookkeeping files and locks. For linked worktrees, it
 validates Git's reciprocal pointers before opening shared and private commit
 paths. Codex normally protects `.git` even inside a writable checkout; these grants let
-ordinary `git add` and `git commit` run inside the sandbox. Source files,
+ordinary `git add` and `git commit` run inside the sandbox. On Linux, Codex's
+sandbox accepts only directories, so the backbone opens just `objects`, `refs`
+and `logs` there; `git add` and `git commit` still fail inside the sandbox on
+Linux, because Git creates its lock files directly in the Git directory. Source files,
 configured tooling directories (`agents.writable_dirs`) and the network are
 also available. Git hooks and configuration, `.codex`, `.agents`, and unrelated
 directories keep their existing protection. A `.git` symlink or unverified

@@ -71,6 +71,17 @@ def test_empty_collection_has_explicit_message():
     assert "No entries." in render(("Name",), [], width=40)
 
 
+@pytest.mark.parametrize("width", [80, 100, 120])
+def test_record_labels_longer_than_the_usual_column_stay_on_one_line(width):
+    output = StringIO()
+    Console(file=output, width=width, color_system=None).print(
+        presentation.record_view(
+            "Report", [("State", "busy"), ("Blockers (dependency)", "waits on CI")], width=width
+        )
+    )
+    assert "Blockers (dependency): waits on CI" in output.getvalue()
+
+
 @pytest.mark.parametrize("width", [80, 96, 120])
 @pytest.mark.parametrize("plain", [True, False])
 def test_usage_identifiers_do_not_push_last_column_off_screen(width, plain):

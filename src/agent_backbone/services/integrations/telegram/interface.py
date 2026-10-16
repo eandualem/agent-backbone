@@ -288,6 +288,12 @@ class TelegramService(Integration):
     async def cmd_approve(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _commands.cmd_approve(self, update, context)
 
+    async def cmd_approve_key(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await _commands.cmd_approve_key(self, update, context)
+
+    async def cmd_approve_owner(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await _commands.cmd_approve_owner(self, update, context)
+
     async def on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """A button on an alert: Allow / Deny a permission prompt, Approve / Reject a plan."""
         if (getattr(update.callback_query, "data", None) or "").startswith("updates:"):
@@ -408,6 +414,8 @@ class TelegramService(Integration):
         self._app.add_handler(CommandHandler("identify", self.cmd_identify))
         self._app.add_handler(CommandHandler("viewplan", self.cmd_viewplan))
         self._app.add_handler(CommandHandler("approve", self.cmd_approve))
+        self._app.add_handler(CommandHandler("approve_key", self.cmd_approve_key))
+        self._app.add_handler(CommandHandler("approve_owner", self.cmd_approve_owner))
         self._app.add_handler(CallbackQueryHandler(self.on_callback))
         self._app.add_handler(
             MessageHandler(

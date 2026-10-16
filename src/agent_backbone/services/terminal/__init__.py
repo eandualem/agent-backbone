@@ -2,7 +2,8 @@
 knows sessions, panes and keys, never which program runs inside."""
 
 from agent_backbone.services.terminal._attach import attach_session
-from agent_backbone.services.terminal._copy_mode import in_copy_mode
+from agent_backbone.services.terminal._callers import CallerUnknown, caller_sessions
+from agent_backbone.services.terminal._copy_mode import in_copy_mode, window_viewers
 from agent_backbone.services.terminal._core import (
     active_pane_size,
     capture_pane,
@@ -14,6 +15,7 @@ from agent_backbone.services.terminal._core import (
     session_exists,
     set_window_size_mode,
 )
+from agent_backbone.services.terminal._memory import process_memory
 from agent_backbone.services.terminal._pty import PtyManager, PtySession
 from agent_backbone.services.terminal._sessions import (
     SESSION_FORMAT_STR,
@@ -29,11 +31,13 @@ from agent_backbone.services.terminal._sessions import (
 
 __all__ = [
     "SESSION_FORMAT_STR",
+    "CallerUnknown",
     "PtyManager",
     "PtySession",
     "access_error",
     "active_pane_size",
     "attach_session",
+    "caller_sessions",
     "capture_pane",
     "graceful_close",
     "in_copy_mode",
@@ -42,6 +46,7 @@ __all__ = [
     "paste_message",
     "press_escape",
     "press_submit",
+    "process_memory",
     "query_environment_var",
     "query_format_vars",
     "resize_window",
@@ -50,4 +55,5 @@ __all__ = [
     "set_window_size_mode",
     "start_session",
     "stop_session",
+    "window_viewers",
 ]

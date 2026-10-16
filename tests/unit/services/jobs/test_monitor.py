@@ -642,6 +642,25 @@ class TestDeliverPendingIssues:
         d.assert_not_called()
         assert await db.acks.exists(7, "ike", repo=_REPO)
 
+    async def test_backfills_ack_for_an_agent_with_capitals_in_its_name(self, config, db):
+        from agent_backbone.config import AgentSpec
+        from agent_backbone.models import CommentData
+
+        spec = AgentSpec(name="Builder", dir=str(config.data_dir), repo=_REPO)
+        config = replace(config, agents=AgentsConfig(specs={"Builder": spec}))
+        gh = AsyncMock()
+        gh.list_issues = AsyncMock(return_value=[_issue(7, target="Builder")])
+        gh.list_comments = AsyncMock(
+            return_value=[CommentData(body="[from:Builder] on it", user_login="bot")]
+        )
+        with patch(f"{_PEND}.safe_deliver", new_callable=AsyncMock) as d:
+            result = await deliver_pending_issues(
+                config, {"Builder": _snap(AgentState.IDLE)}, db, gh
+            )
+        assert result["Builder"] == "no_deliverable"
+        d.assert_not_called()
+        assert await db.acks.exists(7, "Builder", repo=_REPO)
+
     async def test_skips_recently_delivered(self, config, db):
         await db.deliveries.record(
             issue_number=7,

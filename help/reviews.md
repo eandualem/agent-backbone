@@ -10,14 +10,25 @@ need to use the same runtime as the reviewer. No managed agent or swarm is creat
    opening its PR, then follow the guide's "Before and after the pull request".
    For develop into main, head is develop and base is main. Preserve the
    implementing agent's active checkout.
-3. Use a reviewer from the other family: Claude-led work gets Codex
-   `exec review --base BASE_COMMIT --model gpt-6-astra`; Codex-led work gets
-   `claude -p "/code-review LEVEL BASE_COMMIT" --model claude-fable-5-1`. Run it
-   read-only (Codex sandbox, Claude plan mode), hooks disabled, in a fresh
-   environment without the caller's Backbone identity, saving JSON evidence. A
-   Claude exit status of 0 is not proof: check `modelUsage` as the guide shows.
-   Depth: `high` for a feature branch, **before** its PR opens; Codex `ultra` or
-   Claude `max` for the develop → main release review.
+3. Use the reviewer for the CLI that wrote the change. On the Codex CLI, use
+   Claude Opus 5.5 (`claude-opus-5-5`), preferably, or Codex `gpt-6-astra`; on
+   Claude Code or any other runtime, use Codex `gpt-6-astra`. The core of each
+   command is `codex exec review --base BASE_COMMIT --model gpt-6-astra` and
+   `claude -p "REVIEW PROMPT" --model claude-opus-5-5 --effort high`; run the full
+   commands from the guide (its "Codex reviewer" and "Claude Opus reviewer"),
+   which add the read-only settings, the depth and the evidence files.
+   Start a separate, fresh reviewer context; the implementing conversation reviewing itself does not
+   satisfy the independent-review gate. A different family or CLI is not required.
+   Run with the reviewer's read-only settings and hooks disabled, in an environment
+   without the caller's Backbone identity, saving JSON evidence as the guide shows.
+   For Codex, pin the standard service tier explicitly, including with
+   `--ignore-user-config`; it is separate from reasoning effort.
+   Depth: `high` for a feature branch, **before** its PR opens. An explicitly
+   authorized develop → main release review uses Codex `gpt-6-astra` at `ultra`,
+   whatever CLI wrote the change, until an Opus release depth is set. Record the
+   model the reviewer reports using (Opus: `modelUsage`), not only the one you
+   asked for. If no permitted reviewer can run, report the
+   blocker rather than substituting another model.
 4. Start the process in the background, retain its handle, and continue working.
    Capture exit status; a timeout, failed launch or missing report is not a clean
    review. Keep artifacts in ignored `.backbone/reviews/`, outside `docs/`.
@@ -28,7 +39,7 @@ need to use the same runtime as the reviewer. No managed agent or swarm is creat
 6. Decide from the triaged findings whether another Ultra round is warranted.
    Many valid findings, or any high-severity ones, suggest the pass saturated and
    more may remain: run another head → base review after fixes land, with the
-   same reviewer at release depth (Codex `ultra`, Claude `max`). Few,
+   same reviewer at release depth (`gpt-6-astra`, `ultra`). Few,
    minor findings mean fix them through the ordinary PR/review/check/merge path
    and **do not run another Ultra pass**. Zero valid findings also ends the rounds.
    Apply this judgment after every round; use neither a fixed pass count nor an
@@ -48,5 +59,5 @@ need to use the same runtime as the reviewer. No managed agent or swarm is creat
 
 Read the guide before first use, especially its sandbox initialization guidance.
 Never stop the caller's session or bypass the reviewer's sandbox to launch a review.
-Claude Code's native `ultrareview` is a distinct cloud service, not an interchangeable
-name for Codex Ultra effort. Its account access must be checked separately.
+Codex `ultra` is a reasoning-effort setting in this workflow, not a separate
+cloud review service.

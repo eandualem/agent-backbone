@@ -2,10 +2,11 @@
 
 Priority (first match wins):
 
-1. no tmux session                       -> OFFLINE
+1. no tmux session, or inbox-only agent  -> OFFLINE
 2. agent waiting for a human             -> WAITING_FOR_HUMAN
 3. agent starting/busy                   -> AGENT_WORKING
-4. tmux copy mode (reading/selection)     -> HUMAN_READING
+4. tmux copy mode (reading/selection)     -> HUMAN_READING, or
+   UNATTENDED_COPY_MODE when no client is viewing the pane
 5. text typed in the prompt (idle agent) -> HUMAN_TYPING
 6. idle, grace period not elapsed        -> SETTLING
 7. idle                                  -> READY
@@ -24,7 +25,12 @@ from agent_backbone.services.agents import bind_task, get_agent_state, read_stat
 from agent_backbone.services.agents.models import WORKING_STATES, AgentState
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from agent_backbone.services.runtimes import resolve_runtime
-from agent_backbone.services.terminal import capture_pane, in_copy_mode, list_sessions
+from agent_backbone.services.terminal import (
+    capture_pane,
+    in_copy_mode,
+    list_sessions,
+    window_viewers,
+)
 
 if TYPE_CHECKING:
     from agent_backbone.config import BackboneConfig
@@ -44,6 +50,14 @@ async def get_session_intelligence(
     idle_since: float | None = None,
 ) -> SessionProfile:
     """Derive the delivery condition for a session, with evidence."""
+    spec = config.agents.get(session_name)
+    if spec is not None and spec.inbox_only:
+        # Whatever tmux shows: a session with this name is not the agent.
+        return SessionProfile(
+            session_name=session_name,
+            intelligence=SessionIntelligence.OFFLINE,
+            evidence=["inbox-only agent: never typed into; it reads messages with backbone inbox"],
+        )
     evidence: list[str] = []
 
     active = await list_sessions()
@@ -111,6 +125,14 @@ async def get_session_intelligence(
     # Reading scrollback and selecting text are human interactions. Inspection
     # must never cancel them, and priority delivery must wait until they end.
     if await in_copy_mode(session_name):
+        # tmux keeps copy mode after its last client detaches: then no one is
+        # reading, and the message still waits until someone leaves it.
+        if await window_viewers(session_name) == 0:
+            return profile(
+                SessionIntelligence.UNATTENDED_COPY_MODE,
+                "tmux copy mode with no client viewing the pane; "
+                "messages wait: attach to the session and press q",
+            )
         return profile(
             SessionIntelligence.HUMAN_READING,
             "tmux copy mode active; preserving scrollback or text selection",

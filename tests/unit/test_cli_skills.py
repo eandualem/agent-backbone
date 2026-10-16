@@ -73,7 +73,10 @@ def test_list_show_and_path(config, capsys):
     assert "unknown skill" in capsys.readouterr().err
 
 
-def test_add_moves_and_tag_rewrites(config, capsys, tmp_path):
+def test_add_moves_and_tag_rewrites(config, capsys, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "agent_backbone.services.agents.operations.session_exists", AsyncMock(return_value=False)
+    )
     source = _skill(tmp_path / "project" / ".claude" / "skills", "draft")
     assert run(["skills", "add", str(source), "--name", "my-skill", "--tag", "python"]) == 0
     assert "Added my-skill" in capsys.readouterr().out
@@ -81,10 +84,24 @@ def test_add_moves_and_tag_rewrites(config, capsys, tmp_path):
     store = config.skills.store_path
     assert (store / "my-skill" / "SKILL.md").read_text().startswith("---\nname: my-skill\n")
     assert run(["skills", "tag", "my-skill", "coder", "python"]) == 0
-    assert capsys.readouterr().out.strip() == "my-skill: coder python"
+    assert capsys.readouterr().out.splitlines()[0] == "my-skill: coder python"
     assert run(["skills", "tag", "my-skill"]) == 0
     assert "reaches nobody" in capsys.readouterr().out
     assert run(["skills", "tag", "nope", "x"]) == 1
+
+
+def test_a_retag_without_an_answer_has_an_unknown_outcome(config, capsys):
+    """A slow backbone can apply the retag after the request gave up (#402)."""
+    import httpx
+
+    with (
+        patch.object(_common, "api_up", AsyncMock(return_value=True)),
+        patch("httpx.AsyncClient.request", AsyncMock(side_effect=httpx.ReadTimeout("slow"))),
+    ):
+        assert run(["skills", "tag", "backend", "python"]) == 1
+    err = capsys.readouterr().err
+    assert "did not answer within 10s; its outcome is unknown" in err
+    assert "`backbone skills list` shows its tags" in err
 
 
 def test_add_goes_through_the_api_when_the_backbone_runs(config, capsys, tmp_path):
@@ -101,6 +118,17 @@ def test_add_goes_through_the_api_when_the_backbone_runs(config, capsys, tmp_pat
     body = api.await_args.kwargs["json_body"]
     assert body["path"] == str(source.resolve()) and body["tags"] == ["all"]
     assert source.exists()  # the backbone moves it, not this process
+
+
+def test_add_local_moves_it_here_even_when_the_backbone_runs(config, capsys, tmp_path):
+    source = _skill(tmp_path / "Downloads", "draft")
+    with (
+        patch.object(_common, "api_up", AsyncMock(return_value=True)),
+        patch.object(_common, "api", AsyncMock()) as api,
+    ):
+        assert run(["skills", "add", str(source), "--tag", "all", "--local"]) == 0
+    api.assert_not_awaited()
+    assert not source.exists() and (config.skills.store_path / "draft" / "SKILL.md").is_file()
 
 
 def test_preview_and_validate(config, capsys):

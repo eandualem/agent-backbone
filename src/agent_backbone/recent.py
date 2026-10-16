@@ -59,10 +59,5 @@ class RecentKeys:
     def forget(self, key: Hashable) -> None:
         self._marked.pop(key, None)
 
-    def retain(self, keys: set[Hashable]) -> None:
-        """Drop every key not in ``keys``."""
-        for key in [k for k in self._marked if k not in keys]:
-            del self._marked[key]
-
     def clear(self) -> None:
         self._marked.clear()

@@ -31,6 +31,15 @@ STARTED_AT = time.time()
 """When this process started: /health reports it so a restart is observable."""
 
 
+async def hint_inboxes(state) -> None:
+    """The monitor tick's inbox hints: rows written outside a tell (expiry
+    notices, escalations to an inbox-only agent) reach their hint here."""
+    inbox = tuple(spec.name for spec in state.config.agents if spec.inbox_only)
+    await state.feed.hint_inbox(
+        lambda: state.db.queue.inbox_rows(inbox_sessions=inbox), complete=True
+    )
+
+
 def _register_jobs(app: FastAPI):
     """Wire the periodic jobs. Each job reads ``app.state.config`` at run time so
     setting changes and newly discovered agents are picked up without a restart."""
@@ -41,8 +50,10 @@ def _register_jobs(app: FastAPI):
         UpgradeWatch,
         delivery_retry,
         monitor_agents,
+        observe_duration,
         observe_job,
         run_transitions,
+        sample_resources,
     )
     from agent_backbone.services.jobs.transitions import INTERVAL_SECONDS as _TRANSITION_TICK
     from agent_backbone.services.routing import routing_in_flight, settle_steers
@@ -54,6 +65,10 @@ def _register_jobs(app: FastAPI):
         await observe_job(
             state.db, source=name, stage="run", error_type=error_type, duration_ms=duration_ms
         )
+        slow = state.config.settings.get("diagnostics.slow_job_seconds", 30)
+        await observe_duration(
+            state.db, source=name, duration_ms=duration_ms, threshold_ms=int(slow * 1000)
+        )
 
     scheduler = PeriodicScheduler(on_result=_job_result)
     config: BackboneConfig = state.config
@@ -61,6 +76,10 @@ def _register_jobs(app: FastAPI):
     async def _broadcast():
         # Reconcile out-of-band session churn to live Socket.IO subscribers.
         await state.feed.emit(only_if_changed=True)
+        try:
+            await hint_inboxes(state)
+        except Exception:
+            log.exception("Inbox hint failed (non-fatal)")
 
     async def _monitor():
         await state.agent_store.refresh()
@@ -74,12 +93,16 @@ def _register_jobs(app: FastAPI):
 
     async def _prune():
         days = state.config.timing.delivery_retention_days
+        # Receipts first: they take their delivery times from the records pruned next.
+        receipts = await state.db.signing.prune_receipts()
         return {
             "deliveries": await state.db.deliveries.prune(days),
             "events": await state.db.events.prune(days),
             "queue": await state.db.queue.prune(days),
             "diagnostics": await state.db.diagnostics.prune(days),
             "reports": await state.db.reports.prune(days),
+            "signing_audit": await state.db.signing.prune(days),
+            "signing_receipts": receipts,
             "action_log_lines": rotate_action_log(state.config.action_log_path),
         }
 
@@ -101,6 +124,13 @@ def _register_jobs(app: FastAPI):
     # What became of each steer offer (`backbone tell --steer`).
     scheduler.add("steer-settle", 15, _steers)
     scheduler.add("prune", 6 * 3600, _prune)
+
+    async def _resources():
+        return await sample_resources(state.config, state.db)
+
+    # Memory and swap, recorded only under pressure (`backbone diagnostics`).
+    if (sample_every := config.settings.get("diagnostics.resource_sample_seconds", 300)) > 0:
+        scheduler.add("resource-sample", sample_every, _resources)
     scheduler.add("report-audio", 30, state.integrations.flush_report_audio, run_immediately=True)
     # Integrations re-provision their per-agent surfaces (Telegram topics):
     # a config publish triggers it immediately, this catches everything else
@@ -299,6 +329,13 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     )
     app.state.config = config
 
+    from agent_backbone.api.signed import SignedSenderMiddleware
+    from agent_backbone.api.validation import Validations
+
+    app.state.validations = Validations()
+
+    app.add_middleware(SignedSenderMiddleware)
+
     cors_origins = list(config.backbone.cors_origins)
     if cors_origins:
         app.add_middleware(
@@ -352,12 +389,14 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     from agent_backbone.api.routes.deliveries import router as deliveries_router
     from agent_backbone.api.routes.diagnostics import router as diagnostics_router
     from agent_backbone.api.routes.events import router as events_router
+    from agent_backbone.api.routes.fleet import router as fleet_router
     from agent_backbone.api.routes.help import router as help_router
     from agent_backbone.api.routes.integrations import router as integrations_router
     from agent_backbone.api.routes.issues import router as issues_router
     from agent_backbone.api.routes.messages import router as messages_router
     from agent_backbone.api.routes.plans import router as plans_router
     from agent_backbone.api.routes.reports import router as reports_router
+    from agent_backbone.api.routes.signing import router as signing_router
     from agent_backbone.api.routes.skills import router as skills_router
     from agent_backbone.api.routes.status import router as status_router
     from agent_backbone.api.routes.swarms import router as swarms_router
@@ -373,12 +412,14 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
         deliveries_router,
         diagnostics_router,
         events_router,
+        fleet_router,
         help_router,
         integrations_router,
         issues_router,
         messages_router,
         plans_router,
         reports_router,
+        signing_router,
         skills_router,
         swarms_router,
         usage_router,

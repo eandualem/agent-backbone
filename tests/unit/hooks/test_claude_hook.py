@@ -107,6 +107,38 @@ class TestDerive:
         assert record["last_message"] == "Shipped."
         assert record["event"] == "Stop" and record["session_id"] == "abc"
 
+    @pytest.mark.parametrize(
+        ("error", "state", "reason"),
+        [
+            ("server_error", "blocked", "provider"),
+            ("rate_limit", "blocked", "provider"),
+            ("billing_error", "blocked", "provider"),
+            ("authentication_failed", "blocked", "provider"),
+            ("invalid_request", "idle", None),
+            ("max_output_tokens", "idle", None),
+            ("unknown", "idle", None),
+        ],
+    )
+    def test_a_turn_that_failed_at_the_api(self, error, state, reason):
+        """#360: 2.1.284 runs StopFailure, not Stop, naming the error (live payload)."""
+        banner = "API Error: Repeated 529 Overloaded errors. The API is at capacity"
+        record, _ = hook.derive(
+            _payload("StopFailure", error=error, last_assistant_message=banner), None
+        )
+        assert (record["state"], record["reason"]) == (state, reason)
+        assert banner in (record["detail"] if reason else record["last_message"])
+
+    def test_a_provider_failure_outlasts_the_idle_notification(self):
+        """Claude Code says it waits for input a minute after a failed turn too."""
+        failed, _ = hook.derive(
+            _payload("StopFailure", error="server_error", last_assistant_message="API Error: 500"),
+            None,
+        )
+        waiting = _payload("Notification", message="Claude is waiting for your input")
+        assert hook.derive(waiting, failed) == (None, None)
+        record, _ = hook.derive(_payload("UserPromptSubmit", prompt="again"), failed)
+        assert record["state"] == "busy"
+
     def test_started_at_is_stable(self):
         first, _ = hook.derive(_payload("SessionStart"), None)
         later, _ = hook.derive(_payload("Stop"), first)
@@ -363,6 +395,23 @@ class TestObservedModel:
         assert "model" not in record
 
 
+def test_a_prompt_time_survives_the_turns_later_records():
+    """Delivery's receipt for a paste: set by the prompt, kept through Stop."""
+    wrapped = '\n<pasted_content id="8687">\ngo\n now\n</pasted_content id="8687">\n'
+    prompted, _ = hook.derive(_payload("UserPromptSubmit", prompt=wrapped), {})
+    assert prompted["prompted_at"] == prompted["ts"]
+    assert prompted["prompt_digest"] == hook.bb.prompt_digest("go now")  # wrapper ignored
+    quoting = 'see <pasted_content id="1">x</pasted_content id="1">'
+    for prompt in (quoting, f'\n<pasted_content id="9">\n{quoting}\n</pasted_content id="9">\n'):
+        record, _ = hook.derive(_payload("UserPromptSubmit", prompt=prompt), {})
+        assert record["prompt_digest"] == hook.bb.prompt_digest(quoting)  # quoted tags kept
+    stopped, _ = hook.derive(_payload("Stop"), prompted)
+    assert stopped["prompted_at"] == prompted["prompted_at"]
+    assert stopped["prompt_digest"] == prompted["prompt_digest"]
+    started, _ = hook.derive(_payload("SessionStart"), {})
+    assert "prompted_at" not in started
+
+
 class TestPermissionDenied:
     """A refusal without a dialog is recorded for the humans; nothing else changes."""
 
@@ -385,7 +434,8 @@ class TestPermissionDenied:
         assert record["action"] == "permission_denied" and record["session"] == "grace"
         assert record["kind"] == "classifier" and record["category"] == "External System Writes"
         assert record["summary"] == "cd; gh issue edit"
-        assert "private" not in line and "40" not in line
+        logged = json.dumps({key: value for key, value in record.items() if key != "ts"})
+        assert "private" not in logged and "40" not in logged  # the timestamp may hold "40"
         assert not (tmp_path / "grace.json").exists()  # the agent's state is untouched
 
     def test_a_browser_refusal_names_actions_not_page_content(self, tmp_path):
@@ -422,6 +472,12 @@ def test_the_claude_runtime_listens_for_refusals():
     from agent_backbone.services.runtimes import RUNTIMES
 
     assert ("PermissionDenied", "") in RUNTIMES["claude"].hook_events
+
+
+def test_the_claude_runtime_listens_for_failed_turns():
+    from agent_backbone.services.runtimes import RUNTIMES
+
+    assert ("StopFailure", None) in RUNTIMES["claude"].hook_events
 
 
 @pytest.mark.parametrize(

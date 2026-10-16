@@ -18,6 +18,8 @@ from agent_backbone.services.database.models import DeliveryORM, DiagnosticORM, 
 
 log = logging.getLogger(__name__)
 _TOKEN = re.compile(r"[A-Za-z0-9_./:@+\-]*\Z")
+# A runtime may announce a display name ("Opus 5.5 (1M context)"), not an identifier.
+_DISPLAY_NAME = re.compile(r"[A-Za-z0-9_./:@+\-() ]*\Z")
 _TOKEN_DETAILS = frozenset(
     {
         "stage",
@@ -38,7 +40,24 @@ _TOKEN_DETAILS = frozenset(
     }
 )
 _BOOL_DETAILS = frozenset({"resume", "priority", "requeue"})
-_INT_DETAILS = frozenset({"duration_ms", "failures", "processed", "http_status"})
+_INT_DETAILS = frozenset(
+    {
+        "duration_ms",
+        "failures",
+        "processed",
+        "http_status",
+        # Memory samples (jobs/resources.py), in MB.
+        "memory_total_mb",
+        "available_mb",
+        "swap_total_mb",
+        "swap_used_mb",
+        "backbone_rss_mb",
+        "agents_rss_mb",
+        "other_rss_mb",
+        "rss_mb",
+        "processes",
+    }
+)
 
 
 def diagnostic_details(value: object) -> dict:
@@ -48,7 +67,7 @@ def diagnostic_details(value: object) -> dict:
     clean: dict = {}
     for key, item in value.items():
         if key in _TOKEN_DETAILS and isinstance(item, str) and len(item) <= 160:
-            if _TOKEN.fullmatch(item):
+            if (_DISPLAY_NAME if key == "observed_model" else _TOKEN).fullmatch(item):
                 clean[key] = item
         elif (key in _BOOL_DETAILS and isinstance(item, bool)) or (
             key in _INT_DETAILS and type(item) is int and 0 <= item <= 2**63 - 1
@@ -324,6 +343,74 @@ class DiagnosticRepo(Repo):
                     .group_by(MessageQueueORM.status)
                 )
             ).all()
+            # Evidence for a slowdown (jobs/diagnostics.py, jobs/resources.py).
+            window = self._where(since=since, category="job")
+            slow = (
+                await conn.execute(
+                    select(DiagnosticORM)
+                    .where(*window, DiagnosticORM.code == "run_slow")
+                    .order_by(DiagnosticORM.last_seen_at.desc(), DiagnosticORM.id.desc())
+                    .limit(limit + 1)
+                )
+            ).mappings()
+            # Jobs belong to no agent: an agent's digest has none.
+            slow_jobs = (
+                []
+                if agent_name is not None
+                else [
+                    {
+                        "job": row["source"],
+                        "longest_ms": _row(row)["details"].get("duration_ms"),
+                        "runs": row["occurrences"],
+                        "last_seen_at": row["last_seen_at"],
+                    }
+                    for row in slow
+                ]
+            )
+            window = self._where(since=since, category="resource")
+            sample = (
+                (
+                    await conn.execute(
+                        select(DiagnosticORM)
+                        .where(*window, DiagnosticORM.code == "memory_pressure")
+                        .order_by(DiagnosticORM.last_seen_at.desc(), DiagnosticORM.id.desc())
+                        .limit(1)
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            memory = None
+            if sample is not None:
+                agents = (
+                    await conn.execute(
+                        select(DiagnosticORM).where(
+                            DiagnosticORM.operation_id == sample["operation_id"],
+                            DiagnosticORM.code == "agent_memory",
+                            # The machine figures stay; only that agent's row is listed.
+                            *self._where(agent_name=agent_name),
+                        )
+                    )
+                ).mappings()
+                memory = {
+                    "sampled_at": sample["last_seen_at"],
+                    "samples": (
+                        await conn.execute(
+                            select(func.count()).where(
+                                *window, DiagnosticORM.code == "memory_pressure"
+                            )
+                        )
+                    ).scalar_one(),
+                    **_row(sample)["details"],
+                    "agents": sorted(
+                        (
+                            {"agent_name": row["agent_name"], **_row(row)["details"]}
+                            for row in agents
+                        ),
+                        key=lambda agent: agent.get("rss_mb", 0),
+                        reverse=True,
+                    ),
+                }
         queue = {
             "pending": 0,
             "in_progress": 0,
@@ -356,6 +443,9 @@ class DiagnosticRepo(Repo):
                 "outcomes": dict(delivery_counts),
             },
             "queue": queue,
+            "slow_jobs": slow_jobs[:limit],
+            "slow_jobs_more": len(slow_jobs) > limit,
+            "memory": memory,
         }
 
     async def prune(self, retention_days: int = 30) -> int:

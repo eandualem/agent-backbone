@@ -8,7 +8,7 @@ from collections.abc import Iterator
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _ANSI_SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
-BOX_CHARS = "─│┌┐└┘┬┴┼━"
+BOX_CHARS = "─│┌┐└┘┬┴┼━▀▄"  # ▄▄ / ▀▀: Gemini CLI 0.46 draws its input box in half blocks
 PROMPT_START_CHARS = ">$❯›%#"
 ENVELOPE_PREFIX = "[via:"
 GENERIC_BUSY_FRAGMENTS = ("thinking...", "tool call")

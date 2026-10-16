@@ -20,16 +20,16 @@ from tests.conftest import make_config
 from tests.support import queue_row
 
 _DELIVERY = "agent_backbone.services.routing._delivery"
-_UPWORK = "from:upwork.com subject:job"
-_LINKEDIN = "from:linkedin.com"
-_ALEX = "from:linkedin.com alex"
+_ALERTS = "from:alerts@example.com subject:outage"
+_DOMAIN = "from:example.com"
+_INVOICE = "from:example.com invoice"
 
 
-def _event(msg_id: str, *filters: str, subject="New job") -> SourceEvent:
+def _event(msg_id: str, *filters: str, subject="Outage") -> SourceEvent:
     return SourceEvent(
         source="gmail",
         id=msg_id,
-        sender="Upwork <donotreply@upwork.com>",
+        sender="Alerts <alerts@example.com>",
         subject=subject,
         received_at=datetime(2026, 9, 17, 14, 2, tzinfo=UTC),
         link=f"https://mail.google.com/mail/#all/{msg_id}",
@@ -42,15 +42,15 @@ def _agents(tmp_path) -> AgentsConfig:
         name="desk",
         dir=str(tmp_path / "desk"),
         subscriptions=(
-            Subscription(1, "gmail", _UPWORK, "high"),
-            Subscription(2, "gmail", _LINKEDIN, "normal"),
-            Subscription(3, "gmail", _ALEX, "high"),
+            Subscription(1, "gmail", _ALERTS, "high"),
+            Subscription(2, "gmail", _DOMAIN, "normal"),
+            Subscription(3, "gmail", _INVOICE, "high"),
         ),
     )
     other = AgentSpec(
         name="other",
         dir=str(tmp_path / "other"),
-        subscriptions=(Subscription(4, "gmail", _LINKEDIN, "normal"),),
+        subscriptions=(Subscription(4, "gmail", _DOMAIN, "normal"),),
     )
     return AgentsConfig(specs={"desk": desk, "other": other})
 
@@ -71,11 +71,11 @@ def _profile(condition, runtime="claude"):
 class TestMatching:
     def test_highest_priority_among_matching_subscriptions(self, tmp_path):
         agents = _agents(tmp_path)
-        assert match_subscriptions(agents, _event("1", _LINKEDIN)) == {
+        assert match_subscriptions(agents, _event("1", _DOMAIN)) == {
             "desk": False,
             "other": False,
         }
-        assert match_subscriptions(agents, _event("2", _LINKEDIN, _ALEX)) == {
+        assert match_subscriptions(agents, _event("2", _DOMAIN, _INVOICE)) == {
             "desk": True,
             "other": False,
         }
@@ -86,10 +86,10 @@ class TestDispatch:
     async def test_batches_per_agent_and_priority_and_dedups(self, tmp_path, db):
         config = _config(tmp_path)
         events = [
-            _event("a1", _UPWORK),
-            _event("a2", _UPWORK),
-            _event("l1", _LINKEDIN, subject="Recruiter"),
-            _event("a1", _UPWORK),  # the overlap repeats an event
+            _event("a1", _ALERTS),
+            _event("a2", _ALERTS),
+            _event("l1", _DOMAIN, subject="Invoice"),
+            _event("a1", _ALERTS),  # the overlap repeats an event
         ]
         with patch(
             "agent_backbone.services.routing._subscriptions.safe_deliver", new_callable=AsyncMock
@@ -105,7 +105,7 @@ class TestDispatch:
         assert high[0].startswith("[via:gmail]")
         assert [line.split(" · ")[0] for line in high[1:]] == ["- a1", "- a2"]
         assert "https://mail.google.com/mail/#all/a1" in high[1]
-        assert "subject «Recruiter»" in calls[("other", False)]
+        assert "subject «Invoice»" in calls[("other", False)]
         for call in deliver.await_args_list:
             assert call.kwargs["delivery_kind"] == SUBSCRIPTION_KIND
         stored = await db.events.query(limit=10)
@@ -114,7 +114,7 @@ class TestDispatch:
 
     async def test_an_event_stays_replayable_until_every_recipient_holds_it(self, tmp_path, db):
         config = _config(tmp_path)
-        shared = _event("l1", _LINKEDIN)  # desk (normal) and other (normal)
+        shared = _event("l1", _DOMAIN)  # desk (normal) and other (normal)
 
         async def deliver(agent, *args, **kwargs):
             if agent == "other":
@@ -129,7 +129,7 @@ class TestDispatch:
             "agent_backbone.services.routing._subscriptions.safe_deliver",
             AsyncMock(side_effect=deliver),
         ):
-            summary = await dispatch_source_events([shared, _event("a1", _UPWORK)], config, db)
+            summary = await dispatch_source_events([shared, _event("a1", _ALERTS)], config, db)
         assert summary == {"events": 2, "queued": 2, "failed": 1, "unprocessed": 1}
         rows = {row["delivery_id"]: row for row in await db.events.query(limit=10)}
         assert rows["gmail:a1"]["processed_at"] is not None

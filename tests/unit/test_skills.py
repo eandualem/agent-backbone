@@ -9,6 +9,8 @@ from unittest.mock import patch
 import pytest
 
 from agent_backbone import skills
+from agent_backbone.services.runtimes import RUNTIMES, project_skill_dirs
+from agent_backbone.services.runtimes.capabilities import REQUIRED
 from agent_backbone.skills import (
     EXCLUDE_BEGIN,
     EXCLUDE_END,
@@ -96,6 +98,12 @@ class TestSelect:
         chosen = select_skills(read_store(tmp_path), ("coder", "python"), "leo")
         assert [s.name for s in chosen] == ["coders", "everyone", "mine", "python-only"]
         assert [s.name for s in select_skills(read_store(tmp_path), (), "ike")] == ["everyone"]
+
+    def test_an_agent_tag_matches_a_mixed_case_agent_name(self, tmp_path):
+        path = make_skill(tmp_path, "notes")
+        write_tags(path, ("agent:Builder",))
+        assert parse_skill(path).tags == ("agent:builder",)
+        assert [s.name for s in select_skills(read_store(tmp_path), (), "Builder")] == ["notes"]
 
     def test_invalid_skills_are_never_selected(self, tmp_path):
         path = make_skill(tmp_path, "broken", tags="all")
@@ -368,6 +376,60 @@ class TestMaterialize:
         ]
         assert manifest.is_file()
 
+    @pytest.mark.parametrize("runtime", ["gemini", "opencode"])
+    def test_links_into_the_runtimes_own_directory(self, tmp_path, runtime):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        manifest = manifest_path(tmp_path / "data", "app")
+        selected = select_skills(read_store(store), (), "app")
+        result = materialize(store, repo, RUNTIMES[runtime].skill_dirs, selected, manifest)
+        assert result.ok and result.linked == [".agents/skills/a"]
+        assert (repo / ".agents" / "skills" / "a" / "SKILL.md").is_file()
+
+    def test_a_changed_directory_releases_links_in_the_recorded_checkout(self, tmp_path):
+        """`agent set NAME dir=…`: the checkout the agent left keeps only others' links."""
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        make_skill(store, "b", tags="all")
+        old = _git_repo(tmp_path / "old")
+        new = _git_repo(tmp_path / "new")
+        manifests = tmp_path / "data" / "skills" / "materialized"
+        skills_dir = (".claude/skills",)
+        both = read_store(store)
+        only_b = [skill for skill in both if skill.name == "b"]
+        materialize(store, old, skills_dir, both, manifests / "app.json")
+        materialize(store, old, skills_dir, only_b, manifests / "ike.json")
+        materialize(store, new, skills_dir, both, manifests / "app.json")
+        assert not (old / ".claude" / "skills" / "a").is_symlink()
+        assert (old / ".claude" / "skills" / "b").is_symlink()  # ike's
+        exclude = (old / ".git" / "info" / "exclude").read_text().splitlines()
+        assert "/.claude/skills/a" not in exclude and "/.claude/skills/b" in exclude
+        assert (new / ".claude" / "skills" / "a").is_symlink()
+        assert (new / ".claude" / "skills" / "b").is_symlink()
+
+    def test_a_moved_store_relinks_the_links_the_backbone_recorded(self, tmp_path):
+        """`skills.store` moved: links into the recorded store are still the backbone's."""
+        old_store = tmp_path / "old-store"
+        make_skill(old_store, "a", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        skills_dir = repo / ".claude" / "skills"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "b").symlink_to(tmp_path / "elsewhere" / "b")  # the repository's own
+        manifest = manifest_path(tmp_path / "data", "app")
+        materialize(old_store, repo, (".claude/skills",), read_store(old_store), manifest)
+        new_store = tmp_path / "new-store"
+        old_store.rename(new_store)
+        make_skill(new_store, "b", tags="all")
+        result = materialize(new_store, repo, (".claude/skills",), read_store(new_store), manifest)
+        assert os.readlink(skills_dir / "a") == str(new_store / "a")
+        assert result.linked == [".claude/skills/a"]
+        assert result.conflicts == [".claude/skills/b is a link the repository owns"]
+        assert os.readlink(skills_dir / "b") == str(tmp_path / "elsewhere" / "b")
+        assert "/.claude/skills/a" in (repo / ".git" / "info" / "exclude").read_text()
+        later = materialize(new_store, repo, (".claude/skills",), [], manifest)
+        assert later.removed == [".claude/skills/a"]
+
     def test_removes_only_its_own_stale_links_and_keeps_repo_skills(self, tmp_path):
         store = tmp_path / "store"
         make_skill(store, "a", tags="all")
@@ -429,6 +491,21 @@ class TestMaterialize:
         materialize(store, repo, (".claude/skills",), [], manifests / "leo.json")
         exclude = (repo / ".git" / "info" / "exclude").read_text()
         assert "/.claude/skills/a" not in exclude and "/.agents/skills/b" in exclude
+
+    def test_a_link_another_agent_in_the_checkout_still_gets_is_kept(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        manifests = tmp_path / "data" / "skills" / "materialized"
+        for agent in ("app", "worker"):
+            materialize(
+                store, repo, (".claude/skills",), read_store(store), manifests / f"{agent}.json"
+            )
+        # app moves to a runtime that reads another directory; worker still reads this one
+        result = materialize(
+            store, repo, (".agents/skills",), read_store(store), manifests / "app.json"
+        )
+        assert result.removed == [] and (repo / ".claude" / "skills" / "a").is_symlink()
 
     def test_repository_owned_name_wins_as_a_conflict(self, tmp_path):
         store = tmp_path / "store"
@@ -496,3 +573,153 @@ async def test_commit_store_initialises_history_on_first_use(tmp_path):
     assert calls[0] == ("init", "-q")
     assert calls[1] == ("add", "-A") and calls[3] == ("commit", "-q", "-m", "add x by leo")
     assert ("init", "-q") not in calls[4:]
+
+
+def _link_for(rt, store, repo, manifest, selected=()):
+    """What a launch of runtime ``rt`` does in ``repo``."""
+    return materialize(
+        store,
+        repo,
+        rt.skill_dirs,
+        list(selected),
+        manifest,
+        read=rt.skill_read_dirs,
+        sources=project_skill_dirs(),
+    )
+
+
+class TestRepositorySkills:
+    """A repository's own skill reaches whichever of the CLIs runs the agent."""
+
+    @pytest.mark.parametrize("runtime", REQUIRED)
+    @pytest.mark.parametrize("home", [".claude/skills", ".agents/skills"])
+    def test_a_repository_skill_reaches_the_cli_that_runs_the_agent(self, tmp_path, runtime, home):
+        rt = RUNTIMES[runtime]
+        store = tmp_path / "store"
+        store.mkdir()
+        repo = _git_repo(tmp_path / "repo")
+        make_skill(repo / home, "own")
+        result = _link_for(rt, store, repo, manifest_path(tmp_path / "data", "app"))
+        assert result.ok
+        read = {*rt.skill_dirs, *rt.skill_read_dirs}
+        assert any((repo / directory / "own" / "SKILL.md").is_file() for directory in read)
+        if home in read:
+            assert result.mirrored == {}
+        else:
+            rel = f"{rt.skill_dirs[0]}/own"
+            assert result.mirrored == {rel: f"{home}/own"}
+            assert os.readlink(repo / rel) == os.path.join("..", "..", home, "own")
+            assert f"/{rel}" in (repo / ".git" / "info" / "exclude").read_text()
+
+    def test_the_link_follows_the_skill_and_the_runtime(self, tmp_path):
+        store = tmp_path / "store"
+        store.mkdir()
+        repo = _git_repo(tmp_path / "repo")
+        own = make_skill(repo / ".claude" / "skills", "own")
+        manifest = manifest_path(tmp_path / "data", "app")
+        codex, claude = RUNTIMES["codex"], RUNTIMES["claude"]
+        _link_for(codex, store, repo, manifest)
+        link = repo / ".agents" / "skills" / "own"
+        assert link.is_symlink()
+        # Switched to Claude Code, which reads .claude/skills: the link goes.
+        assert _link_for(claude, store, repo, manifest).removed == [".agents/skills/own"]
+        assert not link.exists() and (own / "SKILL.md").is_file()
+        _link_for(codex, store, repo, manifest)
+        assert link.is_symlink()
+        # The repository deletes its skill: the link goes with it.
+        skills._remove(own)
+        assert _link_for(codex, store, repo, manifest).removed == [".agents/skills/own"]
+        assert not link.is_symlink()
+
+    def test_the_repository_skill_wins_over_a_store_skill_of_the_same_name(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "own", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        make_skill(repo / ".claude" / "skills", "own")
+        selected = select_skills(read_store(store), (), "app")
+        manifest = manifest_path(tmp_path / "data", "app")
+        result = _link_for(RUNTIMES["codex"], store, repo, manifest, selected)
+        assert result.conflicts == [
+            ".agents/skills/own: the repository's own .claude/skills/own wins"
+        ]
+        assert os.readlink(repo / ".agents" / "skills" / "own") == "../../.claude/skills/own"
+
+    def test_a_store_link_gives_way_when_the_repository_adds_the_skill(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "own", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        selected = select_skills(read_store(store), (), "app")
+        manifest = manifest_path(tmp_path / "data", "app")
+        codex = RUNTIMES["codex"]
+        _link_for(codex, store, repo, manifest, selected)
+        link = repo / ".agents" / "skills" / "own"
+        assert os.readlink(link) == str(store / "own")
+        make_skill(repo / ".claude" / "skills", "own")
+        _link_for(codex, store, repo, manifest, selected)
+        assert os.readlink(link) == "../../.claude/skills/own"
+
+    def test_agents_sharing_a_checkout_share_the_link(self, tmp_path):
+        store = tmp_path / "store"
+        store.mkdir()
+        repo = _git_repo(tmp_path / "repo")
+        make_skill(repo / ".claude" / "skills", "own")
+        first = manifest_path(tmp_path / "data", "first")
+        second = manifest_path(tmp_path / "data", "second")
+        codex, claude = RUNTIMES["codex"], RUNTIMES["claude"]
+        _link_for(codex, store, repo, first)
+        assert _link_for(codex, store, repo, second).ok  # the first agent's link is shared
+        link = repo / ".agents" / "skills" / "own"
+        _link_for(claude, store, repo, first)  # the first agent moves to Claude Code
+        assert link.is_symlink()  # the second still gets it
+        _link_for(claude, store, repo, second)
+        assert not link.is_symlink()
+
+    def test_a_link_the_repository_made_between_its_directories_is_left_alone(self, tmp_path):
+        store = tmp_path / "store"
+        store.mkdir()
+        repo = _git_repo(tmp_path / "repo")
+        make_skill(repo / ".claude" / "skills", "own")
+        theirs = repo / ".agents" / "skills" / "own"
+        theirs.parent.mkdir(parents=True)
+        theirs.symlink_to("../../.claude/skills/own")
+        manifest = manifest_path(tmp_path / "data", "app")
+        result = _link_for(RUNTIMES["codex"], store, repo, manifest)
+        assert result.mirrored == {} and result.linked == []
+        _link_for(RUNTIMES["claude"], store, repo, manifest)
+        assert theirs.is_symlink() and not manifest.exists()
+
+
+def test_a_sibling_manifest_without_a_links_list_is_ignored(tmp_path):
+    """A malformed manifest of another agent must not stop this agent's launch."""
+    from agent_backbone.skills import materialize
+
+    store = tmp_path / "store"
+    make_skill(store, "tidy")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    (manifests / "other.json").write_text(f'{{"repo": "{repo}", "links": null}}')
+    result = materialize(
+        store, repo, (".claude/skills",), read_store(store), manifests / "mine.json"
+    )
+    assert result.linked == [".claude/skills/tidy"]
+
+
+def test_an_agents_own_manifest_is_not_counted_as_anothers_under_another_spelling(tmp_path):
+    """A case-insensitive filesystem (here: a link) names one file two ways."""
+    from agent_backbone.skills import materialize
+
+    store = tmp_path / "store"
+    make_skill(store, "tidy")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    own = manifests / "desk.json"
+    materialize(store, repo, (".claude/skills",), read_store(store), own)
+    alias = manifests / "desk-alias.json"
+    alias.symlink_to(own)
+    result = materialize(store, repo, (), [], alias)
+    assert result.removed == [".claude/skills/tidy"]
+    assert not (repo / ".claude/skills/tidy").is_symlink()

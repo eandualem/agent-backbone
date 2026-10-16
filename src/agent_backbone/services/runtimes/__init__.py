@@ -24,6 +24,11 @@ from agent_backbone.services.runtimes.base import (
     resolve_command,
     split_model_effort,
 )
+from agent_backbone.services.runtimes.capabilities import (
+    CAPABILITIES,
+    unavailable,
+    verified_versions,
+)
 from agent_backbone.services.terminal import capture_pane, query_environment_var
 
 RUNTIME_ENV_KEY = "BACKBONE_RUNTIME"
@@ -92,6 +97,26 @@ async def resolve_runtime(
     return detect_runtime(pane_content)
 
 
+def agent_clis() -> list[str]:
+    """The agent CLIs the backbone can start (the ``shell`` runtime is not one)."""
+    return [rt.id for rt in RUNTIMES.values() if rt.binary and rt.id != "shell"]
+
+
+def project_skill_dirs() -> tuple[str, ...]:
+    """Every project-relative directory some runtime loads skills from: where
+    a repository's own skills can be (``skills.materialize``'s ``sources``)."""
+    dirs = (d for rt in RUNTIMES.values() for d in (*rt.skill_dirs, *rt.skill_read_dirs))
+    return tuple(dict.fromkeys(dirs))
+
+
+def install_hint() -> str:
+    """What to do when no agent CLI (or not the chosen one) is on PATH."""
+    return (
+        f"install one of these agent CLIs and sign in to it: {', '.join(agent_clis())} "
+        "(Requirements in `backbone docs getting-started`); `backbone runtimes` then lists it"
+    )
+
+
 async def send_message(session_name: str, message: str, *, runtime_hint: str | None = None) -> bool:
     """Paste ``message`` into a session and submit it the way its runtime expects."""
     pane_content = await capture_pane(session_name, lines=80)
@@ -101,6 +126,7 @@ async def send_message(session_name: str, message: str, *, runtime_hint: str | N
 
 __all__ = [
     "AGENT_ENV_KEY",
+    "CAPABILITIES",
     "GENERIC_BUSY_FRAGMENTS",
     "RUNTIMES",
     "RUNTIME_ENV_KEY",
@@ -110,8 +136,11 @@ __all__ = [
     "RuntimeDiagnostic",
     "SubmissionUnconfirmed",
     "TranscriptEntry",
+    "agent_clis",
     "detect_runtime",
     "get_runtime",
+    "install_hint",
+    "project_skill_dirs",
     "read_brief",
     "read_usage_jsonl",
     "resolve_command",
@@ -119,4 +148,6 @@ __all__ = [
     "sanitize_pane_content",
     "send_message",
     "split_model_effort",
+    "unavailable",
+    "verified_versions",
 ]

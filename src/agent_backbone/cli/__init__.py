@@ -31,6 +31,7 @@ import argparse
 import logging
 import os
 import sys
+from pathlib import Path
 
 from agent_backbone import __version__
 from agent_backbone.cli.agents import (
@@ -43,11 +44,13 @@ from agent_backbone.cli.agents import (
 )
 from agent_backbone.cli.completion import cmd_completion, complete
 from agent_backbone.cli.diagnostics import add_diagnostics_parser
+from agent_backbone.cli.fleet import add_fleet_parser
 from agent_backbone.cli.instructions import add_instruction_commands
 from agent_backbone.cli.reports import add_report_parsers
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_up
 from agent_backbone.cli.service import cmd_service
 from agent_backbone.cli.setup import cmd_doctor, cmd_init, cmd_runtimes, cmd_secrets
+from agent_backbone.cli.signing import cmd_message, cmd_signing
 from agent_backbone.cli.skills import add_skill_commands, expand_shorthand
 from agent_backbone.cli.status import add_status_options, cmd_status
 from agent_backbone.cli.swarms import cmd_docs, cmd_help, cmd_swarm
@@ -124,6 +127,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("up", help="run the backbone")
     p.add_argument("--detach", "-d", action="store_true", help="run inside a tmux session")
     p.add_argument("--reload", action="store_true", help="auto-reload on code changes (dev)")
+    p.add_argument(
+        "--log-file",
+        type=Path,
+        default=None,
+        help="write the log to this file, rotated by size (the login service sets it)",
+    )
     p.set_defaults(func=cmd_up)
 
     p = sub.add_parser("down", help="stop a detached backbone")
@@ -141,6 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_status)
 
     add_diagnostics_parser(sub)
+    add_fleet_parser(sub)
     add_instruction_commands(sub)
     add_skill_commands(sub)
     add_report_parsers(sub)
@@ -215,11 +225,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="also watch this repository (repeatable)",
     )
     ps.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        metavar="TAG",
+        help="add this tag before launching, so the first session already has "
+        "the skills and policies it selects (repeatable)",
+    )
+    ps.add_argument(
         "--no-wait",
         action="store_true",
         help="return immediately instead of waiting for the prompt",
     )
     ps.add_argument("--attach", action="store_true", help="attach to this agent after starting")
+    ps.add_argument(
+        "--inbox-only",
+        action="store_true",
+        help="register a client without a terminal instead of launching: never typed into; "
+        "it reads its messages with `backbone inbox --agent NAME`",
+    )
     pr = asub.add_parser("resume", help="resume a known agent's previous conversation")
     pr.add_argument("names", nargs="+", metavar="NAME")
     pr.add_argument("--attach", action="store_true", help="attach after resuming")
@@ -294,7 +318,8 @@ def build_parser() -> argparse.ArgumentParser:
         "output",
         help="what the agent has said: its messages in full, else its screen",
         description=(
-            "Reads only. Claude Code and Codex keep a transcript; the backbone shows the "
+            "Reads only. Claude Code, Codex, Gemini CLI and OpenCode keep a transcript; the "
+            "backbone shows the "
             "agent's user-facing messages from it, complete, a page at a time: the last "
             "--lines by default, earlier ones with --before OFFSET, later ones with --since "
             "OFFSET (--end OFFSET bounds a range). Each page prints the offsets to continue "
@@ -369,8 +394,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Subscribe an agent to events from a source, matched by a filter written in the "
             "source's own query language (gmail: Gmail search syntax such as "
-            "'from:upwork.com subject:job'). High priority reaches a working agent at once; "
-            "normal waits for its prompt, batched."
+            "'from:alerts@example.com subject:outage'). High priority reaches a working agent "
+            "at once; normal waits for its prompt, batched."
         ),
     )
     psub.add_argument("targets", nargs="+", metavar="[NAME] SOURCE FILTER")
@@ -452,6 +477,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("path", nargs="*", help="optional subcommands, e.g. help agent start")
     p.set_defaults(func=cmd_help)
 
+    signing_parser = sub.add_parser(
+        "signing", help="signed senders: who approves their key changes in Telegram"
+    )
+    signing_sub = signing_parser.add_subparsers(dest="signing_command", required=True)
+    owner = signing_sub.add_parser(
+        "owner", help="set the Telegram user who approves key changes (once; later changes wait)"
+    )
+    owner.add_argument("user_id", type=int, help="the numeric Telegram user id")
+    owner.add_argument("--json", action="store_true")
+    owner.set_defaults(func=cmd_signing)
+
+    message_parser = sub.add_parser("message", help="owner-confirmed messages: validate one")
+    message_sub = message_parser.add_subparsers(dest="message_command", required=True)
+    validate = message_sub.add_parser(
+        "validate",
+        help="claim an owner confirmation delivered to this agent and print its exact text",
+    )
+    validate.add_argument("confirmation_id", help="the id in the owner-confirmed marker")
+    validate.add_argument("--done", action="store_true", help="close the claim once finished")
+    validate.add_argument("--json", action="store_true")
+    validate.set_defaults(func=cmd_message)
+
     usage = sub.add_parser(
         "usage", help="token usage by agent and CLI session; optional cost estimates"
     )
@@ -504,7 +551,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--steer",
         action="store_true",
         help="guidance for the agent's CURRENT task: offered through its hook while it works "
-        "(Claude Code, Codex), never queued or pasted; refused when it is not working",
+        "(Claude Code, Codex, OpenCode), never queued or pasted; refused when it is not working",
     )
     p.set_defaults(func=cmd_tell)
 
