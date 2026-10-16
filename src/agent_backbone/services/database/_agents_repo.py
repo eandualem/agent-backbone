@@ -201,6 +201,9 @@ class AgentRepo(Repo):
             ("message_queue", "target_entity"),
             ("event_outbox", "recipient"),
             ("agent_transitions", "agent_name"),
+            # Where a confirmation went and who claimed it; the signed recipient stays.
+            ("signing_receipts", "delivered_to"),
+            ("signing_grants", "agent"),
         )
         values = {"old": name, "new": new_name}
         async with self._tx() as conn:

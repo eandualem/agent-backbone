@@ -157,6 +157,9 @@ class ClaudeCode(Runtime):
     )
     hook_timeout = 10  # seconds
     hook_context = True  # PostToolUse additionalContext
+    refusal_check = "Claude's auto-mode safety check"
+    refusal_allow = "/permissions"
+
     # Claude-drafted feedback can send the session's transcript to Anthropic,
     # which may hold private or third-party data. Off unless the agent's env
     # sets CLAUDE_CODE_SEND_FEEDBACK=1: the variable defaults to 0, and the
