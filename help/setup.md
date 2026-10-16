@@ -35,6 +35,19 @@ when you run it by hand.
 
 ## 3. Start the first agent from its repository
 
+If you are yourself running in the repository the human is working in, do
+not start an agent there: it would be a second conversation, and a later
+`--resume` would bring that one back instead of this one. Skip this step,
+finish the others, then tell the human how to move this session in: exit it,
+then in this folder run `backbone agent start --resume --runtime <this CLI>
+--no-wait` and `backbone agent attach <name>` (the name `start` prints). That
+continues the folder's most recent conversation, this one (Claude Code lists
+its conversations first; pick the top one). If Backbone already has an agent
+for this folder from an earlier attempt, `--resume` opens that agent's saved
+conversation instead: after attaching, switch to this one with the CLI's own
+command (`/resume` in Claude Code and Codex). Later starts and restarts
+continue it only with `--resume`.
+
 ```bash
 cd <repository> && backbone agent start            # default runtime: claude
 cd <repository> && backbone agent start --runtime codex
