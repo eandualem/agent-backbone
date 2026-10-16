@@ -1,48 +1,114 @@
-# agent-backbone
+<div align="center">
+
+<img src="docs/media/banner.png" alt="agent-backbone: your terminal agents, working as a team" width="720">
+
+**Claude Code, Codex and OpenCode, working as one team on your machine.**<br>
+Agents message each other by name, take work from GitHub Issues and reach you on your phone.<br>
+They use the logins you already have, and core use needs no setup in your repositories.
 
 [![PyPI](https://img.shields.io/pypi/v/agent-backbone)](https://pypi.org/project/agent-backbone/)
-[![Downloads](https://img.shields.io/pypi/dm/agent-backbone)](https://pypistats.org/packages/agent-backbone)
+[![Python](https://img.shields.io/pypi/pyversions/agent-backbone)](https://pypi.org/project/agent-backbone/)
 [![CI](https://github.com/eandualem/agent-backbone/actions/workflows/ci.yml/badge.svg)](https://github.com/eandualem/agent-backbone/actions/workflows/ci.yml)
-[![Visitors](https://api.visitorbadge.io/api/visitors?path=eandualem%2Fagent-backbone&label=visitors&countColor=%23263238)](https://github.com/eandualem/agent-backbone)
+[![Downloads](https://img.shields.io/pypi/dm/agent-backbone)](https://pypistats.org/packages/agent-backbone)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-Run terminal coding agents as a team on your machine.
+[Watch](#watch) · [Quick start](#quick-start) · [Why Backbone](#why-backbone) · [Docs](docs/INDEX.md) · [Security](docs/security.md)
 
-agent-backbone manages persistent tmux sessions for Claude Code, Codex, OpenCode
-and other agent CLIs. Agents can message each other, delegate work through GitHub
-Issues and form teams across runtimes and repositories. You can inspect their
-state, join their terminals, or talk to them through Telegram.
+</div>
 
-It uses your existing agent logins and model access. No repository configuration
-is required for core use; optional shared skills and swarms create their own
-links and worktrees.
+## Watch
 
-![Two agents started through Backbone review each other's work](docs/media/demo.gif)
+https://github.com/user-attachments/assets/695a6096-4196-4115-911c-a0043d632088
 
-*Installation from PyPI and collaboration between Claude Code and OpenCode on
-Linux. Unedited recording at 3× speed.*
+<p align="center"><sub>The overview, 1:23, captioned. Unmute for the narration.</sub></p>
 
-## What it enables
+<p align="center"><b>Up next</b>&nbsp;&nbsp;›<br>
+<a href="docs/media/films.md#why-backbone"><img src="docs/media/film-why-backbone.jpg" width="49%" alt="Why Backbone, 2 minutes 23: from 'set up Backbone for me' to a team on three CLIs"></a>
+</p>
 
-- **Communication:** agents address each other by name. Messages wait in a
-  durable queue while the recipient is busy or needs a person.
-- **Management:** start, stop, inspect and attach to sessions. State readings
-  include the evidence behind them.
-- **Delegation:** GitHub issues reach the agent responsible for a repository;
-  labels route work to specific agents. An orchestrator is an ordinary agent
-  that watches several repositories.
-- **Teams:** a swarm puts a coordinator and workers on one issue, sharing a
-  worktree and branch. Closing the issue tears down its sessions.
-- **Usage visibility:** inspect tokens by agent, CLI conversation and model,
-  with optional API-equivalent estimates. [Coverage and limits](docs/token-usage.md).
+## Why Backbone
 
-New sessions receive a brief explaining these tools. Agents choose how to
-collaborate; Backbone tracks delivery and runtime state, not task completion.
-Resumed sessions keep their conversation without receiving another brief.
+You already run coding agents in your terminal. Each one works alone, and you
+carry every message between them. Backbone turns them into a team.
 
-## Getting started
+<table>
+<tr>
+<td width="50%" valign="top">
 
-You need macOS or Linux, Python 3.11+, tmux, [uv](https://docs.astral.sh/uv/)
-(or pipx), and an agent CLI installed and signed in.
+**Never typed into a busy agent**<br>
+Agents reach each other by name. When the recipient is working or waiting
+for you, the message is queued and delivered when the agent is ready, marked
+with who sent it. Ordinary messages expire after 30 minutes by default, and
+the sender is told.
+
+</td>
+<td width="50%" valign="top">
+
+**No setup in your repositories**<br>
+An agent is a folder and the CLI you choose, and the folder is its name.
+Core use adds no configuration files, task schemas or commits to your
+projects.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**GitHub Issues are the task list**<br>
+In a repository worker owns or watches, label an issue `for:worker` and it
+lands in worker's queue, one at a time.
+To hand work on, an agent opens an issue for another. The issue stays as the
+record.
+
+</td>
+<td valign="top">
+
+**Mix CLIs in one team**<br>
+Claude Code, Codex and OpenCode agents work side by side, and a swarm puts a
+coordinator and helpers on different CLIs on one branch. A second model can
+review the change.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**In the loop from anywhere**<br>
+Watch any agent, step into its terminal, or answer from your phone. With
+[Telegram set up](docs/telegram.md#one-topic-per-agent) in a group with
+topics, every agent outside a swarm gets its own topic, with Allow and Deny
+on permission prompts.
+
+</td>
+<td valign="top">
+
+**State you can check**<br>
+Backbone tracks whether each agent is idle, working or waiting for a person,
+and shows the evidence behind every reading. Your agents decide the work.
+
+</td>
+</tr>
+</table>
+
+New sessions are briefed on these tools, so you can ask any agent to set up
+the team you need: an agent per repository, skills and rules shared by tag,
+specialists on request.
+
+## Quick start
+
+**Let your agent do it.** Open the coding agent you already use and say:
+
+```text
+Install agent-backbone with uv tool install "agent-backbone[github-app]",
+then run backbone help setup and follow it.
+```
+
+The setup playbook is written for agents: each step ends with a check and
+says when it needs you, for your accounts and secrets.
+
+**Or by hand.** You need macOS or Linux, Python 3.11+, tmux,
+[uv](https://docs.astral.sh/uv/) (or pipx), and an agent CLI installed and
+signed in.
 
 ```bash
 uv tool install agent-backbone
@@ -51,11 +117,7 @@ backbone service install           # start now and at login
 backbone doctor                    # check dependencies and API access
 ```
 
-If `backbone` is not on your PATH, run `uv tool update-shell` and open a new
-terminal. In a container without a login service, use `backbone up --detach`.
-`ab` is a short alias; on macOS, use `backbone` if Apache Bench shadows it.
-
-From a repository you want an agent to read:
+Then, from a repository you want an agent to work in:
 
 ```bash
 cd ~/code/app
@@ -64,29 +126,62 @@ backbone tell app "Summarise what this repository does in three sentences."
 backbone agent attach app               # read its reply; Ctrl-b d detaches
 ```
 
-The directory supplies the agent name. If startup reports a prompt or a timeout,
-use `backbone agent inspect app` to see what needs attention. `tell` reports
+The folder supplies the agent name. If startup reports a prompt or a timeout,
+`backbone agent inspect app` shows what needs attention. `tell` reports
 whether the message was delivered or queued; delivery does not mean the agent
-has finished answering. Do not resend a message accepted into the queue.
+has finished answering. A queued message waits until the agent is ready, up
+to 30 minutes by default, so do not resend a message the queue accepted. If
+`backbone` is not on your PATH, run `uv tool update-shell` and open a new
+terminal. In a container without a login service, use `backbone up --detach`.
+`ab` is a short alias; on macOS, use `backbone` if Apache Bench shadows it.
 
-[Getting started](docs/getting-started.md) walks through setup, a second agent
-and optional integrations. [Quick usage](USAGE.md) is the everyday command guide.
-You can also ask an existing agent with shell access to install the package and
-follow `backbone help setup`.
+[Getting started](docs/getting-started.md) walks through a second agent,
+GitHub and Telegram. [Quick usage](USAGE.md) is the everyday command guide.
+
+## Built to be relied on
+
+- **One delivery gate.** Everything typed into an agent's terminal passes the
+  same readiness check. Busy agents are never interrupted, and every message
+  carries where it came from.
+- **The same result on every required CLI.** A capability ships only when it
+  works the same in Claude Code, Codex and OpenCode, checked by the same
+  behaviour test on each. The [runtime capability table](docs/runtime-capabilities.md)
+  and `backbone doctor` read one contract, and gaps are listed, not hidden.
+- **More than 3,500 tests,** run on every change with no network, models or
+  services.
+- **Built with itself.** Backbone is developed by agents running inside a
+  Backbone in daily use. The films in this README were made the same way.
+- **An honest security model.** One trusted user on one machine, an API on
+  localhost, and a clear account of what agents can reach. Read
+  [Security](docs/security.md) before granting access.
+
+Backbone is not an agent framework: it calls no models and needs no model API
+keys. It is not a workflow engine or a dashboard either. It gives your
+agents names, safe messages and evidence, and leaves the work to them.
+
+## Works with
+
+| CLI | Support |
+|---|---|
+| Claude Code, Codex, OpenCode | Required set: a capability ships only when it works on all three, and any open gap is tracked as a defect |
+| Gemini CLI, Deep Code, Aider | Supported on demand; each gap is listed in the [capability table](docs/runtime-capabilities.md) |
 
 ## Going further
 
 - [GitHub](docs/github.md): route issues and review notifications, starting with
   token-based polling. [GitHub App setup](docs/github-app-setup.md) adds webhooks.
 - [Swarms](docs/swarms.md): put several specialists on one task.
+- [Skills](docs/skills.md): keep one copy of each skill, tag it, and every agent
+  with that tag finds it in its own CLI.
 - [Telegram](docs/telegram.md): send messages and read reports from your phone.
+- [Token usage](docs/token-usage.md): tokens by agent, conversation and model.
 - [API](docs/api.md): build a dashboard or automation; Backbone ships no UI.
 - [Runtime support and limits](docs/status-and-roadmap.md): checked capabilities,
   unsupported environments and known limitations.
 - [How it works](docs/how-it-works.md): state detection, delivery and routing.
 
-The [documentation index](docs/INDEX.md) covers configuration, diagnostics,
-skills and the remaining references. Installed copies are available through
+The [documentation index](docs/INDEX.md) covers configuration, diagnostics
+and the remaining references. Installed copies are available through
 `backbone docs`; `backbone help` contains short agent playbooks.
 
 ## Security model

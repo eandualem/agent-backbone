@@ -122,10 +122,27 @@ async def flush_outbox(
                     result.offline.append(session)
                 else:
                     result.deferred.append(session)
-            except Exception:
+            except Exception as exc:
                 await db.outbox.set_status(event_id, recipient, "failed")
                 result.offline.append(session)
                 log.exception("Outbox event %s delivery to %s failed", event_id, recipient)
+                spec = config.agents.get(session)
+                try:
+                    await db.diagnostics.record(
+                        category="delivery",
+                        code="outbox_recipient_failed",
+                        severity="error",
+                        operation_id=delivery["operation_id"],
+                        agent_name=session,
+                        source="github-outbox",
+                        runtime=spec.runtime if spec is not None else "",
+                        repo=delivery.get("repo") or "",
+                        issue_number=delivery.get("issue_number"),
+                        event_id=event_id,
+                        details={"stage": "outbox_recipient", "error_type": type(exc).__name__},
+                    )
+                except Exception:
+                    log.warning("Outbox recipient diagnostic could not be recorded")
         return result
 
 

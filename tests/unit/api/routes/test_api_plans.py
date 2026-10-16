@@ -190,20 +190,6 @@ class TestPlanControl:
         )
         assert resp.status_code == 409
 
-    async def test_respond_is_deprecated_and_types_nothing(
-        self, api_client, auth_headers, api_app, state_svc
-    ):
-        """#357: no plan dialog takes a typed answer; a pasted "2" approved a Claude Code plan."""
-        _enable_plan_control(api_app)
-        state_svc.get_state.return_value = _plan_snapshot()
-        with patch(f"{_PLANS}.safe_deliver", new_callable=AsyncMock) as deliver:
-            resp = await api_client.post(
-                "/api/plans/ike/respond", json={"input": "2"}, headers=auth_headers
-            )
-        assert resp.status_code == 409
-        assert resp.json()["detail"].startswith("Deprecated")
-        deliver.assert_not_awaited()
-
     async def test_a_plan_answered_meanwhile_is_a_conflict(
         self, api_client, auth_headers, api_app, state_svc
     ):

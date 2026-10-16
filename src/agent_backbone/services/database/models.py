@@ -47,6 +47,9 @@ class AgentORM(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     last_started_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conversation_started_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """When the agent's current conversation started fresh: issue deliveries from
+    before it reached an earlier conversation (#410). Empty until a fresh start."""
     report_identity: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Lazily assigned report author ID; survives rename, never reused after forget."""
 
@@ -187,6 +190,8 @@ class EventORM(Base):
 
     __table_args__ = (
         Index("uq_events_delivery_id", "delivery_id", unique=True),
+        # Comment and review ids stored before #394 are matched ignoring case.
+        Index("idx_events_delivery_id_lower", text("lower(delivery_id)")),
         Index("idx_events_received", "received_at"),
         Index("idx_events_repo", "repo"),
     )
@@ -226,6 +231,9 @@ class DeliveryORM(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     settled_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     """When a later outcome replaced the first (a steer's handoff time)."""
+    superseded_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """When the issue was delivered again to a later session of the agent, which
+    never saw this one; the row keeps its outcome but no longer owns the issue."""
 
     __table_args__ = (
         Index("idx_deliveries_issue", "repo", "issue_number"),
@@ -240,11 +248,11 @@ class DeliveryORM(Base):
             unique=True,
             postgresql_where=text(
                 "kind = 'issue' AND issue_number IS NOT NULL"
-                " AND outcome IN ('attempting','delivered','retried')"
+                " AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
             sqlite_where=text(
                 "kind = 'issue' AND issue_number IS NOT NULL"
-                " AND outcome IN ('attempting','delivered','retried')"
+                " AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
         ),
     )
@@ -313,6 +321,26 @@ class AgentTransitionORM(Base):
         ),
         {"sqlite_autoincrement": True},
     )
+
+
+class FleetSnapshotORM(Base):
+    """The agents that were running at one moment, with the conversation each
+    was in (``backbone fleet save``), and every resume of that set since."""
+
+    __tablename__ = "fleet_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stop: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    force: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    agents: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    """JSON: one entry per saved agent, with the outcome of its stop."""
+    resumes: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    """JSON: every resume run of this snapshot, oldest first."""
+
+    __table_args__ = ({"sqlite_autoincrement": True},)
 
 
 class IssueDependencyORM(Base):
@@ -478,6 +506,8 @@ class UsageSessionORM(Base):
     coverage: Mapped[str] = mapped_column(Text, nullable=False, server_default="unavailable")
     detail: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     launches: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    context_noted: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    """The highest context size the agent was told about in this conversation."""
     __table_args__ = (Index("idx_usage_sessions_agent", "agent_name", "last_seen"),)
 
 

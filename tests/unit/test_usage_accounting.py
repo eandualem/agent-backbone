@@ -97,7 +97,9 @@ async def test_request_revisions_resume_and_cli_switch_are_not_double_counted(
     transcript = tmp_path / "s1.jsonl"
     append(transcript, claude(output=1), claude(at=T2), claude(at=T2))
     monkeypatch.setattr(
-        RUNTIMES["claude"], "usage_paths", lambda sid, env: [transcript] if sid == "s1" else []
+        type(RUNTIMES["claude"]),
+        "usage_paths",
+        lambda self, sid, env: [transcript] if sid == "s1" else [],
     )
     register(config, launch="launch1")
     await collect_usage(config, db)
@@ -115,7 +117,7 @@ async def test_request_revisions_resume_and_cli_switch_are_not_double_counted(
     append(
         other, dict(type="turn_context", payload=dict(model="gpt-6-astra", turn_id="t2")), codex()
     )
-    monkeypatch.setattr(RUNTIMES["codex"], "usage_paths", lambda sid, env: [other])
+    monkeypatch.setattr(type(RUNTIMES["codex"]), "usage_paths", lambda self, sid, env: [other])
     register(config, "codex", "s2")
     switched = replace(
         config,
@@ -217,7 +219,9 @@ async def test_child_usage_and_time_filtered_pagination(tmp_path, db, monkeypatc
     children.mkdir(parents=True)
     append(children / "agent-child.jsonl", claude("child", T2, output=40, model="claude-sonnet-5"))
     monkeypatch.setattr(
-        RUNTIMES["claude"], "usage_paths", lambda sid, env: [path] if sid == "s1" else []
+        type(RUNTIMES["claude"]),
+        "usage_paths",
+        lambda self, sid, env: [path] if sid == "s1" else [],
     )
     register(config)
     with patch("agent_backbone.services.terminal.session_exists", AsyncMock(return_value=False)):
@@ -665,7 +669,9 @@ async def test_current_usage_links_previously_registered_children(
         parent_id=usage_id("claude", "s1") if already_linked else None,
     )
     monkeypatch.setattr(
-        RUNTIMES["claude"], "usage_paths", lambda sid, env: [path] if sid == "s1" else []
+        type(RUNTIMES["claude"]),
+        "usage_paths",
+        lambda self, sid, env: [path] if sid == "s1" else [],
     )
     register(config)
     with (

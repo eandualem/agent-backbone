@@ -3,8 +3,9 @@
 Used two ways:
 
 * **poll intake** (no webhook secret): every ``github.poll_interval_seconds``
-  ask GitHub for issues and comments updated since the last run in every
-  repository an agent owns or watches.
+  ask GitHub for issues, pull requests and comments updated since the last run
+  in every repository an agent owns or watches. Of pull requests, only one
+  opened inside the window is an event.
 * **backfill** (webhook intake): catch what happened while the backbone was
   down; the existing retry job retries unfinished startup repositories.
 
@@ -76,6 +77,14 @@ def comment_event_from_api(
         "repository": {"full_name": repo_full_name},
     }
     return IssueEvent.from_webhook("issue_comment", "created", payload, delivery_id)
+
+
+def pull_opened_event(pull: dict[str, Any], repo_full_name: str) -> IssueEvent:
+    """The ``pull_request opened`` event the webhook would have sent."""
+    delivery_id = f"poll:pull:{repo_full_name}#{pull.get('number')}"
+    repository = {"full_name": repo_full_name}
+    payload = {"action": "opened", "pull_request": pull, "repository": repository}
+    return IssueEvent.from_webhook("pull_request", "opened", payload, delivery_id)
 
 
 def issue_number_from_url(url: str) -> int | None:
@@ -204,6 +213,20 @@ class GitHubPoller:
                 log.exception("Review poll failed for %s (issues/comments continue)", repo)
                 had_errors = True
         for item in issues:
+            number = item.get("number")
+            if (
+                "pull_request" in item
+                and item.get("state") == "open"
+                and item.get("created_at", "") >= since
+            ):
+                try:
+                    # The issues listing lacks the head branch that identifies the opener.
+                    pull = await self._gh.get_pull_raw(number, repo)
+                except Exception:
+                    log.warning("Could not fetch pull request %s#%s (retried)", repo, number)
+                    had_errors = True
+                else:
+                    events.append(pull_opened_event(pull, repo))
             event = issue_event_from_api(item, repo, since)
             if event is not None:
                 events.append(event)

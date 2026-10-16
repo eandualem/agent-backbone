@@ -350,8 +350,11 @@ class GitHubClient:
     # --- Raw listing (used by the poller) ---
 
     async def list_issues_since(self, repo_full_name: str, since: str) -> list[dict[str, Any]]:
-        """Issues (open and closed, PRs excluded) updated since an ISO timestamp."""
-        items = await self._request_all(
+        """Issues and pull requests (open and closed) updated since an ISO timestamp.
+
+        A pull request is the item with a ``pull_request`` key.
+        """
+        return await self._request_all(
             "/issues",
             repo_full_name=repo_full_name,
             params={
@@ -362,7 +365,6 @@ class GitHubClient:
                 "per_page": 100,
             },
         )
-        return [item for item in items if "pull_request" not in item]
 
     async def list_comments_since(self, repo_full_name: str, since: str) -> list[dict[str, Any]]:
         """Issue comments created/updated since an ISO timestamp, oldest first."""

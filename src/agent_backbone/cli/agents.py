@@ -84,6 +84,22 @@ def _print_inspection(data: dict) -> None:
         )
 
 
+_SECRET_WORDS = {"KEY", "APIKEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD"}
+
+
+def _secret_looking(env: object) -> list[str]:
+    """Names in an ``env`` value that read as credentials (``API_KEY``, ``GITHUB_TOKEN``),
+    or whose value is a URL carrying a password (``postgresql://app:pw@db/app``)."""
+    if not isinstance(env, dict):
+        return []
+    return [
+        key
+        for key, value in env.items()
+        if _SECRET_WORDS & set(str(key).upper().split("_"))
+        or re.search(r"://[^/@\s]*:[^/@\s]*@", str(value))
+    ]
+
+
 _DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
@@ -360,8 +376,8 @@ async def _agent_start(args: argparse.Namespace) -> int:
         if len(names) == 1:
             return await _agent_start(argparse.Namespace(**{**vars(args), "group": True}))
     if len(args.names) > 1:
-        if args.dir or args.watch:
-            print("--dir/--watch apply to a single agent; start a group by name only")
+        if args.dir or args.watch or getattr(args, "tag", None):
+            print("--dir/--watch/--tag apply to a single agent; start a group by name only")
             return 1
         # A group start: each name must already be a known agent.
         worst = 0
@@ -393,6 +409,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
         "model": args.model,
         "resume": args.resume,
         "watch": args.watch or [],
+        "tags": getattr(args, "tag", None) or [],
         "wait": not args.no_wait,
         "inbox_only": getattr(args, "inbox_only", False),
     }
@@ -426,6 +443,7 @@ async def _agent_start(args: argparse.Namespace) -> int:
             model=args.model,
             resume=args.resume,
             watch=tuple(args.watch or ()),
+            tags=tuple(body["tags"]),
             wait=not args.no_wait,
             inbox_only=body["inbox_only"],
         )
@@ -548,6 +566,7 @@ async def _agent(args: argparse.Namespace) -> int:
             if sub == "rename"
             else {"tags": args.tags, "remove": sub == "untag"}
         )
+        relinked: list[str] = []
         if api_up:
             endpoint = "rename" if sub == "rename" else "tags"
             response = await _common.api(
@@ -556,13 +575,18 @@ async def _agent(args: argparse.Namespace) -> int:
             if not response or response[0] != 200:
                 print(f"error: {response[1] if response else 'API unreachable'}")
                 return 1
+            if isinstance(response[1], dict):
+                relinked = response[1].get("relinked", [])
         else:
             async with _common.Direct(boot) as direct:
                 try:
                     if sub == "rename":
                         await direct.store.rename(args.name, args.new_name)
                     else:
-                        await direct.store.tag(args.name, args.tags, remove=sub == "untag")
+                        from agent_backbone.services.agents.operations import relink_skills
+
+                        spec = await direct.store.tag(args.name, args.tags, remove=sub == "untag")
+                        relinked = await relink_skills(direct.store.config, [spec])
                 except (KeyError, ValueError, OSError) as exc:
                     print(f"error: {exc}")
                     return 1
@@ -572,6 +596,9 @@ async def _agent(args: argparse.Namespace) -> int:
             print(f"Update external for:{args.name} labels and scripts to use {args.new_name}.")
         else:
             print(f"{args.name}: tags updated")
+            for line in relinked:
+                print(f"  {line}")
+            print("Policies follow at its next fresh launch; so do skills if it is not running.")
         return 0
 
     if sub == "restart":
@@ -724,6 +751,13 @@ async def _agent(args: argparse.Namespace) -> int:
             key, raw = item.split("=", 1)
             json_keys = ("tags", "env", "always_on", "unattended", "inbox_only")
             changes[key] = _common.parse_value(raw) if key in json_keys else raw
+        if names := _secret_looking(changes.get("env")):
+            print(
+                f"warning: env entries that look like secrets: {', '.join(names)}. Values are "
+                "stored in plain text in the backbone's database; keep credentials in the "
+                "tool's own credential store (docs/security.md)",
+                file=sys.stderr,
+            )
         if api_up:
             result = await _common.api(boot, "PATCH", f"/api/agents/{args.name}", json_body=changes)
             if result and result[0] == 200:

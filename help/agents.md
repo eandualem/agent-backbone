@@ -15,11 +15,24 @@ when you explicitly want to reopen a previous conversation, such as after an
 unexpected closure. It uses the saved conversation ID for the selected runtime
 when supported, or that runtime's latest conversation when no usable ID is
 available. A fresh start does not replay a previous conversation.
+When a saved id is used, the start's evidence names it: `resuming the session
+the last launch reported: ID (AGE old)`, or `resuming the session the last
+launch opened: ID` when that launch resumed it and had not reported yet. Without
+either line the runtime's own latest conversation opened. An id from a launch
+that ended before reporting or opening one is from an earlier session and is not
+used; the evidence says so. `backbone agent inspect NAME` shows the id on
+record before you resume. A running agent is left as it is
+(`already running`). `backbone docs cli` covers every case.
 Changing runtime without specifying a model clears the previous runtime's model.
 Starting from a directory reuses its registered name, even after a rename;
 if several agents share that directory, specify a name.
 
 Any agent may start other agents; you do not need a human for this.
+
+`backbone fleet save --stop` saves every running agent with its current
+conversation and stops the idle ones; `backbone fleet resume` later starts each
+on exactly that conversation and reports the agents it could not resume, with
+the reason (`backbone docs cli` has the outcomes).
 
 ```bash
 backbone agent start                       # this directory becomes an agent

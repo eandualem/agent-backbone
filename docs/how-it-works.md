@@ -3,9 +3,10 @@
 
 Starting an existing agent reuses its saved CLI and model and begins a **new
 conversation**. Continuing the previous one is your call: `backbone agent resume
-NAME` (or `start --resume`; API `resume: true`) reopens the session the backbone
-last saw for that runtime, or the runtime's own last conversation when no ID is
-saved. A fresh start says when a previous conversation is available. Starts are
+NAME` (or `start --resume`; API `resume: true`) reopens the conversation the
+agent's last launch held (the session id its hook reported, or the one it was
+resumed on), or the runtime's own last conversation when there is none. An id
+left by an earlier launch is not reused. A fresh start says when a previous conversation is available. Starts are
 fresh by default because a resumed agent trusts its own context over whatever
 happened in the checkout since — another CLI, a swarm, the shared memory.
 Changing runtime without specifying a model clears the previous runtime's model.
@@ -37,11 +38,26 @@ This page follows real requests through the system. Read
    skills are never touched ([skills](skills.md)).
 4. **Launch.** `tmux new-session -d -s <name> -c <dir>` running the runtime
    command (`claude --model …`), with `BACKBONE_RUNTIME`, `BACKBONE_AGENT`,
-   `BACKBONE_STATE_DIR` and the agent's `env` exported into the session.
+   `BACKBONE_LAUNCH_ID` (new for every launch), `BACKBONE_STATE_DIR` and the
+   agent's `env` exported into the session.
    For Claude Code the command also carries
    `--settings <data_dir>/hooks/claude-settings.json` — a backbone-owned
    settings file, replaced atomically at every start, that wires the state hooks
-   without touching the repository or `~/.claude/settings.json`.
+   without touching the repository or `~/.claude/settings.json`. An unattended
+   launch gets `claude-settings-unattended.json` instead: the same hooks plus
+   Claude Code's one-time bypass consent. Both files set `tui` to `default`, so
+   Backbone-launched agents always use Claude Code's inline renderer, the one
+   Backbone reads their screens from, and its one-time fullscreen-renderer offer
+   never stops them at startup. If you chose the fullscreen renderer for your
+   own sessions, this is why agents look different; your own sessions keep it.
+   Codex starts and resumes with `-c service_tier=default`, independently of
+   the selected model and reasoning effort. This selects standard processing
+   even when inherited settings prefer Fast mode. It sets the launch default;
+   an operator can still change the tier explicitly inside the session. Running
+   sessions are unaffected until their next explicit start or resume.
+   Codex also starts with `-c check_for_update_on_startup=false`, so an
+   available Codex update never stops a launch on its update dialog; upgrade
+   Codex yourself when you choose to.
 5. **Wait until ready** (up to `timing.start_timeout_seconds`, 60 s): a
    fresh hook-written `idle` state, or a visible empty prompt for runtimes
    without hooks. A fresh busy or blocked hook keeps startup waiting even if
@@ -53,13 +69,23 @@ This page follows real requests through the system. Read
    selection cursor are recognized generically; Claude also recognizes its
    unnumbered option block with the Enter/Esc footer. Startup always ends as
    `ready`, `waiting_for_human`, `exited` or `timeout`.
-   An explicitly unattended Claude launch pre-records bypass consent in
-   `~/.claude.json`; ordinary launches never do. The runtime's bypass flag still
-   controls its mode. Folder trust remains controlled by `agents.pre_trust`.
+   Only an explicitly unattended Claude launch carries the bypass consent, in
+   its own settings file (step 4). The runtime's bypass flag still controls its
+   mode. Folder trust remains controlled by `agents.pre_trust`.
 6. Broadcast a fresh snapshot on Socket.IO `/sessions`.
 
 Startup readiness uses the same state reconciliation as inspection and delivery,
-with a launch timestamp fence to exclude old hooks and submission markers.
+with a persistent launch timestamp and identity to exclude old hooks and
+submission markers. This boundary survives readiness: ordinary inspection,
+delivery and prompt acknowledgements cannot reuse the previous launch's hook.
+Untagged state posted by older integrations is accepted only when its timestamp
+is at or after this launch. Managed hooks also carry the launch identity, so a
+late write from an older process is excluded. Managed hooks keep a separate
+state file for each launch; a delayed writer cannot erase the replacement's
+busy record, even when its input box remains visible. A newer eligible untagged
+API update still takes precedence, and renaming a stopped agent moves its launch
+marker and state records together. The saved conversation remains
+available for explicit resume and usage history.
 Current provider-capacity evidence therefore prevents a false ready result.
 
 Starts with a database handle retain operational diagnostics under one operation
@@ -95,8 +121,10 @@ Register an agent with that session name before sending it messages through
 the backbone; unregistered sessions cannot receive API messages or be streamed.
 
 Stopping (`agent stop`) is `tmux kill-session`. The backbone refuses to
-stop its own session. A session that dies on its own is **reported** (to
-the escalation target and Telegram, once) — never restarted.
+stop its own session. A session that dies on its own is never restarted.
+For an agent marked `always_on` it is **reported** at once, to the
+escalation target and Telegram; any other absent agent is reported only
+when messages are queued for it ([`always_on`](configuration.md#agents)).
 
 Restarting (`agent restart`, `POST /api/agents/{name}/restart`) is the one
 restart the backbone performs, because it was asked for. The request is
@@ -292,7 +320,7 @@ sequenceDiagram
         B->>T: paste-buffer; Enter
         B->>T: re-read pane: submitted? still in the box?
         B-->>C: delivered
-    else offline / waiting_for_human / agent_working / human_reading / human_typing / settling
+    else offline / waiting_for_human / agent_working / human_reading / unattended_copy_mode / human_typing / settling
         B->>Q: enqueue (direct messages, comments, notices)
         B-->>C: agent_working (etc.)
         Note over Q: delivered by agent-monitor (60 s) or delivery-retry (5 min)
@@ -338,12 +366,17 @@ sequenceDiagram
   when the agent is ready; priority does not bypass these conditions.
 - **Human selection.** Copy mode is preserved during monitoring and readiness
   checks. Messages wait with `human_reading` until the human exits copy mode;
-  priority does not bypass it.
+  priority does not bypass it. With no client viewing the pane, they wait with
+  `unattended_copy_mode` until someone attaches and presses `q`.
 - **Queue hygiene.** Ordinary pending messages expire after `timing.queue_expiry_minutes`
   (30). Active swarm coordination, inbox holds and startup briefs are retained, and a session
   held by an unconfirmed (`uncertain`) delivery keeps its queue until the hold is
-  acknowledged. Each expiry sweep sends one notice to every recipient and every
-  registered sender it dropped messages between; the notices never expire. Leased by a crashed drain: released after 5 min. A blocked drain
+  acknowledged. Each expiry sweep sends one notice to every registered recipient and every
+  registered sender it dropped messages between; the notices never expire. A queue
+  whose agent has no tmux session still expires and retires obsolete work, but
+  the drain makes no delivery attempt for it until the session exists again,
+  so a stopped agent does not collect an `offline` receipt every pass.
+  Leased by a crashed drain: released after 5 min. A blocked drain
   keeps the original row, including when displaying its age; completed rows
   are pruned after `timing.delivery_retention_days` from completion.
 - **Everything is recorded**, direct messages included:
@@ -355,7 +388,7 @@ sequenceDiagram
 
 | Intake | When | How |
 |---|---|---|
-| `poll` | `GITHUB_TOKEN` (or App credentials) and no webhook secret | every `github.poll_interval_seconds`, list issues and comments from the durable replay cursor for each tracked repository |
+| `poll` | `GITHUB_TOKEN` (or App credentials) and no webhook secret | every `github.poll_interval_seconds`, list issues, pull requests and comments from the durable replay cursor for each tracked repository; a pull request opened since the last poll gets the same notice the webhook sends, never twice |
 | `webhook` | `GITHUB_WEBHOOK_SECRET` is set | GitHub posts to `/webhooks/github`; signature verified; startup backfill catches downtime and retries unfinished repositories through the delivery-retry job |
 | `off` | no credentials, or `github.intake = off` | — |
 
@@ -387,8 +420,8 @@ Routing for an issue in repository R:
 1. `for:<agent>` labels → those agents' queues (explicit always wins).
 2. Otherwise, if R has one owner → its queue. Several owners → all of them
    get an "unassigned issue — comment to claim it" notice, nobody is queued.
-3. Watchers of R get an informational notice (kind `watch`, never queued as
-   work, expires like any queued message).
+3. Watchers of R get an informational notice when the issue is opened (kind
+   `watch`, never queued as work, expires like any queued message).
 4. The sender (`from:`) never gets its own issue.
 
 An **edit** of an existing issue (`labeled` events without a new `for:`
@@ -396,7 +429,9 @@ label) routes nobody.
 
 The **issue queue gate** keeps issue delivery orderly: an agent gets one
 issue at a time. A newer issue is held (`awaiting_ack`) while the last
-delivered issue in the agent's open queue has not been acknowledged.
+issue delivered to the agent's current conversation, in its open queue, has
+not been acknowledged; a fresh conversation (not a resumed one) is offered that
+issue again.
 **Acknowledgement** = the agent commented on the issue (or opened a pull
 request that closes it): detected from the hook action log, a
 `[from:<agent>]` comment prefix, or GitHub comments on
@@ -463,9 +498,10 @@ Every `timing.monitor_interval_seconds` (60 s), `agent-monitor`:
 3. **Stalls**: `busy` on one issue for > `timing.stall_threshold_seconds`
    (90 min) → one message to `escalation.target`, deduplicated for
    `timing.escalation_dedup_seconds` (30 min).
-4. **Dead sessions**: an agent that had a live state and has no session now
-   → reported to `escalation.target` and Telegram, once; state reset.
-   Never restarted. If no notification route accepts the alert, the transition
+4. **Dead sessions**: an `always_on` agent that had a live state and has no
+   session now → reported to `escalation.target` and Telegram, once; state
+   reset. Any other absent agent is reported only when messages are queued
+   for it. Never restarted. If no notification route accepts the alert, the transition
    stays pending for the next monitor tick.
 5. **Plan waiting**: Telegram notification (`/viewplan`, `/approve`) and a
    message to `escalation.target`, once per plan after delivery or successful

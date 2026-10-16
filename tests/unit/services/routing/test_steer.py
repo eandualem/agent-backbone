@@ -213,6 +213,20 @@ async def test_an_unwritable_offer_fails_the_row(config, db, working):
     assert [r["outcome"] for r in rows] == ["failed"]
 
 
+async def test_a_failed_turn_end_refusal_keeps_evidence_for_settlement(config, db, working):
+    with (
+        patch(f"{_STEER}._turn_ended", return_value=True),
+        patch.object(db.deliveries, "settle", side_effect=RuntimeError("database unavailable")),
+        pytest.raises(RuntimeError, match="database unavailable"),
+    ):
+        await steer_agent("app", "check this task", config, db=db, sender="peer")
+    assert [(i, state) for _, _, i, state, _ in steer_offers(config.state_dir)] == [(1, "missed")]
+    assert await settle_steers(config, db, read_states=False) == {"not_taken": 1}
+    assert (await db.deliveries.query(session_name="app", kind="steer"))[0][
+        "outcome"
+    ] == "not_taken"
+
+
 class TestSettle:
     @pytest.fixture(autouse=True)
     def state(self):
@@ -257,6 +271,39 @@ class TestSettle:
         retire_steers(config.state_dir, "ike", launch_id="L1")
         assert await settle_steers(config, db) == {"not_taken": 1}
         rows = await db.deliveries.query(session_name="ike", kind="steer")
+        assert rows[0]["outcome"] == "not_taken"
+        assert steer_offers(config.state_dir) == []
+
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    @pytest.mark.parametrize("ending", ["missed", "expired"])
+    async def test_a_failed_not_taken_receipt_keeps_its_evidence_for_retry(
+        self, config, db, working, runtime, ending
+    ):
+        working[0].return_value = _profile(SessionIntelligence.AGENT_WORKING, runtime)
+        report = await steer_agent("app", "check this task", config, db=db, sender="peer")
+        if ending == "missed":
+            retire_steers(config.state_dir, "app", launch_id="L1")
+        else:
+            path = (
+                config.state_dir / "context" / "app" / "L1" / f"{steer_key(report.delivery_id)}.md"
+            )
+            old = time.time() - 1000
+            os.utime(path, (old, old))
+        async with db.engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE deliveries SET created_at = '2020-01-01T00:00:00Z' WHERE id = :id"),
+                {"id": report.delivery_id},
+            )
+        with (
+            patch.object(db.deliveries, "settle", side_effect=RuntimeError("database unavailable")),
+            pytest.raises(RuntimeError, match="database unavailable"),
+        ):
+            await settle_steers(config, db, read_states=False)
+        assert [(i, state) for _, _, i, state, _ in steer_offers(config.state_dir)] == [
+            (report.delivery_id, "missed")
+        ]
+        assert await settle_steers(config, db, read_states=False) == {"not_taken": 1}
+        rows = await db.deliveries.query(session_name="app", kind="steer")
         assert rows[0]["outcome"] == "not_taken"
         assert steer_offers(config.state_dir) == []
 

@@ -62,7 +62,9 @@ def _run(hook, tmp_path, payload: dict) -> str:
 
 _OPENCODE_DRIVER = """
 import fs from "node:fs";
-const [plugin, steps, reply] = process.argv.slice(1);
+const [plugin, steps, reply, clock, session] = process.argv.slice(1);
+if (clock) Date.now = () => Number(clock) * 1000;
+const sid = session || "s";
 const { AgentBackbone } = await import(plugin);
 const prompts = [];
 const client = { session: {
@@ -73,7 +75,7 @@ const client = { session: {
   // "child" is a subagent resumed from an earlier run: no session.created for it.
   // "old" is the agent's own session resumed from an earlier run, whose lookup never answers.
   get: ({ path }) => path.id === "old" ? new Promise(() => {}) : Promise.resolve({
-    data: { id: path.id, parentID: path.id === "child" ? "s" : undefined },
+    data: { id: path.id, parentID: path.id === "child" ? sid : undefined },
   }),
 } };
 const hook = await AgentBackbone({ client, directory: process.cwd() });
@@ -83,19 +85,19 @@ const state = `${process.env.BACKBONE_STATE_DIR}/desk.json`;
 const outputs = [], marks = [], states = [];
 for (const step of JSON.parse(steps)) {
   if (step === "busy" || step === "request") {
-    await status("s", "busy");
-    if (step === "request") await hook["chat.params"]({ sessionID: "s", agent: "plan", message: {
+    await status(sid, "busy");
+    if (step === "request") await hook["chat.params"]({ sessionID: sid, agent: "plan", message: {
       agent: "plan", system: "house style",
       model: { providerID: "zen", modelID: "free", variant: "high" } } }, {});
   } else if (step === "tool" || step === "child-tool") {
-    const sessionID = step === "tool" ? "s" : "child";
+    const sessionID = step === "tool" ? sid : "child";
     if (sessionID === "child") await status("child", "busy");
     const output = { title: "read", output: "file text", metadata: {} };
     await hook["tool.execute.after"]({ tool: "read", sessionID, callID: "c" }, output);
     outputs.push(output.output);
   } else if (step === "mcp-tool") {
     const output = { content: [{ type: "text", text: "mcp text" }] };
-    await hook["tool.execute.after"]({ tool: "srv_q", sessionID: "s", callID: "c" }, output);
+    await hook["tool.execute.after"]({ tool: "srv_q", sessionID: sid, callID: "c" }, output);
     outputs.push(output.content.map((block) => block.text).join("\\n\\n"));
   } else if (step === "old-busy" || step === "old-idle") {
     await status("old", step === "old-busy" ? "busy" : "idle");
@@ -104,39 +106,39 @@ for (const step of JSON.parse(steps)) {
   } else if (step === "interrupt") {
     // Escape in the TUI (live, 1.18.32): the reply is aborted, then the turn ends.
     await hook.event({ event: { type: "session.error",
-      properties: { sessionID: "s", error: { name: "MessageAbortedError" } } } });
-    await status("s", "idle");
-    await hook.event({ event: { type: "session.idle", properties: { sessionID: "s" } } });
+      properties: { sessionID: sid, error: { name: "MessageAbortedError" } } } });
+    await status(sid, "idle");
+    await hook.event({ event: { type: "session.idle", properties: { sessionID: sid } } });
   } else if (step === "ask" || step === "reject") {
     // A permission dialog, then Reject (live, 1.18.32): the turn ends.
     const type = step === "ask" ? "permission.asked" : "permission.replied";
-    await hook.event({ event: { type, properties: { sessionID: "s", id: "p", requestID: "p" } } });
+    await hook.event({ event: { type, properties: { sessionID: sid, id: "p", requestID: "p" } } });
     if (step === "reject") {
-      await status("s", "idle");
-      await hook.event({ event: { type: "session.idle", properties: { sessionID: "s" } } });
+      await status(sid, "idle");
+      await hook.event({ event: { type: "session.idle", properties: { sessionID: sid } } });
     }
   } else if (step === "plan" || step === "question") {
     // plan_exit asks whether to build; the question tool asks something else
     // (live, 1.18.32 with OPENCODE_EXPERIMENTAL_PLAN_MODE).
     const tool = step === "plan" ? "plan_exit" : "question";
-    await hook["tool.execute.before"]({ tool, sessionID: "s", callID: tool }, { args: {} });
+    await hook["tool.execute.before"]({ tool, sessionID: sid, callID: tool }, { args: {} });
     const question = `Plan at ${process.env.BACKBONE_STATE_DIR}/proposed.md is complete. ` +
       "Would you like to switch to the build agent and start implementing?";
-    await hook.event({ event: { type: "question.asked", properties: { id: "q", sessionID: "s",
+    await hook.event({ event: { type: "question.asked", properties: { id: "q", sessionID: sid,
       questions: [{ question, header: "Build Agent", custom: false, options: [] }],
       tool: { messageID: "m", callID: tool } } } });
   } else if (step === "plan-yes" || step === "plan-no") {
     // "1. Yes" builds on in the same turn; "2. No" ends it in the plan agent.
-    await hook.event({ event: { type: "question.replied", properties: { sessionID: "s",
+    await hook.event({ event: { type: "question.replied", properties: { sessionID: sid,
       requestID: "q", answers: [[step === "plan-yes" ? "Yes" : "No"]] } } });
     if (step === "plan-no") {
-      await status("s", "idle");
-      await hook.event({ event: { type: "session.idle", properties: { sessionID: "s" } } });
+      await status(sid, "idle");
+      await hook.event({ event: { type: "session.idle", properties: { sessionID: sid } } });
     }
   } else if (step === "failed-subtask") {
-    await hook["tool.execute.after"]({ tool: "task", sessionID: "s", callID: "c" }, undefined);
+    await hook["tool.execute.after"]({ tool: "task", sessionID: sid, callID: "c" }, undefined);
   } else {
-    const sessionID = step === "idle" ? "s" : "child";
+    const sessionID = step === "idle" ? sid : "child";
     await status(sessionID, "idle");
     await hook.event({ event: { type: "session.idle", properties: { sessionID } } });
   }
@@ -150,7 +152,9 @@ console.log(JSON.stringify({ prompts, outputs, marks, states }));
 """
 
 
-def _opencode(tmp_path, steps: list[str], *, reply: str = "ok") -> dict:
+def _opencode(
+    tmp_path, steps: list[str], *, reply: str = "ok", clock: float | None = None, session: str = "s"
+) -> dict:
     """Drive the shipped OpenCode plugin with Node and a stand-in OpenCode client:
     ``busy`` (the agent's session works), ``request`` (and a model request of
     its turn), ``tool`` / ``mcp-tool`` (a tool call ends), ``failed-subtask`` (a
@@ -169,7 +173,13 @@ def _opencode(tmp_path, steps: list[str], *, reply: str = "ok") -> dict:
     (hooks / "opencode_hook.mjs").write_text(hook_source("opencode_hook.js").read_text())
     done = subprocess.run(
         [node, "--input-type=module", "-e", _OPENCODE_DRIVER]
-        + [(hooks / "opencode_hook.mjs").as_uri(), json.dumps(steps), reply],
+        + [
+            (hooks / "opencode_hook.mjs").as_uri(),
+            json.dumps(steps),
+            reply,
+            str(clock) if clock is not None else "",
+            session,
+        ],
         env={**os.environ, "BACKBONE_AGENT": "desk", "BACKBONE_STATE_DIR": str(tmp_path)},
         check=True,
         capture_output=True,
@@ -333,18 +343,30 @@ def test_a_steer_left_by_a_turn_that_ended_unseen_never_reaches_the_next_task(
     assert [(i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path)] == [(5, "missed")]
 
 
-@pytest.mark.parametrize("runtime", ("claude", "codex"))
+@pytest.mark.parametrize("runtime", RUNTIMES)
 def test_a_steer_is_handed_over_only_within_the_turn_it_was_offered_to(
     tmp_path, monkeypatch, runtime
 ):
     """Half a second apart, either way round: the turn's prompt decides, not a clock."""
     monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
     monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
-    first = _prompt(runtime, tmp_path, at=1000.2)
+    first = (
+        {"prompted_at": 1000.2, "session_id": "s"}
+        if runtime == "opencode"
+        else _prompt(runtime, tmp_path, at=1000.2)
+    )
     bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(5), "for task one", first)
-    second = _prompt(runtime, tmp_path, at=1000.7)
+    second = (
+        {"prompted_at": 1000.7, "session_id": "s"}
+        if runtime == "opencode"
+        else _prompt(runtime, tmp_path, at=1000.7)
+    )
     bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(6), "for task two", second)
-    assert _tool_call(runtime, tmp_path) == "for task two"
+    if runtime == "opencode":
+        prompts = _opencode(tmp_path, ["request", "tool"], clock=1000.7)["prompts"]
+        assert [part["text"] for p in prompts for part in p["body"]["parts"]] == ["for task two"]
+    else:
+        assert _tool_call(runtime, tmp_path) == "for task two"
     offers = sorted((i, state) for _, _, i, state, _ in bb.steer_offers(tmp_path))
     assert offers == [(5, "missed"), (6, "taken")]
     for key in (5, 6):
@@ -352,7 +374,7 @@ def test_a_steer_is_handed_over_only_within_the_turn_it_was_offered_to(
     assert list((tmp_path / "context" / "desk" / "launch-x").iterdir()) == []
 
 
-@pytest.mark.parametrize("runtime", ("claude", "codex"))
+@pytest.mark.parametrize("runtime", RUNTIMES)
 @pytest.mark.parametrize(("session", "handed"), [("s", True), ("s-cleared", False)])
 def test_a_new_conversation_never_takes_a_steer_offered_to_the_old_one(
     tmp_path, monkeypatch, runtime, session, handed
@@ -362,11 +384,19 @@ def test_a_new_conversation_never_takes_a_steer_offered_to_the_old_one(
     same conversation (compaction) it still does."""
     monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
     monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
-    turn = _prompt(runtime, tmp_path, at=1000.2)
+    turn = (
+        {"prompted_at": 1000.2, "session_id": "s"}
+        if runtime == "opencode"
+        else _prompt(runtime, tmp_path, at=1000.2)
+    )
     bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(5), "for the old task", turn)
-    hook = {"claude": claude_hook, "codex": codex_hook}[runtime]
-    out = _run(hook, tmp_path, {"hook_event_name": "SessionStart", "session_id": session})
-    assert ("for the old task" in out) is handed
+    if runtime == "opencode":
+        out = _opencode(tmp_path, ["request", "tool"], clock=1000.2, session=session)
+        assert bool(out["prompts"]) is handed
+    else:
+        hook = {"claude": claude_hook, "codex": codex_hook}[runtime]
+        out = _run(hook, tmp_path, {"hook_event_name": "SessionStart", "session_id": session})
+        assert ("for the old task" in out) is handed
     state = "taken" if handed else "missed"
     assert [(i, s) for _, _, i, s, _ in bb.steer_offers(tmp_path)] == [(5, state)]
 
@@ -381,7 +411,7 @@ def test_a_steer_not_tied_to_a_turn_is_handed_over_as_before(tmp_path, monkeypat
     _prompt(runtime, tmp_path, at=1000.2)
     assert _tool_call(runtime, tmp_path) == "untied"
     bb.offer_steer(tmp_path, "desk", "launch-x", bb.steer_key(6), "tied", {"prompted_at": 999.0})
-    (tmp_path / "desk.json").write_text(json.dumps({"state": "busy", "ts": 1000.3}))
+    bb.write_state(tmp_path, "desk", {"state": "busy", "ts": 1000.3, "launch_id": "launch-x"})
     assert _tool_call(runtime, tmp_path) == "tied"
 
 

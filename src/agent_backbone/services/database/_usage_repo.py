@@ -29,6 +29,14 @@ class UsageRepo(Repo):
             row = (await conn.execute(select(_S).where(_S.c.id == identity))).mappings().one()
             return _session(row)
 
+    async def find(self, identity: str) -> dict | None:
+        """One conversation, or None when it was never recorded."""
+        async with self._tx() as conn:
+            row = (
+                (await conn.execute(select(_S).where(_S.c.id == identity))).mappings().one_or_none()
+            )
+            return _session(row) if row else None
+
     async def sessions(self) -> list[dict]:
         async with self._tx() as conn:
             return [_session(r) for r in (await conn.execute(select(_S))).mappings()]
@@ -219,6 +227,33 @@ class UsageRepo(Repo):
             async for batch in self.event_batches(**filters)
             for r in batch
         ]
+
+    async def latest_context_tokens(self, identity: str) -> int | None:
+        """The context size of the conversation's most recent request that measured one.
+
+        Zero is not a measurement: a failed request (OpenCode) records no tokens."""
+        async with self._tx() as conn:
+            rows = await conn.execute(
+                select(_E.c.data)
+                .where(_E.c.session == identity)
+                .order_by(_E.c.at.desc(), _E.c.event_key.desc())
+                .limit(20)
+            )
+            for (data,) in rows:
+                tokens = json.loads(data).get("context_tokens")
+                if tokens:
+                    return tokens
+        return None
+
+    async def note_context(self, identity: str, level: int) -> bool:
+        """Record ``level`` as told; False when this or a higher level already was."""
+        async with self._tx() as conn:
+            result = await conn.execute(
+                update(_S)
+                .where(_S.c.id == identity, _S.c.context_noted < level)
+                .values(context_noted=level)
+            )
+        return result.rowcount == 1
 
     async def observed(self, identities: list[str], at: str) -> None:
         """Refresh collection timestamps without rewriting unchanged checkpoints."""

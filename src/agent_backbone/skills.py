@@ -394,6 +394,8 @@ class Materialization:
 
     linked: list[str] = field(default_factory=list)
     """``<dir>/<name>`` links present after the run (created or kept)."""
+    mirrored: dict[str, str] = field(default_factory=dict)
+    """``<dir>/<name>`` → ``<source>/<name>``: a repository skill linked where the CLI reads."""
     removed: list[str] = field(default_factory=list)
     conflicts: list[str] = field(default_factory=list)
     """Selected skills the repository already owns under that name."""
@@ -416,6 +418,11 @@ def _read_manifest(path: Path) -> list[str]:
         return []
     links = data.get("links") if isinstance(data, dict) else None
     return [str(item) for item in links] if isinstance(links, list) else []
+
+
+def manifest_links(path: Path) -> set[str]:
+    """The ``<dir>/<name>`` links a manifest records."""
+    return set(_read_manifest(path))
 
 
 def _manifest_path(path: Path, key: str) -> Path | None:
@@ -470,6 +477,14 @@ def _links_of_others(manifest: Path, repo_dir: Path) -> set[str]:
     return links
 
 
+def recorded_links(manifest: Path, repo_dir: Path) -> set[str]:
+    """Every link the backbone made in ``repo_dir``: this manifest's, while it
+    records that checkout, and other agents' there."""
+    own = _manifest_path(manifest, "repo")
+    mine = set(_read_manifest(manifest)) if own is not None and _same_file(own, repo_dir) else set()
+    return mine | _links_of_others(manifest, repo_dir)
+
+
 def _links_sharing_git_dir(manifest_dir: Path, git_dir: Path) -> set[str]:
     """Every manifest's links whose repository uses ``git_dir`` — several
     agents can share one checkout, and worktrees share one ``info/exclude``."""
@@ -509,12 +524,60 @@ def _points_into(link: Path, store: Path) -> bool:
         return False
 
 
+def _mirrors_into(link: Path, repo_dir: Path) -> bool:
+    """Whether ``link`` is a relative symlink to the same-named skill in
+    another directory of ``repo_dir``: a repository skill linked where a CLI
+    reads. Only links a manifest records are ever judged by this."""
+    if not link.is_symlink():
+        return False
+    try:
+        target = Path(os.readlink(link))
+    except OSError:
+        return False
+    if target.is_absolute():
+        return False
+    resolved = Path(os.path.normpath(link.parent / target))
+    return (
+        resolved.name == link.name
+        and resolved.parent != link.parent
+        and Path(os.path.normpath(repo_dir)) in resolved.parents
+    )
+
+
+def repository_skills(
+    repo_dir: Path, sources: tuple[str, ...], store: Path | None, recorded: set[str] = frozenset()
+) -> dict[str, list[str]]:
+    """The repository's own skills: ``name -> [directories it is in]``.
+
+    Every entry with a ``SKILL.md`` under one of ``sources`` that the
+    backbone did not make: not a link into ``store`` and not a link a
+    manifest records (``recorded``, as ``<dir>/<name>``).
+    """
+    owned: dict[str, list[str]] = {}
+    for source in sources:
+        folder = Path(repo_dir) / source
+        if not folder.is_dir():
+            continue
+        for entry in sorted(folder.iterdir()):
+            rel = f"{source}/{entry.name}"
+            if entry.name.startswith(".") or rel in recorded:
+                continue
+            if store is not None and _points_into(entry, store):
+                continue
+            if (entry / "SKILL.md").is_file():
+                owned.setdefault(entry.name, []).append(source)
+    return owned
+
+
 def materialize(
     store: Path,
     repo_dir: Path,
     dirs: tuple[str, ...],
     selected: list[Skill],
     manifest: Path,
+    *,
+    read: tuple[str, ...] = (),
+    sources: tuple[str, ...] = (),
 ) -> Materialization:
     """Bring ``<repo>/<dir>/<name>`` links in line with ``selected``.
 
@@ -525,6 +588,12 @@ def materialize(
     links there are released first, except those another agent there has.
     A link into the store the manifest records is the backbone's too, so
     moving the store relinks what it made.
+
+    ``read`` lists every directory the CLI loads skills from (``dirs`` when
+    empty); ``sources`` every directory any CLI does. A repository skill in
+    a source the CLI does not read is linked into ``dirs`` by a relative
+    link, so it reaches whichever CLI runs the agent, and it wins over a
+    store skill of the same name.
     """
     store = Path(store).expanduser()
     repo_dir = Path(repo_dir)
@@ -532,9 +601,11 @@ def materialize(
     previous = set(_read_manifest(manifest))
     old_store = _manifest_path(manifest, "store")
 
-    def ours(link: Path) -> bool:
-        return _points_into(link, store) or (
-            old_store is not None and _points_into(link, old_store)
+    def ours(link: Path, repo: Path) -> bool:
+        return (
+            _points_into(link, store)
+            or (old_store is not None and _points_into(link, old_store))
+            or _mirrors_into(link, repo)
         )
 
     old_repo = _manifest_path(manifest, "repo")
@@ -542,25 +613,45 @@ def materialize(
     if previous and old_repo is not None and not _same_file(old_repo, repo_dir):
         for rel in sorted(previous - _links_of_others(manifest, old_repo)):
             link = old_repo / rel
-            if ours(link):
+            if ours(link, old_repo):
                 link.unlink()
         old_git = _common_git_dir(old_repo)
         previous = set()
-    wanted = {f"{directory}/{skill.name}": skill for directory in dirs for skill in selected}
     # Another agent in this checkout may still be given the same link.
     shared = _links_of_others(manifest, repo_dir)
+    read_dirs = set(read) | set(dirs)
+    scan = tuple(dict.fromkeys((*sources, *read, *dirs)))
+    owned = repository_skills(repo_dir, scan, store, previous | shared) if dirs else {}
+    wanted: dict[str, str] = {}
+    for directory in dirs:
+        for skill in selected:
+            rel = f"{directory}/{skill.name}"
+            places = owned.get(skill.name, [])
+            if places and directory not in places:
+                own = f"{places[0]}/{skill.name}"
+                result.conflicts.append(f"{rel}: the repository's own {own} wins")
+                continue
+            wanted[rel] = str(store / skill.name)
+    for name, places in owned.items():
+        if read_dirs & set(places):
+            continue  # the CLI already reads it where it is
+        for directory in dirs:
+            rel = f"{directory}/{name}"
+            wanted[rel] = os.path.relpath(repo_dir / places[0] / name, repo_dir / directory)
+            result.mirrored[rel] = f"{places[0]}/{name}"
     for rel in sorted(previous - set(wanted) - shared):
         link = repo_dir / rel
-        if ours(link):
+        if ours(link, repo_dir):
             link.unlink()
             result.removed.append(rel)
     kept: list[str] = []
-    for rel, skill in sorted(wanted.items()):
+    for rel, target in sorted(wanted.items()):
         link = repo_dir / rel
-        target = store / skill.name
         if link.is_symlink():
-            if _points_into(link, store) or (rel in previous and ours(link)):
-                if os.readlink(link) != str(target):
+            # A link recorded here, by this agent or another, is the backbone's.
+            recorded = rel in previous or rel in shared
+            if _points_into(link, store) or (recorded and ours(link, repo_dir)):
+                if os.readlink(link) != target:
                     link.unlink()
                     link.symlink_to(target, target_is_directory=True)
             else:

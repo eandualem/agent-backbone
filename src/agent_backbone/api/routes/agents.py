@@ -6,7 +6,7 @@ import logging
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agent_backbone.api.deps import (
     get_agent_store,
@@ -53,6 +53,7 @@ from agent_backbone.services.agents import (
 )
 from agent_backbone.services.agents.operations import (
     StartRequest,
+    relink_skills,
     resolve_agent,
     start_resolved,
     stop_agent_session,
@@ -92,7 +93,14 @@ class AgentRenameRequest(BaseModel):
     name: str
 
 
-@router.post("/agents/{name}/tags", response_model=AgentConfigView)
+class AgentTagsView(AgentConfigView):
+    """An agent after ``tag``/``untag``, with what reached its running session."""
+
+    relinked: list[str] = Field(default_factory=list)
+    """Evidence lines from bringing a running session's skill links in line now."""
+
+
+@router.post("/agents/{name}/tags", response_model=AgentTagsView)
 async def tag_agent(
     name: str, body: AgentTagsRequest, store: AgentStore = Depends(get_agent_store)
 ):
@@ -102,7 +110,8 @@ async def tag_agent(
         raise HTTPException(status_code=404, detail=f"unknown agent '{name}'") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return AgentConfigView.from_spec(spec)
+    relinked = await relink_skills(store.config, [spec])
+    return AgentTagsView(**AgentConfigView.from_spec(spec).model_dump(), relinked=relinked)
 
 
 @router.post("/agents/{name}/rename", response_model=AgentConfigView)
@@ -262,6 +271,7 @@ def _request(body: AgentStartRequest, *, name: str | None = None) -> StartReques
         model=body.model,
         resume=body.resume,
         watch=tuple(body.watch),
+        tags=tuple(body.tags),
         wait=body.wait,
         inbox_only=body.inbox_only,
     )

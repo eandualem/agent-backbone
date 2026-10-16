@@ -1,23 +1,22 @@
 # Deep reviews without stopping your agent
 
-A repository agent can run the installed Codex CLI as a separate reviewer
-process while its own conversation continues. No Backbone swarm or managed
+A repository agent can run a reviewer CLI as a separate process while its own
+conversation continues. No Backbone swarm or managed
 agent session is needed. The review produces findings for an agent to verify,
 not automatic fixes.
 
-Every review uses Codex with `gpt-6-astra`, whether the implementation was
-written with Codex, Claude Code or another runtime. Independence means a separate,
-fresh reviewer context reviewing the pinned changes, not the implementing
-conversation checking itself. A different model family or CLI is not required.
-Name the model exactly; if it is unavailable, report that rather than substituting
-another reviewer.
+The reviewer depends on the CLI that wrote the change. An agent on the Codex
+CLI uses Claude Opus 5.5 (`claude-opus-5-5`), preferably, or Codex
+`gpt-6-astra`. Every other agent, Claude Code included, uses Codex
+`gpt-6-astra`. Independence means a separate, fresh reviewer context reviewing
+the pinned changes, not the implementing conversation checking itself. A
+different model family or CLI is not required. Name the model exactly; if no
+permitted reviewer can run, report that rather than substituting another one.
 
-Two scopes use the same command at different depths:
-
-| Scope | Head | Base | Codex effort |
+| Scope | Head | Base | Reviewer and depth |
 |---|---|---|---|
-| Feature branch, **before** its PR opens | the branch's commit | the integration branch (`develop`) | `high` |
-| Release, develop into main | `develop` | `main` | `ultra` |
+| Feature branch, **before** its PR opens | the branch's commit | the integration branch (`develop`) | Codex implementer: [Opus](#claude-opus-reviewer-for-codex-implementers) at `--effort high`, or Astra at `high`. Any other: [Astra](#codex-reviewer) at `high` |
+| Release, develop into main | `develop` | `main` | [Astra](#codex-reviewer) at `ultra`, whatever wrote the change, until an Opus release depth is set |
 
 Use `high` for ordinary feature work. A release review at `ultra` still requires
 explicit release authorization.
@@ -27,8 +26,10 @@ explicit release authorization.
 Check `codex --version` and `codex exec review --help`. Complete reviews were verified
 with `gpt-6-astra` at `ultra` (CLI 0.153.4) and at `high` (CLI 0.155.1). An unknown
 model fails: exit 1, a `turn.failed` event and no report. Ultra is a reasoning setting for
-Codex's review command, not a separate `codex ultrareview` subcommand. Set both
-model and effort explicitly rather than inheriting the implementing agent's defaults.
+Codex's review command, not a separate `codex ultrareview` subcommand. Set
+model, effort and `service_tier=default` explicitly. The standard service tier is
+independent of reasoning effort, including `ultra`; it does not select Fast or
+Ultrafast processing.
 
 Fetch the intended repository refs, resolve the head and base to commit IDs, and
 use a clean, detached checkout of the head. This is a merge-base diff;
@@ -50,7 +51,7 @@ mkdir -p "$review_run"
 git worktree add --detach "$review_run/repo" "$review_head"
 printf '%s\n' "head=$review_head" "base=$review_base" \
   "merge_base=$(git merge-base "$review_base" "$review_head")" \
-  "model=gpt-6-astra" "effort=$review_effort" > "$review_run/scope.txt"
+  "model=gpt-6-astra" "effort=$review_effort" "service_tier=default" > "$review_run/scope.txt"
 codex --version >> "$review_run/scope.txt"
 ```
 
@@ -67,6 +68,7 @@ env -u BACKBONE_AGENT -u BACKBONE_RUNTIME -u BACKBONE_STATE_DIR \
   --disable hooks --disable shell_snapshot \
   -c approval_policy=never \
   -c model_reasoning_effort=EFFORT \
+  -c service_tier=default \
   review --base BASE_COMMIT --model gpt-6-astra \
   --json --output-last-message /ABSOLUTE/RUN/DIR/report.md \
   > /ABSOLUTE/RUN/DIR/events.jsonl 2> /ABSOLUTE/RUN/DIR/stderr.log
@@ -75,14 +77,16 @@ env -u BACKBONE_AGENT -u BACKBONE_RUNTIME -u BACKBONE_STATE_DIR \
 Use a fresh environment without the implementing agent's `BACKBONE_*` identity,
 state paths or secrets. Disabling hooks prevents reviewer events from overwriting
 the caller's state or acknowledgments. `--ignore-user-config` leaves Codex's own
-login available while skipping its user configuration file. Repository instructions still apply.
+login available while skipping its user configuration file, including any service-tier
+default there. Keep the explicit `service_tier=default` override even when that
+file already selects the standard tier. Repository instructions still apply.
 The review retains its read-only sandbox; do not bypass it to remove a prompt.
 
 Run through the caller's background command facility and retain the process handle.
 For a job that must outlive that facility, use a detached supervisor with closed
 stdin that records the process exit code and timestamps. Save the command, CLI
-version, model, effort, head, base and merge-base alongside the report. Keep these
-artifacts under the repository's ignored `.backbone/reviews/` directory, not `docs/`.
+version, model, effort, service tier, head, base and merge-base alongside the
+report. Keep these artifacts under the repository's ignored `.backbone/reviews/` directory, not `docs/`.
 CLI 0.155.1 reports every token count as 0 in `exec review`'s `turn.completed`
 event; record tokens as unavailable, not zero. Remove the detached checkout afterwards with `git worktree remove "$review_run/repo"`;
 the saved evidence stays in the run directory.
@@ -94,6 +98,80 @@ outside that outer sandbox, retaining the inner `--sandbox read-only` and disabl
 hooks. Do not use `--dangerously-bypass-approvals-and-sandbox`. A missing model or
 authentication failure is a different problem: inspect stderr and preserve the
 requested model rather than silently substituting another one.
+
+A swarm member cannot take that route: unattended Codex members run with
+`-a never` and cannot ask for the one-process permission. Run a swarm's gate
+review from the initiating agent's session instead, on the swarm's branch.
+
+## Claude Opus reviewer (for Codex implementers)
+
+An agent working in the Codex CLI reviews its feature branch with Claude Code
+running `claude-opus-5-5`, the same way: a separate headless process in the
+clean detached checkout, while the calling agent keeps working. Prepare the run
+directory, checkout and `scope.txt` as above, recording `model=claude-opus-5-5`
+and `effort=high`, and save `claude --version` in place of Codex's. Measured
+with Claude Code 2.1.294.
+
+```bash
+cd /ABSOLUTE/RUN/DIR/repo
+env -u BACKBONE_AGENT -u BACKBONE_RUNTIME -u BACKBONE_STATE_DIR \
+  -u BACKBONE_DATA_DIR -u BACKBONE_API_KEY -u BACKBONE_LAUNCH_ID \
+  claude -p "Review the changes from BASE_COMMIT to HEAD in this repository: \
+read them with git diff --no-ext-diff --no-textconv BASE_COMMIT...HEAD and \
+git log --no-ext-diff --no-textconv BASE_COMMIT..HEAD, and \
+read the surrounding code. Report only problems a maintainer would fix (bugs, \
+regressions, security issues), each checked against the code. Do not change \
+any file. Reply with a JSON array of findings, each with file, line, severity \
+(P0 to P3), summary and failure_scenario, then one short paragraph; reply [] \
+if you find nothing." \
+  --model claude-opus-5-5 --effort high \
+  --setting-sources "" --permission-mode dontAsk --tools "Read,Grep,Glob,Bash" \
+  --allowedTools "Read Grep Glob Bash(git diff --no-ext-diff --no-textconv:*) \
+Bash(git log --no-ext-diff --no-textconv:*) Bash(git show --no-ext-diff --no-textconv:*)" \
+  --no-session-persistence --settings '{"disableAllHooks":true}' \
+  --output-format json \
+  < /dev/null > /ABSOLUTE/RUN/DIR/report.json 2> /ABSOLUTE/RUN/DIR/stderr.log
+```
+
+`--setting-sources ""` loads no user, project or local settings, so no allow
+rule from them widens what the reviewer may run; the login is not a setting and
+still works. `--tools` leaves the reviewer only reading tools and Bash, and
+`dontAsk` with `--allowedTools` refuses every command other than `git diff`,
+`git log` and `git show` without asking; refusals are listed in
+`permission_denials`. Those three are allowed only with `--no-ext-diff
+--no-textconv`, so git cannot run an external diff or textconv command its
+configuration names, which would run outside Claude Code's permission check. This is
+Claude Code's permission check, not an operating-system sandbox like Codex's
+`--sandbox read-only`, so run it only in the detached review checkout.
+`disableAllHooks` also turns off any hook that still applies, and `--no-session-persistence` leaves no resumable
+conversation. Do not use `--bare` for isolation: it refuses OAuth and keychain
+logins, so a subscription login cannot authenticate.
+
+Use a plain review prompt like the one above, not Claude Code's built-in
+`/code-review`: that skill chooses its own model, so `--model` does not decide
+who reviews (measured: a run asked for `haiku` was answered by
+`claude-sonnet-5-5`).
+
+**Exit status 0 does not prove a review ran.** Count the review as done only when
+`modelUsage` names the requested model and `result` holds the findings:
+
+```bash
+jq -e '.is_error == false and (.result | type == "string" and length > 0)
+  and (.modelUsage | has("claude-opus-5-5"))' \
+  /ABSOLUTE/RUN/DIR/report.json
+```
+
+Save the model `modelUsage` names, not only the one you asked for, with
+`total_cost_usd` and `usage`: they are the round's evidence of who reviewed, at
+what cost and with how many tokens.
+
+From inside a Codex session the reviewer needs network access to Anthropic's
+API. An agent Backbone launched on Codex has it (`claude -p --model
+claude-opus-5-5` was measured to run there). Elsewhere, ask for this one process
+to run outside the outer sandbox and keep the permission settings above.
+
+No Opus release depth is set yet. Until one is, release reviews use Astra at
+`ultra` for every implementer, as described in [Codex reviewer](#codex-reviewer).
 
 ## Retrieve and assess the result
 
@@ -163,8 +241,8 @@ and verify the resulting PR state before reporting completion.
 ## Historical review measurements
 
 These measurements describe earlier reviewer configurations, not approved
-reviewer selections. The current reviewer for every implementation is
-`gpt-6-astra`; do not launch the earlier Claude review recipes.
+reviewer selections. Use the reviewers named at the top of this guide; do not
+launch the earlier `/code-review` recipe.
 
 On a one-file diff with two seeded bugs, Claude `claude-fable-5-1` at `high`
 took 99 s and $0.56 and found both. The same diff at `max` (measured with Opus)

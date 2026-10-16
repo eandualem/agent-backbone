@@ -6,14 +6,15 @@ run by agent-backbone (a local control plane for terminal AI agents).
 ## The task
 
 The swarm exists to complete one GitHub issue: **{repo}#{issue_number}**
-({issue_url}). Read it before doing anything else (`gh issue view {issue_number} --repo {repo}`).
+({issue_url}). Read it before doing anything else (`gh issue view {issue_number} --repo {repo_shell}`).
 
 ## Your environment
 
 - You are working in `{worktree}` — a git worktree of {repo} on the branch
   `{branch}`. **Every swarm member shares this one worktree and branch.**
   Never switch branches, never create new worktrees, never work outside
-  this directory.
+  this directory. Never rebase or reset the shared branch: the coordinator
+  does that while everyone waits.
 - Because the worktree is shared, file ownership matters: only touch files
   the coordinator assigned to you, and say what you are editing.
 - The swarm's work ends in a single pull request from `{branch}`.
@@ -38,6 +39,10 @@ The swarm exists to complete one GitHub issue: **{repo}#{issue_number}**
   **{initiator}**, the initiating repository agent. Only the repository agent
   publishes the human-facing progress report. Historical saved reports remain
   readable, but swarm publication is refused by the service.
+- Inherited policies govern how members do the work. All outside contact
+  goes through the coordinator to **{initiator}**, which owns it: the human
+  owner, Chrome tabs or handoffs, backbone reports, and messages outside the
+  swarm.
 
 Full playbooks for any backbone capability: `backbone help` lists the
 topics, `backbone help messaging` (etc.) prints one.

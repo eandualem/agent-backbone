@@ -6,7 +6,7 @@ setting is on (``backbone config set security.allow_remote_plan_control true``).
 The keys are the runtime's own (``Runtime.plan_approve_keys`` /
 ``plan_reject_keys``): a runtime without a plan mode the backbone can drive
 answers 409 and nothing is typed. A rejection's feedback is an ordinary
-message through ``safe_deliver``; ``respond`` is deprecated (#357).
+message through ``safe_deliver``.
 """
 
 from __future__ import annotations
@@ -159,19 +159,3 @@ async def reject_plan(
         "action": "plan_rejected",
         "feedback": outcome.value,
     }
-
-
-@router.post("/plans/{session}/respond", deprecated=True)
-async def respond_to_plan(session: str):
-    """Deprecated (#357): answers 409 and types nothing.
-
-    No shipped runtime's plan dialog takes a typed answer: Claude Code,
-    Codex and OpenCode choose with keys only, where a pasted answer is no
-    choice and its Enter picks the highlighted option. Approve, or reject
-    with feedback. Removed at the next breaking release.
-    """
-    raise HTTPException(
-        status_code=409,
-        detail="Deprecated: plan dialogs choose with keys only, so nothing was sent. "
-        "Approve, or reject with feedback.",
-    )

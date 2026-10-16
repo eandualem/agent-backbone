@@ -4,8 +4,9 @@ One object per runtime holds it all: how to recognise the CLI in a pane
 (prompt, busy marker, permission dialog), how to paste into it, how to
 answer its permission prompt, how to launch it (binary, model, resume,
 brief injection, trust dialog, state hooks). Adding a runtime is one new
-module in this package that subclasses ``Runtime`` and registers itself in
-``__init__``.
+module in this package that subclasses ``Runtime`` and exports ``RUNTIME``,
+an entry in ``catalog.json`` (which ``__init__`` loads), and a cell in every
+row of the capability contract (``capabilities.py``).
 """
 
 from __future__ import annotations
@@ -18,8 +19,10 @@ import logging
 import re
 import shutil
 import subprocess
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal
 
 from agent_backbone.hooks import install as hooks
@@ -234,6 +237,8 @@ class Runtime:
     started with): handed to its ``SessionStart`` hook as context, which a
     peer's message cannot imitate, or not at all (a gap: start the agent
     fresh to apply a changed brief). Never as a chat message (#294)."""
+    default_env: Mapping[str, str] = MappingProxyType({})
+    """Launch environment the agent's own ``env`` can override (an opt-in)."""
     declared_capabilities: frozenset[str] = frozenset()
     """Contract rows (``capabilities.py``) this CLI provides by itself, where
     no other adapter attribute shows it (loading ``AGENTS.md``, declining a
@@ -252,6 +257,10 @@ class Runtime:
     skill_dirs: tuple[str, ...] = ()
     """Project-relative directories this CLI reads skills from, measured live
     (``docs/skills.md``). Empty: the backbone materialises no skills for it."""
+    skill_read_dirs: tuple[str, ...] = ()
+    """Every project-relative directory this CLI loads skills from, measured
+    live; empty means ``skill_dirs`` alone. A repository skill in a directory
+    another CLI reads is linked into ``skill_dirs`` for this one."""
     unattended_args: tuple[str, ...] | None = None
     """The CLI's own switch that stops it asking a person before acting — the
     launch arguments for an ``unattended`` agent, as the CLI spells them
@@ -265,6 +274,10 @@ class Runtime:
     a sandbox, ``unattended`` means free inside a wall; without one it means
     free on the machine — which is why a swarm only makes sandboxed members
     unattended by default."""
+    sandbox_commit_block: str = ""
+    """Why ``git add`` and ``git commit`` fail inside this runtime's sandbox on
+    this machine; empty when they work. An unattended member cannot ask to
+    commit outside it, so ``swarm create`` refuses one (#437)."""
     mouse_scroll: bool = False
     """Enable tmux mouse handling for this runtime's session so wheel events
     scroll terminal history. False leaves the user's tmux setting alone."""
@@ -382,6 +395,18 @@ class Runtime:
         directory the session starts in."""
         return []
 
+    def user_skill_dirs(self, env: dict[str, str]) -> list[Path]:
+        """The user-level skill directories this CLI loads in every project, as
+        it would pick them now (measured live; ``docs/skills.md``). ``env`` as
+        for ``user_instructions``; ``skills preview`` lists what they hold."""
+        return []
+
+    def reload_skills(self, state_dir: Path, session: str) -> str | None:
+        """Have a running session load its skills again after the backbone
+        changed its links; what it will do, for the evidence. ``None``: the CLI
+        loads a linked or changed skill mid-session by itself (measured live)."""
+        return None
+
     def native_memory(self, env: dict[str, str], project: Path | None = None) -> str | None:
         """The CLI's own memory across sessions, when the settings Backbone can
         read leave it on for an agent (#292): what it is and how to turn it
@@ -391,9 +416,6 @@ class Runtime:
 
     def pre_trust(self, directory: Path | str) -> None:
         """Answer the runtime's folder-trust dialog ahead of launch, if it has one."""
-
-    def prepare_unattended(self) -> None:
-        """Record any consent needed for an explicitly unattended launch."""
 
     def launch_env(self, model: str | None, effort: str | None = None) -> dict[str, str]:
         """Extra environment the session needs (runtimes that take the model or
@@ -475,6 +497,10 @@ class Runtime:
             return None
         hooks.save_settings(path, hooks.remove_hooks(hooks.load_settings(path)))
         return path
+
+    def env_args(self, env: Mapping[str, str]) -> list[str]:
+        """Launch flags that depend on the agent's launch environment."""
+        return []
 
     def effort_args(self, effort: str | None) -> list[str]:
         """Arguments that set the reasoning effort for this launch.
@@ -558,8 +584,12 @@ class Runtime:
         unattended: bool = False,
         writable_dirs: tuple[str, ...] = (),
         auto_review: bool = False,
+        env: Mapping[str, str] | None = None,
     ) -> list[str] | None:
         """The launch command, or None for a plain shell.
+
+        ``env`` is the agent's launch environment, for flags that depend on it
+        (``env_args``).
 
         ``brief_file`` is only handed over when ``brief_mode`` injects at
         launch; on ``resume`` initial-prompt runtimes get none here. A
@@ -602,6 +632,9 @@ class Runtime:
                 data_dir=data_dir,
                 state_dir=state_dir,
             ),
+            # Last: a flag here may take several values (Claude Code's
+            # --disallowedTools) and would swallow a positional argument after it.
+            *self.env_args(env or {}),
         ]
 
     # --- pane recognition ----------------------------------------------------

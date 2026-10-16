@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import (
@@ -89,7 +91,7 @@ def _event_sender(event: IssueEvent) -> str:
 
 def _source_key(event: IssueEvent, kind: str) -> str | None:
     """The originating event's identity, so a queued copy is never stored twice."""
-    repo = event.issue.repo_full_name
+    repo = event.issue.repo_full_name.casefold()
     if kind == "comment" and event.comment and event.comment.id:
         return f"comment:{repo}#{event.issue.number}:{event.comment.id}"
     if kind == "review" and event.review and event.event_type == EventType.REVIEW_STARTED:
@@ -261,11 +263,20 @@ async def _dispatch_pull_request(
     opened it (its hook logged the ``gh pr create``), for which the issues
     the pull request closes count as acknowledged instead."""
     repo = event.issue.repo_full_name
+    # A polled opening can arrive long after the fact (startup backfill), so
+    # it is matched to the action log at the pull request's creation time.
+    # An unknown creation time is matched against now, as before.
+    opened_at = None
+    if event.action == "opened" and event.issue.created_at:
+        with contextlib.suppress(ValueError, OverflowError):
+            created = datetime.fromisoformat(event.issue.created_at.replace("Z", "+00:00"))
+            opened_at = created.timestamp()
     opener = find_outgoing_pull_request(
         event.issue.head_repo,
         event.issue.head_ref,
         action_log=config.action_log_path,
         base_repo=repo,
+        at=opened_at,
     )
     confirmed = (
         find_outgoing_pull_request(
@@ -274,6 +285,7 @@ async def _dispatch_pull_request(
             action_log=config.action_log_path,
             base_repo=repo,
             include_intent=False,
+            at=opened_at,
         )
         if opener
         else None

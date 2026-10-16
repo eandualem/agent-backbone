@@ -82,9 +82,10 @@ actually generated a response in the running session.
 
 Starting an existing agent reuses its saved CLI and model and begins a **new
 conversation**. Continuing the previous one is your call: `backbone agent resume
-NAME` (or `start --resume`; API `resume: true`) reopens the session the backbone
-last saw for that runtime, or the runtime's own last conversation when no ID is
-saved. A fresh start says when a previous conversation is available. Starts are
+NAME` (or `start --resume`; API `resume: true`) reopens the conversation the
+agent's last launch held (the session id its hook reported, or the one it was
+resumed on), or the runtime's own last conversation when there is none. An id
+left by an earlier launch is not reused. A fresh start says when a previous conversation is available. Starts are
 fresh by default because a resumed agent trusts its own context over whatever
 happened in the checkout since — another CLI, a swarm, the shared memory.
 Changing runtime without specifying a model clears the previous runtime's model.
@@ -93,12 +94,14 @@ if several agents share that directory, specify a name.
 
 ```json
 {"dir": "/Users/me/code/app", "name": null, "runtime": null, "model": null,
- "resume": false, "watch": ["acme/web"], "wait": true}
+ "resume": false, "watch": ["acme/web"], "tags": ["coder"], "wait": true}
 ```
 
 Discovers (or re-registers) the agent for `dir`, starts it and — with
 `wait` — blocks until it is at its prompt (up to
 `timing.start_timeout_seconds`). Without `dir`, `name` must be a known agent.
+`tags` are added to the agent before it launches, so its first session already
+has the skills and policies they select.
 
 ```json
 {"ok": true, "session": "app", "name": "app", "working_directory": "/Users/me/code/app",
@@ -116,6 +119,20 @@ With `"inbox_only": true` the agent is registered as
 ### `POST /api/agents/{name}/start`
 
 Same body; starts a known agent (`dir` in the body registers it first).
+`{"resume": true}` continues its previous conversation instead of starting a
+fresh one:
+
+```json
+{"ok": true, "session": "app", "name": "app", "runtime": "codex", "already_existed": false,
+ "ready": "ready", "evidence": ["resuming the session the last launch reported: 019a… (9h old)"]}
+```
+
+When the saved session id is used, an evidence line names it. Without that line
+the runtime's own latest conversation was opened. A running agent is left
+as it is and returns `already_existed: true`; nothing is resumed. The CLI
+reference's [Resuming a previous conversation](cli.md#resuming-a-previous-conversation)
+lists every case, and `resume_selection` in the start's diagnostic records
+(`fresh`, `known_session` or `runtime_latest`) records the same choice.
 
 ### `POST /api/agents/{name}/stop`
 
@@ -208,13 +225,18 @@ Everything the backbone knows about one agent, with the evidence:
  "model": null, "repo": "acme/app", "watches": [],
  "state": "busy", "reason": null, "current_issue": 42, "current_repo": "acme/app",
  "state_source": "push", "state_age_seconds": 4.4, "delivery": "agent_working",
- "evidence": ["runtime: claude", "hook state 'busy' written 4s ago (fresh)"],
+ "session_id": "a1b2c3d4-…", "evidence": ["runtime: claude", "hook state 'busy' written 4s ago (fresh)"],
  "tmux": {"pane_in_mode": "0", "…": "…"}, "pane_tail": ["❯ …"],
  "recent_deliveries": [{"kind": "direct_message", "outcome": "agent_working", "…": "…"}]}
 ```
 
 `delivery` is the delivery condition: `ready`, `settling`, `human_typing`, `human_reading`,
-`agent_working`, `waiting_for_human`, `offline` or `unknown`.
+`unattended_copy_mode`, `agent_working`, `waiting_for_human`, `offline` or `unknown`.
+`session_id` is the conversation id the agent's hook reported; for a running
+agent, only one reported by the current session. A resume opens it only when
+the agent's runtime still matches the one that reported it and can open a
+session by id. Otherwise the runtime's own latest conversation opens.
+`state_age_seconds` is how long ago the hook last wrote.
 
 ### `GET /api/agents/{name}/state`
 
@@ -344,6 +366,79 @@ Supported runtimes with availability; raw tmux session names; a one-shot
 capture of a **registered agent's** screen (404 for any other tmux session —
 the API never reads or types into sessions that are not backbone agents).
 
+## Fleet snapshots
+
+The agents running at one moment, each with the conversation it was in, saved
+to be resumed exactly later. `backbone fleet` is the CLI for these routes; its
+[reference](cli.md#backbone-fleet-savelistshowresume) explains the outcomes
+and what a resumed conversation keeps.
+
+### `POST /api/fleet/snapshots`
+
+```json
+{"stop": true, "force": false, "note": "night", "from_entity": "orch"}
+```
+
+Saves every registered agent whose session is running, then, with `stop`,
+stops them. Agents that are busy or `waiting_for_human` are left running
+unless `force` is set. The caller (`from_entity`) is stopped last. All fields
+are optional; a plain save stops nothing. `201`:
+
+```json
+{"id": 12, "created_at": "2026-10-05T21:00:00.000000Z", "created_by": "orch",
+ "note": "night", "stop": true, "force": false,
+ "agents": [{"name": "app", "runtime": "codex", "model": "gpt-6-astra", "dir": "/Users/me/code/app",
+             "session_id": "a1b2c3d4-…", "session_reported_at": "2026-10-05T20:58:11.000000Z",
+             "resumable": true, "not_resumable_reason": null, "state_at_save": "idle",
+             "stop": "stopped", "stop_error": null}],
+ "counts": {"saved": 1, "resumable": 1, "stopped": 1, "skipped_busy": 0, "stop_failed": 0},
+ "resumes": []}
+```
+
+`session_id` is the current session's: the id its hook reported or, before that,
+the one it was resumed on by id (`session_reported_at` is then `null`).
+`not_resumable_reason` is `no_session_reported` or `exact_resume_unsupported`.
+`stop` is `stopped`, `skipped_busy`, `stop_failed` (with `stop_error`) or
+`not_requested`. Every entry is kept, whatever its stop did. With no agent
+running, `409` and nothing is saved.
+
+### `GET /api/fleet/snapshots?limit=20`
+
+Snapshots, newest first: `id`, `created_at`, `created_by`, `note`, `stop`,
+`counts` and `last_resume` (`{"at", "counts"}` or `null`).
+
+### `GET /api/fleet/snapshots/{id}`
+
+One snapshot in the shape above, with every resume run in `resumes`. `{id}` is
+a number or `latest`; an unknown one returns `404`.
+
+### `POST /api/fleet/snapshots/{id}/resume`
+
+Body (optional): `{"from_entity": "orch", "wait": true}`. Starts each saved
+agent on exactly its saved session id, with its saved model, a few at a time.
+With `wait`, the response comes once each is at its prompt. A resume never
+falls back to the runtime's latest conversation or a fresh one.
+
+```json
+{"snapshot_id": 12, "resumed_at": "2026-10-06T07:00:00.000000Z", "resumed_by": "orch",
+ "agents": [{"name": "app", "outcome": "resumed_known_session", "reason": null,
+             "session_id": "a1b2c3d4-…", "runtime": "codex", "model": "gpt-6-astra",
+             "ready": "ready", "session_confirmed": true,
+             "evidence": ["resuming the saved session: a1b2c3d4-…"]}],
+ "counts": {"resumed_known_session": 1}}
+```
+
+`outcome` is one of:
+- `resumed_known_session`;
+- `already_running` (left alone);
+- `not_resumed`, with `reason` `no_saved_session`, `exact_resume_unsupported`, `agent_unknown`, `dir_changed` or `runtime_changed`;
+- `failed` (the launch failed or the runtime exited).
+
+`session_confirmed` is `true` when the resumed session's hook reported the
+saved id, `false` for another id, and `null` before it reports (Claude Code
+reports at startup, OpenCode a moment after its prompt appears, Codex at its
+first turn).
+
 ## Messages
 
 ### `POST /api/messages`
@@ -358,7 +453,9 @@ false, "queue": null, "detail": "Delivered to web."}`. The target must be a
 registered agent or an active swarm (404 otherwise — the backbone never
 types into a tmux session that is not one of its agents). Outcomes:
 `delivered`, `agent_working`, `waiting_for_human`, `offline`, `expired`,
-`human_typing`, `human_reading`, `settling`, `delivery_failed`.
+`human_typing`, `human_reading`, `unattended_copy_mode`, `settling`, `delivery_failed`,
+`awaiting_ack` (blocked
+by an unconfirmed delivery, or a copy is already queued or held).
 
 The reply also includes `operation_id`, `delivery_id` and `queue_id` (nullable).
 The operation identifies this message across queue drains and retries; a duplicate
@@ -430,9 +527,15 @@ store entry with its tags, validity and the agents it reaches.
 directory into the store and tags it (422 when the directory is not a skill or
 the name is taken without `replace`; 400 when `skills.store` is empty).
 `PUT /api/skills/{name}/tags` `{tags, actor}` replaces its tags (404 for an
-unknown skill). `GET /api/skills/preview/{agent}` returns what that agent's next
-launch links, per directory, with link state and notices. `actor` is recorded in
-the store's commit history when the store is a git repository.
+unknown skill). Both relink every running agent at once and return the skill
+with `relinked`, one evidence line per running agent whose links were brought
+in line; `POST /api/agents/{name}/tags` does the same for that agent.
+`GET /api/skills/preview/{agent}` returns every skill that agent's CLI loads:
+`skills` (store skills selected by tag, per directory, with link state),
+`repository` (the repository's own, with the `directories` they are in and how
+this CLI reaches each: `state`), `user` (from `user_directories`, the CLI's
+user-level directories) and `notices`. `actor` is recorded in the store's
+commit history when the store is a git repository.
 
 ## Help and documentation
 
@@ -569,12 +672,6 @@ feedback is sent *after* the plan is declined, as an ordinary
 `feedback` field is its outcome. All three runtimes stay in plan mode after a
 rejection, so the feedback asks for a revised plan.
 
-`POST /api/plans/{name}/respond` is **deprecated** (#357): it
-answers **409** and types nothing, and it is removed at the next breaking
-release. No shipped runtime's plan dialog takes a typed answer: Claude Code,
-Codex and OpenCode choose with keys only, where a pasted answer is no choice
-and its Enter picks the highlighted option. Approve, or reject with feedback.
-
 ## Status
 
 | Route | Purpose |
@@ -596,7 +693,7 @@ See [Integrations](integrations.md).
 
 ## Webhook
 
-`POST /webhooks/github` (also `POST /`). Verified with
+`POST /webhooks/github`. Verified with
 `X-Hub-Signature-256`; `X-GitHub-Delivery` deduplicates; `ping` returns
 `pong`.
 

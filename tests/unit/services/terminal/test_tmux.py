@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import re
 import signal
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,6 +22,7 @@ from agent_backbone.services.terminal import (
     session_exists,
     start_session,
 )
+from agent_backbone.services.terminal._sessions import _LOAD_AND_EXEC
 
 
 @pytest.fixture
@@ -23,6 +31,19 @@ def mock_subprocess():
     mock = AsyncMock()
     with patch("agent_backbone.services.terminal._core.asyncio.create_subprocess_exec", mock):
         yield mock
+
+
+def _new_session(mock_subprocess) -> list[str]:
+    """The ``new-session`` command ``start_session`` hands tmux on stdin, as arguments.
+
+    Each argument is a double-quoted word with backslash escapes; the test
+    values hold no control character, which would be an octal escape.
+    """
+    start = ("tmux", "start-server", ";", "source-file", "-")
+    assert mock_subprocess.call_args_list[0].args == start
+    stdin = mock_subprocess.return_value.communicate.await_args_list[0].kwargs["input"]
+    words = re.findall(r'"((?:\\.|[^"\\])*)"', stdin.decode())
+    return [re.sub(r"\\(.)", r"\1", word) for word in words]
 
 
 class TestSessionExists:
@@ -151,7 +172,7 @@ class TestStartSession:
                 command=["claude"],
             )
             assert result is True
-            call_args = mock_subprocess.call_args_list[0][0]  # first call positional args
+            call_args = _new_session(mock_subprocess)
             assert "-c" in call_args
             assert "/tmp/wd" in call_args
             assert "claude" in call_args
@@ -179,7 +200,7 @@ class TestStartSession:
             mock_subprocess.return_value = proc
             result = await start_session("test")
             assert result is True
-            call_args = mock_subprocess.call_args_list[0][0]
+            call_args = _new_session(mock_subprocess)
             assert "-c" not in call_args
 
     async def test_start_with_multi_arg_command(self, mock_subprocess):
@@ -200,7 +221,7 @@ class TestStartSession:
                 command=["claude", "--model", "opus"],
             )
             assert result is True
-            call_args = mock_subprocess.call_args_list[0][0]
+            call_args = _new_session(mock_subprocess)
             assert "claude" in call_args
             assert "--model" in call_args
             assert "opus" in call_args
@@ -247,8 +268,8 @@ class TestQueryFormatVars:
 
 
 class TestStartSessionEnvironment:
-    async def test_initial_command_receives_env_vars(self, mock_subprocess):
-        """The initial tmux command inherits env vars when a command is supplied."""
+    async def test_env_values_never_appear_in_a_process_argument(self, mock_subprocess):
+        """Every user can read a process's arguments with ``ps`` (#289)."""
         with patch(
             "agent_backbone.services.terminal._sessions.session_exists",
             new_callable=AsyncMock,
@@ -263,15 +284,74 @@ class TestStartSessionEnvironment:
             result = await start_session(
                 "test",
                 command=["claude", "--model", "opus"],
-                environment={"BACKBONE_AGENT": "app"},
+                environment={"API_TOKEN": "s3cret value"},
+                scrub=["GITHUB_TOKEN"],
             )
 
             assert result is True
-            new_session_call = mock_subprocess.call_args_list[0][0]
-            assert "new-session" in new_session_call
-            assert "env" in new_session_call
-            assert "BACKBONE_AGENT=app" in new_session_call
-            assert "claude" in new_session_call
+            for call in mock_subprocess.call_args_list:
+                assert not any("s3cret" in arg for arg in call.args)
+            new_session = _new_session(mock_subprocess)
+            assert "API_TOKEN=s3cret value" in new_session  # the session environment
+            # The pane's start command, which tmux keeps, names the file the
+            # process reads its values from (after tmux sets TERM, SHELL, PATH).
+            launched = new_session[new_session.index("env") :]
+            env_file = Path(launched[6])
+            assert launched[:5] == ["env", "-uGITHUB_TOKEN", sys.executable, "-I", "-c"]
+            assert launched[7:] == ["claude", "--model", "opus"]
+            assert json.loads(env_file.read_text()) == {"API_TOKEN": "s3cret value"}
+            assert env_file.stat().st_mode & 0o777 == 0o600
+
+    def test_env_file_loader_sets_any_name_and_removes_the_file(self, tmp_path):
+        """Read-only shell names (``UID``) work, and a configured ``PATH`` without
+        ``rm`` still leaves no file behind."""
+        env_file = tmp_path / "env.json"
+        env_file.write_text(json.dumps({"UID": "123", "PATH": str(tmp_path), "K": "a b"}))
+        out = subprocess.run(
+            [sys.executable, "-I", "-c", _LOAD_AND_EXEC, str(env_file), "/usr/bin/env"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.splitlines()
+        assert {"UID=123", f"PATH={tmp_path}", "K=a b"} <= set(out)
+        assert not env_file.exists()
+
+    async def test_env_file_is_removed_when_it_cannot_be_written(self):
+        with (
+            patch("agent_backbone.services.terminal._sessions.session_exists", return_value=False),
+            patch("agent_backbone.services.terminal._sessions.json.dump", side_effect=OSError),
+            pytest.raises(OSError),
+        ):
+            await start_session("test", environment={"API_TOKEN": "s3cret"})
+        assert not list(Path(tempfile.gettempdir()).glob("backbone-env-*"))
+
+    async def test_env_file_is_removed_when_the_launch_is_canceled(self, tmp_path):
+        tempfile_dir = tempfile.gettempdir()
+        with (
+            patch("agent_backbone.services.terminal._sessions.session_exists", return_value=False),
+            patch(
+                "agent_backbone.services.terminal._sessions._run_tmux",
+                side_effect=asyncio.CancelledError,
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await start_session("test", environment={"API_TOKEN": "s3cret"})
+        assert not list(Path(tempfile_dir).glob("backbone-env-*"))
+
+    async def test_env_file_is_removed_when_tmux_refuses(self, mock_subprocess):
+        with patch(
+            "agent_backbone.services.terminal._sessions.session_exists",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            proc = AsyncMock()
+            proc.returncode = 1
+            proc.communicate = AsyncMock(return_value=(b"", b"duplicate session"))
+            mock_subprocess.return_value = proc
+            assert not await start_session("test", environment={"API_TOKEN": "s3cret"})
+            new_session = _new_session(mock_subprocess)
+            env_file = Path(new_session[new_session.index("-I") + 3])
+            assert not env_file.exists()
 
     async def test_env_vars_are_session_environment_from_the_start(self, mock_subprocess):
         """`new-session -e` sets the session environment atomically with the session."""
@@ -291,7 +371,7 @@ class TestStartSessionEnvironment:
                 environment={"MY_VAR": "hello", "OTHER": "world"},
             )
             assert result is True
-            new_session = mock_subprocess.call_args_list[0][0]
+            new_session = _new_session(mock_subprocess)
             e_flags = [new_session[i + 1] for i, a in enumerate(new_session) if a == "-e"]
             assert e_flags == ["MY_VAR=hello", "OTHER=world"]
             assert not [c for c in mock_subprocess.call_args_list if "set-environment" in c[0]]
@@ -457,10 +537,10 @@ class TestSessionSecretScrub:
                 scrub=["BACKBONE_API_KEY", "GITHUB_TOKEN"],
             )
             assert result is True
-            new_session = mock_subprocess.call_args_list[0][0]
+            new_session = _new_session(mock_subprocess)
             assert "-uBACKBONE_API_KEY" in new_session
             assert "-uGITHUB_TOKEN" in new_session
-            # `env -u` comes before the assignments and the command itself.
+            # `env -u` comes before the command itself.
             assert new_session.index("env") < new_session.index("-uGITHUB_TOKEN")
             assert new_session.index("-uGITHUB_TOKEN") < new_session.index("claude")
             # ...and the session environment shadows the server's from the start,
@@ -518,7 +598,7 @@ class TestSessionSecretScrub:
                 environment={"GITHUB_TOKEN": "agent-own"},
                 scrub=["GITHUB_TOKEN", "BACKBONE_API_KEY"],
             )
-            new_session = mock_subprocess.call_args_list[0][0]
+            new_session = _new_session(mock_subprocess)
             assert "GITHUB_TOKEN=agent-own" in new_session
             assert "-uGITHUB_TOKEN" not in new_session
             assert "-uBACKBONE_API_KEY" in new_session
@@ -540,7 +620,7 @@ class TestSessionSecretScrub:
                 environment={"BACKBONE_AGENT": "app"},
                 scrub=["BACKBONE_API_KEY"],
             )
-            new_session = mock_subprocess.call_args_list[0][0]
+            new_session = _new_session(mock_subprocess)
             assert "-uBACKBONE_API_KEY" in new_session
             assert "BACKBONE_AGENT=app" in new_session
             # A login shell, so the user's profile (and PATH) still applies.
@@ -554,6 +634,6 @@ class TestSessionSecretScrub:
         ):
             mock_subprocess.return_value = self._ok_proc()
             await start_session("test", command=["claude"])
-            new_session = mock_subprocess.call_args_list[0][0]
+            new_session = _new_session(mock_subprocess)
             assert "env" not in new_session
             assert new_session[-1] == "claude"
