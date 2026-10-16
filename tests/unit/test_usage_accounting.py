@@ -3,6 +3,7 @@
 import json
 from dataclasses import replace
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -14,6 +15,7 @@ from agent_backbone.services.runtimes import RUNTIMES, read_usage_jsonl
 from agent_backbone.usage import DEFAULT_PRICES, UsageEvent, estimate, timestamp
 from tests.conftest import make_config
 
+_USAGE = "agent_backbone.services.agents.usage"
 T = "2026-09-12T10:00:00Z"
 T2 = "2026-09-12T10:01:00Z"
 
@@ -805,3 +807,73 @@ async def test_usage_source_failure_is_separate_from_registration(tmp_path, db, 
         "usage_source": "OSError",
     }
     assert "private path" not in str(result)
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex"])
+async def test_gone_source_is_searched_for_once_and_keeps_its_usage(
+    tmp_path, db, monkeypatch, runtime
+):
+    first, later = {
+        "claude": (claude(), claude("m2")),
+        "codex": (codex(), codex(total=200, at=T2)),
+    }[runtime]
+    config = config_for(tmp_path, runtime)
+    path = tmp_path / "source.jsonl"
+    append(path, first)
+    searches = []
+
+    def usage_paths(sid, env):
+        searches.append(sid)
+        return [path] if path.exists() else []
+
+    monkeypatch.setattr(RUNTIMES[runtime], "usage_paths", usage_paths)
+    saved = SimpleNamespace(runtime=runtime, session_id="s1", timestamp=1789207200)
+    monkeypatch.setattr(f"{_USAGE}.read_state_file", lambda state_dir, name: saved)
+    register(config, runtime)
+    await collect_usage(config, db)
+    path.unlink()
+    for _ in range(3):  # the saved hook state names it on every pass: not a launch
+        result = await collect_usage(config, db)
+    assert len(searches) == 2  # found, then searched for once after it went
+    assert result["errors"] == []
+    (session,) = await db.usage.sessions()
+    assert (session["coverage"], session["detail"]) == ("partial", "source file is gone")
+    assert len(await db.usage.events()) == 1
+    append(path, first, later)  # back at the recorded path, grown: read again
+    await collect_usage(config, db)
+    assert len(await db.usage.events()) == 2
+
+
+async def test_a_gone_source_registered_again_is_searched_for_again(tmp_path, db, monkeypatch):
+    config = config_for(tmp_path)
+    path, resumed = tmp_path / "source.jsonl", tmp_path / "resumed.jsonl"
+    append(path, claude())
+    found = [path]
+    monkeypatch.setattr(RUNTIMES["claude"], "usage_paths", lambda sid, env: found)
+    register(config)
+    await collect_usage(config, db)
+    path.unlink()
+    found = []
+    await collect_usage(config, db)  # marked gone
+    append(resumed, claude(), claude("m2"))
+    found = [resumed]
+    await collect_usage(config, db)
+    assert len(await db.usage.events()) == 1  # not searched while gone
+    register(config, launch="resume")  # a resume writes to a new path
+    await collect_usage(config, db)
+    assert len(await db.usage.events()) == 2
+
+
+async def test_a_missing_source_with_several_matches_is_not_marked_gone(tmp_path, db, monkeypatch):
+    config = config_for(tmp_path)
+    path = tmp_path / "source.jsonl"
+    append(path, claude())
+    found = [path]
+    monkeypatch.setattr(RUNTIMES["claude"], "usage_paths", lambda sid, env: found)
+    register(config)
+    await collect_usage(config, db)
+    path.unlink()
+    found = [tmp_path / "a.jsonl", tmp_path / "b.jsonl"]
+    await collect_usage(config, db)
+    (session,) = await db.usage.sessions()
+    assert session["detail"] != "source file is gone"
