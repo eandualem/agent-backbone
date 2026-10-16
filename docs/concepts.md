@@ -35,10 +35,11 @@ app: ready — claude repo acme/app
   an agent can subscribe itself: `backbone agent watch acme/app` (the name
   defaults to `$BACKBONE_AGENT`).
 - **Subscriptions** — inbound events from a [source](sources.md) the agent
-  wants (`backbone agent subscribe desk gmail "from:upwork.com" --priority high`):
+  wants (`backbone agent subscribe desk gmail "from:alerts@example.com" --priority high`):
   a source, a filter in that source's own query language, and a priority
-  (`normal` waits for the prompt, batched; `high` reaches a working Claude Code
-  or Codex agent on its next tool call through hook context, other runtimes first when ready).
+  (`normal` waits for the prompt, batched; `high` reaches a working Claude Code,
+  Codex or OpenCode agent on its next tool call through hook context, or on Codex when a long-running
+  command exits; other runtimes first when ready).
 
 There are no roles, groups or hierarchies. An orchestrator is an ordinary
 agent whose directory is its own repository and which watches the others.
@@ -96,10 +97,11 @@ Derived from the state plus the terminal, right before anything is pasted:
 
 | Condition | Meaning | Deliverable? |
 |---|---|---|
-| `offline` | no session | no — queued |
+| `offline` | no session, or an [inbox-only](configuration.md#agents) agent | no — queued (an inbox-only agent reads its messages with `backbone inbox`) |
 | `waiting_for_human` | agent is asking a person something | no — queued |
 | `agent_working` | starting, busy, or blocked on a usage limit or provider failure | no — queued (never bypassed) |
 | `human_reading` | someone is selecting text or reading tmux scrollback | no — queued, even with `priority` |
+| `unattended_copy_mode` | the pane is in tmux copy mode and no client is viewing it | no — queued, even with `priority`, until someone attaches and presses `q` |
 | `human_typing` | someone typed text into the prompt | no — queued, unless `priority` |
 | `settling` | hook reported idle less than `timing.grace_period_seconds` ago, or a fresh session's brief (Codex, aider) is not delivered yet | not yet, unless `priority`; the brief goes first even then |
 | `ready` | idle, empty prompt | **yes** |
@@ -110,6 +112,13 @@ without cancelling it: otherwise-ready agents report `human_reading`, and
 messages wait until the human leaves copy mode (normally `q` or Escape).
 Monitoring and priority delivery never clear a selection. The agent's own state
 still takes precedence: a busy agent remains `agent_working` while you read.
+
+tmux keeps a pane in copy mode after its last client detaches. When no client
+is viewing the pane's window, the agent reports `unattended_copy_mode` instead:
+messages still wait, and `backbone agent inspect` and `backbone doctor` say to
+attach to the session and press `q`. A sender whose message expires in the
+queue is told the condition that held it, so they can tell whether a resend
+would meet it too.
 
 ## Message
 
@@ -122,25 +131,23 @@ knows where it came from:
 [via:github issue:42] New issue targeting you: acme/app#42 [bug] "Fix flaky auth test" (from planner, blocking). Link: https://…
 [via:telegram from:alice] status?
 [via:gmail] New gmail messages matching your subscriptions. …
-- 199a4f2c3d1e0b7a · from «Upwork <donotreply@upwork.com>» · subject «New job: Python scraper» · 2026-09-17 14:02Z · https://mail.google.com/mail/#all/199a4f2c3d1e0b7a
+- 199a4f2c3d1e0b7a · from «Alerts <alerts@example.com>» · subject «Outage: build queue stalled» · 2026-09-17 14:02Z · https://mail.google.com/mail/#all/199a4f2c3d1e0b7a
 ```
 
 ## Delivery
 
 One attempt to hand a message to a session, recorded with its **kind**
 (`issue`, `comment`, `review`, `pull_request`, `direct_message`, `watch`,
-`escalation`, `plan_response`, `subscription`, `steer`), repository, outcome and a preview — direct
+`escalation`, `subscription`, `steer`), repository, outcome and a preview — direct
 messages included. A `steer` (`backbone tell --steer`) is never queued or
 pasted: it is offered to a working agent's hook and its record moves from
-`offered` to `handed_off`, `not_taken` or `cancelled`. A `plan_response` (an answer typed into a plan prompt)
-is the one kind that is **never queued**: it goes in only while the agent
-is waiting for a plan decision, and is refused as `not_waiting` otherwise. What cannot be delivered now is **queued** in the database and
+`offered` to `handed_off`, `not_taken` or `cancelled`. What cannot be delivered now is **queued** in the database and
 delivered by the background jobs — a message that waited at least two
 minutes is delivered with `(queued N min ago)` (`N h` from two hours) after
 its envelope, so a review or comment drained after a long busy stretch
 does not read as current; queued messages expire after
 `timing.queue_expiry_minutes` (30), except active swarm coordination, inbox holds,
-an agent's startup brief and `subscription` batches (facts, not conversation: they grow while the agent
+direct messages to an inbox-only agent, an agent's startup brief and `subscription` batches (facts, not conversation: they grow while the agent
 is busy and are retired only when delivered). Nothing expires for an agent whose
 queue is held by an unconfirmed (`uncertain`) delivery: that wait measures the
 hold, not whether the message is still wanted. Once the hold is acknowledged,
@@ -190,9 +197,11 @@ from the runtime's measured state and from operational diagnostics. See
 A directory with a `SKILL.md` that an agent's CLI loads on demand. The
 **store** (`skills.store`, `~/skills`) holds the one shared copy of each;
 a skill's frontmatter names the **tags** of the agents that receive it
-(`all` for everyone, `agent:NAME` for one). At launch the backbone links the
-selected skills into the directory the runtime reads and never touches a
-skill the repository owns. See [Skills](skills.md).
+(`all` for everyone, `agent:NAME` for one). At launch, and for a running
+agent whenever a skill or its tags change, the backbone links the selected
+skills into the directory the runtime reads. It never changes a skill the
+repository owns, and links one kept where only another CLI reads it, so the
+repository's skills reach whichever CLI runs the agent. See [Skills](skills.md).
 
 ## Settings
 
@@ -215,6 +224,10 @@ Background loops inside the backbone process:
 | `sources-poll` | `sources.poll_interval_seconds` (60 s) | only with a configured [source](sources.md): search each source for new items matching any subscription filter and deliver them |
 | `github-backfill` | starts at startup | webhook intake only: catch up on downtime; `delivery-retry` retries unfinished repositories until catch-up succeeds |
 | `prune` | 6 h | delete old deliveries, events and completed queue bodies; rotate the hook action log |
+| `integrations-sync` | 5 min | re-provision each integration's per-agent surfaces, such as Telegram topics |
+| `report-notifications` | 30 s | post new [progress reports](reports.md) to the integrations |
+| `report-audio` | 30 s | send report voice messages, when `telegram.report_audio` is on |
+| `upgrade-watch` | 60 s | restart the backbone itself onto new code when the installed version changes, or the checkout moves on the branch it started on (not when it switches branches), with no active upgrade hold and nothing being routed; off with `backbone.restart_on_upgrade` |
 
 ## What the backbone does not decide
 

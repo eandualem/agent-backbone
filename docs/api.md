@@ -82,9 +82,10 @@ actually generated a response in the running session.
 
 Starting an existing agent reuses its saved CLI and model and begins a **new
 conversation**. Continuing the previous one is your call: `backbone agent resume
-NAME` (or `start --resume`; API `resume: true`) reopens the session the backbone
-last saw for that runtime, or the runtime's own last conversation when no ID is
-saved. A fresh start says when a previous conversation is available. Starts are
+NAME` (or `start --resume`; API `resume: true`) reopens the conversation the
+agent's last launch held (the session id its hook reported, or the one it was
+resumed on), or the runtime's own last conversation when there is none. An id
+left by an earlier launch is not reused. A fresh start says when a previous conversation is available. Starts are
 fresh by default because a resumed agent trusts its own context over whatever
 happened in the checkout since — another CLI, a swarm, the shared memory.
 Changing runtime without specifying a model clears the previous runtime's model.
@@ -93,12 +94,14 @@ if several agents share that directory, specify a name.
 
 ```json
 {"dir": "/Users/me/code/app", "name": null, "runtime": null, "model": null,
- "resume": false, "watch": ["acme/web"], "wait": true}
+ "resume": false, "watch": ["acme/web"], "tags": ["coder"], "wait": true}
 ```
 
 Discovers (or re-registers) the agent for `dir`, starts it and — with
 `wait` — blocks until it is at its prompt (up to
 `timing.start_timeout_seconds`). Without `dir`, `name` must be a known agent.
+`tags` are added to the agent before it launches, so its first session already
+has the skills and policies they select.
 
 ```json
 {"ok": true, "session": "app", "name": "app", "working_directory": "/Users/me/code/app",
@@ -109,9 +112,27 @@ Discovers (or re-registers) the agent for `dir`, starts it and — with
 `ready` is `ready`, `waiting_for_human` (the runtime is asking something —
 `evidence` shows the question), `timeout`, `exited` or `not_waited`.
 
+With `"inbox_only": true` the agent is registered as
+[inbox-only](configuration.md#agents) and nothing is launched: `ready` is
+`inbox_only`. A start without it for an inbox-only agent returns 400.
+
 ### `POST /api/agents/{name}/start`
 
 Same body; starts a known agent (`dir` in the body registers it first).
+`{"resume": true}` continues its previous conversation instead of starting a
+fresh one:
+
+```json
+{"ok": true, "session": "app", "name": "app", "runtime": "codex", "already_existed": false,
+ "ready": "ready", "evidence": ["resuming the session the last launch reported: 019a… (9h old)"]}
+```
+
+When the saved session id is used, an evidence line names it. Without that line
+the runtime's own latest conversation was opened. A running agent is left
+as it is and returns `already_existed: true`; nothing is resumed. The CLI
+reference's [Resuming a previous conversation](cli.md#resuming-a-previous-conversation)
+lists every case, and `resume_selection` in the start's diagnostic records
+(`fresh`, `known_session` or `runtime_latest`) records the same choice.
 
 ### `POST /api/agents/{name}/stop`
 
@@ -187,8 +208,9 @@ approval is an `approval` event in `GET /api/events`.
 ### `POST /api/agents/{name}/deny`
 
 Same body. Refuses the prompt with the runtime's refusing key (Escape for
-Claude Code and Codex), under the same gate: only a dialog on screen is
-answered, and the denial is recorded as a `denial` event. Response
+Claude Code, Codex, Gemini CLI, OpenCode and Deep Code), under the same
+gate: only a dialog on screen is answered, and the denial is recorded as a
+`denial` event. Response
 `{"ok": true, "session": "app", "outcome": "denied", "evidence": ["answered with Escape; prompt cleared"],
 "denied_by": "orch"}`. `approve` answers `409 not_permission` for a
 *choice* dialog (Codex's rate-limit model switch, where Enter would pick
@@ -203,13 +225,18 @@ Everything the backbone knows about one agent, with the evidence:
  "model": null, "repo": "acme/app", "watches": [],
  "state": "busy", "reason": null, "current_issue": 42, "current_repo": "acme/app",
  "state_source": "push", "state_age_seconds": 4.4, "delivery": "agent_working",
- "evidence": ["runtime: claude", "hook state 'busy' written 4s ago (fresh)"],
+ "session_id": "a1b2c3d4-…", "evidence": ["runtime: claude", "hook state 'busy' written 4s ago (fresh)"],
  "tmux": {"pane_in_mode": "0", "…": "…"}, "pane_tail": ["❯ …"],
  "recent_deliveries": [{"kind": "direct_message", "outcome": "agent_working", "…": "…"}]}
 ```
 
 `delivery` is the delivery condition: `ready`, `settling`, `human_typing`, `human_reading`,
-`agent_working`, `waiting_for_human`, `offline` or `unknown`.
+`unattended_copy_mode`, `agent_working`, `waiting_for_human`, `offline` or `unknown`.
+`session_id` is the conversation id the agent's hook reported; for a running
+agent, only one reported by the current session. A resume opens it only when
+the agent's runtime still matches the one that reported it and can open a
+session by id. Otherwise the runtime's own latest conversation opens.
+`state_age_seconds` is how long ago the hook last wrote.
 
 ### `GET /api/agents/{name}/state`
 
@@ -236,7 +263,7 @@ includes `last_message`, `detail`, `state_source` and `evidence`, when available
 CLI status uses those observations without polling GitHub for task estimates.
 
 Change `dir`, `runtime`, `model`, `repo`, `tags`, `env`, `description`,
-`always_on`, `unattended` (booleans; see [configuration](configuration.md#agents)).
+`always_on`, `unattended`, `inbox_only` (booleans; see [configuration](configuration.md#agents)).
 Changing `runtime` clears `unattended` unless the same request sets it: a
 freedom granted with one CLI's sandbox in mind does not follow the agent to
 another.
@@ -262,7 +289,7 @@ returns 409. External GitHub labels and scripts are not changed. See the
 
 Watch / stop watching a repository; forget a stopped agent (409 if running).
 
-### `POST /api/agents/{name}/subscribe` `{"source": "gmail", "filter": "from:upwork.com", "priority": "high"}` · `/unsubscribe` `{"id": 3}`
+### `POST /api/agents/{name}/subscribe` `{"source": "gmail", "filter": "from:alerts@example.com", "priority": "high"}` · `/unsubscribe` `{"id": 3}`
 
 Subscribe to inbound events from a [source](sources.md), matched by a filter in
 the source's own query language, at `normal` (default) or `high` priority; the
@@ -274,16 +301,18 @@ configuration view with `subscriptions: [{id, source, filter, priority}]`;
 
 A page of a registered agent's user-facing messages, reads only. `source` is
 `transcript` when the runtime keeps a record the backbone can read (Claude
-Code, Codex; located from the session id the hook recorded, only when that
-record's runtime is the live one) and `screen` otherwise (`screen=true`, no
-transcript, an unsupported runtime): the visible terminal with ANSI stripped
-in `lines`.
+Code, Codex, OpenCode; located from the session id the hook recorded, only
+when that record's runtime is the live one) and `screen` otherwise
+(`screen=true`, no transcript, an unsupported runtime): the visible terminal
+with ANSI stripped in `lines`.
 
 Messages are the agent's own text to the person — progress, commentary and
 replies — **complete**; tool calls, tool results and thinking are not
 messages and are never included. A page holds at most `lines` messages
 (max 200) and never cuts one. Navigation is by byte offset into the
-append-only file: by default the last `lines` messages; `before=OFFSET`
+append-only file (OpenCode: the message's position in its database, its
+creation time in milliseconds × 1000 plus its order within that millisecond,
+used the same way): by default the last `lines` messages; `before=OFFSET`
 the messages ending at or before it (earlier pages); `since=OFFSET` the
 messages starting at or after it (later pages), with `end=OFFSET` bounding a
 range. `range_start`/`range_end` are the page's offsets, `more_before` /
@@ -308,9 +337,12 @@ offset to continue from. `400` when `since` and `before` are both given or
 Guidance for the agent's **current task**, handed over through its runtime's
 hook as a transient offer — never a queue row, never a paste. Accepted only
 when the registered agent is `agent_working` on a runtime whose hook can add
-context (Claude Code, Codex) in a session the backbone started; the offer is
+context (Claude Code, Codex, OpenCode) in a session the backbone started, and
+not once its turn failed at the provider (`blocked` / `provider`); the offer is
 written for that session only (`<state_dir>/context/<agent>/<launch_id>/`)
-and the hook returns it as `additionalContext` on the next tool call, with the
+and the hook returns it as `additionalContext` on the next tool call, or on Codex
+when a long-running command exits (OpenCode's
+plugin adds it to the running turn as a user message after that call), with the
 envelope `[via:backbone from:<from_entity>] (steer for your current task) …`.
 
 ```json
@@ -323,7 +355,7 @@ envelope `[via:backbone from:<from_entity>] (steer for your current task) …`.
 `failed` (the offer could not be written). Status lives in the delivery log
 (`kind` `steer`, `GET /api/deliveries?kind=steer&session=app`, `agent inspect`):
 `offered` → `handed_off` once the hook took it, `not_taken` when the turn
-ended first or no further tool call took it within 300 s (the offer is removed), or `cancelled` when the
+ended first or nothing took it within 300 s, checked every 15 s (the offer is removed), or `cancelled` when the
 session was replaced first. At-most-once handoff; a handoff is not
 incorporation. `404` for an unregistered agent; `422` for a sender that does
 not fit the envelope.
@@ -333,6 +365,79 @@ not fit the envelope.
 Supported runtimes with availability; raw tmux session names; a one-shot
 capture of a **registered agent's** screen (404 for any other tmux session —
 the API never reads or types into sessions that are not backbone agents).
+
+## Fleet snapshots
+
+The agents running at one moment, each with the conversation it was in, saved
+to be resumed exactly later. `backbone fleet` is the CLI for these routes; its
+[reference](cli.md#backbone-fleet-savelistshowresume) explains the outcomes
+and what a resumed conversation keeps.
+
+### `POST /api/fleet/snapshots`
+
+```json
+{"stop": true, "force": false, "note": "night", "from_entity": "orch"}
+```
+
+Saves every registered agent whose session is running, then, with `stop`,
+stops them. Agents that are busy or `waiting_for_human` are left running
+unless `force` is set. The caller (`from_entity`) is stopped last. All fields
+are optional; a plain save stops nothing. `201`:
+
+```json
+{"id": 12, "created_at": "2026-10-05T21:00:00.000000Z", "created_by": "orch",
+ "note": "night", "stop": true, "force": false,
+ "agents": [{"name": "app", "runtime": "codex", "model": "gpt-6-astra", "dir": "/Users/me/code/app",
+             "session_id": "a1b2c3d4-…", "session_reported_at": "2026-10-05T20:58:11.000000Z",
+             "resumable": true, "not_resumable_reason": null, "state_at_save": "idle",
+             "stop": "stopped", "stop_error": null}],
+ "counts": {"saved": 1, "resumable": 1, "stopped": 1, "skipped_busy": 0, "stop_failed": 0},
+ "resumes": []}
+```
+
+`session_id` is the current session's: the id its hook reported or, before that,
+the one it was resumed on by id (`session_reported_at` is then `null`).
+`not_resumable_reason` is `no_session_reported` or `exact_resume_unsupported`.
+`stop` is `stopped`, `skipped_busy`, `stop_failed` (with `stop_error`) or
+`not_requested`. Every entry is kept, whatever its stop did. With no agent
+running, `409` and nothing is saved.
+
+### `GET /api/fleet/snapshots?limit=20`
+
+Snapshots, newest first: `id`, `created_at`, `created_by`, `note`, `stop`,
+`counts` and `last_resume` (`{"at", "counts"}` or `null`).
+
+### `GET /api/fleet/snapshots/{id}`
+
+One snapshot in the shape above, with every resume run in `resumes`. `{id}` is
+a number or `latest`; an unknown one returns `404`.
+
+### `POST /api/fleet/snapshots/{id}/resume`
+
+Body (optional): `{"from_entity": "orch", "wait": true}`. Starts each saved
+agent on exactly its saved session id, with its saved model, a few at a time.
+With `wait`, the response comes once each is at its prompt. A resume never
+falls back to the runtime's latest conversation or a fresh one.
+
+```json
+{"snapshot_id": 12, "resumed_at": "2026-10-06T07:00:00.000000Z", "resumed_by": "orch",
+ "agents": [{"name": "app", "outcome": "resumed_known_session", "reason": null,
+             "session_id": "a1b2c3d4-…", "runtime": "codex", "model": "gpt-6-astra",
+             "ready": "ready", "session_confirmed": true,
+             "evidence": ["resuming the saved session: a1b2c3d4-…"]}],
+ "counts": {"resumed_known_session": 1}}
+```
+
+`outcome` is one of:
+- `resumed_known_session`;
+- `already_running` (left alone);
+- `not_resumed`, with `reason` `no_saved_session`, `exact_resume_unsupported`, `agent_unknown`, `dir_changed` or `runtime_changed`;
+- `failed` (the launch failed or the runtime exited).
+
+`session_confirmed` is `true` when the resumed session's hook reported the
+saved id, `false` for another id, and `null` before it reports (Claude Code
+reports at startup, OpenCode a moment after its prompt appears, Codex at its
+first turn).
 
 ## Messages
 
@@ -348,7 +453,9 @@ false, "queue": null, "detail": "Delivered to web."}`. The target must be a
 registered agent or an active swarm (404 otherwise — the backbone never
 types into a tmux session that is not one of its agents). Outcomes:
 `delivered`, `agent_working`, `waiting_for_human`, `offline`, `expired`,
-`human_typing`, `human_reading`, `settling`, `delivery_failed`.
+`human_typing`, `human_reading`, `unattended_copy_mode`, `settling`, `delivery_failed`,
+`awaiting_ack` (blocked
+by an unconfirmed delivery, or a copy is already queued or held).
 
 The reply also includes `operation_id`, `delivery_id` and `queue_id` (nullable).
 The operation identifies this message across queue drains and retries; a duplicate
@@ -371,10 +478,38 @@ reading the reply. Two senders with identical text are two messages; the
 same sender repeating the same text while the first copy waits is one.
 
 `from_entity` must be nonblank, at most 64 characters, and contain no square
-brackets, CR or LF; invalid senders return 422. The API key grants access, but
-the supplied sender name is not authenticated identity.
+brackets or whitespace, and nothing that reads as `owner-confirmed` (in any
+case or character width, with any separator); invalid senders return 422.
+The same rule applies to `POST /api/steer`. A restart's continuation sender
+follows it when given; an empty sender means `backbone`. The API key grants
+access, but the supplied sender name is not authenticated identity.
+
+A line of the message that starts like an envelope (`[via:`) is delivered as
+`[quoted] [via:…`. An [enrolled signed sender](owner-confirmed-messages.md)
+may add `owner_confirmation`; the response then carries `confirmation_id` and
+the `receipt`.
 
 This is the endpoint agents use to talk to each other.
+
+## Signed senders
+
+An app can enroll an Ed25519 key for its sender name; every request made as
+that name must then be signed, and a signed `POST /api/messages` or
+`POST /api/steer` may carry `owner_confirmation`, the owner's confirmation of
+exactly that text, which Backbone records and marks in the envelope. The wire format, the refusal reasons and the
+enrollment flow are in [Signed senders and owner-confirmed
+messages](owner-confirmed-messages.md).
+
+| Route | What it does |
+|---|---|
+| `GET /api/signing/audience` | This install's audience id, which signed requests are bound to |
+| `GET /api/signing/enrollment?sender=` | A name's epoch, key fingerprint and pending transition |
+| `POST /api/signing/transitions` | Start a set, replace or clear; it takes effect when the owner sends `/approve_key` in Telegram |
+| `POST /api/signing/rotation` | Replace the key, signed by the current one |
+| `GET /api/signing/observations?sender=&after=` | How requests made as the name fared while a transition was pending |
+| `GET /api/signing/receipts?after=&limit=` | The signed sender's owner-confirmation receipts, for reconciliation (a signed request) |
+| `POST /api/signing/owner` `{"telegram_user_id": 42}` | Set the Telegram user who approves key changes (once; a change waits for the current owner) |
+| `POST /api/messages/validate` `{"confirmation_id": "…", "done": false}` | An agent claims an owner confirmation delivered to it and gets its exact text, or closes the claim; the caller is identified from its connection |
 
 ## Config
 
@@ -392,9 +527,15 @@ store entry with its tags, validity and the agents it reaches.
 directory into the store and tags it (422 when the directory is not a skill or
 the name is taken without `replace`; 400 when `skills.store` is empty).
 `PUT /api/skills/{name}/tags` `{tags, actor}` replaces its tags (404 for an
-unknown skill). `GET /api/skills/preview/{agent}` returns what that agent's next
-launch links, per directory, with link state and notices. `actor` is recorded in
-the store's commit history when the store is a git repository.
+unknown skill). Both relink every running agent at once and return the skill
+with `relinked`, one evidence line per running agent whose links were brought
+in line; `POST /api/agents/{name}/tags` does the same for that agent.
+`GET /api/skills/preview/{agent}` returns every skill that agent's CLI loads:
+`skills` (store skills selected by tag, per directory, with link state),
+`repository` (the repository's own, with the `directories` they are in and how
+this CLI reaches each: `state`), `user` (from `user_directories`, the CLI's
+user-level directories) and `notices`. `actor` is recorded in the store's
+commit history when the store is a git repository.
 
 ## Help and documentation
 
@@ -517,21 +658,19 @@ proof that its original cause recovered.
 (with the plan text — read only from `<state_dir>/plans/`, never from an
 arbitrary path the state record names), and — only when
 `security.allow_remote_plan_control` is on and `{name}` is a registered
-agent — `POST /api/plans/{name}/approve`, `/reject {"feedback"}`,
-`/respond {"input"}`.
+agent — `POST /api/plans/{name}/approve` and `/reject {"feedback"}`.
 
 Approve and reject send the agent's **runtime's own** plan keys
-(`Runtime.plan_approve_keys` / `plan_reject_keys`; Claude Code today). A
-runtime without a plan mode the backbone can drive answers **409** and
-nothing is typed. The response text (`/respond`) is a `plan_response`
-delivery through `safe_deliver`: it goes in only while the agent is
-waiting for a plan decision (`not_waiting` otherwise — a bare option
-number at an idle prompt would be a new instruction), is recorded like
-every other delivery, and is never queued — a 409 names the outcome.
-`not_waiting` occurs only here, never on `POST /api/messages`. Rejection
-feedback is not a plan response: it is sent *after* plan mode is left, as
-an ordinary `direct_message` (enveloped, queued if the agent is busy); the
-reply's `feedback` field is its outcome.
+(`Runtime.plan_approve_keys` / `plan_reject_keys`: Claude Code, Codex in
+Plan mode, and OpenCode's plan agent when `OPENCODE_EXPERIMENTAL_PLAN_MODE` is
+set in the agent's environment). A runtime without a plan mode the backbone
+can drive answers **409** and nothing is typed. Claude Code and Codex ask in a
+dialog of their own: their keys go in only while it is on screen (otherwise
+**409**, not waiting), and then wait a moment for it to go. Rejection
+feedback is sent *after* the plan is declined, as an ordinary
+`direct_message` (enveloped, queued if the agent is busy); the reply's
+`feedback` field is its outcome. All three runtimes stay in plan mode after a
+rejection, so the feedback asks for a revised plan.
 
 ## Status
 
@@ -554,7 +693,7 @@ See [Integrations](integrations.md).
 
 ## Webhook
 
-`POST /webhooks/github` (also `POST /`). Verified with
+`POST /webhooks/github`. Verified with
 `X-Hub-Signature-256`; `X-GitHub-Delivery` deduplicates; `ping` returns
 `pong`.
 
@@ -568,6 +707,19 @@ Server emits `sessions:update` with the same array as `GET /api/agents`:
 a full snapshot on connect, then again whenever an agent
 starts/stops/changes state. Updates are change-only — an unchanged system
 emits nothing (the monitor job re-checks once a minute).
+
+It also emits `inbox:pending` `{"session": "app", "pending": 2}` when an
+agent's [inbox](#cooperative-inbox) has more to read: at once when a message
+to it is queued through `POST /api/messages`, and within a minute for rows
+written otherwise (such as an expiry notice, or an escalation notice to an
+inbox-only agent). `pending` is how many rows are
+waiting to be read; the event carries no message text. It is a hint, not a
+delivery: read with `POST /api/messages/inbox`. One read returns at most
+ten, unacknowledged messages first, so acknowledge each message once it is
+handled and read again until a read returns none; a message you cannot
+acknowledge yet keeps coming back, so stop there. Also read once on connect
+and on a slow fallback poll, because a hint missed during a disconnect or
+restart is not sent again.
 
 ### Namespace `/terminal` (read-only)
 
@@ -601,6 +753,7 @@ previous PTY cleanup to finish.
 ```js
 const sio = io("http://127.0.0.1:7120/sessions", { auth: { api_key: KEY } });
 sio.on("sessions:update", agents => render(agents));
+sio.on("inbox:pending", ({ session }) => session === ME && readInbox());
 ```
 
 ## Hold automatic upgrade restarts
@@ -622,6 +775,9 @@ coordination, acknowledgement and retention.
 `{"session":"worker","messages":[...]}` with `id`, `operation_id`, `message`,
 `ack_token`, `sender`, `status`, and `enqueued_at`. Acknowledge with the same endpoint and
 `{"session":"worker","acknowledge":["41:operation-id"]}`. Pass each complete `ack_token` returned by the inbox, not a numeric row ID.
+The inbox of an [inbox-only](configuration.md#agents) agent also returns
+escalation notices (their text starts `[via:backbone]` without a `from:`),
+so it can be the `escalation.target`.
 Up to 20 tokens per acknowledgement; stale or mismatched tokens return 409, unknown session 404.
 The existing shared API key is required. Session names are self-asserted, as with
 ordinary messaging; this is not a per-agent authentication boundary.

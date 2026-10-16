@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
+
 from agent_backbone.services.runtimes import get_runtime
 from agent_backbone.services.runtimes.base import transcript_clock
+from tests.support import gemini_session, opencode_db
 
 LONG = "A" * 5000 + "\nsecond paragraph " + "B" * 3000
 
@@ -132,8 +136,118 @@ def test_codex_keeps_assistant_messages_complete_and_nothing_else():
     assert entries[1].text == LONG
 
 
+def _opencode_text(body, ended=1790071205000):
+    return {"type": "text", "text": body, "time": {"start": ended - 900, "end": ended}}
+
+
+def test_opencode_keeps_completed_assistant_text_complete_by_position(tmp_path):
+    base = 1790071200000  # each part below is created a millisecond after the one before
+    assistant = {"role": "assistant"}
+    path = opencode_db(
+        tmp_path / "opencode.db",
+        [
+            ("s", {"role": "user"}, [{"type": "text", "text": "Fix the bug"}]),
+            (
+                "s",
+                assistant,
+                [
+                    {"type": "step-start"},
+                    {**_opencode_text("Looking at it now."), "_created": base + 2},  # same ms
+                    {"type": "tool", "tool": "bash", "state": {"output": "3 passed"}},
+                    {"type": "step-finish"},
+                ],
+            ),
+            (
+                "s",
+                assistant,
+                [
+                    {"type": "reasoning", "text": "private"},
+                    _opencode_text(LONG, 1790071212000),
+                    _opencode_text(" \n"),
+                ],
+            ),
+            ("s", {"role": "assistant", "summary": True}, [_opencode_text("compaction")]),
+            ("child", assistant, [_opencode_text("sub-agent")]),
+            ("s", assistant, [{"type": "text", "text": "", "time": {"start": base}}]),  # streaming
+        ],
+    )
+    entries, more_before, more_after = get_runtime("opencode").transcript_page(path, "s", limit=10)
+    assert [(e.time, e.role, e.start, e.end) for e in entries] == [
+        ("10:00:05", "assistant", (base + 2) * 1000 + 1, (base + 2) * 1000 + 2),
+        ("10:00:12", "assistant", (base + 6) * 1000, (base + 6) * 1000 + 1),
+    ]
+    assert entries[0].text == "Looking at it now."
+    assert entries[1].text == LONG  # never shortened
+    assert more_before is False and more_after is False
+
+
+def test_opencode_positions_survive_an_undo_that_frees_rowids(tmp_path):
+    assistant = {"role": "assistant"}
+    path = opencode_db(
+        tmp_path / "opencode.db",
+        [("s", assistant, [_opencode_text("kept")]), ("s", assistant, [_opencode_text("undone")])],
+    )
+    rt = get_runtime("opencode")
+    seen, _, _ = rt.transcript_page(path, "s", limit=10)
+    # Undo deletes the last message; SQLite gives its rowid to the next reply.
+    conn = sqlite3.connect(path)
+    with conn:
+        conn.execute("DELETE FROM part WHERE message_id = 'msg_1'")
+        conn.execute("DELETE FROM message WHERE id = 'msg_1'")
+        conn.execute("INSERT INTO message VALUES ('msg_2', 's', 0, 0, ?)", (json.dumps(assistant),))
+        conn.execute(
+            "INSERT INTO part VALUES ('prt_2_0', 'msg_2', 's', 1790071300000, 0, ?)",
+            (json.dumps(_opencode_text("after the undo")),),
+        )
+        assert conn.execute("SELECT rowid FROM part WHERE id = 'prt_2_0'").fetchone() == (2,)
+    conn.close()
+    later, more_before, more_after = rt.transcript_page(path, "s", limit=10, since=seen[-1].end)
+    assert [e.text for e in later] == ["after the undo"]
+    assert more_before is True and more_after is False
+
+
+def _gemini_reply(identity, text, second=5, **extra):
+    stamp = f"2026-09-28T10:00:{second:02d}.000Z"
+    return {"id": identity, "timestamp": stamp, "type": "gemini", "content": text, **extra}
+
+
+def test_gemini_keeps_each_reply_once_complete_at_its_first_record(tmp_path):
+    call = [{"id": "c1", "name": "run_shell_command", "args": {"command": "pytest -q"}}]
+    records = [
+        {"$set": {"messages": [_gemini_reply("old", "replayed history")]}},
+        {"id": "u1", "type": "user", "content": [{"text": "Fix the bug"}]},
+        _gemini_reply("g1", "Looking at it now.", thoughts=[{"subject": "private"}]),
+        {"$set": {"lastUpdated": "2026-09-28T10:00:05.001Z"}},
+        _gemini_reply("g1", "Looking at it now.", toolCalls=call),  # the call finished
+        {"id": "u2", "type": "user", "content": [{"functionResponse": {"id": "c1"}}]},
+        {"id": "i1", "type": "info", "content": "Request cancelled."},
+        _gemini_reply("g2", "", toolCalls=call),  # a call with no text
+        _gemini_reply("g3", LONG, second=12),
+        {"$rewindTo": "g3"},  # a rewind does not unsay a reply
+        _gemini_reply("g4", [{"text": "synthetic"}]),  # history replayed as parts
+        "not json",
+        _gemini_reply("g5", " \n"),
+        '{"id":"g6","type":"gemini","content":"partly writ',  # still being appended
+    ]
+    path = gemini_session(tmp_path / "session.jsonl", "s", records)
+    lines = path.read_bytes().splitlines(keepends=True)
+    offsets = [sum(map(len, lines[:i])) for i in range(len(lines) + 1)]
+    rt = get_runtime("gemini")
+    entries, more_before, more_after = rt.transcript_page(path, "s", limit=10)
+    assert [(e.time, e.role, e.start, e.end) for e in entries] == [
+        ("10:00:05", "assistant", offsets[3], offsets[4]),
+        ("10:00:12", "assistant", offsets[9], offsets[10]),
+    ]
+    assert entries[0].text == "Looking at it now."
+    assert entries[1].text == LONG  # never shortened
+    assert more_before is False and more_after is False
+    # Continuing past the first reply does not show it again at its repeat.
+    later, more_before, more_after = rt.transcript_page(path, "s", limit=10, since=entries[0].end)
+    assert [e.text for e in later] == [LONG] and more_before is True and more_after is False
+
+
 def test_other_runtimes_keep_no_readable_transcript():
-    for runtime in ("gemini", "opencode", "aider", "shell"):
+    for runtime in ("aider", "shell"):
         rt = get_runtime(runtime)
         assert rt.transcript_supported is False
         assert rt.transcript_entries([{"type": "assistant", "message": {"content": "x"}}]) == []

@@ -23,7 +23,7 @@ from agent_backbone.services.agents.operations import StartRequest, resolve_agen
 from agent_backbone.services.agents.transitions import SOURCE, due_after
 from agent_backbone.services.database import now_iso
 from agent_backbone.services.jobs.diagnostics import observe_job
-from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.routing import envelope, safe_deliver
 from agent_backbone.services.terminal import query_environment_var
 
 if TYPE_CHECKING:
@@ -66,8 +66,13 @@ async def run_transitions(
 
 async def _advance(config: BackboneConfig, store: AgentStore, db: BackboneDB, row: dict) -> str:
     name = row["agent_name"]
-    if config.agents.get(name) is None:
+    spec = config.agents.get(name)
+    if spec is None:
         await db.transitions.finish(row["id"], "failed", {"reason": "agent is no longer known"})
+        return "failed"
+    if spec.inbox_only:
+        # Made inbox-only after the request: a session with its name is not its own.
+        await db.transitions.finish(row["id"], "failed", {"reason": "agent is inbox-only"})
         return "failed"
     if row["stopped_at"] is None:
         async with lifecycle_lock(name):
@@ -143,7 +148,7 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         sender = row["requested_by"] or "backbone"
         report = await safe_deliver(
             name,
-            f"[via:backbone from:{sender}] {row['message']}",
+            envelope(sender, row["message"]),
             config,
             db=db,
             delivery_kind="direct_message",

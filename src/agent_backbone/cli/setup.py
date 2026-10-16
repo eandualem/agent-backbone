@@ -239,7 +239,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     from agent_backbone.config import invalid_settings
     from agent_backbone.services.database.engine import redact_url
     from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
-    from agent_backbone.services.runtimes import agent_clis, install_hint, unavailable
+    from agent_backbone.services.runtimes import (
+        agent_clis,
+        install_hint,
+        unavailable,
+        verified_versions,
+    )
+    from agent_backbone.services.terminal import in_copy_mode, list_sessions, window_viewers
 
     ok = True
 
@@ -290,12 +296,28 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         note("Agents")
         if not config.agents:
             note("  - none yet (run `backbone agent start` from a project directory)")
+        sessions = set(await list_sessions()) if shutil.which("tmux") else set()
         for spec in config.agents:
             check(f"'{spec.name}' dir exists: {spec.path}", spec.path.is_dir())
             installed = spec.runtime in REGISTRY and REGISTRY[spec.runtime].available()
             check(f"'{spec.name}' runtime '{spec.runtime}' installed", installed)
+            if spec.runtime in REGISTRY and (
+                needs := REGISTRY[spec.runtime].plan_approval_needs(spec.env)
+            ):
+                note(f"  ! '{spec.name}': {needs}")
             if not spec.repo:
                 note(f"  ! '{spec.name}' has no GitHub remote — issue routing is off for it")
+            # tmux keeps copy mode after its last client detaches; messages wait for it.
+            if (
+                spec.name in sessions
+                and not spec.inbox_only
+                and await in_copy_mode(spec.name)
+                and await window_viewers(spec.name) == 0
+            ):
+                note(
+                    f"  ! '{spec.name}' is in tmux copy mode with no one viewing it — "
+                    "messages wait: attach to its session and press q"
+                )
 
         note("Tools")
         check("tmux on PATH", shutil.which("tmux") is not None, "install tmux")
@@ -304,6 +326,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         check("an agent CLI on PATH", bool(found), install_hint())
         if found:
             note(f"  - runtimes installed: {', '.join(found)}")
+            # Reported, not failed: the file may be meant, but never unnoticed (#274).
+            for runtime_id in found:
+                runtime = REGISTRY[runtime_id]
+                for path in runtime.user_instructions({}):
+                    note(f"  ! {runtime.display_name} user-level instructions: {path}")
+                if memory := runtime.native_memory({}):
+                    note(f"  ! {runtime.display_name} native memory: {memory}")
             # The capability contract: what each installed runtime lacks, and its issue.
             gaps = [
                 (
@@ -321,6 +350,33 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 print_table(
                     "Unavailable on installed runtimes", ("CLI", "Capability (issue)"), gaps
                 )
+            # What depends on the CLI's own dialogs, keys or hooks, and the version it was
+            # verified on: a newer CLI may have changed it (#356).
+            verified = [
+                (runtime_id, version, ", ".join(ids))
+                for runtime_id in found
+                for version, ids in verified_versions(runtime_id).items()
+            ]
+            if verified:
+                print_table(
+                    "Verified on a CLI version (check again after upgrading)",
+                    ("CLI", "Verified on", "Capability"),
+                    verified,
+                )
+            # The installed CLI against those versions: advice, never a failure (#359).
+            for runtime_id in found:
+                recorded = [v for v in verified_versions(runtime_id) if v != "not recorded"]
+                if not recorded:
+                    continue
+                runtime = REGISTRY[runtime_id]
+                if (installed := runtime.installed_version()) is None:
+                    unread = f"({runtime.binary} --version)"
+                    note(f"  ! {runtime_id}: installed version unreadable {unread}")
+                elif differ := [v for v in recorded if v != installed]:
+                    note(
+                        f"  ! {runtime_id}: installed {installed}, verified on "
+                        f"{', '.join(differ)}: check those capabilities again"
+                    )
             note("    details: `backbone docs runtime-capabilities`")
 
         note("Security")

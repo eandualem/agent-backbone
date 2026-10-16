@@ -4,6 +4,7 @@
 .DEFAULT_GOAL := help
 
 ALL_DIRS := src/ tests/
+DEV_TMUX_TMPDIR ?= /tmp/backbone-dev-tmux-$(shell id -u)
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage: make \033[36m<target>\033[0m\n\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -20,8 +21,9 @@ clean: ## Remove generated artifacts
 
 # ─── Run ─────────────────────────────────────────────────
 
-dev: ## Run the backbone with auto-reload
-	uv run backbone up --reload
+dev: ## Run the backbone with auto-reload on its own tmux server
+	mkdir -p "$(DEV_TMUX_TMPDIR)"
+	env -u TMUX -u TMUX_PANE "TMUX_TMPDIR=$(DEV_TMUX_TMPDIR)" uv run backbone up --reload
 
 up: ## Run the backbone detached in a tmux session
 	uv run backbone up --detach

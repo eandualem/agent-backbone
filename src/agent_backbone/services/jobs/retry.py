@@ -69,8 +69,11 @@ def _expired_line(row: dict, *, to_recipient: bool) -> str:
         else f"to {row.get('session_name')}"
     )
     queued = str(row.get("enqueued_at") or "")[11:16]
+    # A sender can tell whether a resend would meet the same condition.
+    blocked = row.get("blocked_by") if not to_recipient else None
+    held = f", blocked by {blocked}" if blocked else ""
     preview = " ".join(str(row.get("message") or "").split())[:100]
-    return f"- {who}, queued {queued}Z: {preview}"
+    return f"- {who}, queued {queued}Z{held}: {preview}"
 
 
 _MORE = re.compile(r"^- … and \d+ more, (?:from|to) (.+?): ")
@@ -148,6 +151,19 @@ def expiry_notices(config: BackboneConfig, expired: list[dict]) -> list[tuple]:
     ]
 
 
+async def _expire(config, db) -> list:
+    """Expire queued messages past ``timing.queue_expiry_minutes`` (swarm and
+    inbox rules apply); each leaves a delivery row and a notice."""
+    active_swarms = {row["name"] for row in await db.swarms.list(active_only=True)}
+    protected = tuple(spec.name for spec in config.agents if spec.swarm in active_swarms)
+    return await db.queue.expire_pending(
+        max_age_minutes=config.timing.queue_expiry_minutes,
+        protected_sessions=protected,
+        inbox_sessions=tuple(spec.name for spec in config.agents if spec.inbox_only),
+        notices=partial(expiry_notices, config),
+    )
+
+
 async def drain_message_queue(
     config: BackboneConfig,
     db: BackboneDB,
@@ -169,13 +185,7 @@ async def drain_message_queue(
         await observe_job(db, source=SOURCE, stage="lease_recovery")
 
     try:
-        active_swarms = {row["name"] for row in await db.swarms.list(active_only=True)}
-        protected = tuple(spec.name for spec in config.agents if spec.swarm in active_swarms)
-        expired = await db.queue.expire_pending(
-            max_age_minutes=config.timing.queue_expiry_minutes,
-            protected_sessions=protected,
-            notices=partial(expiry_notices, config),
-        )
+        expired = await _expire(config, db)
         if expired:
             log.info(
                 "Expired %d queued messages (> %d min)",
@@ -199,9 +209,14 @@ async def drain_message_queue(
     for session_name in sorted(set(active_sessions) | queued_sessions):
         if session_name in _draining:
             continue
+        spec = config.agents.get(session_name)
+        if spec is not None and spec.inbox_only:
+            continue  # never typed into: its messages wait for backbone inbox
         _draining.add(session_name)
         try:
-            completed = await _drain_session(config, db, gh, session_name, summary)
+            completed = await _drain_session(
+                config, db, gh, session_name, summary, active_sessions=active_sessions
+            )
         except Exception as exc:
             log.exception("Queue drain failed for %s (other sessions continue)", session_name)
             await observe_job(
@@ -219,6 +234,23 @@ async def drain_message_queue(
     return summary
 
 
+async def deliver_now(config, db, gh, session_name: str) -> None:
+    """Try one session's queue at once (a confirmed message was just queued),
+    under the retry job's own guard: a session is never drained twice at once,
+    and an inbox-only agent is never typed into."""
+    spec = config.agents.get(session_name)
+    if session_name in _draining or (spec is not None and spec.inbox_only):
+        return
+    _draining.add(session_name)
+    try:
+        await _expire(config, db)  # nothing overdue rides along on this drain
+        await _drain_session(config, db, gh, session_name, {})
+    except Exception:
+        log.exception("Immediate drain failed for %s; the retry job tries again", session_name)
+    finally:
+        _draining.discard(session_name)
+
+
 async def drain_agent(config, db, session_name: str) -> None:
     """Deliver one agent's queued startup brief from outside the running
     service (an ``agent start`` while it is down), through the same delivery.
@@ -228,7 +260,15 @@ async def drain_agent(config, db, session_name: str) -> None:
 
 
 async def _drain_session(
-    config, db, gh, session_name, summary, *, limit: int = 5, brief_only: bool = False
+    config,
+    db,
+    gh,
+    session_name,
+    summary,
+    *,
+    limit: int = 5,
+    brief_only: bool = False,
+    active_sessions: Collection[str] | None = None,
 ) -> bool:
     queued = await db.queue.dequeue(session_name, limit=limit)
     if brief_only:
@@ -316,6 +356,20 @@ async def _drain_session(
                         repo=record.get("repo") or "",
                         issue_number=record.get("issue_number"),
                     )
+            if not await db.queue.still_leased(record["id"]):
+                # Revoked or completed meanwhile: never deliver the stale copy.
+                summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
+                continue
+            if (
+                active_sessions is not None
+                and session_name not in active_sessions
+                and session_name not in await list_sessions()
+            ):
+                # Offline queues still expire and retire obsolete work above.
+                # Retained notices wait without another futile terminal attempt;
+                # re-read sessions because the monitor's snapshot may be old.
+                completed = False
+                break
             outcome = (
                 await safe_deliver(
                     session_name,

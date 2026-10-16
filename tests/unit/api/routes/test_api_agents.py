@@ -176,7 +176,7 @@ class TestStartAgent:
         data = resp.json()
         assert data["ok"] is True and data["runtime"] == "claude"
         assert data["working_directory"].endswith("/ike")
-        assert data["ready"] == "ready" and data["evidence"] == ["hook reported idle"]
+        assert data["ready"] == "ready" and data["evidence"][-1] == "hook reported idle"
         launch.start_session.assert_awaited_once()
         kwargs = launch.start_session.await_args.kwargs
         assert kwargs["command"] == ["/usr/bin/claude"]
@@ -356,14 +356,18 @@ class TestStartAgent:
         assert "acme/web" not in resp.json()["watches"]
         resp = await api_client.post(
             "/api/agents/ike/subscribe",
-            json={"source": "gmail", "filter": "from:upwork.com  subject:job", "priority": "high"},
+            json={
+                "source": "gmail",
+                "filter": "from:alerts@example.com  subject:outage",
+                "priority": "high",
+            },
             headers=auth_headers,
         )
         assert resp.status_code == 200, resp.text
         (sub,) = resp.json()["subscriptions"]
         assert (sub["source"], sub["filter"], sub["priority"]) == (
             "gmail",
-            "from:upwork.com subject:job",
+            "from:alerts@example.com subject:outage",
             "high",
         )
         bad = await api_client.post(
@@ -503,6 +507,16 @@ class TestRestartAgent:
         )
         assert resp.status_code == 400 and "ISO 8601" in resp.json()["detail"]
 
+    async def test_the_continuation_sender_must_fit_the_envelope(
+        self, api_client, auth_headers, launch
+    ):
+        resp = await api_client.post(
+            "/api/agents/ike/restart",
+            json={"message": "carry on", "from_entity": "app owner-confirmed:abc"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422
+
     async def test_cross_cli_resume_is_400(self, api_client, auth_headers, launch):
         resp = await api_client.post(
             "/api/agents/ike/restart",
@@ -633,8 +647,33 @@ class TestApproveAgent:
 
 
 class TestPostAgentState:
-    async def test_writes_the_hook_state_file(self, api_client, auth_headers, api_app):
-        from agent_backbone.services.agents import get_agent_state, read_state_file
+    @pytest.mark.parametrize("after_managed_hook", [False, True])
+    async def test_writes_the_hook_state_file(
+        self, api_client, auth_headers, api_app, after_managed_hook
+    ):
+        from agent_backbone.services.agents import (
+            get_agent_state,
+            read_state_file,
+            write_state_file,
+        )
+        from agent_backbone.services.agents._file_reader import (
+            clear_starting_marker,
+            write_starting_marker,
+        )
+
+        state_dir = api_app.state.config.state_dir
+        if after_managed_hook:
+            write_starting_marker(state_dir, "ike", time.time() - 10, launch_id="current")
+            write_state_file(
+                state_dir,
+                "ike",
+                {
+                    "state": "idle",
+                    "ts": time.time() - 1,
+                    "launch_id": "current",
+                },
+            )
+            clear_starting_marker(state_dir, "ike")
 
         resp = await api_client.post(
             "/api/agents/ike/state",
@@ -760,6 +799,18 @@ async def test_group_tags_are_persistent_and_validated(api_client, auth_headers)
         "/api/agents/missing/tags", headers=auth_headers, json={"tags": ["python"]}
     )
     assert response.status_code == 404
+
+
+async def test_tagging_an_agent_relinks_its_skills_now(api_client, auth_headers):
+    outcome = ["ike: skills: could not relink now (OSError)"]
+    with patch(f"{_ROUTE}.relink_skills", AsyncMock(return_value=outcome)) as relink:
+        response = await api_client.post(
+            "/api/agents/ike/tags", headers=auth_headers, json={"tags": ["python"]}
+        )
+    assert response.status_code == 200
+    (spec,) = relink.await_args.args[1]
+    assert spec.name == "ike" and "python" in spec.tags
+    assert response.json()["relinked"] == outcome  # the tag is saved; the outcome is shown
 
 
 async def test_offline_agent_retains_expired_session_end_recap(config):

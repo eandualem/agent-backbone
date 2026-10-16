@@ -54,7 +54,12 @@ def route_issue(issue: IssueData, event_type: EventType, config: BackboneConfig)
     owners = [s.name for s in agents.owners(repo)]
     watchers = [s.name for s in agents.watchers(repo)]
 
-    explicit = [t for t in issue.labels.targets if t not in ignore and t in agents]
+    # An inbox-only agent takes no part in GitHub routing, even when named.
+    explicit = [
+        t
+        for t in issue.labels.targets
+        if t not in ignore and t in agents and not agents.get(t).inbox_only
+    ]
     # `for:` labels that name a person (ignored) or an unknown agent still mean
     # the issue is addressed — it must not fall back to the owner as if unlabelled.
     addressed = bool(issue.labels.targets)
@@ -73,7 +78,11 @@ def route_issue(issue: IssueData, event_type: EventType, config: BackboneConfig)
             routing.announce = owners
     # ISSUE_LABELED without for: labels is an edit — nobody is queued.
 
-    routing.watch = [n for n in watchers if n not in routing.queue and n not in routing.announce]
+    # Watchers hear "new issue": only an opened one is new, not a later edit.
+    if event_type == EventType.ISSUE_OPENED:
+        routing.watch = [
+            n for n in watchers if n not in routing.queue and n not in routing.announce
+        ]
     return routing
 
 
@@ -81,7 +90,8 @@ def issue_parties(issue: IssueData, config: BackboneConfig) -> list[str]:
     """The agents an issue belongs to: its queue targets plus its opener, if an agent."""
     parties = set(route_issue(issue, EventType.ISSUE_OPENED, config).queue)
     sender = issue.labels.sender
-    if sender and sender != "unknown" and sender in config.agents:
+    spec = config.agents.get(sender) if sender and sender != "unknown" else None
+    if spec is not None and not spec.inbox_only:
         parties.add(sender)
     return sorted(parties - set(config.routing.ignore_targets))
 

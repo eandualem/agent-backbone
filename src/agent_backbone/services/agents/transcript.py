@@ -6,10 +6,11 @@ The transcript is located from the session id the runtime's hook recorded
 (only when that record's runtime is the live one) through the runtime's
 ``usage_paths``; the runtime parses its own format and returns only the
 messages the agent addressed to the person, never shortened. Navigation is
-by byte offset into the append-only file: a page is a bounded number of
-messages, read backwards from the end (or from ``before``) or forwards from
-``since`` (optionally up to ``end``); every page says whether more lies
-before or after it, so nothing is silently dropped.
+by byte offset into the append-only file (by the record's own position when
+the runtime keeps a database): a page is a bounded number of messages, read
+backwards from the end (or from ``before``) or forwards from ``since``
+(optionally up to ``end``); every page says whether more lies before or
+after it, so nothing is silently dropped.
 """
 
 from __future__ import annotations
@@ -62,8 +63,9 @@ class OutputPage:
 
 def locate_transcript(
     config: BackboneConfig, name: str, runtime_id: str | None
-) -> tuple[Path | None, Runtime, list[str]]:
-    """The transcript file for the agent's live session, its runtime and why not."""
+) -> tuple[Path | None, Runtime, str, list[str]]:
+    """The transcript file for the agent's live session, its runtime, the
+    session id and why not."""
     spec = config.agents.get(name)
     last = read_state_file(config.state_dir, name)
     runtime_id = runtime_id or (last.runtime if last is not None else None)
@@ -71,23 +73,28 @@ def locate_transcript(
         runtime_id = spec.runtime
     rt = get_runtime(runtime_id)
     if not rt.transcript_supported:
-        return None, rt, [f"{rt.id} keeps no transcript the backbone can read"]
+        return None, rt, "", [f"{rt.id} keeps no transcript the backbone can read"]
     if last is None or not last.session_id:
-        return None, rt, ["no session id recorded by the hook yet"]
+        return None, rt, "", ["no session id recorded by the hook yet"]
     if last.runtime and last.runtime != rt.id:
-        return None, rt, [f"the recorded session id belongs to {last.runtime}, not {rt.id}"]
+        why = f"the recorded session id belongs to {last.runtime}, not {rt.id}"
+        return None, rt, "", [why]
     env = dict(spec.env) if spec is not None else {}
+    try:
+        candidates = rt.usage_paths(last.session_id, env)
+    except Exception as exc:  # a runtime's store may be locked or corrupt
+        return None, rt, "", [f"transcript unreadable: {type(exc).__name__}"]
     stamped = []
-    for p in rt.usage_paths(last.session_id, env):
+    for p in candidates:
         try:
             if p.is_file():
                 stamped.append((p.stat().st_mtime, p))
         except OSError:  # archived or removed while we looked
             continue
     if not stamped:
-        return None, rt, [f"no transcript file found for session {last.session_id}"]
+        return None, rt, "", [f"no transcript file found for session {last.session_id}"]
     newest = max(stamped, key=lambda item: item[0])[1]
-    return newest, rt, [f"transcript {newest}"]
+    return newest, rt, last.session_id, [f"transcript {newest}"]
 
 
 def _records(raw: bytes, base: int) -> list[dict]:
@@ -119,6 +126,7 @@ def read_messages(
     since: int | None = None,
     before: int | None = None,
     end: int | None = None,
+    session_id: str = "",
 ) -> tuple[list[TranscriptEntry], bool, bool, list[str]]:
     """A page of complete messages and whether more exist before and after it.
 
@@ -126,6 +134,9 @@ def read_messages(
     ending at or before that offset. Forwards (``since``): the first ``limit``
     messages starting at or after it, up to ``end``. Returns
     ``(messages, more_before, more_after, evidence)``."""
+    page = rt.transcript_page(path, session_id, limit=limit, since=since, before=before, end=end)
+    if page is not None:
+        return (*page, [])
     size = path.stat().st_size
     evidence: list[str] = []
     with path.open("rb") as stream:
@@ -211,12 +222,21 @@ async def output_page(
     live_runtime = await query_environment_var(name, "BACKBONE_RUNTIME") if online else None
     evidence: list[str] = []
     if not screen:
-        path, rt, why = locate_transcript(config, name, live_runtime)
+        path, rt, session_id, why = await asyncio.to_thread(
+            locate_transcript, config, name, live_runtime
+        )
         evidence.extend(why)
         if path is not None:
             try:
                 messages, more_before, more_after, notes = await asyncio.to_thread(
-                    read_messages, path, rt, limit=limit, since=since, before=before, end=end
+                    read_messages,
+                    path,
+                    rt,
+                    limit=limit,
+                    since=since,
+                    before=before,
+                    end=end,
+                    session_id=session_id,
                 )
             except OSError as exc:
                 evidence.append(f"transcript unreadable: {type(exc).__name__}")

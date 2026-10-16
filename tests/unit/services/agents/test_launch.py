@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -26,6 +27,11 @@ _MOD = "agent_backbone.services.agents.launch"
 _BASE = "agent_backbone.services.runtimes.base"
 
 
+def _codex_sandbox(*, linux: bool):
+    """Codex on macOS takes file roots; on Linux only directories (#433)."""
+    return patch("agent_backbone.services.runtimes.codex._DIRECTORY_ROOTS_ONLY", linux)
+
+
 class TestApproveAgent:
     DIALOG = " Do you want to proceed?\n ❯ 1. Yes\n   2. No\n"
     IDLE = "❯ \n  ? for shortcuts\n"
@@ -41,6 +47,113 @@ class TestApproveAgent:
         assert keys.await_args.args == ("ike", "Enter")
         assert evidence[0] == "answered with Enter; prompt cleared"
         assert "Do you want to proceed?" in evidence  # the dialog is quoted for the audit
+
+    DEEPCODE_DIALOG = (
+        "status: ask_permission · 14/1M · deepseek-v4-flash max\n"
+        "╭──────────────────────────────╮\n"
+        "│ Permission required 1/1      │\n"
+        "│ bash                         │\n"
+        "│ echo probe                   │\n"
+        "│ Do you want to proceed?      │\n"
+        "│ > 1. Yes                     │\n"
+        "│   2. No                      │\n"
+        "╰──────────────────────────────╯\n"
+    )
+    # The cursor moved to "No": "1" still picks Yes.
+    DEEPCODE_DIALOG_ON_NO = DEEPCODE_DIALOG.replace("│ > 1. Yes", "│   1. Yes").replace(
+        "│   2. No ", "│ > 2. No "
+    )
+    DEEPCODE_IDLE = (
+        "status: completed · 14/1M · deepseek-v4-flash max\n"
+        ">   Type your message...\n"
+        "enter send · shift+enter newline · / commands · ctrl+d exit\n"
+    )
+
+    @pytest.mark.parametrize("dialog", [DEEPCODE_DIALOG, DEEPCODE_DIALOG_ON_NO])
+    async def test_deepcode_is_answered_with_its_yes_option(self, dialog):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", side_effect=[dialog, self.DEEPCODE_IDLE]),
+            patch(f"{_BASE}.send_keys", return_value=True) as keys,
+        ):
+            outcome, evidence = await approve_agent("dc", runtime="deepcode", settle_seconds=0)
+        assert outcome == "approved"
+        assert keys.await_args.args == ("dc", "1")
+        assert evidence[0] == "answered with 1; prompt cleared"
+
+    # gemini 0.46 (live); its update notice may be drawn below the dialog.
+    GEMINI_DIALOG = (
+        "╭──────────────────────────────────────╮\n"
+        "│ ? Shell  touch probe.txt             │\n"
+        "│ Allow execution of [Shell]?          │\n"
+        "│                                      │\n"
+        "│ ● 1. Allow once                      │\n"
+        "│   2. Allow for this session          │\n"
+        "│   3. No, suggest changes (esc)       │\n"
+        "╰──────────────────────────────────────╯\n"
+        "╭──────────────────────────────────────╮\n"
+        "│ Gemini CLI update available!         │\n"
+        "╰──────────────────────────────────────╯\n"
+    )
+    # The cursor moved to "No": "1" still picks "Allow once" (live).
+    GEMINI_DIALOG_ON_NO = GEMINI_DIALOG.replace("│ ● 1. Allow", "│   1. Allow").replace(
+        "│   3. No", "│ ● 3. No"
+    )
+    # A file edit and a web fetch ask their own questions (live).
+    GEMINI_EDIT_DIALOG = (
+        "╭──────────────────────────────────────╮\n"
+        "│ ? WriteFile  Writing to new.txt      │\n"
+        "│ ╭──────────────────────────────────╮ │\n"
+        "│ │ 1 written                        │ │\n"
+        "│ ╰──────────────────────────────────╯ │\n"
+        "│ Apply this change?                   │\n"
+        "│                                      │\n"
+        "│ ● 1. Allow once                      │\n"
+        "│   2. Allow for this session          │\n"
+        "│   3. Modify with external editor     │\n"
+        "│   4. No, suggest changes (esc)       │\n"
+        "╰──────────────────────────────────────╯\n"
+        "╭──────────────────────────────────────╮\n"
+        "│ Gemini CLI update available!         │\n"
+        "╰──────────────────────────────────────╯\n"
+    )
+    # The command itself mentions the update notice: still the dialog.
+    GEMINI_NOTICE_IN_COMMAND = GEMINI_DIALOG.replace(
+        "? Shell  touch probe.txt ", "? Shell  echo update available!"
+    )
+    GEMINI_FETCH_DIALOG = GEMINI_DIALOG.replace(
+        "? Shell  touch probe.txt ", "?  WebFetch https://ex.com/"
+    ).replace("Allow execution of [Shell]?", "Do you want to proceed?    ")
+    GEMINI_IDLE = (
+        "                                                   ? for shortcuts\n"
+        "────────────────────────────────────────────────────────────────\n"
+        " Shift+Tab to accept edits\n"
+        "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n"
+        " >   Type your message or @path/to/file\n"
+        "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+    )
+
+    @pytest.mark.parametrize(
+        "dialog",
+        [
+            GEMINI_DIALOG,
+            GEMINI_DIALOG_ON_NO,
+            GEMINI_EDIT_DIALOG,
+            GEMINI_FETCH_DIALOG,
+            GEMINI_NOTICE_IN_COMMAND,
+        ],
+        ids=["shell", "cursor-on-no", "edit", "fetch", "notice-in-command"],
+    )
+    async def test_gemini_is_answered_with_allow_once(self, dialog):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", side_effect=[dialog, self.GEMINI_IDLE]),
+            patch(f"{_BASE}.send_keys", return_value=True) as keys,
+        ):
+            outcome, evidence = await approve_agent("gm", runtime="gemini", settle_seconds=0)
+        assert outcome == "approved"
+        assert keys.await_args.args == ("gm", "1")
+        assert evidence[0] == "answered with 1; prompt cleared"
 
     MODEL_SWITCH = (
         "  Approaching rate limits\n"
@@ -61,6 +174,71 @@ class TestApproveAgent:
             outcome, evidence = await approve_agent("ike", runtime="codex", settle_seconds=0)
         assert outcome == "not_permission"
         assert "choice, not a permission prompt" in evidence[0]
+        keys.assert_not_called()
+
+    # gemini 0.46 (live): "1" here would pick a sign-in method, not allow a tool.
+    GEMINI_AUTH_PICKER = (
+        "╭──────────────────────────────────────────────────────────╮\n"
+        "│ ? Get started                                            │\n"
+        "│   How would you like to authenticate for this project?   │\n"
+        "│   ● 1. Sign in with Google                               │\n"
+        "│     2. Use Gemini API Key                                │\n"
+        "│     3. Vertex AI                                         │\n"
+        "│   No authentication method selected.                     │\n"
+        "│   (Use Enter to select)                                  │\n"
+        "╰──────────────────────────────────────────────────────────╯\n"
+    )
+
+    # Failed sign-in, with the update box drawn below the picker.
+    GEMINI_AUTH_PICKER_FAILED = (
+        GEMINI_AUTH_PICKER.replace(
+            "No authentication method selected.", "Failed to sign in.                "
+        )
+        + GEMINI_DIALOG.split("╰──────────────────────────────────────╯\n", 1)[1]
+    )
+
+    # A question the model asks (ask_user; layout live): "1" would answer it,
+    # even when it quotes a permission prompt and offers "Allow once" first.
+    GEMINI_QUESTION = (
+        "╭──────────────────────────────────────────────────────────╮\n"
+        "│ Answer Questions                                         │\n"
+        "│ ← □ Deploy │ □ Notify │ ≡ Review →                       │\n"
+        + "│ A long question, one of many lines                       │\n"
+        * 8
+        + "│ Allow execution of deploy.sh?                            │\n"
+        "│ ● 1.  Allow once                                         │\n"
+        "│       Run it                                             │\n"
+        "│   2.  No                                                 │\n"
+        "│   3.  Enter a custom value                               │\n"
+        "│ Enter to select · ←/→ to switch questions · Esc to cancel │\n"
+        "╰──────────────────────────────────────────────────────────╯\n"
+    )
+    GEMINI_TRUST = (
+        "│ Do you trust the files in this folder?\n"
+        "│ ● 1. Trust folder (proj)\n"
+        "│   2. Trust parent folder (work)\n"
+        "│   3. Don't trust\n"
+    )
+
+    @pytest.mark.parametrize(
+        "dialog",
+        [
+            GEMINI_AUTH_PICKER,
+            GEMINI_AUTH_PICKER_FAILED,
+            GEMINI_QUESTION,
+            GEMINI_QUESTION.split("\n", 2)[2],  # its title scrolled off screen
+            GEMINI_TRUST,
+        ],
+        ids=["sign-in", "sign-in-failed", "question", "question-clipped", "trust"],
+    )
+    async def test_gemini_only_allow_once_is_approved(self, dialog):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value=dialog),
+            patch(f"{_BASE}.send_keys") as keys,
+        ):
+            outcome, _ = await approve_agent("gm", runtime="gemini", settle_seconds=0)
+        assert outcome == "not_permission"
         keys.assert_not_called()
 
     async def test_idle_prompt_is_never_typed_into(self):
@@ -127,66 +305,134 @@ class TestDenyAgent:
         assert outcome == "not_waiting"
         keys.assert_not_called()
 
+    # opencode 1.18 (live): no Escape hint on screen, but Escape rejects the call.
+    OPENCODE_DIALOG = (
+        "  ┃  △ Permission required\n"
+        "  ┃    # Shell command\n"
+        "  ┃\n"
+        "  ┃  $ touch probe.txt\n"
+        "  ┃\n"
+        "  ┃   Allow once   Allow always   Reject          ⇆ select  enter confirm\n"
+        "  ┃\n"
+    )
+    OPENCODE_IDLE = (
+        "     $ touch probe.txt\n"
+        "     ▣  Build · Stub main\n"
+        "  ┃\n"
+        "  ┃  Build · Stub main Local stub\n"
+        "   /tmp/proj                                    14  ctrl+p commands\n"
+    )
+
+    @pytest.mark.parametrize(
+        ("runtime", "dialog", "idle"),
+        [
+            ("deepcode", TestApproveAgent.DEEPCODE_DIALOG, TestApproveAgent.DEEPCODE_IDLE),
+            ("gemini", TestApproveAgent.GEMINI_DIALOG_ON_NO, TestApproveAgent.GEMINI_IDLE),
+            ("opencode", OPENCODE_DIALOG, OPENCODE_IDLE),
+        ],
+    )
+    async def test_escape_refuses(self, runtime, dialog, idle):
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
+            patch(f"{_MOD}.capture_pane", side_effect=[dialog, idle]),
+            patch(f"{_BASE}.send_keys", new_callable=AsyncMock, return_value=True) as keys,
+        ):
+            outcome, evidence = await deny_agent("ag", runtime=runtime, settle_seconds=0)
+        assert outcome == "denied"
+        keys.assert_awaited_once_with("ag", "Escape")
+        assert evidence[0].startswith(f"sent Escape to {runtime}; dialog cleared")
+
     async def test_runtimes_without_a_verified_key_are_refused(self):
         with (
             patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
-            patch(
-                f"{_MOD}.capture_pane", return_value="│ Allow execution?\n│ ● 1. Yes, allow once\n"
-            ),
+            patch(f"{_MOD}.capture_pane", return_value="Run shell command? (Y)es/(N)o [Yes]:"),
             patch(f"{_BASE}.send_keys", new_callable=AsyncMock) as keys,
         ):
-            outcome, _ = await deny_agent("ike", runtime="gemini")
+            outcome, _ = await deny_agent("ike", runtime="aider")
         assert outcome == "unsupported"
         keys.assert_not_called()
 
     """Plan approve/reject go through the runtime's own keys, or nowhere."""
 
-    async def test_claude_approve_sends_shift_tab(self):
-        with (
-            patch(f"{_MOD}.session_exists", return_value=True),
-            patch(f"{_MOD}.capture_pane", return_value="❯ \n"),
-            patch(f"{_BASE}.send_keys", return_value=True) as keys,
-        ):
-            outcome, evidence = await plan_control("ike", "approve", runtime="claude")
-        assert outcome == "approved"
-        assert [c.args for c in keys.await_args_list] == [("ike", "Escape"), ("ike", "[Z")]
-        assert evidence == ["sent Escape [Z to claude"]
+    # Claude Code 2.1.284's plan dialog (live capture, trimmed).
+    CLAUDE_PLAN = (
+        "   Exit plan mode?\n"
+        "    Claude wants to exit plan mode\n"
+        "    ❯ 1. Yes, and switch to default (ask each time) for this session\n"
+        "      2. No\n"
+    )
 
-    async def test_claude_reject_only_leaves_plan_mode(self):
+    async def test_claude_approve_chooses_yes(self):
         with (
             patch(f"{_MOD}.session_exists", return_value=True),
-            patch(f"{_MOD}.capture_pane", return_value="❯ \n"),
+            patch(f"{_MOD}.capture_pane", return_value=self.CLAUDE_PLAN),
             patch(f"{_BASE}.send_keys", return_value=True) as keys,
         ):
-            outcome, _ = await plan_control("ike", "reject", runtime="claude")
+            outcome, evidence = await plan_control(
+                "ike", "approve", runtime="claude", settle_seconds=0
+            )
+        assert outcome == "approved"
+        assert [c.args for c in keys.await_args_list] == [("ike", "1")]
+        assert evidence == ["sent 1 to claude; plan dialog still visible"]
+
+    async def test_claude_reject_declines_the_plan(self):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", side_effect=[self.CLAUDE_PLAN, "❯ \n"]),
+            patch(f"{_BASE}.send_keys", return_value=True) as keys,
+        ):
+            outcome, evidence = await plan_control(
+                "ike", "reject", runtime="claude", settle_seconds=0
+            )
         assert outcome == "rejected"
         assert [c.args for c in keys.await_args_list] == [("ike", "Escape")]
+        assert evidence == ["sent Escape to claude; plan dialog cleared"]
 
-    @pytest.mark.parametrize(
-        "runtime", ["codex", "opencode", "gemini", "deepcode", "aider", "shell"]
-    )
+    @pytest.mark.parametrize("runtime", ["gemini", "deepcode", "aider", "shell"])
     async def test_other_runtimes_get_no_keys_at_all(self, runtime):
         with (
             patch(f"{_MOD}.session_exists", return_value=True),
             patch(f"{_MOD}.capture_pane", return_value="› \n"),
             patch(f"{_BASE}.send_keys") as keys,
         ):
-            outcome, evidence = await plan_control("ike", "approve", runtime=runtime)
+            outcome, evidence = await plan_control(
+                "ike", "approve", runtime=runtime, settle_seconds=0
+            )
         assert outcome == "unsupported"
         assert "nothing was sent" in evidence[0]
         keys.assert_not_called()
 
-    async def test_partial_sequence_is_reported_not_hidden(self):
-        # Escape goes in, "[Z" is refused: plan mode was left without approval.
+    async def test_the_dialog_is_given_time_to_go_before_the_feedback(self):
+        """#355: a rejection's feedback reads the state right after the keys."""
         with (
             patch(f"{_MOD}.session_exists", return_value=True),
-            patch(f"{_MOD}.capture_pane", return_value="❯ \n"),
-            patch(f"{_BASE}.send_keys", side_effect=[True, False]),
+            patch(f"{_MOD}.capture_pane", side_effect=[self.CLAUDE_PLAN, "❯ \n"]),
+            patch(f"{_BASE}.send_keys", return_value=True),
+            patch(f"{_MOD}.asyncio.sleep", new_callable=AsyncMock) as sleep,
         ):
-            outcome, evidence = await plan_control("ike", "approve", runtime="claude")
+            await plan_control("ike", "reject", runtime="claude")
+        sleep.assert_awaited_once_with(1.0)
+
+    async def test_an_unreadable_screen_confirms_nothing(self):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", side_effect=[self.CLAUDE_PLAN, ""]),
+            patch(f"{_BASE}.send_keys", return_value=True),
+        ):
+            _, evidence = await plan_control("ike", "approve", runtime="claude", settle_seconds=0)
+        assert evidence == ["sent 1 to claude; the screen could not be read to confirm"]
+
+    async def test_a_refused_key_is_reported_not_hidden(self):
+        with (
+            patch(f"{_MOD}.session_exists", return_value=True),
+            patch(f"{_MOD}.capture_pane", return_value=self.CLAUDE_PLAN),
+            patch(f"{_BASE}.send_keys", return_value=False),
+        ):
+            outcome, evidence = await plan_control(
+                "ike", "approve", runtime="claude", settle_seconds=0
+            )
         assert outcome == "failed"
-        assert "sent Escape but tmux refused [Z" in evidence[0]
-        assert "may have left plan mode" in evidence[0]
+        assert "tmux refused 1 after 0 of 1 keys" in evidence[0]
 
     async def test_offline_and_bad_action(self):
         with patch(f"{_MOD}.session_exists", return_value=False):
@@ -219,6 +465,31 @@ class TestStartAgentScrubsSecrets:
         assert "MY_OWN_SECRET" in scrub  # whatever the user put in .env
         # The launch contract itself is untouched.
         assert start.await_args.kwargs["environment"]["BACKBONE_AGENT"] == "ike"
+
+    @pytest.mark.parametrize("runtime", sorted(RUNTIMES))
+    async def test_env_values_are_on_no_command_line(self, tmp_path, runtime):
+        """The agent's own env reaches its session, never a process argument (#289)."""
+        spec = AgentSpec(name="ike", dir=str(tmp_path), runtime=runtime, env={"API_TOKEN": "s3c"})
+        config = bootstrap_config(tmp_path / "data")
+        proc = AsyncMock(returncode=0)
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        with (
+            patch(f"{_MOD}.session_exists", AsyncMock(return_value=False)),
+            patch(
+                "agent_backbone.services.terminal._sessions.session_exists",
+                AsyncMock(return_value=False),
+            ),
+            patch(f"{_BASE}.resolve_command", return_value=f"/usr/bin/{runtime}"),
+            patch(
+                "agent_backbone.services.terminal._core.asyncio.create_subprocess_exec",
+                AsyncMock(return_value=proc),
+            ) as tmux,
+        ):
+            assert (await start_agent(spec, config, wait=False)).ok
+        assert not any("s3c" in arg for call in tmux.call_args_list for arg in call.args)
+        new_session = proc.communicate.await_args_list[0].kwargs["input"].decode()
+        assert '"API_TOKEN=s3c"' in new_session  # the session environment, on stdin
+        assert new_session.count("s3c") == 1
 
 
 class TestStartAgentContext:
@@ -473,6 +744,30 @@ class TestStartAgentBrief:
         assert result.ok is False
         started.assert_not_awaited()
 
+    async def test_a_user_level_instruction_file_is_named_at_start(self, tmp_path):
+        """#274, with the agent's own environment applied."""
+        config = bootstrap_config(tmp_path / "data")
+        agents = tmp_path / "codex-home" / "AGENTS.md"
+        agents.parent.mkdir()
+        agents.write_text("notes left by another session")
+        spec = replace(self._spec(tmp_path, "codex"), env={"CODEX_HOME": str(agents.parent)})
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start, _cmd, _trust, _wait:
+            result = await start_agent(spec, config, db=AsyncMock())
+        assert f"user-level instructions: {agents}" in result.evidence
+
+    async def test_native_memory_that_is_on_is_named_at_start(self, tmp_path):
+        """#292, with the agent's own environment applied."""
+        config = bootstrap_config(tmp_path / "data")
+        home = tmp_path / "codex-home"
+        home.mkdir()
+        (home / "config.toml").write_text("[features]\nmemories = true\n")
+        spec = replace(self._spec(tmp_path, "codex"), env={"CODEX_HOME": str(home)})
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start, _cmd, _trust, _wait:
+            result = await start_agent(spec, config, db=AsyncMock())
+        assert any(line.startswith("native memory: memories are on") for line in result.evidence)
+
     async def test_unknown_runtime_is_refused(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
         with patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False):
@@ -485,7 +780,7 @@ class TestStartAgentBrief:
         config = replace(config, launch=replace(config.launch, writable_dirs=("/cache",)))
         spec = replace(self._spec(tmp_path, "codex"), unattended=True)
         exists, start, _cmd, _trust, _wait = self._launch()
-        with exists, start as started, _cmd, _trust, _wait:
+        with exists, start as started, _cmd, _trust, _wait, _codex_sandbox(linux=False):
             result = await start_agent(spec, config, db=AsyncMock())
         assert result.ok
         command = started.await_args.kwargs["command"]
@@ -504,7 +799,7 @@ class TestStartAgentBrief:
         (main_git / "worktrees" / "wt" / "commondir").write_text("../..")
         spec = AgentSpec(name="ike", dir=str(worktree), runtime="codex", repo="acme/app")
         exists, start, _cmd, _trust, _wait = self._launch()
-        with exists, start as started, _cmd, _trust, _wait:
+        with exists, start as started, _cmd, _trust, _wait, _codex_sandbox(linux=False):
             assert (await start_agent(spec, config, db=AsyncMock())).ok
         command = started.await_args.kwargs["command"]
         assert command[1:3] == ["--add-dir", str(main_git / "objects")]
@@ -522,13 +817,33 @@ class TestStartAgentBrief:
         spec = replace(self._spec(tmp_path, "codex"), unattended=unattended)
         (spec.path / ".git").mkdir()
         exists, start, _cmd, _trust, _wait = self._launch()
-        with exists, start as started, _cmd, _trust, _wait:
+        with exists, start as started, _cmd, _trust, _wait, _codex_sandbox(linux=False):
             assert (await start_agent(spec, config, db=AsyncMock())).ok
         command = started.await_args.kwargs["command"]
         grant = command.index("--add-dir")
         assert command[grant + 1] == str((spec.path / ".git" / "objects").resolve())
         assert str(spec.path / ".git" / "index.lock") in command
         assert str(spec.path / ".git") not in command
+
+    async def test_on_linux_no_git_file_becomes_a_codex_root(self, tmp_path):
+        # Codex's Linux sandbox mounts each root as a directory: a file root
+        # panics it at the first command, a missing one under .git stops it.
+        # A relative configured root is Codex's to resolve in the agent's dir.
+        config = bootstrap_config(tmp_path / "data")
+        config = replace(config, launch=replace(config.launch, writable_dirs=("../cache",)))
+        spec = self._spec(tmp_path, "codex")
+        git = spec.path / ".git"
+        for name in ("objects", "refs", "logs"):
+            (git / name).mkdir(parents=True)
+        (git / "HEAD").write_text("ref: refs/heads/main\n")
+        (git / "index").write_bytes(b"")
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait, _codex_sandbox(linux=True):
+            assert (await start_agent(spec, config, db=AsyncMock())).ok
+        command = started.await_args.kwargs["command"]
+        roots = [command[i + 1] for i, arg in enumerate(command) if arg == "--add-dir"]
+        git_roots = [str((git / name).resolve()) for name in ("objects", "refs", "logs")]
+        assert roots == ["../cache", *git_roots]
 
     @pytest.mark.parametrize("runtime", ["codex", "claude", "shell"])
     async def test_mouse_scrolling_follows_the_runtime(self, tmp_path, runtime):
@@ -745,9 +1060,9 @@ class TestResumeBySessionId:
             result = await start_agent(spec, config, wait=False)
         command = start.await_args.kwargs["command"]
         assert "--resume" not in command and "--continue" not in command
-        assert result.evidence == (
+        assert result.evidence[0] == (
             "fresh conversation; the previous one (1d old) is still available: "
-            "backbone agent resume ike",
+            "backbone agent resume ike"
         )
 
     async def test_a_plain_start_without_history_says_nothing_about_resuming(self, tmp_path):
@@ -875,7 +1190,7 @@ class TestLaunchEnvFromRuntime:
             assert (await start_agent(spec, config, wait=False)).ok
         command = start.await_args.kwargs["command"]
         assert command[command.index("--model") + 1] == spec.model
-        env.assert_called_once_with(spec.model)
+        env.assert_called_once_with(spec.model, None)  # the tag is no effort
 
     async def test_runtime_environment_reaches_the_session(self, tmp_path):
         project = tmp_path / "project"
@@ -889,13 +1204,63 @@ class TestLaunchEnvFromRuntime:
         ):
             assert (await start_agent(spec, config, wait=False)).ok
         env = start.await_args.kwargs["environment"]
-        assert env["MODEL"] == "deepseek-v4-pro" and env["BACKBONE_RUNTIME"] == "deepcode"
+        assert env["DEEPCODE_MODEL"] == "deepseek-v4-pro" and env["BACKBONE_RUNTIME"] == "deepcode"
+
+    async def test_an_effort_reaches_deepcode_through_its_environment(self, tmp_path):
+        project = tmp_path / "project"
+        project.mkdir()
+        spec = AgentSpec(
+            name="ike", dir=str(project), runtime="deepcode", model="deepseek-v4-pro:low"
+        )
+        config = bootstrap_config(tmp_path / "data")
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value="/bin/deepcode"),
+        ):
+            assert (await start_agent(spec, config, wait=False)).ok
+        env = start.await_args.kwargs["environment"]
+        assert (env["DEEPCODE_MODEL"], env["DEEPCODE_REASONING_EFFORT"]) == (
+            "deepseek-v4-pro",
+            "low",
+        )
+        assert "low" not in start.await_args.kwargs["command"]  # no flag carries it
+
+    @pytest.mark.parametrize(
+        ("runtime", "env", "expected"),
+        [
+            ("claude", {}, "0"),
+            ("claude", {"CLAUDE_CODE_SEND_FEEDBACK": "1"}, "1"),  # the agent opted in
+            ("codex", {}, None),
+            ("opencode", {}, None),
+        ],
+    )
+    async def test_claude_drafted_feedback_is_off_unless_the_agent_opts_in(
+        self, tmp_path, runtime, env, expected
+    ):
+        project = tmp_path / "project"
+        project.mkdir()
+        spec = AgentSpec(name="ike", dir=str(project), runtime=runtime, env=env)
+        config = bootstrap_config(tmp_path / "data")
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value=f"/bin/{runtime}"),
+        ):
+            assert (await start_agent(spec, config, wait=False)).ok
+        assert start.await_args.kwargs["environment"].get("CLAUDE_CODE_SEND_FEEDBACK") == expected
+        # and the tool itself is disallowed, which no settings file can reopen
+        disallowed = "SendFeedback" in start.await_args.kwargs["command"]
+        assert disallowed is (expected == "0")
 
     async def test_the_selected_model_beats_a_model_in_the_agents_env(self, tmp_path):
         project = tmp_path / "project"
         project.mkdir()
         spec = AgentSpec(
-            name="ike", dir=str(project), runtime="deepcode", env={"MODEL": "deepseek-v4-flash"}
+            name="ike",
+            dir=str(project),
+            runtime="deepcode",
+            env={"DEEPCODE_MODEL": "deepseek-v4-flash"},
         )
         config = bootstrap_config(tmp_path / "data")
         with (
@@ -904,28 +1269,27 @@ class TestLaunchEnvFromRuntime:
             patch(f"{_BASE}.resolve_command", return_value="/bin/deepcode"),
         ):
             await start_agent(spec, config, model="deepseek-v4-pro", wait=False)
-        assert start.await_args.kwargs["environment"]["MODEL"] == "deepseek-v4-pro"
+        assert start.await_args.kwargs["environment"]["DEEPCODE_MODEL"] == "deepseek-v4-pro"
 
 
 @pytest.mark.parametrize("unattended", [False, True])
-async def test_claude_consent_is_preaccepted_only_for_explicit_unattended(tmp_path, unattended):
+async def test_claude_consent_rides_only_in_an_unattended_launch(tmp_path, monkeypatch, unattended):
     from dataclasses import replace
 
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     config = bootstrap_config(tmp_path / "data")
     config = replace(config, launch=replace(config.launch, pre_trust=False))
     spec = replace(TestStartAgentBrief._spec(tmp_path, "claude"), unattended=unattended)
     exists, start, command, trust, wait = TestStartAgentBrief._launch()
-    with (
-        exists,
-        start,
-        command,
-        trust,
-        wait,
-        patch("agent_backbone.services.runtimes.claude.pre_accept_bypass") as consent,
-    ):
+    with exists, start as started, command, trust, wait:
         result = await start_agent(spec, config, db=AsyncMock())
     assert result.ok
-    assert consent.call_count == int(unattended)
+    launched = started.await_args.kwargs["command"]
+    assert launched.count("--settings") == 1
+    settings = json.loads(Path(launched[launched.index("--settings") + 1]).read_text())
+    assert "SessionStart" in settings["hooks"]
+    assert settings.get("skipDangerousModePermissionPrompt", False) is unattended
+    assert not (tmp_path / "home").exists()  # nothing written to ~/.claude.json
 
 
 @pytest.mark.parametrize("hook", [None, "idle"])
@@ -1061,3 +1425,251 @@ class TestSkillsAtLaunch:
             result, start = await self._start(spec, config)
         assert not result.ok and start.await_count == 0
         assert result.evidence[0].startswith("skills: ") and "no SKILL.md" in result.evidence[0]
+
+
+class TestResumeOnlyTheLastLaunchesSession:
+    """A launch that ended before its hook reported an id leaves an earlier
+    session's id on record: resuming it would reopen the wrong conversation."""
+
+    def _setup(self, tmp_path, runtime, *, reported_by_last_launch):
+        from agent_backbone.services.agents import clear_starting_marker, write_starting_marker
+
+        config = bootstrap_config(tmp_path / "data")
+        project = tmp_path / "project"
+        project.mkdir()
+        write_starting_marker(config.state_dir, "ike", 1.0, launch_id="L1")
+        write_state_file(
+            config.state_dir,
+            "ike",
+            {
+                "state": "idle",
+                "ts": 2.0,
+                "session_id": "old-sess",
+                "runtime": runtime,
+                "launch_id": "L1",
+            },
+        )
+        if not reported_by_last_launch:
+            # Launched again and stopped before its hook ever wrote (a Codex
+            # agent reports only at its first turn).
+            write_starting_marker(config.state_dir, "ike", 3.0, launch_id="L2")
+            clear_starting_marker(config.state_dir, "ike")
+        return config, AgentSpec(name="ike", dir=str(project), runtime=runtime)
+
+    async def _start(self, config, spec, *, resume):
+        with (
+            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+            patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+            patch(f"{_BASE}.resolve_command", return_value=f"/usr/bin/{spec.runtime}"),
+        ):
+            result = await start_agent(spec, config, resume=resume, wait=False)
+        return start.await_args.kwargs["command"], result.evidence
+
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    async def test_an_earlier_sessions_id_is_not_resumed(self, tmp_path, runtime):
+        config, spec = self._setup(tmp_path, runtime, reported_by_last_launch=False)
+        command, evidence = await self._start(config, spec, resume=True)
+        assert "old-sess" not in command
+        assert any(
+            "last launch reported no session id" in line and "earlier session" in line
+            for line in evidence
+        )
+        _, fresh = await self._start(config, spec, resume=False)
+        assert not any("still available" in line for line in fresh)
+
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    async def test_the_last_launches_session_is_resumed(self, tmp_path, runtime):
+        config, spec = self._setup(tmp_path, runtime, reported_by_last_launch=True)
+        command, evidence = await self._start(config, spec, resume=True)
+        assert "old-sess" in command
+        assert any("resuming the session the last launch reported" in line for line in evidence)
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_a_launch_that_resumed_by_id_holds_that_conversation_before_reporting(
+    tmp_path, runtime
+):
+    """Resumed by id, stopped before its hook reported: resuming again reopens the same one."""
+    from agent_backbone.services.agents import clear_starting_marker
+
+    config = bootstrap_config(tmp_path / "data")
+    project = tmp_path / "project"
+    project.mkdir()
+    spec = AgentSpec(name="ike", dir=str(project), runtime=runtime)
+    write_state_file(
+        config.state_dir,
+        "ike",
+        {"state": "idle", "ts": 2.0, "session_id": "sess-1", "runtime": runtime, "launch_id": "L1"},
+    )
+    with (
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+        patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+        patch(f"{_BASE}.resolve_command", return_value=f"/usr/bin/{runtime}"),
+    ):
+        await start_agent(spec, config, resume=True, wait=False)  # resumes sess-1 by id
+        clear_starting_marker(config.state_dir, "ike")  # stopped before its hook wrote
+        result = await start_agent(spec, config, resume=True, wait=False)
+    assert "sess-1" in start.await_args.kwargs["command"]
+    opened = "resuming the session the last launch opened: sess-1"
+    assert any(opened in line for line in result.evidence)
+
+
+async def test_the_id_a_launch_resumed_is_used_even_when_history_holds_another(tmp_path):
+    """Resumed on B (a fleet snapshot's) while the history still records A; stopped
+    before reporting: resuming again opens B, not the runtime's latest."""
+    from agent_backbone.services.agents import write_starting_marker
+
+    config = bootstrap_config(tmp_path / "data")
+    project = tmp_path / "project"
+    project.mkdir()
+    write_state_file(
+        config.state_dir,
+        "ike",
+        {"state": "idle", "ts": 2.0, "session_id": "A", "runtime": "codex", "launch_id": "L1"},
+    )
+    write_starting_marker(config.state_dir, "ike", 3.0, launch_id="L2", opened=("codex", "B"))
+    from agent_backbone.services.agents import clear_starting_marker
+
+    clear_starting_marker(config.state_dir, "ike")
+    spec = AgentSpec(name="ike", dir=str(project), runtime="codex")
+    with (
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+        patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+        patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
+    ):
+        result = await start_agent(spec, config, resume=True, wait=False)
+    command = start.await_args.kwargs["command"]
+    assert "B" in command and "A" not in command and "--last" not in command
+    assert any("the last launch opened: B" in line for line in result.evidence)
+
+
+@pytest.mark.parametrize("content", ["null", "[]", '"x"'])
+def test_a_malformed_launch_record_has_no_session(tmp_path, content):
+    from agent_backbone.services.agents._file_reader import read_launch_session
+
+    (tmp_path / "ike.launch").write_text(content)
+    assert read_launch_session(tmp_path, "ike", "codex") is None
+
+
+async def test_a_launch_tmux_refused_records_no_conversation(tmp_path):
+    """A resume of X that never ran must not make a later resume open X."""
+    from agent_backbone.services.agents import write_starting_marker
+
+    config = bootstrap_config(tmp_path / "data")
+    project = tmp_path / "project"
+    project.mkdir()
+    write_starting_marker(config.state_dir, "ike", 1.0, launch_id="L1")
+    write_state_file(
+        config.state_dir,
+        "ike",
+        {"state": "idle", "ts": 2.0, "session_id": "Y", "runtime": "codex", "launch_id": "L1"},
+    )
+    spec = AgentSpec(name="ike", dir=str(project), runtime="codex")
+    with (
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+        patch(f"{_MOD}.start_session", new_callable=AsyncMock, side_effect=[False, True]) as start,
+        patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
+    ):
+        failed = await start_agent(spec, config, session_id="X", wait=False)
+        result = await start_agent(spec, config, resume=True, wait=False)
+    assert not failed.ok
+    command = start.await_args.kwargs["command"]
+    assert "X" not in command and "Y" not in command
+    assert any("is from an earlier session" in line for line in result.evidence)
+
+
+async def test_a_launch_killed_after_its_hook_reported_stays_the_last_launch(tmp_path):
+    """tmux created the session, the hook reported Z, then the scrub failed and
+    the session was killed: Z is the last launch's conversation, not Y."""
+    from agent_backbone.services.agents import write_starting_marker
+
+    config = bootstrap_config(tmp_path / "data")
+    project = tmp_path / "project"
+    project.mkdir()
+    write_starting_marker(config.state_dir, "ike", 1.0, launch_id="L1")
+    write_state_file(
+        config.state_dir,
+        "ike",
+        {"state": "idle", "ts": 2.0, "session_id": "Y", "runtime": "codex", "launch_id": "L1"},
+    )
+    spec = AgentSpec(name="ike", dir=str(project), runtime="codex")
+
+    async def created_then_killed(name, *, environment, **kwargs):
+        write_state_file(
+            config.state_dir,
+            name,
+            {
+                "state": "idle",
+                "ts": time.time(),
+                "session_id": "Z",
+                "runtime": "codex",
+                "launch_id": environment["BACKBONE_LAUNCH_ID"],
+            },
+        )
+        return False
+
+    with (
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+        patch(f"{_MOD}.start_session", side_effect=created_then_killed),
+        patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
+    ):
+        await start_agent(spec, config, session_id="X", wait=False)
+    with (
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
+        patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
+        patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
+    ):
+        result = await start_agent(spec, config, resume=True, wait=False)
+    assert "Z" in start.await_args.kwargs["command"]
+    assert any("the last launch reported: Z" in line for line in result.evidence)
+
+
+@pytest.mark.parametrize(
+    ("runtime", "resume", "moves"),
+    [
+        ("claude", False, True),  # a fresh conversation starts over
+        ("claude", True, False),  # a resumed one keeps what it was sent
+        ("codex", False, True),
+        ("codex", True, False),
+        ("opencode", False, True),
+        ("opencode", True, False),
+        ("shell", True, True),  # a plain shell has no conversation to resume
+    ],
+)
+async def test_a_fresh_start_is_recorded_before_the_readiness_wait(
+    tmp_path, db, runtime, resume, moves
+):
+    """#410: messages can reach the session before it is ready, and a backbone
+    restart can cut the wait short."""
+    common = {"runtime": runtime, "model": None, "repo": "", "tags": [], "env": {}}
+    await db.agents.upsert("ike", dir=str(tmp_path), description="", unattended=False, **common)
+    await db.agents.conversation_started("ike", "2026-10-13T19:59:43.000000Z")
+    config = bootstrap_config(tmp_path / "data")
+    spec = AgentSpec(name="ike", dir=str(tmp_path), runtime=runtime)
+    seen = {}
+
+    async def waiting(*args, **kwargs):
+        seen["at"] = await db.agents.started_at("ike")
+        return "ready", []
+
+    with (
+        patch(f"{_MOD}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_MOD}.start_session", AsyncMock(return_value=True)),
+        patch(f"{_BASE}.resolve_command", return_value=f"/bin/{runtime}"),
+        patch(f"{_MOD}.wait_until_ready", side_effect=waiting),
+    ):
+        assert (await start_agent(spec, config, resume=resume, db=db, wait=True)).ok
+    assert (seen["at"] != "2026-10-13T19:59:43.000000Z") is moves
+
+
+async def test_a_failed_start_record_never_fails_a_running_session(tmp_path):
+    db = AsyncMock()
+    db.agents.conversation_started.side_effect = RuntimeError("database is locked")
+    config = bootstrap_config(tmp_path / "data")
+    spec = AgentSpec(name="ike", dir=str(tmp_path), runtime="claude")
+    with (
+        patch(f"{_MOD}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_MOD}.start_session", AsyncMock(return_value=True)),
+        patch(f"{_BASE}.resolve_command", return_value="/bin/claude"),
+    ):
+        assert (await start_agent(spec, config, db=db, wait=False)).ok

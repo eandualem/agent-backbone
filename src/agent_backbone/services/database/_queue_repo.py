@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 
 from sqlalchemy import bindparam, text
 
-from agent_backbone.models import BRIEF_SOURCE, RETIREMENT_REASONS, SUBSCRIPTION_KIND
+from agent_backbone.models import (
+    BLOCKED_OUTCOMES,
+    BRIEF_SOURCE,
+    RETIREMENT_REASONS,
+    SUBSCRIPTION_KIND,
+)
 from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
@@ -362,6 +367,31 @@ class QueueRepo(Repo):
             )
             return int(result.scalar_one())
 
+    async def inbox_rows(
+        self, session_name: str | None = None, *, inbox_sessions: Collection[str] = ()
+    ) -> dict[str, frozenset[tuple[int, str | None]]]:
+        """Per session with any, the rows waiting for its inbox (held
+        ``checkpoint``/``uncertain`` rows and pending direct messages, plus
+        escalation notices for ``inbox_sessions``, the inbox-only agents;
+        ``checkpoint`` hands them out ten at a time), each as
+        ``(id, operation_id)``: an identity a reused id cannot repeat."""
+        only = "AND session_name = :session " if session_name is not None else ""
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(
+                    "SELECT session_name, id, operation_id FROM message_queue "
+                    "WHERE (status IN ('checkpoint', 'uncertain') "
+                    "OR (status = 'pending' AND delivery_kind = 'direct_message') "
+                    "OR (status = 'pending' AND delivery_kind = 'escalation' "
+                    "AND session_name IN :inbox)) " + only
+                ).bindparams(bindparam("inbox", expanding=True)),
+                {"session": session_name, "inbox": list(inbox_sessions)},
+            )
+            rows: dict[str, set[tuple[int, str | None]]] = {}
+            for row in result.mappings():
+                rows.setdefault(row["session_name"], set()).add((row["id"], row["operation_id"]))
+            return {name: frozenset(ids) for name, ids in rows.items()}
+
     async def sessions_with_pending(self) -> list[str]:
         async with self._tx() as conn:
             result = await conn.execute(
@@ -398,6 +428,31 @@ class QueueRepo(Repo):
                 )
             )
             return rows
+
+    async def by_operation(self, operation_id: str) -> dict | None:
+        """The queue row of one operation (``id``, ``status``), if it is still kept."""
+        async with self._tx() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT id, status FROM message_queue WHERE operation_id = :op"
+                        " ORDER BY id DESC LIMIT 1"
+                    ),
+                    {"op": operation_id},
+                )
+            ).fetchone()
+        return dict(row._mapping) if row is not None else None
+
+    async def still_leased(self, message_id: int) -> bool:
+        """Whether a leased row is still ours to deliver: nothing expired or
+        completed it (a key reset revokes leased work too) since the lease."""
+        async with self._tx() as conn:
+            status = (
+                await conn.execute(
+                    text("SELECT status FROM message_queue WHERE id = :id"), {"id": message_id}
+                )
+            ).scalar()
+        return status == "in_progress"
 
     async def release(self, message_id: int) -> None:
         async with self._tx() as conn:
@@ -478,6 +533,7 @@ class QueueRepo(Repo):
         max_age_minutes: int = 30,
         *,
         protected_sessions: tuple[str, ...] = (),
+        inbox_sessions: tuple[str, ...] = (),
         notices: Notices | None = None,
     ) -> list[dict]:
         """Expire pending messages older than the cutoff and, in the same
@@ -496,6 +552,12 @@ class QueueRepo(Repo):
         row holds the whole queue until it is acknowledged, so the wait
         measures the hold, not whether the message is still wanted. After the
         hold is acknowledged the queue gets a full window from that moment.
+        For ``inbox_sessions`` (inbox-only agents) the rule is simpler: a
+        direct message or escalation notice waits for ``backbone inbox``, its
+        only way in, and
+        every other row, which can never reach it, expires (a subscription
+        batch, brief or restart message left from before it became
+        inbox-only included).
 
         ``notices`` turns the expired rows into notices written in the same
         transaction: an expiry is never committed without them, and a failure
@@ -507,6 +569,9 @@ class QueueRepo(Repo):
                 text(
                     """UPDATE message_queue SET status = 'expired', delivered_at = :now
                        WHERE status = 'pending' AND enqueued_at < :cutoff
+                         AND ((session_name IN :inbox
+                               AND delivery_kind NOT IN ('direct_message', 'escalation'))
+                         OR (session_name NOT IN :inbox
                          AND delivery_kind != 'subscription'
                          AND source NOT IN ('agent-restart', 'queue-expiry', :brief)
                          AND session_name NOT IN (
@@ -516,19 +581,63 @@ class QueueRepo(Repo):
                              WHERE source IN ('uncertain-acknowledged', 'uncertain-retired')
                                AND created_at >= :cutoff)
                          AND session_name NOT IN :protected
-                         AND COALESCE(sender, '') NOT IN :protected
+                         AND COALESCE(sender, '') NOT IN :protected))
                        RETURNING *"""
-                ).bindparams(bindparam("protected", expanding=True)),
+                ).bindparams(
+                    bindparam("protected", expanding=True), bindparam("inbox", expanding=True)
+                ),
                 {
                     "now": now,
                     "cutoff": cutoff_iso(minutes=max_age_minutes),
                     "brief": BRIEF_SOURCE,
                     "protected": list(protected_sessions),
+                    "inbox": list(inbox_sessions),
                 },
             )
             rows = [dict(row._mapping) for row in result.fetchall()]
+            # Each session's last readiness check while its rows waited: the
+            # sender's notice names its condition when that held the queue. A
+            # paste, delivered or failed, or a wait for an unconfirmed paste
+            # (awaiting_ack) means it had cleared. A steer, a
+            # hook-context offer or an inbox acknowledgement reaches the agent
+            # without a check, so those receipts do not count.
+            checks = [
+                *sorted(BLOCKED_OUTCOMES),
+                "delivered",
+                "retried",
+                "delivery_failed",
+                "awaiting_ack",
+            ]
+            last_check: dict[str, tuple[str, str] | None] = {}
+            for session_name in {row.get("session_name") or "" for row in rows}:
+                since = min(
+                    row.get("enqueued_at") or ""
+                    for row in rows
+                    if (row.get("session_name") or "") == session_name
+                )
+                last = await conn.execute(
+                    text(
+                        """SELECT outcome, created_at FROM deliveries
+                           WHERE session_name = :session_name AND outcome IN :checks
+                             AND source NOT IN
+                                 ('hook-context', 'agent-checkpoint', 'uncertain-acknowledged')
+                             AND created_at >= :since
+                           ORDER BY id DESC LIMIT 1"""
+                    ).bindparams(bindparam("checks", expanding=True)),
+                    {"session_name": session_name, "checks": checks, "since": since},
+                )
+                found = last.first()
+                last_check[session_name] = (found[0], found[1]) if found else None
             for row in rows:
                 await self._ensure_operation_id(conn, row)
+                check = last_check[row.get("session_name") or ""]
+                row["blocked_by"] = (
+                    check[0]
+                    if check
+                    and check[0] in BLOCKED_OUTCOMES
+                    and check[1] >= (row.get("enqueued_at") or "")
+                    else None
+                )
                 message = row.get("message") or ""
                 delivery = await conn.execute(
                     text(
@@ -591,13 +700,18 @@ class QueueRepo(Repo):
                 {"id": message_id},
             )
 
-    async def checkpoint(self, session_name: str, limit: int = 10) -> list[dict]:
+    async def checkpoint(
+        self, session_name: str, limit: int = 10, *, escalations: bool = False
+    ) -> list[dict]:
         """Take direct messages out of terminal delivery until explicit acknowledgement.
 
         Re-reading returns the same unacknowledged IDs, including after a lost
         HTTP response or process restart. Ambiguous pastes are labeled uncertain.
         Issue notifications retain the issue routing/acknowledgement protocol.
+        ``escalations`` also claims escalation notices: for an inbox-only
+        agent, which has no terminal to take them.
         """
+        kinds = "('direct_message', 'escalation')" if escalations else "('direct_message')"
         async with self._tx() as conn:
             params = {"session": session_name, "limit": limit}
             held = await conn.execute(
@@ -615,7 +729,9 @@ class QueueRepo(Repo):
                     "UPDATE message_queue SET status='checkpoint', leased_at=NULL "
                     "WHERE status='pending' AND id IN (SELECT id FROM message_queue "
                     "WHERE session_name=:session AND status='pending' "
-                    "AND delivery_kind='direct_message' ORDER BY enqueued_at,id LIMIT :limit "
+                    "AND delivery_kind IN "
+                    + kinds
+                    + " ORDER BY enqueued_at,id LIMIT :limit "
                     + lock
                     + ") RETURNING *"
                 ),

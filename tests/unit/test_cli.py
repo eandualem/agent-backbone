@@ -10,8 +10,11 @@ import pytest
 from agent_backbone import cli
 from agent_backbone.cli import setup
 from agent_backbone.services.agents import AgentState, StartResult, StateSnapshot
+from agent_backbone.services.runtimes import RUNTIMES
 
 _DETECT_REPO = "agent_backbone.services.agents.store.detect_repo"
+_INSTALLED_VERSION = "agent_backbone.services.runtimes.base.Runtime.installed_version"
+_TERMINAL = "agent_backbone.services.terminal"
 
 
 def _run(argv: list[str]) -> int:
@@ -101,6 +104,54 @@ class TestConfig:
 
 
 class TestDoctor:
+    @pytest.fixture(autouse=True)
+    def _no_cli_runs(self):
+        # doctor reads each installed CLI's version; no real CLI runs under test.
+        with (
+            patch(_INSTALLED_VERSION, return_value=None),
+            patch(f"{_TERMINAL}.list_sessions", new_callable=AsyncMock, return_value=[]),
+        ):
+            yield
+
+    def test_names_an_agent_held_in_copy_mode_with_no_one_viewing_it(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """#388: messages wait for it, and only someone attaching can end it."""
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        assert _run(["init"]) == 0
+        with (
+            patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
+            patch(
+                "agent_backbone.services.agents.launch.start_agent",
+                new_callable=AsyncMock,
+                return_value=StartResult(ok=True, ready="ready", evidence=()),
+            ),
+            patch(_DETECT_REPO, new_callable=AsyncMock, return_value=None),
+        ):
+            for name in ("reader", "away"):
+                (tmp_path / name).mkdir()
+                assert _run(["agent", "start", name, "--dir", str(tmp_path / name)]) == 0
+        capsys.readouterr()
+        with (
+            patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                f"{_TERMINAL}.list_sessions",
+                new_callable=AsyncMock,
+                return_value=["reader", "away"],
+            ),
+            patch(f"{_TERMINAL}.in_copy_mode", new_callable=AsyncMock, return_value=True),
+            patch(
+                f"{_TERMINAL}.window_viewers",
+                new_callable=AsyncMock,
+                side_effect=lambda name: 0 if name == "away" else 1,
+            ),
+        ):
+            _run(["doctor"])
+        out = " ".join(capsys.readouterr().out.split())  # a long note wraps
+        assert "'away' is in tmux copy mode with no one viewing it" in out
+        assert "attach to its session and press q" in out
+        assert "'reader' is in tmux copy mode" not in out
+
     def test_reports_missing_pieces(self, tmp_path, capsys):
         assert _run(["init"]) == 0
         assert _run(["agent", "set", "ghost", "dir=/nope"]) == 1  # unknown agent
@@ -121,6 +172,49 @@ class TestDoctor:
         assert code == 0
         assert "All good" in capsys.readouterr().out
 
+    def test_lists_the_cli_version_capabilities_were_verified_on(self, monkeypatch, capsys):
+        """#356: a CLI release can change the dialog, key or hook a capability relies on."""
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        assert _run(["init"]) == 0
+        with (
+            patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"),
+            patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
+        ):
+            assert _run(["doctor"]) == 0
+        out = capsys.readouterr().out
+        assert "Verified on a CLI version" in out
+        assert "2.1.284" in out and "plan-approval" in out and "not recorded" in out
+
+    @pytest.mark.parametrize("runtime_id", ["claude", "codex", "opencode", "gemini", "deepcode"])
+    def test_advises_checking_again_where_the_installed_cli_differs(
+        self, runtime_id, monkeypatch, capsys
+    ):
+        """#359: a mismatch is advice, not a failure; an unreadable version is named."""
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+
+        def doctor(recorded, installed):
+            with (
+                patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"),
+                patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
+                patch(
+                    "agent_backbone.services.runtimes.verified_versions",
+                    side_effect=lambda rid: recorded if rid == runtime_id else {},
+                ),
+                patch(_INSTALLED_VERSION, new=lambda rt: installed),
+            ):
+                assert _run(["doctor"]) == 0
+            return " ".join(capsys.readouterr().out.split())  # a long note wraps
+
+        versions = {"2.0.0": ["steer"], "1.9.0": ["delivery"], "not recorded": ["trust"]}
+        out = doctor(versions, "2.0.0")
+        assert f"! {runtime_id}: installed 2.0.0, verified on 1.9.0: check those" in out
+        out = doctor(versions, None)
+        binary = RUNTIMES[runtime_id].binary
+        assert f"! {runtime_id}: installed version unreadable ({binary} --version)" in out
+        assert f"! {runtime_id}:" not in doctor({"2.0.0": ["steer"]}, "2.0.0")
+
     def test_no_agent_cli_is_a_problem_that_names_them(self, tmp_path, monkeypatch, capsys):
         """A newcomer must not read "All good." and then fail at `agent start` (#260)."""
         monkeypatch.setenv("BACKBONE_API_KEY", "k")
@@ -136,6 +230,24 @@ class TestDoctor:
         flat = " ".join(out.split())  # the hint wraps at the terminal width
         assert "claude, codex" in flat and "backbone docs getting-started" in flat
 
+    def test_names_a_user_level_instruction_file_without_failing(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """#274: such a file reaches every session of its CLI."""
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+        (tmp_path / "codex").mkdir()
+        (tmp_path / "codex" / "AGENTS.md").write_text("notes left by another session")
+        assert _run(["init"]) == 0
+        with (
+            patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"),
+            patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
+        ):
+            code = _run(["doctor"])
+        squeezed = "".join(capsys.readouterr().out.split())  # a long path wraps anywhere
+        assert code == 0
+        assert f"!Codexuser-levelinstructions:{tmp_path / 'codex' / 'AGENTS.md'}" in squeezed
+
     def test_reports_a_stored_setting_that_is_now_ignored(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_API_KEY", "k")
         assert _run(["init"]) == 0
@@ -148,6 +260,37 @@ class TestDoctor:
         out = capsys.readouterr().out
         assert code == 1
         assert "FAIL setting skills.store" in out and "backbone config set skills.store" in out
+
+    def test_names_each_opencode_agent_whose_plans_ask_for_no_approval(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """#278: OpenCode asks to approve a plan only with its experimental flag."""
+        for flag in ("OPENCODE_EXPERIMENTAL_PLAN_MODE", "OPENCODE_EXPERIMENTAL"):
+            monkeypatch.delenv(flag, raising=False)
+        assert _run(["init"]) == 0
+        with (
+            patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
+            patch(
+                "agent_backbone.services.agents.launch.start_agent",
+                new_callable=AsyncMock,
+                return_value=StartResult(ok=True, ready="ready", evidence=()),
+            ),
+            patch(_DETECT_REPO, new_callable=AsyncMock, return_value=None),
+        ):
+            for name in ("planner", "builder"):
+                (tmp_path / name).mkdir()
+                argv = ["agent", "start", name, "--dir", str(tmp_path / name)]
+                assert _run([*argv, "--runtime", "opencode"]) == 0
+        env = '{"OPENCODE_EXPERIMENTAL_PLAN_MODE": "1"}'
+        assert _run(["agent", "set", "planner", f"env={env}"]) == 0
+        capsys.readouterr()
+        with patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"):
+            _run(["doctor"])
+        out = " ".join(capsys.readouterr().out.split())  # a long note wraps
+        assert (
+            "'builder': plan approval is unavailable until OPENCODE_EXPERIMENTAL_PLAN_MODE" in out
+        )
+        assert "'planner': plan approval" not in out
 
 
 class TestAgentCommands:
@@ -552,7 +695,11 @@ class TestAgentCommands:
             assert _run(["agent", "start", "--dir", str(project), "--no-wait"]) == 0
         assert _run(["agent", "watch", "orch", "acme/app", "acme/web"]) == 0
         assert _run(["agent", "set", "orch", "description=Coordinates", "repo=acme/orch"]) == 0
-        capsys.readouterr()
+        assert "warning" not in capsys.readouterr().err
+        # A secret-looking env name is warned about (#289), and still set.
+        env = '{"UV_CACHE_DIR": ".uv", "GITHUB_TOKEN": "x", "DB": "postgresql://app:pw@db/app"}'
+        assert _run(["agent", "set", "orch", f"env={env}"]) == 0
+        assert "look like secrets: GITHUB_TOKEN, DB." in capsys.readouterr().err
         assert _run(["agent", "list"]) == 0
         assert "orch" in capsys.readouterr().out
         assert _run(["agent", "unwatch", "orch", "acme/web"]) == 0
@@ -579,12 +726,22 @@ class TestAgentCommands:
             assert _run(["agent", "start", "--dir", str(project), "--no-wait"]) == 0
         capsys.readouterr()
         assert (
-            _run(["agent", "subscribe", "desk", "gmail", "from:upwork.com", "--priority", "high"])
+            _run(
+                [
+                    "agent",
+                    "subscribe",
+                    "desk",
+                    "gmail",
+                    "from:alerts@example.com",
+                    "--priority",
+                    "high",
+                ]
+            )
             == 0
         )
         out = capsys.readouterr().out
-        assert "desk: subscribed to gmail (high): from:upwork.com" in out
-        assert "#1 gmail high: from:upwork.com" in out
+        assert "desk: subscribed to gmail (high): from:alerts@example.com" in out
+        assert "#1 gmail high: from:alerts@example.com" in out
         assert _run(["agent", "subscribe", "desk", "pigeon", "x"]) == 1
         assert "unknown source" in capsys.readouterr().out
         assert _run(["agent", "subscribe", "desk", "gmail"]) == 1
@@ -608,12 +765,12 @@ class TestAgentCommands:
         ):
             assert _run(["agent", "inspect", "desk", "--json"]) == 0
         assert json.loads(capsys.readouterr().out)["subscriptions"] == [
-            {"id": 1, "source": "gmail", "filter": "from:upwork.com", "priority": "high"}
+            {"id": 1, "source": "gmail", "filter": "from:alerts@example.com", "priority": "high"}
         ]
 
         monkeypatch.setenv("BACKBONE_AGENT", "desk")
-        assert _run(["agent", "subscribe", "gmail", "from:linkedin.com"]) == 0
-        assert "#2 gmail normal: from:linkedin.com" in capsys.readouterr().out
+        assert _run(["agent", "subscribe", "gmail", "from:example.com"]) == 0
+        assert "#2 gmail normal: from:example.com" in capsys.readouterr().out
         assert _run(["agent", "unsubscribe", "1"]) == 0
         out = capsys.readouterr().out
         assert "subscription 1 removed" in out and "#1 " not in out
@@ -820,7 +977,11 @@ class TestReply:
 
 
 class TestDown:
-    async def test_failed_stop_is_reported(self, tmp_path, capsys):
+    @pytest.mark.parametrize(
+        ("closed", "exit_code", "message"),
+        [(False, 1, "failed to stop"), (True, 0, "backbone stopped")],
+    )
+    async def test_stop_result(self, tmp_path, capsys, closed, exit_code, message):
         from agent_backbone.cli import server
         from agent_backbone.config import bootstrap_config
 
@@ -834,31 +995,11 @@ class TestDown:
             patch(
                 "agent_backbone.services.terminal.graceful_close",
                 new_callable=AsyncMock,
-                return_value=False,
+                return_value=closed,
             ),
         ):
-            assert await server._down(config) == 1
-        assert "failed to stop" in capsys.readouterr().out
-
-    async def test_clean_stop(self, tmp_path, capsys):
-        from agent_backbone.cli import server
-        from agent_backbone.config import bootstrap_config
-
-        config = bootstrap_config(tmp_path / "data")
-        with (
-            patch(
-                "agent_backbone.services.terminal.session_exists",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "agent_backbone.services.terminal.graceful_close",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-        ):
-            assert await server._down(config) == 0
-        assert "backbone stopped" in capsys.readouterr().out
+            assert await server._down(config) == exit_code
+        assert message in capsys.readouterr().out
 
 
 class TestHooks:
@@ -1069,6 +1210,50 @@ class TestCheckpointInbox:
             assert _run(["inbox"]) == 1
             api.assert_not_called()
         assert "--agent" in capsys.readouterr().out
+
+
+class TestMessageValidate:
+    CLAIM = {
+        "confirmation_id": "c0ffee00-0000-4000-8000-000000000001",
+        "outcome": "recovered",
+        "recovered": True,
+        "agent": "ike",
+        "sender": "assistant",
+        "kind": "message",
+        "text": "Merge the release branch\n  keeping this indent\n",
+        "text_sha256": "0" * 64,
+        "source": "button",
+        "confirmed_at": "2026-09-27T08:00:00+00:00",
+        "delivered_at": "2026-09-27T08:00:05.000000Z",
+        "grant": {"status": "open", "claimed_at": 0, "expires_at": 86400, "closed_at": None},
+    }
+
+    def test_prints_the_exact_text_and_says_a_recovery_is_not_fresh(self, capsys):
+        with patch(
+            "agent_backbone.cli._common.api", AsyncMock(return_value=(200, self.CLAIM))
+        ) as api:
+            assert _run(["message", "validate", self.CLAIM["confirmation_id"]]) == 0
+        assert api.call_args.kwargs["json_body"] == {
+            "confirmation_id": self.CLAIM["confirmation_id"],
+            "done": False,
+        }
+        out = capsys.readouterr().out
+        assert "not fresh authority" in out and "1970-01-02T00:00:00+00:00" in out
+        assert out.endswith("--json gives it exactly):\n" + self.CLAIM["text"])
+
+    def test_terminal_controls_in_the_text_are_shown_escaped(self, capsys):
+        claim = {**self.CLAIM, "text": "copy\x1b]52;c;ZXZpbA==\x07 this\u202e"}
+        with patch("agent_backbone.cli._common.api", AsyncMock(return_value=(200, claim))):
+            assert _run(["message", "validate", claim["confirmation_id"]]) == 0
+        out = capsys.readouterr().out
+        assert "\x1b" not in out and "\x07" not in out and "\u202e" not in out
+        assert out.endswith("copy\\x1b]52;c;ZXZpbA==\\x07 this\\u202e\n")
+
+    def test_a_refusal_exits_1_with_its_reason(self, capsys):
+        refusal = {"detail": {"reason": "wrong_recipient", "message": "delivered to another"}}
+        with patch("agent_backbone.cli._common.api", AsyncMock(return_value=(403, refusal))):
+            assert _run(["message", "validate", "x", "--done"]) == 1
+        assert capsys.readouterr().out.startswith("Not validated (wrong_recipient)")
 
 
 class TestAgentRestart:

@@ -28,7 +28,7 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import suppress
 from pathlib import Path
 
@@ -42,6 +42,7 @@ REASON_PLAN = "plan"
 REASON_PERMISSION = "permission"
 REASON_QUESTION = "question"
 REASON_QUOTA = "quota"
+REASON_PROVIDER = "provider"
 
 LAST_MESSAGE_CHARS = 500
 
@@ -198,6 +199,7 @@ def _gh_arguments(argv: list[str]) -> tuple[list[str], dict[str, str]] | None:
         "-T": "template",
         "--template": "template",
         "--recover": "recover",
+        "--attach": "attach",  # gh 2.99+: an image or video to upload (#434)
     }
     flags = {
         "--draft",
@@ -633,16 +635,16 @@ def observed_model(payload: dict, current: dict | None, event: str) -> str | Non
     """The model the runtime is actually answering with, when it can be known.
 
     No CLI puts the model in its hook payload today (Claude Code 2.1.267
-    measured 2026-09-10), but Claude Code names the transcript, and every
-    assistant entry there carries ``"model": "…"``. The tail of that file is
-    read on the events that follow a reply; other events carry the last
-    observation forward. A payload ``model`` field, if one appears, wins.
+    measured 2026-09-10), but Claude Code and Gemini CLI name the transcript,
+    and every reply entry there carries ``"model": "…"``. The tail of that
+    file is read on the events that follow a reply; other events carry the
+    last observation forward. A payload ``model`` field, if one appears, wins.
     """
     current = current or {}
     direct = payload.get("model")
     if isinstance(direct, str) and direct.strip() and not direct.startswith("<"):
         return direct.strip()
-    if event in ("Stop", "SessionStart", "UserPromptSubmit"):
+    if event in ("Stop", "SessionStart", "UserPromptSubmit", "AfterAgent"):
         transcript = payload.get("transcript_path")
         if isinstance(transcript, str) and transcript:
             found = _model_from_transcript(Path(transcript))
@@ -651,8 +653,9 @@ def observed_model(payload: dict, current: dict | None, event: str) -> str | Non
     return current.get("model") or None
 
 
-def _model_from_transcript(path: Path) -> str | None:
-    """The last Claude assistant record's model, never a nested tool argument."""
+def transcript_records(path: Path) -> Iterator[dict]:
+    """The JSON records at the end of a JSONL transcript, newest first
+    (the last ``TRANSCRIPT_TAIL_BYTES``; nothing when it cannot be read)."""
     try:
         with path.open("rb") as stream:
             stream.seek(0, os.SEEK_END)
@@ -661,7 +664,7 @@ def _model_from_transcript(path: Path) -> str | None:
             stream.seek(start)
             tail = stream.read().decode("utf-8", "replace")
     except OSError:
-        return None
+        return
     if start:
         tail = tail.partition("\n")[2]  # the first record may be truncated
     for line in reversed(tail.splitlines()):
@@ -669,10 +672,21 @@ def _model_from_transcript(path: Path) -> str | None:
             record = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(record, dict) or record.get("type") != "assistant":
+        if isinstance(record, dict):
+            yield record
+
+
+def _model_from_transcript(path: Path) -> str | None:
+    """The last reply record's model, never a nested tool argument: Claude
+    Code's ``assistant`` message, or Gemini CLI's ``gemini`` record (0.46)."""
+    for record in transcript_records(path):
+        if record.get("type") == "assistant":
+            message = record.get("message")
+            model = message.get("model") if isinstance(message, dict) else None
+        elif record.get("type") == "gemini":
+            model = record.get("model")
+        else:
             continue
-        message = record.get("message")
-        model = message.get("model") if isinstance(message, dict) else None
         if isinstance(model, str) and 0 < len(model) <= 120 and not any(c in model for c in "<>"):
             return model
     return None
@@ -748,6 +762,14 @@ def clip_message(text: str | None) -> str | None:
     return text[:LAST_MESSAGE_CHARS] + ("…" if len(text) > LAST_MESSAGE_CHARS else "")
 
 
+def launch_state_path(state_dir: Path, agent: str, launch_id: object) -> Path | None:
+    """A launch owns its state file: a delayed older writer cannot replace it."""
+    if not isinstance(launch_id, str) or not launch_id:
+        return None
+    identity = hashlib.sha256(launch_id.encode()).hexdigest()
+    return state_dir / "launches" / agent / f"{identity}.json"
+
+
 def write_state(state_dir: Path, agent: str, record: dict) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     plan_text = record.pop("plan_text", None)
@@ -757,10 +779,14 @@ def write_state(state_dir: Path, agent: str, record: dict) -> None:
         plan_path = plans_dir / f"{agent}.md"
         plan_path.write_text(plan_text)
         record["plan_file"] = str(plan_path)
-    target = state_dir / f"{agent}.json"
-    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")  # never shared with another writer
-    tmp.write_text(json.dumps(record))
-    os.replace(tmp, target)
+    targets = [state_dir / f"{agent}.json"]
+    if scoped := launch_state_path(state_dir, agent, record.get("launch_id")):
+        targets.insert(0, scoped)
+    for target in targets:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(record))
+        os.replace(tmp, target)
 
 
 def remember_usage_session(state_dir: Path, agent: str, record: dict) -> None:
@@ -887,11 +913,15 @@ def take_context(state_dir: Path, agent: str, launch_id: str | None = None) -> l
     scoped to this session (steers under ``<agent>/<launch_id>/``, see
     ``offer_steer``); ``launch_id`` defaults to the session's own
     ``BACKBONE_LAUNCH_ID``, so a steer written for another session of the
-    same agent is never taken here."""
+    same agent is never taken here. A steer offered to an earlier turn, or
+    to an earlier conversation of this session, is marked ``.missed``
+    instead (see ``offer_steer``); so is an agent offer with a ``.turn``
+    naming an earlier conversation (the context-size note)."""
     launch_id = launch_id or os.environ.get("BACKBONE_LAUNCH_ID", "").strip()
     directories = [_context_dir(state_dir, agent)]
     if launch_id:
         directories.append(_steer_dir(state_dir, agent, launch_id))
+    current = read_current(state_dir, agent) or {}
     texts: list[str] = []
     for directory in directories:
         try:
@@ -908,6 +938,12 @@ def take_context(state_dir: Path, agent: str, launch_id: str | None = None) -> l
         except OSError:
             continue
         for offer in offers:
+            if _for_an_earlier_turn(offer, current):
+                # That turn ended with no hook event (an interrupt, a provider
+                # failure): its steer is never the next task's.
+                with suppress(OSError):
+                    os.rename(offer, offer.with_suffix(".missed"))
+                continue
             taken = offer.with_suffix(".taken")
             try:
                 # Read before renaming: once it is ``.taken`` the backbone may
@@ -933,18 +969,55 @@ def steer_key(delivery_id: int) -> str:
     return f"{STEER_PREFIX}{delivery_id:08d}"
 
 
-def offer_steer(state_dir: Path, agent: str, launch_id: str, key: str, text: str) -> bool:
+def offer_steer(
+    state_dir: Path,
+    agent: str,
+    launch_id: str,
+    key: str,
+    text: str,
+    turn: dict | None = None,
+) -> bool:
     """Backbone side: offer a steer to one session of the agent. False when
-    that key was already taken."""
+    that key was already taken.
+
+    ``turn`` names the turn it is offered to: the hook record's
+    ``prompted_at`` and ``session_id``, read before the offer. They go to
+    ``<key>.turn`` before the offer exists, and the hook hands the offer over
+    only within that turn of that conversation. Without them, the session's
+    next tool call takes the offer, whichever turn that is."""
     directory = _steer_dir(state_dir, agent, launch_id)
     directory.mkdir(parents=True, exist_ok=True)
     if (directory / f"{key}.taken").exists():
         return False
+    marks = {name: value for name, value in (turn or {}).items() if value is not None}
+    if marks:
+        (directory / f"{key}.turn").write_text(json.dumps(marks), encoding="utf-8")
     target = directory / f"{key}.md"
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, target)
     return True
+
+
+def _for_an_earlier_turn(offer: Path, current: dict) -> bool:
+    """Whether a steer was offered to a turn before the current one: its
+    ``.turn`` file names that turn's prompt and conversation, and the current
+    record names another (a newer prompt, or a new conversation after
+    ``/clear``). The values are compared for equality, not ordered, so no
+    clock boundary can misplace an offer. A value missing on either side is
+    not compared; with none, the offer is handed over."""
+    try:
+        offered_to = json.loads(offer.with_suffix(".turn").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(offered_to, dict):
+        return False
+    return any(
+        offered_to.get(name) is not None
+        and current.get(name) is not None
+        and offered_to[name] != current[name]
+        for name in ("prompted_at", "session_id")
+    )
 
 
 def retire_steers(state_dir: Path, agent: str, launch_id: str | None = None) -> None:
@@ -1019,7 +1092,7 @@ def expire_steer(state_dir: Path, agent: str, launch_id: str, delivery_id: int) 
 
 def clear_steer(state_dir: Path, agent: str, launch_id: str, delivery_id: int) -> None:
     directory = _steer_dir(state_dir, agent, launch_id)
-    for suffix in ("md", "taken", "missed"):
+    for suffix in ("md", "taken", "missed", "turn"):
         (directory / f"{steer_key(delivery_id)}.{suffix}").unlink(missing_ok=True)
 
 
@@ -1031,8 +1104,12 @@ def hook_context_output(event: str, texts: list[str]) -> str:
 
 
 def read_current(state_dir: Path, agent: str) -> dict | None:
+    target = state_dir / f"{agent}.json"
+    scoped = launch_state_path(state_dir, agent, os.environ.get("BACKBONE_LAUNCH_ID"))
+    if scoped is not None and scoped.exists():
+        target = scoped
     try:
-        return json.loads((state_dir / f"{agent}.json").read_text())
+        return json.loads(target.read_text())
     except (OSError, ValueError):
         return None
 

@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import re
+import sys
 import time
 import tomllib
 from pathlib import Path
@@ -18,11 +19,19 @@ from agent_backbone.services.runtimes.base import (
     Runtime,
     RuntimeDiagnostic,
     TranscriptEntry,
+    agent_home,
+    git_root,
+    has_text,
+    main_checkout,
     transcript_clock,
 )
 from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
+# Codex's Linux sandbox (bubblewrap) mounts every writable root as a directory:
+# a file root panics it at the first command, and a missing root under the
+# protected `.git` stops it (#433, codex-cli 0.160 measured in Debian 13).
+_DIRECTORY_ROOTS_ONLY = sys.platform == "linux"
 _usage_lineage: dict[str, tuple[float, dict[str, list[tuple[str, Path]]]]] = {}
 
 
@@ -57,6 +66,13 @@ def pre_trust_codex_directory(directory: Path | str, *, codex_config: Path | Non
     except (OSError, ValueError, tomllib.TOMLDecodeError):
         log.warning("Could not pre-trust %s for Codex (the trust dialog will appear)", path)
         return False
+
+
+def _toml_object(path: Path) -> dict:
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
 
 
 def _toml_string(value: str) -> str:
@@ -103,6 +119,7 @@ class Codex(Runtime):
     supports_exact_resume = True
     id = "codex"
     skill_dirs = (".agents/skills",)
+    skill_read_dirs = (".agents/skills", ".codex/skills")  # 0.160.0
     fallback_prompts = ("›",)
     display_name = "Codex"
     binary = "codex"
@@ -121,6 +138,9 @@ class Codex(Runtime):
             "deep-review",
             "message-authority",
             "observed-model",
+            # Escape, while working or at an approval dialog, runs its
+            # Interrupt hook (live, codex-cli 0.157.1).
+            "interrupted-turn",
         }
     )
     models = ("gpt-5.6-sol", "gpt-6-astra")  # as shown by codex's own status line (live capture)
@@ -139,6 +159,12 @@ class Codex(Runtime):
     # before `resume`.
     unattended_args = ("-a", "never", "-s", "workspace-write")
     sandboxed = True
+    sandbox_commit_block = (
+        "Codex's sandbox on Linux takes only directories, so git add and git commit "
+        "fail inside it (#437)"
+        if _DIRECTORY_ROOTS_ONLY
+        else ""
+    )
     mouse_scroll = True
     # Codex 0.153.4: on-request approvals go to its automatic reviewer,
     # with workspace-write enforced by this switch (verified with --help).
@@ -186,6 +212,9 @@ class Codex(Runtime):
         r"^(?:error:\s*)?you(?:'ve| have) hit your usage limit\b",
         r"^(?:error:\s*)?rate limit (?:reached|exceeded)\b",
         r"^(?:error:\s*)?(?:too many requests|insufficient_quota)\b",
+        # A turn whose retries ran out (0.160.0, live): "exceeded retry limit,
+        # last status: 429 Too Many Requests".
+        r"^(?:error:\s*)?exceeded retry limit, last status: \d{3}\b",
     )
     provider_error_prefixes = ("■",)
     prompt_markers = (
@@ -205,6 +234,40 @@ class Codex(Runtime):
     # preselected (live capture, 0.153): Enter changes the model, Escape
     # ("go back") keeps it.
     choice_markers = ("keep current model", "switch to gpt-")
+    # After a Plan-mode turn ends with a proposed plan: "Implement this plan?"
+    # "› 1. Yes, implement this plan", "2. Yes, clear context and implement",
+    # "3. No, stay in Plan mode", "enter select · esc back" (live, 0.157.1).
+    # "1" switches to Default mode and submits "Implement the plan."; "3"
+    # closes the dialog and stays in Plan mode, where the feedback follows as
+    # a message. A digit, not Enter or Escape: once a person has answered,
+    # it cannot choose another option or interrupt the turn that follows.
+    plan_markers = ("implement this plan?", "no, stay in plan mode")
+    plan_approve_keys = ("1",)
+    plan_reject_keys = ("3",)
+    # A turn that fails at the provider runs no hook (0.157.1): its
+    # UserPromptSubmit record still says busy while the banner is on screen.
+    hooks_miss_failed_turns = True
+
+    def provider_failure(self, pane_content: str) -> str | None:
+        # The last "›" line is the input: it, the placeholder and the status
+        # line below it (any model, effort and directory) are not output
+        # (0.157.1, live).
+        lines = pane_content.splitlines()
+        last = max(
+            (
+                i
+                for i, raw in enumerate(lines)
+                if sanitize_pane_content(raw).lstrip().startswith(self.prompt_prefixes)
+            ),
+            default=None,
+        )
+        above = pane_content if last is None else "\n".join(lines[:last])
+        return super().provider_failure(above)
+
+    def _opens_with_error_glyph(self, raw: str) -> bool:
+        # Codex draws its banners at the left edge and indents every line of a
+        # reply, so an indented glyph is output quoting one.
+        return sanitize_pane_content(raw).startswith(self.provider_error_prefixes)
 
     def diagnostics(self, pane_content: str) -> tuple[RuntimeDiagnostic, ...]:
         """Observe typed error banners, including one still visible after a model change.
@@ -287,10 +350,17 @@ class Codex(Runtime):
         """``--add-dir <path>`` per writable root, including Git bookkeeping
         files and their locks. What a project's
         tooling keeps outside the checkout — uv's cache under `~/.cache`, the
-        one wall a member hit live — is opened here, nothing else."""
+        one wall a member hit live — is opened here, nothing else.
+
+        On Linux only existing directories: Git's files are left out, so
+        commits stay blocked inside the sandbox there (#433). A relative
+        entry is Codex's to resolve in the agent's directory, as before."""
         args: list[str] = []
         for directory in dirs:
-            args.extend(["--add-dir", str(Path(directory).expanduser())])
+            path = Path(directory).expanduser()
+            if _DIRECTORY_ROOTS_ONLY and path.is_absolute() and not os.path.isdir(path):
+                continue
+            args.extend(["--add-dir", str(path)])
         return args
 
     def effort_args(self, effort: str | None) -> list[str]:
@@ -335,24 +405,81 @@ class Codex(Runtime):
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         hook = self.hook_launch_args(data_dir, state_dir)
-        # `codex resume` accepts explicit model overrides as well as a session ID.
-        # Both the TUI and `resume` take `-c` and the hook-trust flag.
-        if resume:
-            target = resume if isinstance(resume, str) else "--last"
-            return [
-                "resume",
-                target,
-                *_LOCAL_API_ACCESS,
-                "--no-alt-screen",
-                *hook,
-                *(["--model", model] if model else []),
-            ]
-        # Inline output gives tmux scrollback to display; session mouse
-        # handling keeps the wheel from becoming Up/Down in the composer.
-        args: list[str] = [*_LOCAL_API_ACCESS, "--no-alt-screen", *hook]
+        # Pin the launch tier independently of model/effort and inherited config.
+        # An operator can still explicitly change the tier inside the session.
+        # Inline output preserves tmux scrollback and mouse handling.
+        # codex-cli 0.160: with any `-c` override, an available update stops the
+        # launch on a numbered dialog; upgrading stays the operator's choice.
+        args = [
+            *_LOCAL_API_ACCESS,
+            "-c",
+            "service_tier=default",
+            "-c",
+            "check_for_update_on_startup=false",
+            "--no-alt-screen",
+            *hook,
+        ]
         if model:
             args.extend(["--model", model])
+        # Both fresh and resumed sessions accept the same config overrides.
+        if resume:
+            target = resume if isinstance(resume, str) else "--last"
+            return ["resume", target, *args]
         return args
+
+    def user_instructions(self, env, project=None):
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
+        ).expanduser()
+        # The override wins over AGENTS.md; only the first file with content is read.
+        for path in (home / "AGENTS.override.md", home / "AGENTS.md"):
+            if has_text(path):
+                return [path]
+        return []
+
+    def user_skill_dirs(self, env):
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
+        ).expanduser()
+        # 0.160.0 reads both recursively, $CODEX_HOME/skills/.system included.
+        return [agent_home(env) / ".agents" / "skills", home / "skills"]
+
+    def native_memory(self, env, project=None):
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
+        ).expanduser()
+        user = _toml_object(home / "config.toml")
+        layers = [user]
+        if project is not None:
+            # 0.157.1: `.codex/config.toml` from the project root (the nearest
+            # directory with `.git`) down to the session's directory, the nearer
+            # one winning. Each counts when its directory is trusted: the nearest
+            # entry from it up to the root, then a worktree's main checkout.
+            here = Path(project).expanduser().resolve()
+            root = git_root(here) or here
+            chain = [here, *here.parents]
+            below = chain[: chain.index(root) + 1]
+            projects = user.get("projects")
+            projects = projects if isinstance(projects, dict) else {}
+
+            def trusted(directory: Path) -> bool:
+                for key in (*below[below.index(directory) :], main_checkout(root)):
+                    entry = projects.get(str(key)) if key else None
+                    if isinstance(entry, dict) and "trust_level" in entry:
+                        return entry["trust_level"] == "trusted"
+                return False
+
+            layers += [
+                _toml_object(d / ".codex/config.toml") for d in reversed(below) if trusted(d)
+            ]
+        enabled = False  # off by default (`codex features list`)
+        for layer in layers:
+            features = layer.get("features")
+            if isinstance(features, dict) and isinstance(features.get("memories"), bool):
+                enabled = features["memories"]
+        if not enabled:
+            return None
+        return "memories are on (off: `memories = false` under `[features]` in config.toml)"
 
     usage_supported = True
     transcript_supported = True
@@ -395,7 +522,7 @@ class Codex(Runtime):
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session_id):
             return []
         home = Path(
-            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
         ).expanduser()
         return sorted(
             [
@@ -408,7 +535,7 @@ class Codex(Runtime):
         self, path: Path, session_id: str, env: dict[str, str]
     ) -> list[tuple[str, Path]]:
         home = Path(
-            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
         ).expanduser()
         cached = _usage_lineage.get(str(home))
         if cached and time.monotonic() - cached[0] < 30:

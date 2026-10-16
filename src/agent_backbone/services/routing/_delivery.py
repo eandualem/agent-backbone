@@ -100,6 +100,16 @@ _session_locks: WeakValueDictionary[tuple[int, str], asyncio.Lock] = WeakValueDi
 _Result = TypeVar("_Result")
 
 
+_revocation_locks: dict[int, asyncio.Lock] = {}
+
+
+def revocation_guard() -> asyncio.Lock:
+    """Held by an owner-approved key reset and around the last check and paste
+    of a queued owner-confirmed message: a reset lands either before that check
+    (the message is skipped) or after the paste (it counts as delivered)."""
+    return _revocation_locks.setdefault(id(asyncio.get_running_loop()), asyncio.Lock())
+
+
 def _serialized(fn: Callable[..., Awaitable[_Result]]):
     """One gate/paste/record transaction per session; idle locks are released.
 
@@ -113,6 +123,36 @@ def _serialized(fn: Callable[..., Awaitable[_Result]]):
         lock = _session_locks.setdefault(key, asyncio.Lock())
         async with lock:
             db = kwargs.get("db")
+            queue_id = kwargs.get("queue_id")
+            if (
+                db is not None
+                and queue_id is not None
+                and kwargs.get("requeue") is False
+                and await db.signing.is_confirmation(kwargs.get("operation_id"))
+            ):
+                # A queued owner confirmation: its whole delivery, from this
+                # check to the success record, runs under the reset's guard.
+                async with revocation_guard():
+                    if not await db.queue.still_leased(queue_id) or await db.signing.was_delivered(
+                        kwargs.get("operation_id")
+                    ):
+                        # Revoked, or already delivered (its row just wasn't
+                        # completed): never paste a confirmation twice.
+                        return DeliveryReport(
+                            DeliveryOutcome.ALREADY_DELIVERED,
+                            operation_id=kwargs.get("operation_id"),
+                        )
+                    if await db.signing.was_attempted(kwargs.get("operation_id")):
+                        # An earlier paste was interrupted before its outcome
+                        # was recorded: it may have landed, so hold it.
+                        await db.queue.hold_uncertain(queue_id)
+                        return DeliveryReport(
+                            DeliveryOutcome.AWAITING_ACK,
+                            unconfirmed=True,
+                            operation_id=kwargs.get("operation_id"),
+                            queue_id=queue_id,
+                        )
+                    return await fn(session_name, *args, **kwargs)
             source_key = kwargs.get("source_key") or ""
             if db is not None and source_key.startswith("review-start:"):
                 async with db.events.review_delivery(source_key) as eligible:
@@ -124,7 +164,9 @@ def _serialized(fn: Callable[..., Awaitable[_Result]]):
     return locked
 
 
-def queue_detail(report: DeliveryReport, session_name: str, expiry_minutes: int) -> str:
+def queue_detail(
+    report: DeliveryReport, session_name: str, expiry_minutes: int, *, inbox_only: bool = False
+) -> str:
     """One plain sentence about what happened, for people and agents alike."""
     if report.unconfirmed and report.queue_id is None:
         return "Submission is uncertain and was not retained; inspect the terminal before retrying."
@@ -135,7 +177,16 @@ def queue_detail(report: DeliveryReport, session_name: str, expiry_minutes: int)
         )
     if report.outcome == DeliveryOutcome.DELIVERED:
         return f"Delivered to {session_name}."
-    why = report.outcome.value.replace("_", " ")
+    why = (
+        "in tmux copy mode with no one viewing it (attach to its session and press q)"
+        if report.outcome == DeliveryOutcome.UNATTENDED_COPY_MODE
+        else report.outcome.value.replace("_", " ")
+    )
+    if report.queue == "stored" and inbox_only:
+        return (
+            f"Held for {session_name}'s inbox: it is inbox-only and reads its messages with "
+            "backbone inbox; direct messages wait there without expiring."
+        )
     if report.queue == "stored":
         return (
             f"Queued: {session_name} is {why}; the message is stored and will be delivered "
@@ -166,13 +217,23 @@ async def is_acknowledged(
     )
 
 
+def _in_session(row: dict, since: str | None) -> bool:
+    """Whether a delivery reached the agent's current session (started at ``since``).
+
+    A fresh session never saw what an earlier one received, so it can neither
+    acknowledge it nor be spared it as a duplicate."""
+    return since is None or (row.get("created_at") or "") >= since
+
+
 async def _has_successful_issue_delivery(
-    db: BackboneDB, repo: str, issue_number: int, session_name: str
+    db: BackboneDB, repo: str, issue_number: int, session_name: str, since: str | None = None
 ) -> bool:
     rows = await db.deliveries.query(
         issue_number=issue_number, session_name=session_name, limit=25, repo=repo, kind="issue"
     )
-    return any((row.get("outcome") or "") in SUCCESS_OUTCOMES for row in rows)
+    return any(
+        (row.get("outcome") or "") in SUCCESS_OUTCOMES and _in_session(row, since) for row in rows
+    )
 
 
 async def _get_unacknowledged_gate_issue(
@@ -181,8 +242,9 @@ async def _get_unacknowledged_gate_issue(
     repo: str,
     current_issue: int,
     queue_scope: Collection[tuple[str, int]] | None = None,
+    since: str | None = None,
 ) -> tuple[str, int] | None:
-    """The most recent successfully delivered issue still awaiting acknowledgment."""
+    """The most recent issue delivered to the current session still awaiting acknowledgment."""
     scope = {(r.casefold(), n) for r, n in (queue_scope or ())}
     rows = await db.deliveries.query(session_name=session_name, limit=100, kind="issue")
     for row in rows:
@@ -195,7 +257,7 @@ async def _get_unacknowledged_gate_issue(
             continue
         if issue_number == current_issue and row_repo.casefold() == repo.casefold():
             continue
-        if (row.get("outcome") or "") not in SUCCESS_OUTCOMES:
+        if (row.get("outcome") or "") not in SUCCESS_OUTCOMES or not _in_session(row, since):
             continue
         if await is_acknowledged(db, row_repo, issue_number, target_entity, session_name):
             continue
@@ -367,14 +429,15 @@ async def safe_deliver(
 
     # 1. Issue queue gate
     if kind == "issue" and trackable_issue:
-        if await _has_successful_issue_delivery(db, repo, issue_number, session_name):
+        since = await db.agents.started_at(session_name)
+        if await _has_successful_issue_delivery(db, repo, issue_number, session_name, since):
             log.info(
                 "Suppressed duplicate issue delivery %s#%s -> %s", repo, issue_number, session_name
             )
             return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED, operation_id=operation_id)
         if enforce_issue_queue:
             blocking = await _get_unacknowledged_gate_issue(
-                db, session_name, repo, issue_number, queue_scope
+                db, session_name, repo, issue_number, queue_scope, since
             )
             if blocking is not None:
                 log.info(
@@ -397,6 +460,7 @@ async def safe_deliver(
             repo=repo,
             preview=preview,
             operation_id=operation_id,
+            since=since,
         )
         if claim is None:
             return DeliveryReport(
@@ -539,10 +603,23 @@ async def safe_deliver(
 
     async def submit() -> bool:
         nonlocal uncertain
+        confirmed = (
+            db is not None
+            and queue_id is not None
+            and not requeue
+            and await db.signing.is_confirmation(operation_id)
+        )
+        if confirmed:
+            # Recorded before the paste: an attempt interrupted after it is
+            # held as uncertain, never pasted again (``_serialized``).
+            await db.signing.attempt(operation_id, begun=True)
         pasted_at = time.time()
         note_submission(config.state_dir, session_name)
         try:
-            return await send_message(session_name, message, runtime_hint=profile.runtime)
+            sent = await send_message(session_name, message, runtime_hint=profile.runtime)
+            if not sent and confirmed:
+                await db.signing.attempt(operation_id, begun=False)
+            return sent
         except SubmissionUnconfirmed as exc:
             # Only a runtime whose hook sees UserPromptSubmit can send a receipt. One
             # not identified before the paste may be (send_message looks again): it waits.
@@ -568,20 +645,6 @@ async def safe_deliver(
         await record_exception("readiness_failed", "readiness", exc)
         raise
     intel = profile.intelligence
-
-    if kind == "plan_response":
-        # A plan response is typed into the plan prompt itself, so it goes in
-        # exactly when the agent is waiting for a plan decision — the one
-        # condition every other kind must wait out — and never otherwise:
-        # at an idle prompt a bare "2" would become a new instruction, and by
-        # the time a queue drained the question would be gone. Never queued.
-        if intel == SessionIntelligence.OFFLINE:
-            return await finish(DeliveryOutcome.OFFLINE, queue=False)
-        if not (intel == SessionIntelligence.WAITING_FOR_HUMAN and profile.reason == "plan"):
-            return await finish(DeliveryOutcome.NOT_WAITING, queue=False)
-        if await submit():
-            return await finish(DeliveryOutcome.DELIVERED, queue=False)
-        return await finish(DeliveryOutcome.DELIVERY_FAILED, queue=False)
 
     if intel in BLOCKED_OUTCOMES:
         bypass = priority and intel in _BYPASSABLE
@@ -687,7 +750,9 @@ async def prompt_hook_after(state_dir, session_name: str, since: float, message:
     digest = prompt_digest(message)
     deadline = time.monotonic() + PROMPT_HOOK_WAIT_SECONDS
     while True:
-        snapshot = await asyncio.to_thread(read_state_file, state_dir, session_name)
+        snapshot = await asyncio.to_thread(
+            read_state_file, state_dir, session_name, current_launch=True
+        )
         if (
             snapshot is not None
             and snapshot.source == "push"
@@ -703,9 +768,15 @@ async def prompt_hook_after(state_dir, session_name: str, since: float, message:
 
 @_serialized
 async def checkpoint_inbox(
-    session_name: str, *, db: BackboneDB, acknowledge: list[str] | None = None
+    session_name: str,
+    *,
+    db: BackboneDB,
+    acknowledge: list[str] | None = None,
+    escalations: bool = False,
 ) -> dict:
-    """Read/ack checkpoints under the same session lock as terminal delivery."""
+    """Read/ack checkpoints under the same session lock as terminal delivery.
+    ``escalations``: the reader is inbox-only, so escalation notices are its too."""
     if acknowledge:
         return {"acknowledged": await db.queue.acknowledge_checkpoint(session_name, acknowledge)}
-    return {"session": session_name, "messages": await db.queue.checkpoint(session_name)}
+    messages = await db.queue.checkpoint(session_name, escalations=escalations)
+    return {"session": session_name, "messages": messages}

@@ -306,6 +306,7 @@ def _values(action: argparse.Action, context: list[str]) -> list[str]:
                 "description",
                 "always_on",
                 "unattended",
+                "inbox_only",
                 "tags",
             )
         ]
@@ -395,7 +396,7 @@ def _candidates(parser: argparse.ArgumentParser, words: list[str]) -> tuple[list
             values = (
                 list(RUNTIMES)
                 if key == "runtime"
-                else (["true", "false"] if key in ("always_on", "unattended") else [])
+                else (["true", "false"] if key in ("always_on", "unattended", "inbox_only") else [])
             )
             path_completion = 2 if key == "dir" else 0
         elif options and not current:

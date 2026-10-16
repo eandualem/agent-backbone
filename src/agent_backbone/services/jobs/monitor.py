@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from agent_backbone.services.agents import StateSnapshot, agent_state, collect_usage
 from agent_backbone.services.github import QueueSnapshot
+from agent_backbone.services.jobs.context_note import note_context_size
 from agent_backbone.services.jobs.diagnostics import observe_job, observe_runtime
 from agent_backbone.services.jobs.escalation import (
     check_blocked,
@@ -46,10 +47,11 @@ AgentStates = dict[str, StateSnapshot]
 async def read_states(config: BackboneConfig, active_sessions: set[str]) -> AgentStates:
     """One reconciled snapshot per configured agent whose session is up."""
     states: AgentStates = {}
-    for name in config.agents.names:
-        if name in active_sessions:
-            pane = await capture_pane(name)
-            states[name] = await agent_state(config, name, pane_content=pane)
+    for spec in config.agents:
+        # An inbox-only agent has no session: one with its name is not its own.
+        if spec.name in active_sessions and not spec.inbox_only:
+            pane = await capture_pane(spec.name)
+            states[spec.name] = await agent_state(config, spec.name, pane_content=pane)
     return states
 
 
@@ -114,6 +116,16 @@ async def monitor_agents(
                 stage="usage_collection",
                 error_type="usage_source_errors" if usage_result.get("errors") else None,
             )
+
+        try:
+            await note_context_size(config, db, states)
+        except Exception as exc:
+            log.exception("Context-size note failed (non-fatal)")
+            await observe_job(
+                db, source="agent-monitor", stage="context_note", error_type=type(exc).__name__
+            )
+        else:
+            await observe_job(db, source="agent-monitor", stage="context_note")
 
         if gh is not None:
             try:

@@ -107,8 +107,8 @@ async def test_a_prompt_hook_receipt_after_the_first_poll_is_delivered(
     monkeypatch.setattr("agent_backbone.services.routing._delivery.PROMPT_HOOK_WAIT_SECONDS", 2.0)
     polls = []
 
-    def read_then_hook_reports(state_dir, session):
-        snapshot = read_state_file(state_dir, session)
+    def read_then_hook_reports(state_dir, session, **kwargs):
+        snapshot = read_state_file(state_dir, session, **kwargs)
         if not polls:
             config.state_dir.mkdir(parents=True, exist_ok=True)
             (config.state_dir / "ike.json").write_text(
@@ -547,19 +547,10 @@ async def test_claude_explanation_is_not_provider_block(config, reply):
         "The color scheme is off; please look at `#123`",
         "Use background #444444; then review #123",
         "Theme issue #123",
-    ],
-)
-def test_color_context_does_not_hide_later_issue(message):
-    assert issue_from_text(message) == (123, None)
-
-
-@pytest.mark.parametrize(
-    "message",
-    [
         "Set the color to #444444; then review issue #123",
         "The background is #444444; review #123",
         'Set {"color": "#444444"}; review #123',
     ],
 )
-def test_color_connectors_and_quotes_preserve_real_issue(message):
+def test_color_context_does_not_hide_later_issue(message):
     assert issue_from_text(message) == (123, None)

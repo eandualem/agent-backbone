@@ -212,3 +212,36 @@ async def test_client_reads_existing_address_without_schema_changes(isolated):
         assert conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall() == [
             ("settings",)
         ]
+
+
+def test_readable_digest_shows_slow_jobs_and_memory_pressure(capsys):
+    digest = {
+        **_digest(),
+        "slow_jobs": [
+            {
+                "job": "agent-monitor",
+                "longest_ms": 41250,
+                "runs": 4,
+                "last_seen_at": "2026-09-07T12:05:00.000000Z",
+            }
+        ],
+        "memory": {
+            "sampled_at": "2026-09-07T12:04:00.000000Z",
+            "samples": 6,
+            "memory_total_mb": 16384,
+            "available_mb": 6062,
+            "swap_total_mb": 23552,
+            "swap_used_mb": 22130,
+            "backbone_rss_mb": 50,
+            "agents_rss_mb": 4200,
+            "other_rss_mb": 9800,
+            "agents": [{"agent_name": "app", "rss_mb": 900, "processes": 7}],
+        },
+    }
+    with patch("agent_backbone.cli._common.api", AsyncMock(return_value=(200, digest))):
+        assert _run([]) == 0
+    output = " ".join(capsys.readouterr().out.split())
+    assert "Slow jobs" in output and "agent-monitor" in output and "41.2" in output
+    assert "swap 22130 of 23552 MB used" in output
+    assert "backbone 50 MB, agents 4200 MB, other processes 9800 MB" in output
+    assert "Largest agents" in output and "900" in output

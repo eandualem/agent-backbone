@@ -143,6 +143,7 @@ _LEAVES = {
     "models",
     "recent",
     "release",
+    "signing",
     "skills",
     "templates",
     "usage",

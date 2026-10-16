@@ -1,18 +1,20 @@
 """The runtime capability contract: every user-reachable capability, one cell per shipped adapter.
 
 A capability counts as working only when it gives the same user-visible
-result in the required pair, Claude Code and Codex (``AGENTS.md``, "Runtime
-parity"). Every other shipped adapter has a recorded cell too, so what works
-where is never guessed. This table is the single source: ``doctor`` reports
-from it and ``docs/runtime-capabilities.md`` is generated from it (a test
-fails when either drifts).
+result in the required set, Claude Code, Codex and OpenCode (``AGENTS.md``,
+"Runtime parity"). Every other shipped adapter is on demand and has a
+recorded cell too, so what works where is never guessed. This table is the
+single source: ``doctor`` reports from it and ``docs/runtime-capabilities.md``
+is generated from it (a test fails when either drifts).
 
 A cell is one of:
 
-- ``supported`` — the capability behaves as in the required pair, with its
+- ``supported`` — the capability behaves as in the required set, with its
   ``evidence``: a behaviour test or doc file, or a ``live:`` receipt;
-- ``gap`` — it does not, yet: an open defect with its issue;
-- ``unverified`` — not yet established on this runtime; unavailable until it is;
+- ``gap`` — it does not, yet: on a required runtime an open defect with its
+  issue; on an on-demand adapter an issue only once someone needs it there;
+- ``unverified`` — not yet established on this runtime; unavailable until it
+  is; an issue tracks it on a required runtime;
 - ``exception`` — the owner decided, for this named capability, that it is
   not required here: the ``decision`` and its issue are recorded, and it is
   still reported as unavailable;
@@ -25,6 +27,12 @@ the agent do where it is unavailable) and ``implemented``: the adapter check
 the registry test holds every ``supported`` cell to. Where no adapter
 attribute shows a capability, the adapter declares it in its own module
 (``Runtime.declared_capabilities``).
+
+A ``cli_dependent`` row relies on what a CLI draws, which keys it takes or
+which hook payload it sends, so a CLI release can break it unseen (#355).
+Each ``supported`` cell there names ``verified_on``, the CLI version it was
+last verified on (by its evidence or a later live check): upgrading past it
+is the trigger to check it again.
 """
 
 from __future__ import annotations
@@ -37,29 +45,44 @@ from agent_backbone.services.runtimes.base import Runtime
 
 Status = Literal["supported", "gap", "unverified", "exception", "n/a"]
 
-REQUIRED: tuple[str, ...] = ("claude", "codex")
-"""The required pair: a capability is working only when it works in both."""
+REQUIRED: tuple[str, ...] = ("claude", "codex", "opencode")
+"""The required set: a capability is working only when it works in all three."""
 
 REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
     {
-        ("global-instructions-detected", "claude", 274),
-        ("global-instructions-detected", "codex", 274),
-        ("cli-memory", "claude", 292),
-        ("cli-memory", "codex", 292),
-        ("plan-approval", "codex", 278),
         ("browser-group-name", "codex", 270),
         ("bounded-unattended", "claude", 285),
         ("auto-review", "claude", 293),
         ("deep-review", "codex", 288),
-        ("request-diagnostics", "claude", 304),
+        ("brief-after-resume", "opencode", 273),
+        ("brief-after-compaction", "opencode", 291),
+        ("plan-approval", "opencode", 278),
+        ("refusal-alert", "opencode", 279),
+        ("browser-group-name", "opencode", 270),
+        ("reasoning-effort", "opencode", 296),
+        ("bounded-unattended", "opencode", 285),
+        ("auto-review", "opencode", 293),
+        ("message-authority", "opencode", 294),
+        ("deep-review", "opencode", 288),
     }
 )
-"""``(row, runtime, issue)``: required-pair cells that shipped before the
-contract and are not supported yet. It only shrinks: a fixed cell leaves it,
-and a new or changed capability never joins it (the registry test fails on
-any other unsupported required-pair cell)."""
+"""``(row, runtime, issue)``: required-set cells that shipped before the
+requirement (before the contract; OpenCode's before it joined the set, #339)
+and are not supported yet. It only shrinks: a fixed cell leaves it, and a new
+or changed capability never joins it (the registry test fails on any other
+unsupported required-set cell)."""
 
 UNAVAILABLE: frozenset[str] = frozenset({"gap", "unverified", "exception"})
+
+VERSION_NOT_RECORDED: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("browser-group-name", "claude"),
+        ("trust", "gemini"),
+    }
+)
+"""``(row, runtime)``: supported cells on a ``cli_dependent`` row whose
+verification recorded no CLI version. It only shrinks: a cell leaves it when
+it is verified again with the version noted, and a new cell never joins it."""
 
 
 @dataclass(frozen=True)
@@ -69,6 +92,7 @@ class Cell:
     note: str = ""
     evidence: str = ""
     decision: str = ""
+    verified_on: str = ""
 
 
 @dataclass(frozen=True)
@@ -79,13 +103,14 @@ class Capability:
     fallback: str
     implemented: Callable[[Runtime], bool]
     cells: Mapping[str, Cell]
+    cli_dependent: bool = False
 
 
-def _ok(evidence: str, note: str = "") -> Cell:
-    return Cell("supported", note=note, evidence=evidence)
+def _ok(evidence: str, note: str = "", *, verified_on: str = "") -> Cell:
+    return Cell("supported", note=note, evidence=evidence, verified_on=verified_on)
 
 
-def _gap(issue: int, note: str = "") -> Cell:
+def _gap(issue: int | None = None, note: str = "") -> Cell:
     return Cell("gap", issue=issue, note=note)
 
 
@@ -108,6 +133,7 @@ def _row(
     *,
     fallback: str,
     implemented: Callable[[Runtime], bool],
+    cli_dependent: bool = False,
     claude: Cell,
     codex: Cell,
     gemini: Cell,
@@ -125,7 +151,7 @@ def _row(
         "aider": aider,
         "shell": shell,
     }
-    return Capability(id, title, implementation, fallback, implemented, cells)
+    return Capability(id, title, implementation, fallback, implemented, cells, cli_dependent)
 
 
 _B1 = "live: #271 batch 1"
@@ -135,8 +161,34 @@ _B4 = "live: #271 batch 4 (scratch probe)"
 _PROVENANCE = "live: #273 post-fix round 3 (forged briefs declined)"
 _FRESH = "live: #290 post-fix probe (stale brief retired, current brief first)"
 _RESUME = "live: #273 post-fix probe (resume and compaction)"
+_GEMINI_STUB = "live: #302 (Gemini CLI 0.46 against a local API stub)"
 _LAUNCH = "tests/unit/services/runtimes/test_launch_commands.py"
+_FLEET = "tests/unit/services/agents/test_fleet.py"
 _NO_MODEL = "a plain shell runs no model"
+_CONTEXT_NOTE = "tests/unit/services/jobs/test_context_note.py"
+_LIVE_AFTER_DEPLOY = (
+    "the hook-context path is live-checked with steers on this version; "
+    "the note's own live check follows deployment"
+)
+_NO_FEEDBACK = "the CLI drafts no feedback reports to its vendor"
+_SKILLS = "tests/unit/test_skills.py"
+_SKILLS_API = "tests/unit/api/routes/test_api_skills.py"
+_RELATIVE = "live-checked: follows a relative link between skill folders"
+_UNMEASURED_SKILLS = "which skill folders it reads beyond `.agents/skills` is not measured"
+_USER_FILES = "tests/unit/services/runtimes/test_user_instructions.py"
+_MEMORY = "tests/unit/services/runtimes/test_native_memory.py"
+_VERSION = "tests/unit/services/runtimes/test_installed_version.py"
+_SIGNED = "tests/unit/api/routes/test_api_signing.py"
+_API_BOUNDARY = "checked at the API, the same for every runtime"
+_CONFIRMED = "tests/unit/api/routes/test_api_confirmations.py"
+_VALIDATE = "tests/unit/services/terminal/test_callers.py"
+_UNMEASURED = "commands it runs are not yet measured under its pane"
+_INBOX_ONLY = "tests/unit/services/test_inbox_only_agents.py"
+_NO_CLI = "runs no CLI; the recorded runtime makes no difference"
+_HINT = "tests/unit/api/routes/test_api_messages.py"
+_QUEUE_ONLY = "read from the queue, the same for every runtime"
+_INTERRUPTED = "tests/unit/services/agents/test_interrupted_turn.py"
+_PLAN = "tests/unit/services/agents/test_plan_approval.py"
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
@@ -145,12 +197,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/services/routing/_delivery.py",
         fallback="Check `agent inspect` for the delivery evidence before relying on it.",
         implemented=lambda rt: True,
-        claude=_ok(_B3),
-        codex=_ok(_B3),
-        gemini=_unverified(302, note="not verified live"),
-        opencode=_ok(_B3),
-        deepcode=_ok("live: checked during development (Deep Code 0.3.1)"),
-        aider=_unverified(302, note="not verified live"),
+        cli_dependent=True,
+        claude=_ok(_B3, verified_on="2.1.284"),
+        codex=_ok(_B3, verified_on="0.157.1"),
+        gemini=_ok(_GEMINI_STUB, verified_on="0.46.0"),
+        opencode=_ok(_B3, verified_on="1.18.32"),
+        deepcode=_ok("live: checked during development (Deep Code 0.3.1)", verified_on="0.3.1"),
+        aider=_unverified(note="not verified live"),
         shell=_ok(
             "tests/unit/services/routing/test_delivery_diagnostics.py", "plumbing tests only"
         ),
@@ -161,12 +214,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/services/agents/launch.py",
         fallback="Answer the dialog in the session (`agent attach`).",
         implemented=_declared("trust"),
-        claude=_ok(_LAUNCH),
-        codex=_ok(_LAUNCH),
+        cli_dependent=True,
+        claude=_ok(_LAUNCH, verified_on="2.1.284"),
+        codex=_ok(_LAUNCH, verified_on="0.157.1"),
         gemini=_ok(_LAUNCH, "`--skip-trust`"),
         opencode=_na("shows no trust dialog"),
         deepcode=_na("shows no trust dialog"),
-        aider=_unverified(302, note="not checked"),
+        aider=_unverified(note="not checked"),
         shell=_na("a plain shell has no trust dialog"),
     ),
     _row(
@@ -177,10 +231,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: rt.brief_mode != "none",
         claude=_ok(_B3),
         codex=_ok(_FRESH),
-        gemini=_unverified(302),
+        gemini=_ok(_GEMINI_STUB),
         opencode=_ok(_B3),
-        deepcode=_unverified(302),
-        aider=_unverified(302, note="not verified live"),
+        deepcode=_unverified(),
+        aider=_unverified(note="not verified live"),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -189,12 +243,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/services/agents/launch.py",
         fallback="Start the agent fresh (`agent start --fresh`) to apply a changed brief.",
         implemented=lambda rt: rt.brief_refresh == "hook_context",
-        claude=_ok(_RESUME),
-        codex=_ok(_RESUME),
-        gemini=_gap(273),
+        cli_dependent=True,
+        claude=_ok(_RESUME, verified_on="2.1.284"),
+        codex=_ok(_RESUME, verified_on="0.157.1"),
+        gemini=_gap(),
         opencode=_gap(273),
-        deepcode=_gap(273),
-        aider=_gap(273),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -203,12 +258,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/services/agents/launch.py",
         fallback="If a long-running agent stops following its brief, start it fresh.",
         implemented=_declared("brief-after-compaction"),
-        claude=_ok(_B4),
-        codex=_ok(_B4),
-        gemini=_unverified(291),
+        cli_dependent=True,
+        claude=_ok(_B4, verified_on="2.1.282"),
+        codex=_ok(_B4, verified_on="0.156.1"),
+        gemini=_unverified(),
         opencode=_gap(291, "the rule is kept but no longer followed"),
-        deepcode=_unverified(291),
-        aider=_unverified(291),
+        deepcode=_unverified(),
+        aider=_unverified(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -219,10 +275,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=_declared("project-instructions"),
         claude=_ok(_B1),
         codex=_ok(_B2),
-        gemini=_gap(286, "reads GEMINI.md unless context.fileName is set"),
+        gemini=_gap(note="reads GEMINI.md unless context.fileName is set"),
         opencode=_ok(_B2),
-        deepcode=_unverified(286),
-        aider=_gap(286, "reads only files passed to it"),
+        deepcode=_ok("live: #286 local stub endpoint (./AGENTS.md sent as a system message)"),
+        aider=_gap(note="reads only files passed to it"),
         shell=_na("a plain shell loads no instructions"),
     ),
     _row(
@@ -230,13 +286,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Non-empty user-level instruction file detected",
         "src/agent_backbone/cli/setup.py",
         fallback="Check the CLI's user-level instruction file by hand.",
-        implemented=_declared("global-instructions-detected"),
-        claude=_gap(274),
-        codex=_gap(274),
-        gemini=_gap(274),
-        opencode=_gap(274),
-        deepcode=_gap(274),
-        aider=_gap(274),
+        implemented=lambda rt: type(rt).user_instructions is not Runtime.user_instructions,
+        claude=_ok(_USER_FILES),
+        codex=_ok(_USER_FILES),
+        gemini=_ok(_USER_FILES),
+        opencode=_ok(_USER_FILES, "files listed under `instructions` in its config not checked"),
+        deepcode=_ok(_USER_FILES),
+        aider=_unverified(note="no default user-level file per its docs; not yet verified"),
         shell=_na("a plain shell reads no instruction file"),
     ),
     _row(
@@ -244,14 +300,42 @@ CAPABILITIES: tuple[Capability, ...] = (
         "CLI-native memory disabled or detected",
         "src/agent_backbone/services/runtimes",
         fallback="Turn the CLI's own memory off in its settings.",
-        implemented=_declared("cli-memory"),
-        claude=_gap(292, "auto-memory is on"),
-        codex=_unverified(292),
-        gemini=_unverified(292),
-        opencode=_unverified(292),
-        deepcode=_unverified(292),
-        aider=_unverified(292),
+        implemented=lambda rt: type(rt).native_memory is not Runtime.native_memory,
+        claude=_ok(_MEMORY, "managed settings not read"),
+        codex=_ok(_MEMORY, "managed config and the `[memories]` switches not read"),
+        gemini=_ok(_MEMORY),
+        opencode=_na("keeps no memory of its own (1.18: no memory tool or file)"),
+        deepcode=_na("keeps no memory of its own (0.3.1)"),
+        aider=_unverified(note="not yet verified"),
         shell=_na("a plain shell keeps no memory"),
+    ),
+    _row(
+        "installed-version",
+        "Installed CLI version compared with the verified one (`doctor`)",
+        "src/agent_backbone/services/runtimes/base.py",
+        fallback="Compare `<cli> --version` with the versions in this table.",
+        implemented=lambda rt: rt.binary is not None,
+        claude=_ok(_VERSION),
+        codex=_ok(_VERSION),
+        gemini=_ok(_VERSION),
+        opencode=_ok(_VERSION),
+        deepcode=_ok(_VERSION),
+        aider=_unverified(note="not yet verified"),
+        shell=_na("a plain shell has no CLI version"),
+    ),
+    _row(
+        "restart-state",
+        "Replacement state excludes previous launch hooks and submissions",
+        "src/agent_backbone/services/agents/_file_reader.py",
+        fallback="Inspect the replacement terminal; readiness does not establish ongoing liveness.",
+        implemented=lambda rt: True,  # Shared launch and reconciliation path for every adapter.
+        claude=_ok("tests/unit/services/agents/test_restart_state.py"),
+        codex=_ok("tests/unit/services/agents/test_restart_state.py"),
+        gemini=_ok("tests/unit/services/agents/test_restart_state.py"),
+        opencode=_ok("tests/unit/services/agents/test_restart_state.py"),
+        deepcode=_ok("tests/unit/services/agents/test_restart_state.py"),
+        aider=_ok("tests/unit/services/agents/test_restart_state.py"),
+        shell=_ok("tests/unit/services/agents/test_restart_state.py"),
     ),
     _row(
         "hook-state",
@@ -259,16 +343,40 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/hooks",
         fallback="State is read from the terminal, which is slower and less certain.",
         implemented=lambda rt: bool(rt.hook_script),
-        claude=_ok("tests/unit/hooks/test_claude_hook.py"),
+        cli_dependent=True,
+        claude=_ok("tests/unit/hooks/test_claude_hook.py", verified_on="2.1.284"),
         codex=_ok(
             "tests/unit/hooks/test_codex_hook.py",
             note="from its first prompt (the brief): Codex runs no hook before its first turn",
+            verified_on="0.157.1",
         ),
-        gemini=_ok("tests/unit/hooks/test_gemini_hook.py"),
-        opencode=_ok("tests/unit/hooks/test_opencode_hook.py"),
-        deepcode=_gap(275, "read from the terminal only"),
-        aider=_gap(275, "read from the terminal only"),
+        gemini=_ok("tests/unit/hooks/test_gemini_hook.py", verified_on="0.46.0"),
+        opencode=_ok("tests/unit/hooks/test_opencode_hook.py", verified_on="1.18.32"),
+        deepcode=_gap(note="read from the terminal only"),
+        aider=_gap(note="read from the terminal only"),
         shell=_na("a plain shell has no agent turn to report"),
+    ),
+    _row(
+        "interrupted-turn",
+        "Interrupted turn reads idle (Escape, refused dialog)",
+        "src/agent_backbone/services/agents/_inference.py",
+        fallback="An interrupted agent may keep reading busy or waiting; "
+        "check the session (`agent attach`).",
+        implemented=lambda rt: (
+            bool(rt.interrupt_patterns) or "interrupted-turn" in rt.declared_capabilities
+        ),
+        cli_dependent=True,
+        claude=_ok(
+            _INTERRUPTED,
+            "from the terminal: Claude Code runs no hook on an interrupt",
+            verified_on="2.1.284",
+        ),
+        codex=_ok(_INTERRUPTED, verified_on="0.157.1"),
+        gemini=_gap(note="a declined dialog runs no hook"),
+        opencode=_ok(_INTERRUPTED, verified_on="1.18.32"),
+        deepcode=_unverified(note="read from the terminal only"),
+        aider=_unverified(note="not verified live"),
+        shell=_na("a plain shell has no agent turn to interrupt"),
     ),
     _row(
         "steer",
@@ -276,12 +384,31 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/services/routing/_steer.py",
         fallback="Send an ordinary message; it waits until the agent is at its prompt.",
         implemented=lambda rt: rt.hook_context,
-        claude=_ok("tests/unit/hooks/test_context.py"),
-        codex=_ok("tests/unit/hooks/test_context.py"),
-        gemini=_gap(276),
-        opencode=_gap(276),
-        deepcode=_gap(276),
-        aider=_gap(276),
+        cli_dependent=True,
+        claude=_ok(
+            "tests/unit/hooks/test_context.py",
+            note=(
+                "a steer that names its turn is handed over only in that turn, also after an Escape"
+            ),
+            verified_on="2.1.284",
+        ),
+        codex=_ok(
+            "tests/unit/hooks/test_context.py",
+            note=(
+                "a command still running when its call returns hands it over "
+                "when it exits (0.157.1); a steer that names its turn is handed "
+                "over only in that turn, also after a provider failure"
+            ),
+            verified_on="0.157.1",
+        ),
+        gemini=_gap(),
+        opencode=_ok(
+            "tests/unit/hooks/test_context.py",
+            note="as a user message in the running turn, after the next tool call",
+            verified_on="1.18.32",
+        ),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -290,12 +417,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/services/runtimes/base.py",
         fallback="Watch the session (`agent attach`) for dialogs.",
         implemented=lambda rt: bool(rt.prompt_markers),
-        claude=_ok("tests/unit/services/runtimes/test_live_panes.py"),
-        codex=_ok("tests/unit/services/runtimes/test_live_panes.py"),
-        gemini=_unverified(302, note="markers not verified live"),
-        opencode=_ok("tests/unit/services/runtimes/test_live_panes.py"),
-        deepcode=_gap(287, "dialog not captured"),
-        aider=_unverified(302, note="markers not verified live"),
+        cli_dependent=True,
+        claude=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="2.1.296"),
+        codex=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.157.1"),
+        gemini=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.46.0"),
+        opencode=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="1.18.32"),
+        deepcode=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.3.1"),
+        aider=_unverified(note="markers not verified live"),
         shell=_na("a plain shell shows no permission dialog"),
     ),
     _row(
@@ -304,12 +432,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/services/agents/launch.py",
         fallback="Answer the dialog in the session (`agent attach`).",
         implemented=lambda rt: bool(rt.approve_keys),
-        claude=_ok("docs/cli.md"),
-        codex=_ok("docs/cli.md"),
-        gemini=_gap(277),
-        opencode=_ok("docs/cli.md"),
-        deepcode=_gap(277),
-        aider=_gap(277),
+        cli_dependent=True,
+        claude=_ok("docs/cli.md", verified_on="2.1.284"),
+        codex=_ok("docs/cli.md", verified_on="0.157.1"),
+        gemini=_ok("tests/unit/services/agents/test_launch.py", verified_on="0.46.0"),
+        opencode=_ok("docs/cli.md", verified_on="1.18.32"),
+        deepcode=_ok("tests/unit/services/agents/test_launch.py", verified_on="0.3.1"),
+        aider=_gap(),
         shell=_na("a plain shell shows no permission dialog"),
     ),
     _row(
@@ -318,12 +447,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/services/agents/launch.py",
         fallback="Refuse the dialog in the session (`agent attach`).",
         implemented=lambda rt: bool(rt.deny_keys),
-        claude=_ok("docs/cli.md"),
-        codex=_ok("docs/cli.md"),
-        gemini=_gap(299),
-        opencode=_gap(299),
-        deepcode=_gap(299),
-        aider=_gap(299),
+        cli_dependent=True,
+        claude=_ok("docs/cli.md", verified_on="2.1.284"),
+        codex=_ok("docs/cli.md", verified_on="0.157.1"),
+        gemini=_ok("tests/unit/services/agents/test_launch.py", verified_on="0.46.0"),
+        opencode=_ok("tests/unit/services/agents/test_launch.py", verified_on="1.18.32"),
+        deepcode=_ok("tests/unit/services/agents/test_launch.py", verified_on="0.3.1"),
+        aider=_gap(),
         shell=_na("a plain shell shows no permission dialog"),
     ),
     _row(
@@ -332,12 +462,20 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/services/agents/launch.py",
         fallback="Answer the plan in the session (`agent attach`).",
         implemented=lambda rt: bool(rt.plan_approve_keys),
-        claude=_ok("tests/unit/api/routes/test_api_plans.py"),
-        codex=_gap(278),
-        gemini=_gap(278),
-        opencode=_gap(278),
-        deepcode=_gap(278),
-        aider=_gap(278),
+        cli_dependent=True,
+        claude=_ok(_PLAN, verified_on="2.1.284"),
+        codex=_ok(_PLAN, "in Plan mode (`/plan`)", verified_on="0.157.1"),
+        gemini=_gap(),
+        # Implemented, but OpenCode asks for no approval unless its own
+        # off-by-default flag is set, and such a flag is not support. Revisit
+        # when an OpenCode release enables plan mode by default or drops the flag.
+        opencode=_gap(
+            278,
+            "works when OPENCODE_EXPERIMENTAL_PLAN_MODE is set in the agent's environment "
+            "(off by default; `doctor` names each agent without it)",
+        ),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -346,14 +484,17 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/services/jobs/escalation.py",
         fallback="Watch the agent's output (`agent output`) for refused actions.",
         implemented=lambda rt: bool(rt.refusal_check),
-        claude=_ok("tests/unit/hooks/test_claude_hook.py"),
+        cli_dependent=True,
+        claude=_ok("tests/unit/hooks/test_claude_hook.py", verified_on="2.1.282"),
         codex=_ok(
-            "tests/unit/hooks/test_codex_hook.py", "its automatic reviewer (`agents.auto_review`)"
+            "tests/unit/hooks/test_codex_hook.py",
+            "its automatic reviewer (`agents.auto_review`)",
+            verified_on="0.160.0",
         ),
-        gemini=_gap(279),
+        gemini=_gap(),
         opencode=_gap(279),
-        deepcode=_gap(279),
-        aider=_gap(279),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -362,12 +503,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/hooks/claude_hook.py",
         fallback="A Codex agent can name its own group with its Chrome client's `nameSession`.",
         implemented=_declared("browser-group-name"),
+        cli_dependent=True,
         claude=_ok("tests/unit/hooks/test_chrome_tab_names.py", "with `backbone chrome install`"),
         codex=_gap(270),
-        gemini=_gap(270),
+        gemini=_gap(),
         opencode=_gap(270),
-        deepcode=_gap(270),
-        aider=_gap(270),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na("a plain shell drives no browser"),
     ),
     _row(
@@ -380,8 +522,25 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok(_LAUNCH),
         gemini=_ok(_LAUNCH),
         opencode=_ok(_LAUNCH),
-        deepcode=_gap(280, "resumes the directory's latest session"),
-        aider=_gap(280),
+        deepcode=_gap(note="resumes the directory's latest session"),
+        aider=_gap(),
+        shell=_na("a plain shell has no conversation to resume"),
+    ),
+    _row(
+        "fleet-resume",
+        "Fleet snapshot resumes the saved session exactly",
+        "src/agent_backbone/services/agents/fleet.py",
+        fallback=(
+            "The agent is reported as not resumed; start it fresh and its handoff carries "
+            "the context."
+        ),
+        implemented=lambda rt: rt.supports_exact_resume,
+        claude=_ok(_FLEET),
+        codex=_ok(_FLEET),
+        gemini=_ok(_FLEET),
+        opencode=_ok(_FLEET),
+        deepcode=_gap(note="reported as exact_resume_unsupported"),
+        aider=_gap(note="reported as exact_resume_unsupported"),
         shell=_na("a plain shell has no conversation to resume"),
     ),
     _row(
@@ -394,10 +553,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: bool(rt.efforts),
         claude=_ok(_LAUNCH),
         codex=_ok(_LAUNCH),
-        gemini=_unverified(296, "whether the CLI has an effort setting is not checked"),
+        gemini=_unverified(note="whether the CLI has an effort setting is not checked"),
         opencode=_gap(296, "the CLI has one; Backbone refuses the effort"),
-        deepcode=_gap(296, "the CLI has one; Backbone refuses the effort"),
-        aider=_unverified(296, "whether the CLI has an effort setting is not checked"),
+        deepcode=_ok(_LAUNCH, note="low, high or max, through DEEPCODE_REASONING_EFFORT"),
+        aider=_unverified(note="whether the CLI has an effort setting is not checked"),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -410,8 +569,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok(_LAUNCH),
         gemini=_ok(_LAUNCH),
         opencode=_ok(_LAUNCH),
-        deepcode=_gap(281),
-        aider=_gap(281),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -421,11 +580,15 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Run unattended agents only on a sandboxed runtime (Codex).",
         implemented=lambda rt: rt.sandboxed,
         claude=_gap(285),
-        codex=_ok(_LAUNCH, "OS sandbox"),
-        gemini=_gap(285),
+        codex=_ok(
+            _LAUNCH,
+            "OS sandbox; on Linux, git add and commit fail inside it, "
+            "so swarms refuse unattended Codex members there (#437)",
+        ),
+        gemini=_gap(),
         opencode=_gap(285),
-        deepcode=_gap(285),
-        aider=_gap(285),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -436,10 +599,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: bool(rt.auto_review_args),
         claude=_unverified(293, "auto mode; equivalence not verified"),
         codex=_ok(_LAUNCH, "`--approve-for-me`"),
-        gemini=_gap(293),
+        gemini=_gap(),
         opencode=_gap(293),
-        deepcode=_gap(293),
-        aider=_gap(293),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -450,10 +613,63 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: bool(rt.skill_dirs),
         claude=_ok("tests/unit/test_skills.py"),
         codex=_ok("tests/unit/api/routes/test_api_skills.py"),
-        gemini=_unverified(302, note="linked by the shared code; not tested for this runtime"),
-        opencode=_unverified(302, note="linked by the shared code; not tested for this runtime"),
-        deepcode=_gap(282),
-        aider=_gap(282),
+        gemini=_ok("tests/unit/test_skills.py", "live-checked: it lists the linked skills (0.46)"),
+        opencode=_ok("tests/unit/test_skills.py"),
+        deepcode=_ok("tests/unit/api/routes/test_api_skills.py"),
+        aider=_gap(),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "skills-repository",
+        "Repository skills reach the agent's CLI",
+        "src/agent_backbone/skills.py",
+        fallback="Keep the skill where that CLI reads, or point the agent at it by path.",
+        implemented=lambda rt: bool(rt.skill_dirs),
+        cli_dependent=True,
+        claude=_ok(_SKILLS, _RELATIVE, verified_on="2.1.294"),
+        codex=_ok(_SKILLS, _RELATIVE, verified_on="0.160.0"),
+        gemini=_gap(note=_UNMEASURED_SKILLS),
+        opencode=_ok(_SKILLS, _RELATIVE, verified_on="1.18.32"),
+        deepcode=_gap(note=_UNMEASURED_SKILLS),
+        aider=_gap(),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "skills-live",
+        "Skill and tag changes reach a running agent",
+        "src/agent_backbone/services/agents/operations.py",
+        fallback="Restart the agent: its next launch links the change.",
+        implemented=lambda rt: bool(rt.skill_dirs),
+        cli_dependent=True,
+        claude=_ok(
+            _SKILLS_API, "live-checked: loads a skill linked mid-session", verified_on="2.1.294"
+        ),
+        codex=_ok(
+            _SKILLS_API, "live-checked: loads a skill linked mid-session", verified_on="0.160.0"
+        ),
+        gemini=_gap(note="whether it loads a skill mid-session is not measured"),
+        opencode=_ok(
+            "tests/unit/hooks/test_opencode_hook.py",
+            "its plugin reloads skills between turns (live-checked)",
+            verified_on="1.18.35",
+        ),
+        deepcode=_gap(note="whether it loads a skill mid-session is not measured"),
+        aider=_gap(),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "skills-view",
+        "Every skill an agent's CLI loads, listed by source",
+        "src/agent_backbone/services/agents/skills_preview.py",
+        fallback="Ask the agent to list its skills; `skills preview` still shows the shared ones.",
+        implemented=lambda rt: bool(rt.user_skill_dirs({})),
+        cli_dependent=True,
+        claude=_ok(_SKILLS_API, "live-checked against its /skills list", verified_on="2.1.294"),
+        codex=_ok(_SKILLS_API, "live-checked against its skill list", verified_on="0.160.0"),
+        gemini=_gap(note=_UNMEASURED_SKILLS),
+        opencode=_ok(_SKILLS_API, "live-checked: `opencode debug skill`", verified_on="1.18.32"),
+        deepcode=_gap(note=_UNMEASURED_SKILLS),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -464,10 +680,45 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: rt.usage_supported,
         claude=_ok("tests/unit/test_usage_accounting.py"),
         codex=_ok("tests/unit/test_usage_accounting.py"),
-        gemini=_gap(283),
+        gemini=_ok("tests/unit/test_usage_accounting.py", "live-checked with a subagent (0.46)"),
         opencode=_ok("tests/unit/test_usage_accounting.py"),
-        deepcode=_gap(283),
-        aider=_gap(283),
+        deepcode=_gap(),
+        aider=_gap(),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "context-note",
+        "Context-size note recommending a fresh session",
+        "src/agent_backbone/services/jobs/context_note.py",
+        fallback="Check the conversation size with `backbone usage`; restart at a task boundary.",
+        implemented=lambda rt: rt.usage_supported and rt.hook_context,
+        cli_dependent=True,
+        claude=_ok(_CONTEXT_NOTE, _LIVE_AFTER_DEPLOY, verified_on="2.1.284"),
+        codex=_ok(_CONTEXT_NOTE, _LIVE_AFTER_DEPLOY, verified_on="0.157.1"),
+        gemini=_gap(note="usage is recorded, but its hook takes no offered context"),
+        opencode=_ok(_CONTEXT_NOTE, _LIVE_AFTER_DEPLOY, verified_on="1.18.32"),
+        deepcode=_gap(),
+        aider=_gap(),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "drafted-feedback-off",
+        "Drafted feedback to the CLI's vendor off unless the agent opts in",
+        "src/agent_backbone/services/runtimes/claude.py",
+        fallback="Turn drafted feedback off in the CLI's own settings.",
+        implemented=lambda rt: rt.default_env.get("CLAUDE_CODE_SEND_FEEDBACK") == "0",
+        cli_dependent=True,
+        claude=_ok(
+            "tests/unit/services/agents/test_launch.py",
+            "`--disallowedTools SendFeedback` and CLAUDE_CODE_SEND_FEEDBACK=0 at launch; "
+            "set the variable to 1 in the agent's env to opt in",
+            verified_on="2.1.296",
+        ),
+        codex=_na(_NO_FEEDBACK),
+        gemini=_na(_NO_FEEDBACK),
+        opencode=_na(_NO_FEEDBACK),
+        deepcode=_na(_NO_FEEDBACK),
+        aider=_na(_NO_FEEDBACK),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -478,10 +729,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: rt.transcript_supported,
         claude=_ok("tests/unit/services/runtimes/test_transcripts.py"),
         codex=_ok("tests/unit/services/runtimes/test_transcripts.py"),
-        gemini=_gap(284),
-        opencode=_gap(284),
-        deepcode=_gap(284),
-        aider=_gap(284),
+        gemini=_ok("tests/unit/services/runtimes/test_transcripts.py"),
+        opencode=_ok("tests/unit/services/runtimes/test_transcripts.py"),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na("a plain shell has no model messages; output is its screen"),
     ),
     _row(
@@ -490,12 +741,21 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/services/runtimes/base.py",
         fallback="Watch the session for provider errors; the agent may look busy or idle.",
         implemented=lambda rt: bool(rt.provider_error_patterns or rt.provider_error_prefixes),
-        claude=_ok("tests/unit/services/agents/test_provider_failures.py"),
-        codex=_ok("tests/unit/services/agents/test_provider_failures.py"),
-        gemini=_gap(295),
-        opencode=_ok("tests/unit/services/agents/test_provider_failures.py"),
-        deepcode=_gap(295),
-        aider=_gap(295),
+        cli_dependent=True,
+        claude=_ok(
+            "tests/unit/services/agents/test_provider_failures.py",
+            "reported by its StopFailure hook",
+            verified_on="2.1.284",
+        ),
+        codex=_ok(
+            "tests/unit/services/agents/test_provider_failures.py",
+            "from the terminal: Codex runs no hook for a failed turn",
+            verified_on="0.160.0",
+        ),
+        gemini=_gap(),
+        opencode=_ok("tests/unit/services/agents/test_provider_failures.py", verified_on="1.18.32"),
+        deepcode=_ok("tests/unit/services/agents/test_provider_failures.py", verified_on="0.3.1"),
+        aider=_gap(),
         shell=_na("a plain shell has no model provider"),
     ),
     _row(
@@ -504,26 +764,30 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/hooks/backbone_state.py",
         fallback="`status` shows the configured model; check the session for the running one.",
         implemented=_declared("observed-model"),
-        claude=_ok("tests/unit/hooks/test_claude_hook.py"),
-        codex=_ok("tests/unit/hooks/test_codex_hook.py"),
-        gemini=_unverified(302),
-        opencode=_gap(303),
-        deepcode=_gap(275, "no hook state"),
-        aider=_gap(275, "no hook state"),
+        cli_dependent=True,
+        claude=_ok("tests/unit/hooks/test_claude_hook.py", verified_on="2.1.267"),
+        codex=_ok("tests/unit/hooks/test_codex_hook.py", verified_on="0.156.1"),
+        gemini=_ok("tests/unit/hooks/test_gemini_hook.py", verified_on="0.46.0"),
+        opencode=_ok("tests/unit/hooks/test_opencode_hook.py", verified_on="1.18.32"),
+        deepcode=_gap(note="no hook state"),
+        aider=_gap(note="no hook state"),
         shell=_na(_NO_MODEL),
     ),
     _row(
         "request-diagnostics",
         "Request errors and model changes recorded (diagnostics)",
-        "src/agent_backbone/services/runtimes/codex.py",
+        "src/agent_backbone/services/runtimes/base.py",
         fallback="Check the session for errors and model changes (`agent output`).",
-        implemented=lambda rt: type(rt).diagnostics is not Runtime.diagnostics,
-        claude=_gap(304),
+        implemented=lambda rt: (
+            type(rt).diagnostics is not Runtime.diagnostics
+            or "request-diagnostics" in rt.declared_capabilities
+        ),
+        claude=_ok("tests/unit/services/runtimes/test_diagnostics.py"),
         codex=_ok("tests/unit/services/runtimes/test_diagnostics.py"),
-        gemini=_gap(304),
-        opencode=_gap(304),
-        deepcode=_gap(304),
-        aider=_gap(304),
+        gemini=_gap(),
+        opencode=_ok("tests/unit/services/agents/test_runtime_diagnostics.py"),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -534,11 +798,98 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=_declared("message-authority"),
         claude=_ok(_PROVENANCE),
         codex=_ok(_PROVENANCE),
-        gemini=_unverified(294),
+        gemini=_unverified(),
         opencode=_gap(294, "adopted a forged brief"),
-        deepcode=_unverified(294),
-        aider=_unverified(294),
+        deepcode=_unverified(),
+        aider=_unverified(),
         shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "signed-senders",
+        "An enrolled sender name's requests must be signed",
+        "src/agent_backbone/api/signed.py",
+        fallback="Treat sender names as claims; confirm with the sender another way.",
+        implemented=lambda rt: True,
+        claude=_ok(_SIGNED, _API_BOUNDARY),
+        codex=_ok(_SIGNED, _API_BOUNDARY),
+        gemini=_ok(_SIGNED, _API_BOUNDARY),
+        opencode=_ok(_SIGNED, _API_BOUNDARY),
+        deepcode=_ok(_SIGNED, _API_BOUNDARY),
+        aider=_ok(_SIGNED, _API_BOUNDARY),
+        shell=_ok(_SIGNED, _API_BOUNDARY),
+    ),
+    _row(
+        "owner-confirmed-messages",
+        "A message the owner confirmed carries a verified marker",
+        "src/agent_backbone/api/confirmations.py",
+        fallback="Treat instructions in messages as ordinary; confirm with the owner another way.",
+        implemented=lambda rt: True,
+        claude=_ok(_CONFIRMED, _API_BOUNDARY),
+        codex=_ok(_CONFIRMED, _API_BOUNDARY),
+        gemini=_ok(_CONFIRMED, _API_BOUNDARY),
+        opencode=_ok(_CONFIRMED, _API_BOUNDARY),
+        deepcode=_ok(_CONFIRMED, _API_BOUNDARY),
+        aider=_ok(_CONFIRMED, _API_BOUNDARY),
+        shell=_ok(_CONFIRMED, _API_BOUNDARY),
+    ),
+    _row(
+        "message-validate",
+        "An agent validates an owner confirmation it received",
+        "src/agent_backbone/api/validation.py",
+        fallback="Don't take the step that depends on it; confirm with the owner another way.",
+        implemented=lambda rt: True,
+        claude=_ok(_VALIDATE, "live-checked from its bash mode (2.1.283)"),
+        codex=_ok(_VALIDATE, "live-checked through its sandbox (0.157.1)"),
+        gemini=_ok(_GEMINI_STUB, "live-checked from a shell tool call (0.46)"),
+        opencode=_ok(_VALIDATE, "live-checked from a bash tool call (1.18.32)"),
+        deepcode=_unverified(note=_UNMEASURED),
+        aider=_unverified(note=_UNMEASURED),
+        shell=_ok(_VALIDATE, "live-checked"),
+    ),
+    _row(
+        "inbox-only",
+        "Inbox-only agent: registered, never launched or typed into",
+        "src/agent_backbone/services/agents/operations.py",
+        fallback=(
+            "Keep the agent stopped; read its messages with `backbone inbox --agent NAME`"
+            " before they expire."
+        ),
+        implemented=lambda rt: True,
+        claude=_ok(_INBOX_ONLY, _NO_CLI),
+        codex=_ok(_INBOX_ONLY, _NO_CLI),
+        gemini=_ok(_INBOX_ONLY, _NO_CLI),
+        opencode=_ok(_INBOX_ONLY, _NO_CLI),
+        deepcode=_ok(_INBOX_ONLY, _NO_CLI),
+        aider=_ok(_INBOX_ONLY, _NO_CLI),
+        shell=_ok(_INBOX_ONLY, _NO_CLI),
+    ),
+    _row(
+        "inbox-hint",
+        "New inbox messages hinted on Socket.IO (`inbox:pending`)",
+        "src/agent_backbone/api/session_updates.py",
+        fallback="Read the inbox (`POST /api/messages/inbox`) on a timer.",
+        implemented=lambda rt: True,
+        claude=_ok(_HINT, _QUEUE_ONLY),
+        codex=_ok(_HINT, _QUEUE_ONLY),
+        gemini=_ok(_HINT, _QUEUE_ONLY),
+        opencode=_ok(_HINT, _QUEUE_ONLY),
+        deepcode=_ok(_HINT, _QUEUE_ONLY),
+        aider=_ok(_HINT, _QUEUE_ONLY),
+        shell=_ok(_HINT, _QUEUE_ONLY),
+    ),
+    _row(
+        "inbox-escalations",
+        "Escalations reach an inbox-only target's inbox",
+        "src/agent_backbone/services/jobs/escalation.py",
+        fallback="Set `escalation.target` to an agent with a terminal session.",
+        implemented=lambda rt: True,
+        claude=_ok(_INBOX_ONLY, _NO_CLI),
+        codex=_ok(_INBOX_ONLY, _NO_CLI),
+        gemini=_ok(_INBOX_ONLY, _NO_CLI),
+        opencode=_ok(_INBOX_ONLY, _NO_CLI),
+        deepcode=_ok(_INBOX_ONLY, _NO_CLI),
+        aider=_ok(_INBOX_ONLY, _NO_CLI),
+        shell=_ok(_INBOX_ONLY, _NO_CLI),
     ),
     _row(
         "deep-review",
@@ -548,10 +899,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=_declared("deep-review"),
         claude=_ok("docs/deep-reviews.md"),
         codex=_unverified(288, "a Claude reviewer launched from Codex's sandbox is not measured"),
-        gemini=_gap(288),
+        gemini=_gap(),
         opencode=_gap(288),
-        deepcode=_gap(288),
-        aider=_gap(288),
+        deepcode=_gap(),
+        aider=_gap(),
         shell=_na(_NO_MODEL),
     ),
 )
@@ -562,7 +913,27 @@ def unavailable(runtime_id: str) -> list[Capability]:
     return [cap for cap in CAPABILITIES if cap.cells[runtime_id].status in UNAVAILABLE]
 
 
-def _cell_text(cell: Cell) -> str:
+def verified_versions(runtime_id: str) -> dict[str, list[str]]:
+    """This runtime's supported ``cli_dependent`` capabilities, by the CLI version
+    each was verified on, newest first (``not recorded`` last, where the
+    verification noted none)."""
+    versions: dict[str, list[str]] = {}
+    for cap in CAPABILITIES:
+        cell = cap.cells[runtime_id]
+        if not (cap.cli_dependent and cell.status == "supported"):
+            continue
+        if cell.verified_on:
+            versions.setdefault(cell.verified_on, []).append(cap.id)
+        elif (cap.id, runtime_id) in VERSION_NOT_RECORDED:
+            versions.setdefault("not recorded", []).append(cap.id)
+
+    def newest_first(version: str) -> tuple[int, ...]:
+        return tuple(map(int, version.split("."))) if version[0].isdigit() else ()
+
+    return dict(sorted(versions.items(), key=lambda item: newest_first(item[0]), reverse=True))
+
+
+def _cell_text(cell: Cell, unrecorded: bool) -> str:
     mark = {
         "supported": "✅",
         "gap": "❌",
@@ -571,6 +942,10 @@ def _cell_text(cell: Cell) -> str:
         "n/a": "n/a",
     }[cell.status]
     parts = [mark]
+    if cell.verified_on:
+        parts.append(f"({cell.verified_on})")
+    elif unrecorded:
+        parts.append("(version not recorded)")
     if cell.issue is not None:
         parts.append(f"#{cell.issue}")
     if cell.note and cell.status != "n/a":
@@ -585,7 +960,9 @@ def markdown_table(runtime_ids: tuple[str, ...]) -> str:
         "|---|" + "---|" * len(runtime_ids),
     ]
     for cap in CAPABILITIES:
-        cells = " | ".join(_cell_text(cap.cells[rid]) for rid in runtime_ids)
+        cells = " | ".join(
+            _cell_text(cap.cells[rid], (cap.id, rid) in VERSION_NOT_RECORDED) for rid in runtime_ids
+        )
         lines.append(f"| {cap.title} | {cells} |")
     lines += ["", "| Capability | Fallback where it is unavailable |", "|---|---|"]
     lines += [f"| {cap.title} | {cap.fallback} |" for cap in CAPABILITIES]

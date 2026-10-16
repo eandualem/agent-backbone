@@ -6,8 +6,8 @@ from unittest.mock import patch
 import pytest
 
 from agent_backbone.cli.instructions import edit_file
-from agent_backbone.services.swarm import list_brief_templates, render_brief, template_paths
-from agent_backbone.templates import TemplateDirs
+from agent_backbone.services.swarm import render_brief, template_paths
+from agent_backbone.templates import TemplateDirs, list_templates
 
 
 @pytest.mark.parametrize("failure", ["exit", "empty", "concurrent"])
@@ -39,7 +39,7 @@ def test_swarm_template_path_matches_new_swarm_rendering(tmp_path):
     override.write_text("Custom scout for {agent_name}")
     assert template_paths("scout", dirs)[0] == override
     assert "Custom scout for scout-1" in render_brief("scout", {"agent_name": "scout-1"}, dirs=dirs)
-    entry = next(t for t in list_brief_templates(dirs) if t["name"] == "scout")
+    entry = next(t for t in list_templates(dirs) if t["name"] == "swarm:scout")
     assert entry["source"] == str(override)
     with pytest.raises(ValueError):
         template_paths("../escape", dirs)

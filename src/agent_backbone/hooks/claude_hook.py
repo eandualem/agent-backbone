@@ -39,6 +39,13 @@ subprocess = bb.subprocess  # tests patch the tmux lookup through this name
 _PASTE_WRAPPER = re.compile(r"\s*<pasted_content\b([^>]*)>(.*)</pasted_content\1>\s*", re.DOTALL)
 
 
+_PROVIDER_ERRORS = frozenset(
+    {"rate_limit", "server_error", "billing_error", "authentication_failed"}
+)
+"""``StopFailure`` errors on the provider's side (Claude Code 2.1.284); the
+others (``invalid_request``, ``max_output_tokens``, ``unknown``) end the turn."""
+
+
 def _unwrapped(payload: dict) -> dict:
     """The payload with the paste wrapper around its whole prompt removed, so
     the prompt's digest is that of the text delivery pasted. Tags inside the
@@ -67,6 +74,14 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
         return state(
             STATE_IDLE, last_message=bb.clip_message(payload.get("last_assistant_message"))
         ), None
+    if event == "StopFailure":
+        # The turn failed at the API (2.1.284): "error" names the kind and the
+        # last message is the banner. The provider's side blocks the agent;
+        # any other failure ends the turn, and the screen is still read (#360).
+        message = bb.clip_message(payload.get("last_assistant_message"))
+        if payload.get("error") in _PROVIDER_ERRORS:
+            return state(bb.STATE_BLOCKED, bb.REASON_PROVIDER, detail=message), None
+        return state(STATE_IDLE, last_message=message), None
     if event == "Notification":
         kind = (payload.get("notification_type") or "").lower()
         message = payload.get("message", "") or ""
@@ -79,6 +94,10 @@ def derive(payload: dict, current: dict | None) -> tuple[dict | None, dict | Non
         if "permission" in lowered:
             return state(STATE_WAITING, REASON_PERMISSION), None
         if "waiting for your input" in lowered:
+            # Sent a minute after any turn ends, a failed one too: a provider
+            # failure stands until the next prompt (#360).
+            if current.get("reason") == bb.REASON_PROVIDER:
+                return None, None
             return state(STATE_IDLE), None
         return None, None
     if event == "PreToolUse":
@@ -221,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
         derive,
         argv,
         context_events=CONTEXT_EVENTS,
-        turn_end_events=frozenset({"Stop"}),
+        turn_end_events=frozenset({"Stop", "StopFailure"}),
         observe=record_chrome_group,
     )
 

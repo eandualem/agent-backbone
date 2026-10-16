@@ -495,6 +495,27 @@ class TestIssueDispatcher:
         assert kinds == {"app": "issue", "orch": "watch"}
         assert sorted(result.delivered) == ["app", "orch"]
 
+    async def test_watchers_hear_nothing_of_a_later_edit(self, tmp_path, mock_db):
+        """Poll intake reports any edit to an older issue as labeled (#399)."""
+        config = make_config(
+            tmp_path,
+            agents=AgentsConfig(
+                specs={
+                    "app": AgentSpec(name="app", dir="/x", repo="acme/app"),
+                    "orch": AgentSpec(
+                        name="orch", dir="/o", repo="acme/orch", watches=("acme/app",)
+                    ),
+                }
+            ),
+        )
+        issue = IssueData(
+            number=3, title="Bug", labels=ParsedLabels(sender="planner"), repo_full_name="acme/app"
+        )
+        event = IssueEvent(event_type=EventType.ISSUE_LABELED, issue=issue)
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED) as mock_deliver:
+            await issue_dispatcher(event, config, mock_db)
+        mock_deliver.assert_not_awaited()
+
     async def test_multi_owner_repo_announces_unassigned_issue(self, tmp_path, mock_db):
         config = make_config(
             tmp_path,

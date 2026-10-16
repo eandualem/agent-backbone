@@ -82,6 +82,7 @@ class AgentConfigView(BaseModel):
     description: str = ""
     always_on: bool = False
     unattended: bool = False
+    inbox_only: bool = False
 
     @classmethod
     def from_spec(cls, spec: AgentSpec) -> AgentConfigView:
@@ -97,6 +98,7 @@ class AgentConfigView(BaseModel):
             description=spec.description,
             always_on=spec.always_on,
             unattended=spec.unattended,
+            inbox_only=spec.inbox_only,
         )
 
 
@@ -107,9 +109,14 @@ async def build_enriched_agent(
     tmux_info: dict | None = None,
 ) -> EnrichedAgent:
     """Build an EnrichedAgent for a session (configured agent or ad-hoc session)."""
-    online = session in active_sessions
     spec = config.agents.get(session)
-    if online:
+    inbox_only = spec is not None and spec.inbox_only
+    if inbox_only:
+        # It has no session: a tmux session with its name, or a hook file
+        # left by one it had before, is not its own (``agent_state``).
+        active_sessions, tmux_info = set(), None
+    online = session in active_sessions
+    if online or inbox_only:
         snapshot = await agent_state(config, session)
     else:
         # The shared tmux listing already proved the session absent. Reconcile

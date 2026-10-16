@@ -59,9 +59,12 @@ def _dedup_id(event: IssueEvent) -> str:
         issue = event.issue
         return f"closed:{issue.repo_full_name.casefold()}#{issue.number}@{issue.closed_at}"
     if event.event_type == EventType.COMMENT_CREATED and event.comment and event.comment.id:
-        return f"comment:{event.issue.repo_full_name}:{event.comment.id}"
+        return f"comment:{event.issue.repo_full_name.casefold()}:{event.comment.id}"
     if event.event_type == EventType.REVIEW_SUBMITTED and event.review and event.review.id:
-        return f"review:{event.issue.repo_full_name}:{event.review.id}"
+        return f"review:{event.issue.repo_full_name.casefold()}:{event.review.id}"
+    if event.event_type == EventType.PULL_REQUEST_OPENED and event.action == "opened":
+        # A pull request opens once; reopened and ready_for_review keep the transport's id.
+        return f"pull-opened:{event.issue.repo_full_name.casefold()}#{event.issue.number}"
     return event.delivery_id
 
 
@@ -117,6 +120,7 @@ async def _store_route_mark(event, key, config, db, gh, issue_closed_hooks) -> s
                 issue_number=event.issue.number or None,
                 sender=_sender(event),
                 summary=_summary(event),
+                ignore_case=key.startswith(("comment:", "review:")),
             )
             if event_id is None:
                 return f"deduped: event {event.delivery_id} already stored"

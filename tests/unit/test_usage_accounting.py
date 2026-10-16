@@ -59,6 +59,13 @@ def codex(total=100, output=20, at=T, cached=50, last=None):
     )
 
 
+def gemini(message="g1", at=T, **counts):
+    tokens = dict(input=100, output=20, cached=40, thoughts=5, tool=0) | counts
+    return dict(
+        id=message, timestamp=at, type="gemini", content="", model="gemini-3-pro", tokens=tokens
+    )
+
+
 def append(path, *records):
     with path.open("a") as f:
         for record in records:
@@ -90,7 +97,9 @@ async def test_request_revisions_resume_and_cli_switch_are_not_double_counted(
     transcript = tmp_path / "s1.jsonl"
     append(transcript, claude(output=1), claude(at=T2), claude(at=T2))
     monkeypatch.setattr(
-        RUNTIMES["claude"], "usage_paths", lambda sid, env: [transcript] if sid == "s1" else []
+        type(RUNTIMES["claude"]),
+        "usage_paths",
+        lambda self, sid, env: [transcript] if sid == "s1" else [],
     )
     register(config, launch="launch1")
     await collect_usage(config, db)
@@ -108,7 +117,7 @@ async def test_request_revisions_resume_and_cli_switch_are_not_double_counted(
     append(
         other, dict(type="turn_context", payload=dict(model="gpt-6-astra", turn_id="t2")), codex()
     )
-    monkeypatch.setattr(RUNTIMES["codex"], "usage_paths", lambda sid, env: [other])
+    monkeypatch.setattr(type(RUNTIMES["codex"]), "usage_paths", lambda self, sid, env: [other])
     register(config, "codex", "s2")
     switched = replace(
         config,
@@ -210,7 +219,9 @@ async def test_child_usage_and_time_filtered_pagination(tmp_path, db, monkeypatc
     children.mkdir(parents=True)
     append(children / "agent-child.jsonl", claude("child", T2, output=40, model="claude-sonnet-5"))
     monkeypatch.setattr(
-        RUNTIMES["claude"], "usage_paths", lambda sid, env: [path] if sid == "s1" else []
+        type(RUNTIMES["claude"]),
+        "usage_paths",
+        lambda self, sid, env: [path] if sid == "s1" else [],
     )
     register(config)
     with patch("agent_backbone.services.terminal.session_exists", AsyncMock(return_value=False)):
@@ -289,6 +300,48 @@ def test_opencode_reasoning_and_cache_are_counted_once(tmp_path):
     assert batch.events[0].output_tokens == 661
     assert batch.events[0].reasoning_tokens == 561
     assert RUNTIMES["opencode"].read_usage(path, 0, {"_session_id": "other"}).events == []
+
+
+async def test_gemini_response_counts_once_with_its_subagents(tmp_path, db, monkeypatch):
+    monkeypatch.setenv("GEMINI_CLI_HOME", str(tmp_path / "gemini"))
+    sid = "5a1e0c2d-7f00-4000-8000-000000000001"
+    chats = tmp_path / "gemini/.gemini/tmp/project/chats"
+    chats.mkdir(parents=True)
+    append(
+        chats / f"session-2026-09-12T10-00-{sid[:8]}.jsonl",
+        dict(sessionId=sid, projectHash="p", startTime=T, lastUpdated=T, kind="main"),
+        dict(id="u1", timestamp=T, type="user", content=[{"text": "hi"}]),
+        gemini(),
+        # 0.46 appends the whole message again whenever it changes.
+        dict(gemini(), toolCalls=[{"id": "c1", "status": "success"}]),
+        {"$set": {"lastUpdated": T2}},
+        {"$rewindTo": "u1"},
+    )
+    (chats / sid).mkdir()
+    append(
+        chats / sid / "child.jsonl",
+        dict(sessionId="child", projectHash="p", startTime=T2, lastUpdated=T2, kind="subagent"),
+        gemini("g2", T2, cached=0, thoughts=0, tool=7),
+    )
+    config = config_for(tmp_path, "gemini")
+    register(config, "gemini", sid)
+    await collect_usage(config, db)
+    await collect_usage(config, db)
+    main, child = await db.usage.events()
+    assert (main["input_tokens"], main["cache_read_tokens"]) == (60, 40)  # input includes cached
+    assert (main["output_tokens"], main["reasoning_tokens"]) == (25, 5)  # thoughts beside output
+    assert (main["model"], main["provider"]) == ("gemini-3-pro", "google")
+    assert main["context_tokens"] == 100
+    assert (child["input_tokens"], child["output_tokens"]) == (107, 20)
+    parent = next(s for s in await db.usage.sessions() if s["session_id"] == sid)
+    assert parent["coverage"] == "measured"
+
+
+def test_gemini_usage_after_an_unreadable_record_is_partial(tmp_path):
+    path = tmp_path / "session.jsonl"
+    append(path, gemini("g1"), dict(gemini("g2"), tokens="invalid"), gemini("g3"))
+    batch = read_usage_jsonl(path, 0, {}, RUNTIMES["gemini"].parse_usage)
+    assert [e.coverage for e in batch.events] == ["measured", "partial"]
 
 
 async def test_persistence_after_restart_and_partial_correction(tmp_path):
@@ -616,7 +669,9 @@ async def test_current_usage_links_previously_registered_children(
         parent_id=usage_id("claude", "s1") if already_linked else None,
     )
     monkeypatch.setattr(
-        RUNTIMES["claude"], "usage_paths", lambda sid, env: [path] if sid == "s1" else []
+        type(RUNTIMES["claude"]),
+        "usage_paths",
+        lambda self, sid, env: [path] if sid == "s1" else [],
     )
     register(config)
     with (

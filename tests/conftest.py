@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -111,15 +113,43 @@ def isolated_skills_store(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def no_real_tmux(monkeypatch):
+def isolated_user_instructions(tmp_path_factory, monkeypatch):
+    """The suite never reads the developer's own user-level instruction files
+    (``~/.claude/CLAUDE.md``, ``~/.codex/AGENTS.md`` …, #274): an empty home,
+    outside ``tmp_path`` so tests that inspect it see only their own files."""
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+    for key in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "XDG_CONFIG_HOME"):
+        monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def isolated_backbone_environment(monkeypatch):
+    """The suite never inherits a running backbone's session environment.
+
+    Run from an agent's own session, ``BACKBONE_STATE_DIR`` and
+    ``BACKBONE_DATA_DIR`` name the real directories and ``TMUX`` the real
+    server; hooks and config prefer them over a test's own values (#351).
+    A test that needs one sets it itself.
+    """
+    for key in list(os.environ):
+        if key.startswith("BACKBONE_") or key in ("TMUX", "TMUX_PANE"):
+            monkeypatch.delenv(key)
+
+
+@pytest.fixture(autouse=True)
+def isolated_temp_dir(tmp_path_factory, monkeypatch):
+    """Temporary files the code writes (a session's environment file) stay in the test tree."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path_factory.mktemp("tmp")))
+
+
+@pytest.fixture(autouse=True)
+def no_real_tmux():
     """The suite never touches the developer's tmux server.
 
     Every tmux call goes through one subprocess entry point; unless a test
     patches it (or a function above it) deliberately, reaching it is a bug
-    in the test's mocking, not something to run. A hook reads its own pane
-    from ``TMUX_PANE``: without one, it reads none.
+    in the test's mocking, not something to run.
     """
-    monkeypatch.delenv("TMUX_PANE", raising=False)
 
     async def _refuse(*args, **kwargs):
         raise RuntimeError(f"unpatched tmux call in a test: {' '.join(map(str, args))}")

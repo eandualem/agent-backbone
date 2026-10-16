@@ -23,7 +23,8 @@ class SessionIntelligence(StrEnum):
     """Why a session can or cannot receive a message right now.
 
     Derived from the agent state plus terminal conditions. Copy mode preserves
-    human reading or selection and blocks delivery until the human leaves it.
+    human reading or selection and blocks delivery until someone leaves it,
+    whether or not anyone is viewing the pane.
     The blocking values share their names with ``DeliveryOutcome``.
     """
 
@@ -31,6 +32,7 @@ class SessionIntelligence(StrEnum):
     SETTLING = "settling"
     HUMAN_TYPING = "human_typing"
     HUMAN_READING = "human_reading"
+    UNATTENDED_COPY_MODE = "unattended_copy_mode"
     AGENT_WORKING = "agent_working"
     WAITING_FOR_HUMAN = "waiting_for_human"
     OFFLINE = "offline"

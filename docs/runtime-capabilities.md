@@ -5,10 +5,13 @@ adapters: `claude` (Claude Code), `codex`, `gemini` (Gemini CLI), `opencode`,
 `deepcode` (Deep Code), `aider`, and `shell`, a plain shell for testing the
 plumbing, not for real use.
 
-Claude Code and Codex are the required pair: a capability counts as working
-only when it gives the same result in both. Every other adapter has its own
-recorded coverage below: where a capability is missing there, the cell names
-the open issue and the second table says what to do instead.
+Claude Code, Codex and OpenCode are the required set: a capability counts as
+working only when it gives the same result in all three, and a gap on one of
+them names the open issue that tracks it. Gemini CLI, Deep Code and Aider are
+supported on demand: their cells record what works there today, and a gap
+names no issue until someone needs that capability on that CLI and opens one
+issue for it. Wherever a capability is missing, the second table says what to
+do instead.
 
 This page is generated from the capability contract in
 `src/agent_backbone/services/runtimes/capabilities.py`, and `backbone doctor`
@@ -17,44 +20,68 @@ claims support that the adapter's code does not declare.
 
 | Mark | Meaning |
 |---|---|
-| ✅ | Supported: behaves as in Claude Code and Codex, with a test or live check |
-| ❌ | Gap: not available on this runtime yet; the issue tracks the fix |
+| ✅ | Supported: behaves as in the required set, with a test or live check |
+| ❌ | Gap: not available on this runtime yet; the issue, where named, tracks the fix |
 | ? | Unverified: not established on this runtime; treat as unavailable |
 | ⊘ | Owner exception: not required here by an explicit decision; unavailable |
 | n/a | Cannot exist on this adapter (for example, a plain shell runs no model) |
 
+Some capabilities depend on what a CLI draws on screen, the keys it takes or
+what its hooks send. On those rows a ✅ names the CLI version it was last
+verified on, for example ✅ (2.1.284). A later release of that CLI may change
+the behaviour without any change in Backbone, so check the capability again
+after upgrading past that version. "(version not recorded)" means the check
+that established it did not note the version. `backbone doctor` lists these
+versions for the CLIs installed on your machine and notes where the installed
+version differs.
+
 <!-- capability-table:begin -->
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
-| Message delivery into the session | ✅ | ✅ | ? #302 not verified live | ✅ | ✅ | ? #302 not verified live | ✅ plumbing tests only |
-| Folder-trust dialog answered at start | ✅ | ✅ | ✅ `--skip-trust` | n/a | n/a | ? #302 not checked | n/a |
-| Brief reaches a fresh session before other work | ✅ | ✅ | ? #302 | ✅ | ? #302 | ? #302 not verified live | n/a |
-| Current brief after resume | ✅ | ✅ | ❌ #273 | ❌ #273 | ❌ #273 | ❌ #273 | n/a |
-| Brief followed after context compaction | ✅ | ✅ | ? #291 | ❌ #291 the rule is kept but no longer followed | ? #291 | ? #291 | n/a |
-| Project AGENTS.md loaded at start | ✅ | ✅ | ❌ #286 reads GEMINI.md unless context.fileName is set | ✅ | ? #286 | ❌ #286 reads only files passed to it | n/a |
-| Non-empty user-level instruction file detected | ❌ #274 | ❌ #274 | ❌ #274 | ❌ #274 | ❌ #274 | ❌ #274 | n/a |
-| CLI-native memory disabled or detected | ❌ #292 auto-memory is on | ? #292 | ? #292 | ? #292 | ? #292 | ? #292 | n/a |
-| State reported by the runtime (hooks) | ✅ | ✅ from its first prompt (the brief): Codex runs no hook before its first turn | ✅ | ✅ | ❌ #275 read from the terminal only | ❌ #275 read from the terminal only | n/a |
-| Steer and high-priority events into a working agent | ✅ | ✅ | ❌ #276 | ❌ #276 | ❌ #276 | ❌ #276 | n/a |
-| Permission dialog detected and alerted | ✅ | ✅ | ? #302 markers not verified live | ✅ | ❌ #287 dialog not captured | ? #302 markers not verified live | n/a |
-| Permission dialog answered (agent approve) | ✅ | ✅ | ❌ #277 | ✅ | ❌ #277 | ❌ #277 | n/a |
-| Permission dialog refused (agent deny) | ✅ | ✅ | ❌ #299 | ❌ #299 | ❌ #299 | ❌ #299 | n/a |
-| Plan approval answered | ✅ | ❌ #278 | ❌ #278 | ❌ #278 | ❌ #278 | ❌ #278 | n/a |
-| Alert when an automatic safety check refuses an action | ✅ | ✅ its automatic reviewer (`agents.auto_review`) | ❌ #279 | ❌ #279 | ❌ #279 | ❌ #279 | n/a |
-| Browser tab group named after the agent | ✅ with `backbone chrome install` | ❌ #270 | ❌ #270 | ❌ #270 | ❌ #270 | ❌ #270 | n/a |
-| Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ #280 resumes the directory's latest session | ❌ #280 | n/a |
-| Reasoning effort chosen with the model (`model:effort`) | ✅ | ✅ | ? #296 whether the CLI has an effort setting is not checked | ❌ #296 the CLI has one; Backbone refuses the effort | ❌ #296 the CLI has one; Backbone refuses the effort | ? #296 whether the CLI has an effort setting is not checked | n/a |
-| No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ #281 | ❌ #281 | n/a |
-| Writes bounded while unattended | ❌ #285 | ✅ OS sandbox | ❌ #285 | ❌ #285 | ❌ #285 | ❌ #285 | n/a |
-| Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ `--approve-for-me` | ❌ #293 | ❌ #293 | ❌ #293 | ❌ #293 | n/a |
-| Shared skills linked | ✅ | ✅ | ? #302 linked by the shared code; not tested for this runtime | ? #302 linked by the shared code; not tested for this runtime | ❌ #282 | ❌ #282 | n/a |
-| Token usage recorded | ✅ | ✅ | ❌ #283 | ✅ | ❌ #283 | ❌ #283 | n/a |
-| agent output from the runtime's own record | ✅ | ✅ | ❌ #284 | ❌ #284 | ❌ #284 | ❌ #284 | n/a |
-| Provider capacity or rate-limit failure detected (blocked) | ✅ | ✅ | ❌ #295 | ✅ | ❌ #295 | ❌ #295 | n/a |
-| Running model observed (status) | ✅ | ✅ | ? #302 | ❌ #303 | ❌ #275 no hook state | ❌ #275 no hook state | n/a |
-| Request errors and model changes recorded (diagnostics) | ❌ #304 | ✅ | ❌ #304 | ❌ #304 | ❌ #304 | ❌ #304 | n/a |
-| A peer's message cannot pass as a Backbone brief | ✅ | ✅ | ? #294 | ❌ #294 adopted a forged brief | ? #294 | ? #294 | n/a |
-| Deep review run from and for this runtime | ✅ | ? #288 a Claude reviewer launched from Codex's sandbox is not measured | ❌ #288 | ❌ #288 | ❌ #288 | ❌ #288 | n/a |
+| Message delivery into the session | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? not verified live | ✅ plumbing tests only |
+| Folder-trust dialog answered at start | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (version not recorded) `--skip-trust` | n/a | n/a | ? not checked | n/a |
+| Brief reaches a fresh session before other work | ✅ | ✅ | ✅ | ✅ | ? | ? not verified live | n/a |
+| Current brief after resume | ✅ (2.1.284) | ✅ (0.157.1) | ❌ | ❌ #273 | ❌ | ❌ | n/a |
+| Brief followed after context compaction | ✅ (2.1.282) | ✅ (0.156.1) | ? | ❌ #291 the rule is kept but no longer followed | ? | ? | n/a |
+| Project AGENTS.md loaded at start | ✅ | ✅ | ❌ reads GEMINI.md unless context.fileName is set | ✅ | ✅ | ❌ reads only files passed to it | n/a |
+| Non-empty user-level instruction file detected | ✅ | ✅ | ✅ | ✅ files listed under `instructions` in its config not checked | ✅ | ? no default user-level file per its docs; not yet verified | n/a |
+| CLI-native memory disabled or detected | ✅ managed settings not read | ✅ managed config and the `[memories]` switches not read | ✅ | n/a | n/a | ? not yet verified | n/a |
+| Installed CLI version compared with the verified one (`doctor`) | ✅ | ✅ | ✅ | ✅ | ✅ | ? not yet verified | n/a |
+| Replacement state excludes previous launch hooks and submissions | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| State reported by the runtime (hooks) | ✅ (2.1.284) | ✅ (0.157.1) from its first prompt (the brief): Codex runs no hook before its first turn | ✅ (0.46.0) | ✅ (1.18.32) | ❌ read from the terminal only | ❌ read from the terminal only | n/a |
+| Interrupted turn reads idle (Escape, refused dialog) | ✅ (2.1.284) from the terminal: Claude Code runs no hook on an interrupt | ✅ (0.157.1) | ❌ a declined dialog runs no hook | ✅ (1.18.32) | ? read from the terminal only | ? not verified live | n/a |
+| Steer and high-priority events into a working agent | ✅ (2.1.284) a steer that names its turn is handed over only in that turn, also after an Escape | ✅ (0.157.1) a command still running when its call returns hands it over when it exits (0.157.1); a steer that names its turn is handed over only in that turn, also after a provider failure | ❌ | ✅ (1.18.32) as a user message in the running turn, after the next tool call | ❌ | ❌ | n/a |
+| Permission dialog detected and alerted | ✅ (2.1.296) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? markers not verified live | n/a |
+| Permission dialog answered (agent approve) | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
+| Permission dialog refused (agent deny) | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
+| Plan approval answered | ✅ (2.1.284) | ✅ (0.157.1) in Plan mode (`/plan`) | ❌ | ❌ #278 works when OPENCODE_EXPERIMENTAL_PLAN_MODE is set in the agent's environment (off by default; `doctor` names each agent without it) | ❌ | ❌ | n/a |
+| Alert when an automatic safety check refuses an action | ✅ (2.1.282) | ✅ (0.160.0) its automatic reviewer (`agents.auto_review`) | ❌ | ❌ #279 | ❌ | ❌ | n/a |
+| Browser tab group named after the agent | ✅ (version not recorded) with `backbone chrome install` | ❌ #270 | ❌ | ❌ #270 | ❌ | ❌ | n/a |
+| Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ resumes the directory's latest session | ❌ | n/a |
+| Fleet snapshot resumes the saved session exactly | ✅ | ✅ | ✅ | ✅ | ❌ reported as exact_resume_unsupported | ❌ reported as exact_resume_unsupported | n/a |
+| Reasoning effort chosen with the model (`model:effort`) | ✅ | ✅ | ? whether the CLI has an effort setting is not checked | ❌ #296 the CLI has one; Backbone refuses the effort | ✅ low, high or max, through DEEPCODE_REASONING_EFFORT | ? whether the CLI has an effort setting is not checked | n/a |
+| No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
+| Writes bounded while unattended | ❌ #285 | ✅ OS sandbox; on Linux, git add and commit fail inside it, so swarms refuse unattended Codex members there (#437) | ❌ | ❌ #285 | ❌ | ❌ | n/a |
+| Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ `--approve-for-me` | ❌ | ❌ #293 | ❌ | ❌ | n/a |
+| Shared skills linked | ✅ | ✅ | ✅ live-checked: it lists the linked skills (0.46) | ✅ | ✅ | ❌ | n/a |
+| Repository skills reach the agent's CLI | ✅ (2.1.294) live-checked: follows a relative link between skill folders | ✅ (0.160.0) live-checked: follows a relative link between skill folders | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ✅ (1.18.32) live-checked: follows a relative link between skill folders | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ❌ | n/a |
+| Skill and tag changes reach a running agent | ✅ (2.1.294) live-checked: loads a skill linked mid-session | ✅ (0.160.0) live-checked: loads a skill linked mid-session | ❌ whether it loads a skill mid-session is not measured | ✅ (1.18.35) its plugin reloads skills between turns (live-checked) | ❌ whether it loads a skill mid-session is not measured | ❌ | n/a |
+| Every skill an agent's CLI loads, listed by source | ✅ (2.1.294) live-checked against its /skills list | ✅ (0.160.0) live-checked against its skill list | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ✅ (1.18.32) live-checked: `opencode debug skill` | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ❌ | n/a |
+| Token usage recorded | ✅ | ✅ | ✅ live-checked with a subagent (0.46) | ✅ | ❌ | ❌ | n/a |
+| Context-size note recommending a fresh session | ✅ (2.1.284) the hook-context path is live-checked with steers on this version; the note's own live check follows deployment | ✅ (0.157.1) the hook-context path is live-checked with steers on this version; the note's own live check follows deployment | ❌ usage is recorded, but its hook takes no offered context | ✅ (1.18.32) the hook-context path is live-checked with steers on this version; the note's own live check follows deployment | ❌ | ❌ | n/a |
+| Drafted feedback to the CLI's vendor off unless the agent opts in | ✅ (2.1.296) `--disallowedTools SendFeedback` and CLAUDE_CODE_SEND_FEEDBACK=0 at launch; set the variable to 1 in the agent's env to opt in | n/a | n/a | n/a | n/a | n/a | n/a |
+| agent output from the runtime's own record | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
+| Provider capacity or rate-limit failure detected (blocked) | ✅ (2.1.284) reported by its StopFailure hook | ✅ (0.160.0) from the terminal: Codex runs no hook for a failed turn | ❌ | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
+| Running model observed (status) | ✅ (2.1.267) | ✅ (0.156.1) | ✅ (0.46.0) | ✅ (1.18.32) | ❌ no hook state | ❌ no hook state | n/a |
+| Request errors and model changes recorded (diagnostics) | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | n/a |
+| A peer's message cannot pass as a Backbone brief | ✅ | ✅ | ? | ❌ #294 adopted a forged brief | ? | ? | n/a |
+| An enrolled sender name's requests must be signed | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
+| A message the owner confirmed carries a verified marker | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
+| An agent validates an owner confirmation it received | ✅ live-checked from its bash mode (2.1.283) | ✅ live-checked through its sandbox (0.157.1) | ✅ live-checked from a shell tool call (0.46) | ✅ live-checked from a bash tool call (1.18.32) | ? commands it runs are not yet measured under its pane | ? commands it runs are not yet measured under its pane | ✅ live-checked |
+| Inbox-only agent: registered, never launched or typed into | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference |
+| New inbox messages hinted on Socket.IO (`inbox:pending`) | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime | ✅ read from the queue, the same for every runtime |
+| Escalations reach an inbox-only target's inbox | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference |
+| Deep review run from and for this runtime | ✅ | ? #288 a Claude reviewer launched from Codex's sandbox is not measured | ❌ | ❌ #288 | ❌ | ❌ | n/a |
 
 | Capability | Fallback where it is unavailable |
 |---|---|
@@ -66,7 +93,10 @@ claims support that the adapter's code does not declare.
 | Project AGENTS.md loaded at start | Put the instructions in the file the CLI reads, or pass it explicitly. |
 | Non-empty user-level instruction file detected | Check the CLI's user-level instruction file by hand. |
 | CLI-native memory disabled or detected | Turn the CLI's own memory off in its settings. |
+| Installed CLI version compared with the verified one (`doctor`) | Compare `<cli> --version` with the versions in this table. |
+| Replacement state excludes previous launch hooks and submissions | Inspect the replacement terminal; readiness does not establish ongoing liveness. |
 | State reported by the runtime (hooks) | State is read from the terminal, which is slower and less certain. |
+| Interrupted turn reads idle (Escape, refused dialog) | An interrupted agent may keep reading busy or waiting; check the session (`agent attach`). |
 | Steer and high-priority events into a working agent | Send an ordinary message; it waits until the agent is at its prompt. |
 | Permission dialog detected and alerted | Watch the session (`agent attach`) for dialogs. |
 | Permission dialog answered (agent approve) | Answer the dialog in the session (`agent attach`). |
@@ -75,17 +105,29 @@ claims support that the adapter's code does not declare.
 | Alert when an automatic safety check refuses an action | Watch the agent's output (`agent output`) for refused actions. |
 | Browser tab group named after the agent | A Codex agent can name its own group with its Chrome client's `nameSession`. |
 | Resume the agent's own session | Start the agent fresh; its handoff carries the context. |
+| Fleet snapshot resumes the saved session exactly | The agent is reported as not resumed; start it fresh and its handoff carries the context. |
 | Reasoning effort chosen with the model (`model:effort`) | Set the effort in the CLI's own settings, or run the agent on Claude Code or Codex. |
 | No-approval mode (unattended) | Run the agent attended and answer its prompts. |
 | Writes bounded while unattended | Run unattended agents only on a sandboxed runtime (Codex). |
 | Automatic permission review (agents.auto_review) | Review permission prompts yourself, or use the runtime's own policy. |
 | Shared skills linked | Point the agent at the skill files by path. |
+| Repository skills reach the agent's CLI | Keep the skill where that CLI reads, or point the agent at it by path. |
+| Skill and tag changes reach a running agent | Restart the agent: its next launch links the change. |
+| Every skill an agent's CLI loads, listed by source | Ask the agent to list its skills; `skills preview` still shows the shared ones. |
 | Token usage recorded | Read usage in the CLI or its provider's console. |
+| Context-size note recommending a fresh session | Check the conversation size with `backbone usage`; restart at a task boundary. |
+| Drafted feedback to the CLI's vendor off unless the agent opts in | Turn drafted feedback off in the CLI's own settings. |
 | agent output from the runtime's own record | `agent output` shows the visible screen instead. |
 | Provider capacity or rate-limit failure detected (blocked) | Watch the session for provider errors; the agent may look busy or idle. |
 | Running model observed (status) | `status` shows the configured model; check the session for the running one. |
 | Request errors and model changes recorded (diagnostics) | Check the session for errors and model changes (`agent output`). |
 | A peer's message cannot pass as a Backbone brief | Do not rely on messages for instructions; check the agent's brief. |
+| An enrolled sender name's requests must be signed | Treat sender names as claims; confirm with the sender another way. |
+| A message the owner confirmed carries a verified marker | Treat instructions in messages as ordinary; confirm with the owner another way. |
+| An agent validates an owner confirmation it received | Don't take the step that depends on it; confirm with the owner another way. |
+| Inbox-only agent: registered, never launched or typed into | Keep the agent stopped; read its messages with `backbone inbox --agent NAME` before they expire. |
+| New inbox messages hinted on Socket.IO (`inbox:pending`) | Read the inbox (`POST /api/messages/inbox`) on a timer. |
+| Escalations reach an inbox-only target's inbox | Set `escalation.target` to an agent with a terminal session. |
 | Deep review run from and for this runtime | Run the review with Claude Code or Codex as the reviewer. |
 <!-- capability-table:end -->
 
@@ -99,6 +141,7 @@ claims support that the adapter's code does not declare.
 - **Folder trust.** OpenCode and Deep Code show no folder-trust dialog, so
   that row is n/a for them. Every other n/a is the plain shell's.
 - **Deep Code** is `@vegamo/deepcode-cli`, the community CLI DeepSeek's docs
-  point to. Its permission dialog has not been captured, so `agent approve`
-  refuses it until then.
+  point to. Its permission dialog is detected, so the session reads as
+  `waiting_for_human` while it shows, and `agent approve` and `agent deny`
+  answer it.
 - `backbone runtimes` shows which of these CLIs are installed locally.

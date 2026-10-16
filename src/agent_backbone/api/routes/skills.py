@@ -13,8 +13,14 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 
 from agent_backbone.api.deps import get_config, registered_agent_or_404
-from agent_backbone.api.models import SkillAddRequest, SkillTagsRequest, SkillView
+from agent_backbone.api.models import (
+    SkillAddRequest,
+    SkillChangeView,
+    SkillTagsRequest,
+    SkillView,
+)
 from agent_backbone.services.agents import skills_preview
+from agent_backbone.services.agents.operations import relink_skills
 from agent_backbone.skills import (
     add_skill,
     commit_store,
@@ -79,7 +85,13 @@ def _inside_a_registered_directory(config, path: str) -> bool:
     return False
 
 
-@router.post("/skills", response_model=SkillView)
+async def _changed(skill, config) -> SkillChangeView:
+    """The skill, after relinking running agents so the change reaches them now."""
+    relinked = await relink_skills(config, list(config.agents), skill=skill.name)
+    return SkillChangeView(**SkillView.from_skill(skill).model_dump(), relinked=relinked)
+
+
+@router.post("/skills", response_model=SkillChangeView)
 async def add_to_store(body: SkillAddRequest, config=Depends(get_config)):
     """Move a skill directory into the store and tag it (a move, never a copy)."""
     store = _store_or_400(config)
@@ -96,10 +108,10 @@ async def add_to_store(body: SkillAddRequest, config=Depends(get_config)):
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await commit_store(store, f"add {skill.name} [{' '.join(skill.tags)}] by {body.actor}")
-    return SkillView.from_skill(skill)
+    return await _changed(skill, config)
 
 
-@router.put("/skills/{name}/tags", response_model=SkillView)
+@router.put("/skills/{name}/tags", response_model=SkillChangeView)
 async def set_tags(name: str, body: SkillTagsRequest, config=Depends(get_config)):
     """Replace a store skill's tags."""
     store = _store_or_400(config)
@@ -112,7 +124,7 @@ async def set_tags(name: str, body: SkillTagsRequest, config=Depends(get_config)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     skill = parse_skill(store / name)
     await commit_store(store, f"tag {name} [{' '.join(body.tags)}] by {body.actor}")
-    return SkillView.from_skill(skill)
+    return await _changed(skill, config)
 
 
 @router.get("/skills/preview/{agent}")

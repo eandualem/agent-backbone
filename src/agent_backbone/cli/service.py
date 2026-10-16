@@ -46,14 +46,20 @@ def _plist(binary: str, data_dir: Path, log: Path) -> str:
     # ProcessType Interactive: the tmux server and every agent the service
     # starts inherit its scheduling, and launchd's default for a LaunchAgent
     # throttles them below ordinary apps (priority 20 instead of 31, measured).
+    # The backbone writes and rotates `log` itself; launchd's own file keeps
+    # only what is printed outside logging (a crash before logging starts).
     path_var = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
-    binary, data_dir, log, path_var = (escape(str(v)) for v in (binary, data_dir, log, path_var))
+    output = log.with_suffix(".out.log")
+    binary, data_dir, log, output, path_var = (
+        escape(str(v)) for v in (binary, data_dir, log, output, path_var)
+    )
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>{LABEL}</string>
   <key>ProgramArguments</key><array>
     <string>{binary}</string><string>up</string>
+    <string>--log-file</string><string>{log}</string>
   </array>
   <key>EnvironmentVariables</key><dict>
     <key>BACKBONE_DATA_DIR</key><string>{data_dir}</string>
@@ -62,8 +68,8 @@ def _plist(binary: str, data_dir: Path, log: Path) -> str:
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ProcessType</key><string>Interactive</string>
-  <key>StandardOutPath</key><string>{log}</string>
-  <key>StandardErrorPath</key><string>{log}</string>
+  <key>StandardOutPath</key><string>{output}</string>
+  <key>StandardErrorPath</key><string>{output}</string>
 </dict></plist>
 """
 

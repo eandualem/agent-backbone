@@ -19,7 +19,8 @@ every later CLI version or account.
 - State-gated delivery: a message sent while the agent is busy is queued
   and retried when it is free, until expiry; `priority` never interrupts a
   busy or provider-blocked agent. Current-issue comments obey the same gate.
-  Copy mode is preserved and blocks delivery as `human_reading`; delivery
+  Copy mode is preserved and blocks delivery as `human_reading`, or as
+  `unattended_copy_mode` when no client is viewing the pane; delivery
   attempts are recorded.
   A crash after terminal submission but before receipt storage can repeat a
   message; see [delivery receipts](github.md#delivery-receipts-and-retries).
@@ -27,8 +28,8 @@ every later CLI version or account.
   `backbone config`; secrets only in `.env`.
 - Event subscriptions ([sources](sources.md)): agents subscribe to Gmail
   with Gmail search filters and a priority; normal events batch in the queue
-  until the agent is ready, high events reach a working Claude Code or Codex
-  agent through its hook context. Unit-tested end to end with the IMAP
+  until the agent is ready, high events reach a working Claude Code, Codex or
+  OpenCode agent through its hook context. Unit-tested end to end with the IMAP
   client mocked; live mailbox validation is still pending.
 - GitHub per repository: owner / `for:` / `from:` / watch routing,
   one-issue-at-a-time with acknowledgement, close-then-next, sub-issue
@@ -60,7 +61,7 @@ every later CLI version or account.
 
 Seven adapters are shipped: `claude`, `codex`, `gemini`, `opencode`,
 `deepcode`, `aider` and `shell`. Which capabilities work on each, and the issue
-tracking each gap, is in [runtime capabilities](runtime-capabilities.md),
+tracking each gap where one exists, is in [runtime capabilities](runtime-capabilities.md),
 generated from the capability contract; `backbone doctor` reports from the
 same source. Use `backbone runtimes` to see which CLIs are installed locally.
 
