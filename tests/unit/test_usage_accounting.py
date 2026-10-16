@@ -840,6 +840,26 @@ async def test_gone_source_is_searched_for_once_and_keeps_its_usage(
     assert len(await db.usage.events()) == 2
 
 
+async def test_a_gone_source_registered_again_is_searched_for_again(tmp_path, db, monkeypatch):
+    config = config_for(tmp_path)
+    path, resumed = tmp_path / "source.jsonl", tmp_path / "resumed.jsonl"
+    append(path, claude())
+    found = [path]
+    monkeypatch.setattr(RUNTIMES["claude"], "usage_paths", lambda sid, env: found)
+    register(config)
+    await collect_usage(config, db)
+    path.unlink()
+    found = []
+    await collect_usage(config, db)  # marked gone
+    append(resumed, claude(), claude("m2"))
+    found = [resumed]
+    await collect_usage(config, db)
+    assert len(await db.usage.events()) == 1  # not searched while gone
+    register(config, launch="resume")  # a resume writes to a new path
+    await collect_usage(config, db)
+    assert len(await db.usage.events()) == 2
+
+
 async def test_a_missing_source_with_several_matches_is_not_marked_gone(tmp_path, db, monkeypatch):
     config = config_for(tmp_path)
     path = tmp_path / "source.jsonl"

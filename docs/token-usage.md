@@ -59,8 +59,9 @@ Coverage describes retained source evidence, not an independent provider audit:
 
 Missing/deleted records cannot be recovered. When a conversation's source file
 is gone, Backbone searches for it once, then records it as `source file is gone`
-and stops searching; the usage already collected stays, and the file is read
-again if it returns to the same path. Tokens may be incomplete for
+and stops searching; the usage already collected stays. The file is read again
+if it returns to the same path, and searched for again when the conversation is
+launched again (resumed). Tokens may be incomplete for
 interrupted requests, unrecorded descendants, or runtime versions that omit
 usage. `unpriced` is separate: token counts remain available without a price.
 

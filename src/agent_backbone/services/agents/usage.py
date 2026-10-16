@@ -77,6 +77,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
             checks[key] = checks.get(key) or error_type
 
         registrations = await asyncio.to_thread(_registrations, config)
+        registered = set()
         for row in registrations:
             if row.get("agent") not in config.agents.names or row.get("runtime") not in RUNTIMES:
                 continue
@@ -84,13 +85,14 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
             if not isinstance(sid, str) or not sid or len(sid) > 300:
                 continue
             try:
-                await db.usage.remember(
+                identity = await db.usage.remember(
                     row["agent"],
                     row["runtime"],
                     sid,
                     at=timestamp(row["observed_at"]),
                     launch_id=row.get("launch_id"),
                 )
+                registered.add(identity)
                 # The database has committed this immutable launch identity.
                 # Consume the registration; no age-based deletion or new job needed.
                 if registration := row.get("_registration_path"):
@@ -121,8 +123,12 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                 source_path = session.get("_discovered_path", session["source_path"])
                 path = Path(source_path) if source_path else None
                 if not path or not path.is_file():
-                    if path and session["detail"] == SOURCE_GONE:
-                        continue  # searched for once already; it is read again if it reappears
+                    if (
+                        path
+                        and session["detail"] == SOURCE_GONE
+                        and session["id"] not in registered
+                    ):
+                        continue  # searched once; a new launch (a resume) searches again
                     paths = await asyncio.to_thread(rt.usage_paths, session["session_id"], env)
                     if len(paths) == 1:
                         path = paths[0]
