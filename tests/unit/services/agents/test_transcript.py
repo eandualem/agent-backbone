@@ -8,13 +8,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent_backbone.services.agents import write_state_file
+from agent_backbone.services.agents import (
+    clear_starting_marker,
+    write_starting_marker,
+    write_state_file,
+)
 from agent_backbone.services.agents.transcript import (
     MAX_MESSAGES,
     output_page,
     read_messages,
 )
-from agent_backbone.services.runtimes import get_runtime
+from agent_backbone.services.runtimes import RUNTIMES, get_runtime
 from tests.support import gemini_session, opencode_db
 
 _MOD = "agent_backbone.services.agents.transcript"
@@ -267,6 +271,42 @@ class TestOutputPage:
         assert page.source == "screen" and page.range_end is None and page.messages == []
         assert page.lines == ["❯ hello"]  # ANSI stripped, trailing blanks dropped
         assert page.evidence == ["no session id recorded by the hook yet"]
+
+    @pytest.mark.parametrize(
+        "runtime", [name for name, rt in RUNTIMES.items() if rt.transcript_supported]
+    )
+    async def test_a_fresh_launch_never_shows_the_previous_conversation(
+        self, config, tmp_path, live, runtime
+    ):
+        live[1].return_value = runtime
+        rt = get_runtime(runtime)
+        files = {"old": tmp_path / "old", "resumed": tmp_path / "resumed"}
+        for path in files.values():
+            path.write_text("")
+        record = {"state": "idle", "session_id": "old", "runtime": runtime, "ts": 100.0}
+        write_state_file(config.state_dir, "ike", record)
+        # A new launch reached its prompt before its hook reported (Codex
+        # reports at its first turn): the previous launch's record remains.
+        write_starting_marker(config.state_dir, "ike", 200.0, launch_id="fresh")
+        clear_starting_marker(config.state_dir, "ike")
+        with (
+            patch.object(type(rt), "usage_paths", side_effect=lambda s, env: [files[s]]),
+            patch.object(type(rt), "transcript_page", return_value=([], False, False)),
+        ):
+            page = await output_page(config, "ike")
+            assert page.source == "screen" and page.lines == ["❯ hello"]
+            assert page.evidence == ["no session id recorded by the hook yet"]
+            # A launch that resumed a conversation by id shows that one.
+            opened = (runtime, "resumed")
+            write_starting_marker(config.state_dir, "ike", 300.0, launch_id="r", opened=opened)
+            clear_starting_marker(config.state_dir, "ike")
+            page = await output_page(config, "ike")
+            assert page.source == "transcript"
+            assert page.evidence == [f"transcript {files['resumed']}"]
+            # Stopped, the agent's last recorded conversation is what it said.
+            live[0].return_value = False
+            page = await output_page(config, "ike")
+        assert page.source == "transcript" and page.evidence == [f"transcript {files['old']}"]
 
     async def test_a_session_id_from_another_runtime_is_not_used(self, config, live):
         write_state_file(

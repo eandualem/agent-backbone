@@ -8,6 +8,7 @@ commits the store's history.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -31,6 +32,9 @@ from agent_backbone.skills import (
 )
 
 router = APIRouter(prefix="/api", tags=["skills"])
+
+_locks: dict[str, asyncio.Lock] = {}
+"""Per store: a change and its commit are one step, so each commit holds one change."""
 
 
 def _store_or_400(config):
@@ -85,10 +89,13 @@ def _inside_a_registered_directory(config, path: str) -> bool:
     return False
 
 
-async def _changed(skill, config) -> SkillChangeView:
+async def _changed(skill, config, failure: str | None) -> SkillChangeView:
     """The skill, after relinking running agents so the change reaches them now."""
     relinked = await relink_skills(config, list(config.agents), skill=skill.name)
-    return SkillChangeView(**SkillView.from_skill(skill).model_dump(), relinked=relinked)
+    warnings = [f"store history not recorded: {failure}"] if failure else []
+    return SkillChangeView(
+        **SkillView.from_skill(skill).model_dump(), relinked=relinked, warnings=warnings
+    )
 
 
 @router.post("/skills", response_model=SkillChangeView)
@@ -101,14 +108,17 @@ async def add_to_store(body: SkillAddRequest, config=Depends(get_config)):
             detail="the skill must live inside a registered agent's directory; "
             "run `backbone skills add --local` from the terminal for other paths",
         )
-    try:
-        skill = add_skill(
-            store, body.path, name=body.name, tags=tuple(body.tags), replace=body.replace
+    async with _locks.setdefault(str(store), asyncio.Lock()):
+        try:
+            skill = add_skill(
+                store, body.path, name=body.name, tags=tuple(body.tags), replace=body.replace
+            )
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        failure = await commit_store(
+            store, f"add {skill.name} [{' '.join(skill.tags)}] by {body.actor}"
         )
-    except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    await commit_store(store, f"add {skill.name} [{' '.join(skill.tags)}] by {body.actor}")
-    return await _changed(skill, config)
+    return await _changed(skill, config, failure)
 
 
 @router.put("/skills/{name}/tags", response_model=SkillChangeView)
@@ -118,13 +128,14 @@ async def set_tags(name: str, body: SkillTagsRequest, config=Depends(get_config)
     current = parse_skill(store / name)
     if current.error == "not a directory":
         raise HTTPException(status_code=404, detail=f"unknown skill '{name}'")
-    try:
-        write_tags(store / name, tuple(body.tags))
-    except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    skill = parse_skill(store / name)
-    await commit_store(store, f"tag {name} [{' '.join(body.tags)}] by {body.actor}")
-    return await _changed(skill, config)
+    async with _locks.setdefault(str(store), asyncio.Lock()):
+        try:
+            write_tags(store / name, tuple(body.tags))
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        skill = parse_skill(store / name)
+        failure = await commit_store(store, f"tag {name} [{' '.join(body.tags)}] by {body.actor}")
+    return await _changed(skill, config, failure)
 
 
 @router.get("/skills/preview/{agent}")

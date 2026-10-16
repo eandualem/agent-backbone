@@ -567,12 +567,21 @@ async def test_commit_store_initialises_history_on_first_use(tmp_path):
         return 0, "", ""
 
     with patch("agent_backbone.git.run_git", fake_git):
-        assert await skills.commit_store(tmp_path / "missing", "m") is False
-        assert await skills.commit_store(tmp_path, "add x by leo") is True
-        assert await skills.commit_store(tmp_path, "again") is True
+        assert await skills.commit_store(tmp_path / "missing", "m") is not None
+        assert await skills.commit_store(tmp_path, "add x by leo") is None
+        assert await skills.commit_store(tmp_path, "again") is None
     assert calls[0] == ("init", "-q")
     assert calls[1] == ("add", "-A") and calls[3] == ("commit", "-q", "-m", "add x by leo")
     assert ("init", "-q") not in calls[4:]
+
+    async def no_identity(repo_dir, *args, timeout=30.0):
+        if args[0] == "commit":
+            return 128, "", "Author identity unknown\n\nfatal: unable to auto-detect email address"
+        return (1 if args[0] == "diff" else 0), "", ""
+
+    with patch("agent_backbone.git.run_git", no_identity):
+        why = await skills.commit_store(tmp_path, "add y by leo")
+    assert why == "git commit failed: fatal: unable to auto-detect email address"
 
 
 def _link_for(rt, store, repo, manifest, selected=()):
@@ -657,6 +666,26 @@ class TestRepositorySkills:
         make_skill(repo / ".claude" / "skills", "own")
         _link_for(codex, store, repo, manifest, selected)
         assert os.readlink(link) == "../../.claude/skills/own"
+
+    def test_a_recorded_link_replaced_by_the_repository_is_its_own(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "own", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        selected = select_skills(read_store(store), (), "app")
+        manifest = manifest_path(tmp_path / "data", "app")
+        _link_for(RUNTIMES["claude"], store, repo, manifest, selected)
+        link = repo / ".claude" / "skills" / "own"
+        assert os.readlink(link) == str(store / "own")
+        # The repository replaces the store link with a skill of its own.
+        link.unlink()
+        make_skill(repo / ".claude" / "skills", "own")
+        # Switched to Codex: the repository's skill wins at once.
+        result = _link_for(RUNTIMES["codex"], store, repo, manifest, selected)
+        assert result.conflicts == [
+            ".agents/skills/own: the repository's own .claude/skills/own wins"
+        ]
+        assert os.readlink(repo / ".agents" / "skills" / "own") == "../../.claude/skills/own"
+        assert (link / "SKILL.md").is_file() and not link.is_symlink()
 
     def test_agents_sharing_a_checkout_share_the_link(self, tmp_path):
         store = tmp_path / "store"

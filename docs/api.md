@@ -301,10 +301,11 @@ configuration view with `subscriptions: [{id, source, filter, priority}]`;
 
 A page of a registered agent's user-facing messages, reads only. `source` is
 `transcript` when the runtime keeps a record the backbone can read (Claude
-Code, Codex, OpenCode; located from the session id the hook recorded, only
-when that record's runtime is the live one) and `screen` otherwise
-(`screen=true`, no transcript, an unsupported runtime): the visible terminal
-with ANSI stripped in `lines`.
+Code, Codex, Gemini CLI, OpenCode; located from the session id the hook
+recorded — for a running agent, its current launch's, or before that the
+conversation the launch resumed — only when that record's runtime is the live
+one) and `screen` otherwise (`screen=true`, no transcript, an unsupported
+runtime): the visible terminal with ANSI stripped in `lines`.
 
 Messages are the agent's own text to the person — progress, commentary and
 replies — **complete**; tool calls, tool results and thinking are not
@@ -529,7 +530,9 @@ the name is taken without `replace`; 400 when `skills.store` is empty).
 `PUT /api/skills/{name}/tags` `{tags, actor}` replaces its tags (404 for an
 unknown skill). Both relink every running agent at once and return the skill
 with `relinked`, one evidence line per running agent whose links were brought
-in line; `POST /api/agents/{name}/tags` does the same for that agent.
+in line; `POST /api/agents/{name}/tags` does the same for that agent. Both
+skill changes also return `warnings`: `store history not recorded: <git's
+reason>` when the change happened (still 200) but its commit failed.
 `GET /api/skills/preview/{agent}` returns every skill that agent's CLI loads:
 `skills` (store skills selected by tag, per directory, with link state),
 `repository` (the repository's own, with the `directories` they are in and how

@@ -36,7 +36,9 @@ skill both should have ends up copied twice per repository, drifting apart. The
 store, `skills.store` (default `~/skills`), holds the only copy; agents use it
 through symlinks. The store is a git repository — the backbone initialises it on
 the first `skills add` and commits after each `add` and `tag` — so every change
-to a shared skill has an author and a date.
+to a shared skill has an author and a date. When git cannot record a change (no
+git author identity configured, git missing, a failing hook), the change still
+happens and `skills add` / `skills tag` print a warning with git's reason.
 
 ## Tags decide who gets what
 

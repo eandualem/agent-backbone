@@ -78,12 +78,13 @@ backbone agent output NAME --since 5120 --end 9000   # a range
 backbone agent output NAME --screen         # the visible terminal instead
 ```
 
-Reads only: nothing is typed, pasted or attached. Claude Code and Codex keep
-their own transcript; the backbone shows the agent's user-facing messages
-from it — progress, commentary, replies — complete, never shortened. Tool
-calls, results and thinking are not messages and are not shown. Each page
-prints the commands for the earlier and later pages and says when more
-exists, so read as far back as you need. Other runtimes show the visible
+Reads only: nothing is typed, pasted or attached. Claude Code, Codex,
+Gemini CLI and OpenCode keep their own transcript; the backbone shows the
+agent's user-facing messages from it — progress, commentary, replies —
+complete, never shortened. Tool calls, results and thinking are not
+messages and are not shown. Each page prints the commands for the earlier
+and later pages and says when more exists, so read as far back as you
+need. Other runtimes, `--screen` and a missing transcript show the visible
 terminal; the first line says which you got. `agent inspect` remains the
 place for state, delivery readiness and the last reply.
 

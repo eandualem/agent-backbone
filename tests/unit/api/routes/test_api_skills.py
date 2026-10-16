@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -39,7 +40,7 @@ def store(api_app, tmp_path):
     )
     _skill(store, "shared", tags="all")
     _skill(store, "backend", tags="coder python")
-    with patch("agent_backbone.api.routes.skills.commit_store", AsyncMock(return_value=True)):
+    with patch("agent_backbone.api.routes.skills.commit_store", AsyncMock(return_value=None)):
         yield store
 
 
@@ -79,6 +80,43 @@ async def test_add_moves_the_directory_and_tags_it(api_client, auth_headers, sto
         json={"path": str(store.parent / "project" / "nowhere")},
     )
     assert again.status_code == 422
+
+
+async def test_concurrent_changes_are_committed_one_at_a_time(api_client, auth_headers, store):
+    seen = {path.name for path in store.iterdir()}
+    commits: list[list[str]] = []
+
+    async def commit(path, message):
+        await asyncio.sleep(0.05)  # git runs as subprocesses: another request runs meanwhile
+        now = {entry.name for entry in path.iterdir()}
+        commits.append(sorted(now - seen))
+        seen.update(now)
+
+    project = store.parent / "project" / ".claude" / "skills"
+    sources = [_skill(project, "one"), _skill(project, "two")]
+    with patch("agent_backbone.api.routes.skills.commit_store", commit):
+        responses = await asyncio.gather(
+            *(
+                api_client.post(
+                    "/api/skills", headers=auth_headers, json={"path": str(path), "tags": ["all"]}
+                )
+                for path in sources
+            )
+        )
+    assert [response.status_code for response in responses] == [200, 200]
+    assert sorted(commits) == [["one"], ["two"]]
+
+
+async def test_a_change_whose_history_fails_says_so(api_client, auth_headers, store):
+    failure = "git commit failed: fatal: unable to auto-detect email address"
+    with patch("agent_backbone.api.routes.skills.commit_store", AsyncMock(return_value=failure)):
+        resp = await api_client.put(
+            "/api/skills/backend/tags", headers=auth_headers, json={"tags": ["python"]}
+        )
+    assert resp.status_code == 200 and resp.json()["tags"] == ["python"]
+    assert resp.json()["warnings"] == [f"store history not recorded: {failure}"]
+    ok = await api_client.put("/api/skills/backend/tags", headers=auth_headers, json={"tags": []})
+    assert ok.status_code == 200 and ok.json()["warnings"] == []
 
 
 @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
