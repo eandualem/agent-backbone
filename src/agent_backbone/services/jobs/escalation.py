@@ -23,7 +23,7 @@ from agent_backbone.services.routing import (
     list_open_queue_for_target,
     safe_deliver,
 )
-from agent_backbone.services.runtimes import resolve_runtime
+from agent_backbone.services.runtimes import Runtime, get_runtime, resolve_runtime
 from agent_backbone.services.terminal import capture_pane, query_format_vars
 
 if TYPE_CHECKING:
@@ -147,15 +147,17 @@ _denials_unsent: dict[tuple, dict] = {}
 _UNSENT_LIMIT = 50
 
 
-def denial_text(name: str, record: dict) -> str:
+def denial_text(name: str, record: dict, runtime: Runtime) -> str:
     """One refusal, for a person: what, why, and what they can actually do."""
     summary = str(record.get("summary") or record.get("tool") or "a tool call")[:120]
     category = str(record.get("category") or "")[:80]
-    why = "Claude's auto-mode safety check refused it" + (f" ({category})" if category else "")
+    check = runtime.refusal_check or "An automatic safety check"
+    why = f"{check} refused it" + (f" ({category})" if category else "")
+    allow = f", then {runtime.refusal_allow}" if runtime.refusal_allow else ""
     route = (
         "No approval prompt was shown, and it cannot be approved from here. "
-        f"If you want it done, allow it in the terminal (tmux attach -t {name}, then "
-        f"/permissions) or do it yourself, and tell {name} to continue."
+        f"If you want it done, allow it in the terminal (tmux attach -t {name}{allow}) "
+        f"or do it yourself, and tell {name} to continue."
     )
     return (
         f"\U0001f6ab Refused — {name}\n"
@@ -212,8 +214,9 @@ def _new_denials(config: BackboneConfig) -> list[dict]:
 
 
 async def check_permission_denials(config: BackboneConfig) -> None:
-    """Tell the humans about a refusal no dialog showed (a Claude auto-mode
-    classifier denial): the agent looks busy, and nobody would know.
+    """Tell the humans about a refusal no dialog showed (Claude's auto-mode
+    classifier, Codex's automatic reviewer): the agent looks busy, and nobody
+    would know.
 
     One notice per agent and refused action within the dedup window, in the
     agent's own Telegram topic, without buttons: there is nothing to approve
@@ -233,7 +236,10 @@ async def check_permission_denials(config: BackboneConfig) -> None:
         ):
             continue
         tried.add(key)
-        if await notify_humans(config, denial_text(name, record), agent=name):
+        # The runtime that refused it, even if the agent's runtime changed since.
+        spec = config.agents.get(name)
+        runtime = get_runtime(str(record.get("runtime") or "") or (spec.runtime if spec else None))
+        if await notify_humans(config, denial_text(name, record, runtime), agent=name):
             _denial_notified.mark(key)
             log.warning("Sent permission-denied notification for %s", name)
         elif key in _denials_unsent or len(_denials_unsent) < _UNSENT_LIMIT:

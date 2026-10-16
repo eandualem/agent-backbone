@@ -50,7 +50,6 @@ REQUIRED: tuple[str, ...] = ("claude", "codex", "opencode")
 
 REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
     {
-        ("refusal-alert", "codex", 279),
         ("browser-group-name", "codex", 270),
         ("bounded-unattended", "claude", 285),
         ("auto-review", "claude", 293),
@@ -484,10 +483,14 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Alert when an automatic safety check refuses an action",
         "src/agent_backbone/services/jobs/escalation.py",
         fallback="Watch the agent's output (`agent output`) for refused actions.",
-        implemented=lambda rt: any(event == "PermissionDenied" for event, _ in rt.hook_events),
+        implemented=lambda rt: bool(rt.refusal_check),
         cli_dependent=True,
         claude=_ok("tests/unit/hooks/test_claude_hook.py", verified_on="2.1.282"),
-        codex=_gap(279),
+        codex=_ok(
+            "tests/unit/hooks/test_codex_hook.py",
+            "its automatic reviewer (`agents.auto_review`)",
+            verified_on="0.160.0",
+        ),
         gemini=_gap(),
         opencode=_gap(279),
         deepcode=_gap(),
