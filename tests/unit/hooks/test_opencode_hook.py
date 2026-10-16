@@ -375,6 +375,28 @@ console.log(JSON.stringify([disposed.length, fs.existsSync(marker)]));
     assert json.loads(out) == [1, False]
 
 
+def test_a_reload_never_reports_a_turn_begun_meanwhile_idle(tmp_path):
+    _run_plugin(
+        tmp_path,
+        _RELOAD
+        + """
+// OpenCode builds the plugin again while it disposes the instance, and that
+// instance can start the agent's next turn before dispose() returns.
+const client = {instance: {dispose: async () => {
+  const rebuilt = await AgentBackbone({client});
+  await rebuilt.event({event: {type: "session.status", properties: {
+      sessionID: "root", status: {type: "busy"}}}});
+}}};
+await AgentBackbone({client});
+const reload = globalThis[Symbol.for("agent-backbone.skills-reload")].check;
+change();
+await reload();
+""",
+    )
+    state = json.loads((tmp_path / "app.json").read_text())
+    assert (state["state"], state["event"]) == ("busy", "session.status")
+
+
 _SESSIONS = """
 import fs from "node:fs";
 const { AgentBackbone } = await import(process.argv[1]);
@@ -515,6 +537,32 @@ await answer("b"); seen();
 """,
     )
     assert states == [["busy", "b"], ["busy", "b"]]
+
+
+def test_a_resumed_subagent_found_during_the_turn_gives_the_state_back(tmp_path):
+    # A subagent resumed from an earlier run (no session.created) works before
+    # its parent lookup answers; once it is known, the state names the agent's
+    # own session again, and a steer offered for its turn is still handed over.
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "root"}});
+await status("root", "busy");
+await status("sub", "busy"); seen();
+await answer("sub", "root"); seen();
+const offers = `${process.env.BACKBONE_STATE_DIR}/context/app`;
+fs.mkdirSync(offers, {recursive: true});
+fs.writeFileSync(`${offers}/steer-1.turn`, JSON.stringify({session_id: "root"}));
+fs.writeFileSync(`${offers}/steer-1.md`, "go");
+await hook["tool.execute.after"]({sessionID: "root", tool: "read"}, {output: "done"});
+states.push(fs.readdirSync(offers).sort());
+""",
+    )
+    assert states == [
+        ["busy", "sub"],  # unknown yet: it may be the agent's own
+        ["busy", "root"],
+        ["steer-1.taken", "steer-1.turn"],
+    ]
 
 
 def test_a_failed_lookup_keeps_the_session_counted(tmp_path):

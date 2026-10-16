@@ -292,6 +292,12 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
             working.delete(sessionID); // its idle is ignored from now on
             held.delete(sessionID);
             withdraw(sessionID);
+            // Its busy named it while it was unknown: name the agent's own session.
+            const current = readCurrent(t);
+            const own = [...working].find((id) => roots.has(id)) ?? root;
+            if (own && current.session_id === sessionID) {
+              record(t, "session.subagent", current.state ?? STATE_BUSY, current.reason, { session_id: own });
+            }
           } else if (info?.id) roots.add(sessionID);
         } catch { /* unknown stays unknown */ }
         lookups.delete(sessionID);
@@ -390,15 +396,20 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
     }
     if (changedAt < reloader.loadedAt) return; // this process started after: it read them
     reloading = true;
+    let mine; // when this reload's busy record was written
     try {
       // Busy while it reloads, so the backbone delivers nothing into it.
       record(t, "skills.reload", STATE_BUSY, null);
+      mine = readCurrent(t).ts;
       await client?.instance?.dispose?.();
     } catch {
       /* the skills stay as they were until the next change or start */
     } finally {
       try {
-        record(t, "skills.reload", STATE_IDLE, null);
+        // The plugin OpenCode builds again while disposing may have recorded a
+        // turn since (in the same millisecond, too): only our own record ends.
+        const now = readCurrent(t);
+        if (now.event === "skills.reload" && now.ts === mine) record(t, "skills.reload", STATE_IDLE, null);
       } catch { /* hook failures must not stop the agent */ }
       reloading = false;
     }
