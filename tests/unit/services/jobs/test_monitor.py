@@ -780,3 +780,24 @@ class TestMonitorAgents:
         assert snapshot.client is gh
         offline.assert_awaited_once_with(config, set(), db, snapshot)
         drain.assert_awaited_once()
+
+
+async def test_monitor_records_usage_stage_without_blocking_delivery(config, db):
+    check = {
+        "agent_name": "worker",
+        "runtime": "codex",
+        "stage": "usage_registration",
+        "error_type": "ValueError",
+    }
+    with (
+        patch(f"{_MON}.list_sessions", return_value=[]),
+        patch(f"{_MON}.handle_offline"),
+        patch(f"{_MON}.collect_usage", return_value={"errors": ["conflict"], "checks": [check]}),
+        patch(f"{_MON}.drain_message_queue", return_value={}) as drain,
+    ):
+        await monitor_agents(config, db, None)
+    drain.assert_awaited_once()
+    rows = await db.diagnostics.query()
+    assert {row["code"] for row in rows} == {"usage_registration_failed", "usage_collection_failed"}
+    (failure,) = [row for row in rows if row["code"] == "usage_registration_failed"]
+    assert (failure["agent_name"], failure["runtime"]) == ("worker", "codex")

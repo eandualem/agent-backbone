@@ -99,7 +99,7 @@ specialists on request.
 **Let your agent do it.** Open the coding agent you already use and say:
 
 ```text
-Install agent-backbone with uv tool install "agent-backbone[github-app]",
+Install agent-backbone with uv tool install agent-backbone,
 then run backbone help setup and follow it.
 ```
 
@@ -111,7 +111,7 @@ says when it needs you, for your accounts and secrets.
 signed in.
 
 ```bash
-uv tool install "agent-backbone[github-app]"
+uv tool install agent-backbone
 backbone init
 backbone service install           # start now and at login
 backbone doctor                    # check dependencies and API access
