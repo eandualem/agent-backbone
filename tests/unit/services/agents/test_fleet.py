@@ -9,7 +9,7 @@ import pytest
 from agent_backbone.config import AgentSpec
 from agent_backbone.services.agents import AgentStore, StateSnapshot, write_state_file
 from agent_backbone.services.agents._file_reader import write_starting_marker
-from agent_backbone.services.agents.fleet import resume_fleet, save_fleet
+from agent_backbone.services.agents.fleet import resume_fleet, save_counts, save_fleet
 from agent_backbone.services.agents.launch import start_agent
 from agent_backbone.services.agents.models import AgentState
 
@@ -163,6 +163,7 @@ class TestSave:
         (entry,) = snapshot["agents"]
         assert entry["session_id"] == "sess-1" and entry["stop"] == "skipped_replaced"
         assert (await db.fleet.get(snapshot["id"]))["agents"][0]["stop"] == "skipped_replaced"
+        assert save_counts(snapshot["agents"])["skipped_replaced"] == 1
 
     async def test_the_caller_is_stopped_last(self, db, tmp_path):
         store = await _store(db, tmp_path, ("app", "claude"), ("web", "codex"), ("zed", "claude"))

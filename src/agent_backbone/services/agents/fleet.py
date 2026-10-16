@@ -63,6 +63,7 @@ def save_counts(agents: list[dict]) -> dict[str, int]:
         "resumable": sum(1 for entry in agents if entry["resumable"]),
         "stopped": stops.get("stopped", 0),
         "skipped_busy": stops.get("skipped_busy", 0),
+        "skipped_replaced": stops.get("skipped_replaced", 0),
         "stop_failed": stops.get("stop_failed", 0),
     }
 

@@ -392,7 +392,7 @@ is stopped last. All fields are optional; a plain save stops nothing. `201`:
              "session_id": "a1b2c3d4-…", "session_reported_at": "2026-10-05T20:58:11.000000Z",
              "resumable": true, "not_resumable_reason": null, "state_at_save": "idle",
              "stop": "stopped", "stop_error": null}],
- "counts": {"saved": 1, "resumable": 1, "stopped": 1, "skipped_busy": 0, "stop_failed": 0},
+ "counts": {"saved": 1, "resumable": 1, "stopped": 1, "skipped_busy": 0, "skipped_replaced": 0, "stop_failed": 0},
  "resumes": []}
 ```
 
