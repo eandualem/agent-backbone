@@ -1,6 +1,8 @@
 """Renaming retains identity-bound receipts and refuses occupied destinations."""
 
 import asyncio
+import time
+from functools import partial
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -8,6 +10,7 @@ from sqlalchemy import text
 
 from agent_backbone.config import AgentSpec
 from agent_backbone.services.agents import AgentStore, read_state_file, write_state_file
+from agent_backbone.services.database._time import now_iso
 
 
 @pytest.fixture
@@ -80,6 +83,36 @@ async def test_unsafe_or_reserved_names_refused(store, new_name):
     with pytest.raises(ValueError):
         await store.rename("api", new_name)
     assert store.agents.get("api")
+
+
+async def test_rename_keeps_owner_confirmations_usable(db, store):
+    """A confirmation delivered to the old name, and a grant it claimed, stay
+    usable under the new name; the signed recipient is never rewritten."""
+    now = int(time.time())
+    async with db.engine.begin() as conn:
+        for cid in ("unclaimed", "claimed"):
+            await conn.execute(
+                text(
+                    "INSERT INTO signing_receipts (confirmation_id, sender, sender_key, recipient,"
+                    " delivered_to, kind, text, text_sha256, source, confirmed_at, key_epoch,"
+                    " operation_id, status, created_at, delivered_at) VALUES (:c, 'assistant',"
+                    " 'k', 'api', 'api', 'message', 'hi', 'h', 'button', 't', 1, :c, 'admitted',"
+                    " :at, :at)"
+                ),
+                {"c": cid, "at": now_iso()},
+            )
+        await conn.execute(
+            text(
+                "INSERT INTO signing_grants (confirmation_id, agent, workspace, claimed_at,"
+                " expires_at, status) VALUES ('claimed', 'api', 'w', :now, :later, 'open')"
+            ),
+            {"now": now, "later": now + 600},
+        )
+    await store.rename("api", "backend")
+    validate = partial(db.signing.validate, agent="backend", workspace="w", done=False, now=now)
+    assert (await validate("unclaimed"))[0] == "claimed"
+    assert (await validate("claimed"))[0] == "recovered"
+    assert (await db.signing.receipt("unclaimed"))["recipient"] == "api"
 
 
 async def test_active_delivery_prevents_rename(db, store):

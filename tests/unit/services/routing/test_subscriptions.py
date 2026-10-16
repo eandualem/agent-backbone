@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
@@ -148,6 +149,37 @@ class TestDispatch:
         assert [c.args[0] for c in deliver.await_args_list] == ["other"]
         row = await db.events.get(rows["gmail:l1"]["id"])
         assert row["processed_at"] is not None and row["outcome"] == "subscription: desk, other"
+
+    async def test_a_restart_mid_poll_does_not_repeat_a_handed_event(self, tmp_path, db):
+        config = _config(tmp_path)
+        shared = _event("l1", _DOMAIN)  # desk (normal) and other (normal)
+        delivered = type(
+            "R", (), {"outcome": DeliveryOutcome.DELIVERED, "queue": None, "queued": False}
+        )()
+        calls = []
+
+        async def deliver(agent, *args, **kwargs):
+            calls.append(agent)
+            if agent == "other":
+                raise asyncio.CancelledError  # the service stops mid-poll
+            return delivered
+
+        with (
+            patch(
+                "agent_backbone.services.routing._subscriptions.safe_deliver",
+                AsyncMock(side_effect=deliver),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await dispatch_source_events([shared], config, db)
+        assert calls == ["desk", "other"]
+
+        with patch(
+            "agent_backbone.services.routing._subscriptions.safe_deliver",
+            AsyncMock(return_value=delivered),
+        ) as again:
+            await dispatch_source_events([shared], config, db)
+        assert [c.args[0] for c in again.await_args_list] == ["other"]
 
 
 class TestHighPriorityReachesAWorkingAgent:
