@@ -310,16 +310,10 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
             working.delete(sessionID); // its idle is ignored from now on
             held.delete(sessionID);
             withdraw(sessionID);
-            // Its own parent when that is working. Otherwise a working session not
-            // yet known may be the agent's own, resumed: its lookup reclaims the
-            // record then, rather than an earlier conversation now.
-            if (working.has(info.parentID)) reclaim(info.parentID);
-            else if (![...working].some((id) => !roots.has(id))) {
-              reclaim([...working].find((id) => roots.has(id)) ?? root);
-            }
+            // The conversation it works for, as OpenCode names it: never another one.
+            reclaim(topOf(children, sessionID));
           } else if (info?.id) {
             roots.add(sessionID);
-            if (working.has(sessionID)) reclaim(sessionID); // its subagent may have been found first
           }
         } catch { /* unknown stays unknown */ }
         lookups.delete(sessionID);

@@ -662,6 +662,24 @@ states.push(fs.readdirSync(context).sort());
     assert states == [["busy", "root"], ["steer-1.taken", "steer-1.turn"]]
 
 
+def test_a_subagent_found_after_its_turn_names_its_own_conversation(tmp_path):
+    # Conversation a was created first; b is resumed and its subagent's lookup
+    # answers only after both went idle: the record names b, what a fleet save
+    # would resume, never a.
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "a"}});
+await status("b", "busy");
+await status("sub", "busy");
+await idle("b");
+await idle("sub"); seen();
+await answer("sub", "b"); seen();
+""",
+    )
+    assert states == [["idle", "sub"], ["idle", "b"]]
+
+
 def test_a_subagent_found_during_a_reload_leaves_the_reload_to_end(tmp_path):
     # The subagent's parent lookup answers only while the instance is disposed:
     # correcting the session it named must not keep the agent busy afterwards.
