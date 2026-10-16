@@ -181,6 +181,34 @@ class TestDispatch:
             await dispatch_source_events([shared], config, db)
         assert [c.args[0] for c in again.await_args_list] == ["other"]
 
+    async def test_a_handed_batch_notes_every_holder_in_one_write(self, tmp_path, db):
+        config = _config(tmp_path)
+        events = [_event("l1", _DOMAIN), _event("l2", _DOMAIN)]  # desk and other, normal
+        delivered = type(
+            "R", (), {"outcome": DeliveryOutcome.DELIVERED, "queue": None, "queued": False}
+        )()
+
+        async def deliver(agent, *args, **kwargs):
+            if agent == "other":
+                raise asyncio.CancelledError  # the service stops after desk's batch
+            return delivered
+
+        with (
+            patch(
+                "agent_backbone.services.routing._subscriptions.safe_deliver",
+                AsyncMock(side_effect=deliver),
+            ),
+            patch.object(db.events, "mark_partial", wraps=db.events.mark_partial) as noted,
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await dispatch_source_events(events, config, db)
+        noted.assert_awaited_once()
+        rows = await db.events.query(limit=10)
+        assert {row["delivery_id"]: row["outcome"] for row in rows} == {
+            "gmail:l1": "subscription-partial: desk",
+            "gmail:l2": "subscription-partial: desk",
+        }
+
 
 class TestHighPriorityReachesAWorkingAgent:
     @pytest.mark.parametrize("count", [26, 51])
