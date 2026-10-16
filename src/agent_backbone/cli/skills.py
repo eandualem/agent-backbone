@@ -20,6 +20,7 @@ from agent_backbone.skills import (
     is_git_repository,
     parse_skill,
     read_store,
+    store_lock,
     write_tags,
 )
 
@@ -147,6 +148,12 @@ def _print_preview(view: dict) -> None:
         note(f"Notice: {notice}", style="yellow")
 
 
+def _print_warnings(warnings: list[str]) -> None:
+    """What did not happen although the change did (the store's history, for one)."""
+    for warning in warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+
+
 def _print_relinked(relinked: list[str]) -> None:
     """Which running agents the change reached now; the rest get it at their next launch."""
     if relinked:
@@ -234,15 +241,21 @@ async def _skills(args: argparse.Namespace) -> int:
                 raise ValueError(f"could not add skill: {detail}")
             skill = response[1]
             name, tags, relinked = skill["name"], skill["tags"], skill.get("relinked", [])
+            warnings = skill.get("warnings", [])
         else:
-            added = add_skill(
-                store, body["path"], name=args.name, tags=tuple(args.tag), replace=args.replace
-            )
-            await commit_store(store, f"add {added.name} [{' '.join(added.tags)}] by {_actor()}")
+            async with store_lock(config.data_dir, store):  # the API may change it too
+                added = add_skill(
+                    store, body["path"], name=args.name, tags=tuple(args.tag), replace=args.replace
+                )
+                failure = await commit_store(
+                    store, f"add {added.name} [{' '.join(added.tags)}] by {_actor()}"
+                )
+            warnings = [f"store history not recorded: {failure}"] if failure else []
             name, tags = added.name, list(added.tags)
             relinked = await relink_skills(config, list(config.agents), skill=name)
         print(f"Added {name} to {store} with tags: {' '.join(tags) or 'none (reaches nobody)'}")
         _print_relinked(relinked)
+        _print_warnings(warnings)
         return 0
     if sub == "tag":
         if await _common.api_up(config):
@@ -262,16 +275,22 @@ async def _skills(args: argparse.Namespace) -> int:
                 detail = detail.get("detail", detail) if isinstance(detail, dict) else detail
                 raise ValueError(f"could not retag skill: {detail}")
             tags, relinked = response[1]["tags"], response[1].get("relinked", [])
+            warnings = response[1].get("warnings", [])
         else:
             current = parse_skill(store / args.name)
             if current.error in ("not a directory", "no SKILL.md"):
                 raise ValueError(f"unknown skill '{args.name}' ({current.error})")
-            write_tags(store / args.name, tuple(args.tags))
-            await commit_store(store, f"tag {args.name} [{' '.join(args.tags)}] by {_actor()}")
+            async with store_lock(config.data_dir, store):
+                write_tags(store / args.name, tuple(args.tags))
+                failure = await commit_store(
+                    store, f"tag {args.name} [{' '.join(args.tags)}] by {_actor()}"
+                )
+            warnings = [f"store history not recorded: {failure}"] if failure else []
             tags = list(parse_skill(store / args.name).tags)
             relinked = await relink_skills(config, list(config.agents), skill=args.name)
         print(f"{args.name}: {' '.join(tags) or 'no tags (reaches nobody)'}")
         _print_relinked(relinked)
+        _print_warnings(warnings)
         return 0
     specs = [config.agents.get(args.agent)] if args.agent else list(config.agents)
     if any(spec is None for spec in specs):

@@ -19,6 +19,14 @@ class TestTopics:
         for step in ("uv tool install", "backbone init", "agent start", "backbone tell"):
             assert step in content
 
+    def test_agents_topic_names_every_runtime_whose_transcript_is_read(self):
+        from agent_backbone.services.runtimes import RUNTIMES
+
+        section = get_topic("agents").split("## Reading what an agent has said")[1]
+        section = " ".join(section.split("\n## ")[0].split())
+        readable = [rt.display_name for rt in RUNTIMES.values() if rt.transcript_supported]
+        assert readable and all(name in section for name in readable)
+
 
 class TestDocs:
     def test_every_docs_page_is_listed_with_a_summary(self):

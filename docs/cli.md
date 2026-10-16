@@ -797,7 +797,8 @@ agent's CLI reads. `list [--tag TAG] [--json]` shows store skills,
 tags and the agents each reaches; `show NAME` prints one; `path [NAME]` locates
 the store or a skill; `add PATH [--name N] [--tag T]… [--replace]` moves a skill
 directory into the store and tags it; `tag NAME [TAG…]` replaces its tags (both
-name the running agents whose links changed at once);
+name the running agents whose links changed at once, and warn when git could not
+record the change in the store's history);
 `preview AGENT [--json]` — or just `backbone skills AGENT` — shows every skill
 the agent's CLI loads, by source (shared, the repository's own, user-level),
 and where each comes from;
