@@ -28,8 +28,8 @@ That single command:
    the coordinator last — here a
    `research-coordinator` (added automatically), `research-scout-1..3`
    on Sonnet, and a `research-coder` on Opus. **Role briefs** are injected
-   at launch for Claude Code, Codex, Gemini and OpenCode; Aider receives a
-   queued first message, and plain shell sessions receive no brief.
+   at launch for Claude Code, Gemini and OpenCode; Codex and Aider receive
+   a queued first message, and plain shell sessions receive no brief.
    Nothing is ever written into the repository,
 4. delivers the kickoff to the coordinator. Its brief tells it to wait for
    this message before assigning work, so assignments cannot race registration.
@@ -59,9 +59,12 @@ and worktree remain available for inspection.
 
 ## The lifecycle
 
-Work ends when the coordinator opens a pull request from the swarm
-branch with `Closes #N` in the body. When the PR's base is the
-repository's default branch, merging it closes the issue automatically;
+The coordinator opens a pull request from the swarm
+branch with `Closes #N` in the body. If the base branch moves first, the
+coordinator rebases the shared branch while members wait, with `git replay`
+rather than `git rebase`, which a Codex sandbox cannot clean up after; its
+brief has the command, which refuses to run over uncommitted changes. When
+the PR's base is the repository's default branch, merging it closes the issue automatically;
 for any other base branch GitHub does not auto-close, so the
 coordinator (or you) closes the issue after the merge. Either way, the
 backbone sees the issue-closed event and tears the swarm down:
@@ -70,6 +73,9 @@ members stopped and forgotten, worktree removed, branch kept.
 and every commit on it — always survives teardown, but **uncommitted
 edits in the worktree are removed with it**, so make sure members have
 committed before disbanding.
+
+If teardown fails, the swarm stays active. Resolve the reported error and run
+`backbone swarm disband <name>` again to finish the remaining cleanup.
 
 ```bash
 backbone swarm list              # every swarm with roster and status
@@ -87,7 +93,10 @@ not measure task completion. Open any member with `backbone agent attach NAME`,
 or watch from a separate terminal with `--read-only`.
 
 Startup role briefs compose global shared policies and policies selected by
-the member's `role:ROLE` or `swarm:NAME` tags. Inspect the exact content and source
+the member's tags: its `role:ROLE` and `swarm:NAME` tags, and every tag of the
+initiating agent except `role:`, `agent:`, `swarm:` and `task:`, which members
+inherit. Shared skills follow the same tags, and `swarm status --details` lists
+them. Inspect the exact content and source
 paths with `backbone instructions preview MEMBER`. A fresh member restart reuses
 its saved role brief; see [instruction management](cli.md#backbone-instructions-).
 
@@ -113,14 +122,14 @@ backbone swarm create review --issue OWNER/REPO#7 \
     --member 'scout*2@codex/gpt-6-astra'
 ```
 
-Omitting the suffix means the CLI's own default, which is not always the
-cheap end — GPT-6-Astra defaults to `low`. `backbone runtimes` lists the
+Omitting the suffix uses the CLI's own default. Set an effort explicitly
+when it matters for review depth or resource use. `backbone runtimes` lists the
 levels each runtime accepts.
 
 ## Roles and briefs
 
 Shipped role briefs: `coordinator` (plans, assigns file ownership,
-tracks, reports on the issue, opens the PR), `scout` (read-only
+tracks, reports to the initiating agent, opens the PR), `scout` (read-only
 research), `coder` (implements an owned vertical slice), `reviewer`
 (verifies by running, never fixes). Any other role name gets a generic
 worker brief driven by the coordinator's instructions.
@@ -132,7 +141,7 @@ role) to create an override in `<data_dir>/templates/swarm/`. Canonical defaults
 live in the repository's top-level `templates/swarm/` and ship in the package.
 New role files use the same layout. `swarm:common` edits the shared preamble and
 `swarm:kickoff` edits the coordinator's initial message. Tag policies can target
-`role:scout`, `role:coordinator`, or `swarm:NAME`. See [Templates](templates.md).
+`role:scout`, `role:coordinator`, `swarm:NAME`, or a tag the members inherit. See [Templates](templates.md).
 
 ## What a swarm is, and is not
 
@@ -186,7 +195,10 @@ backbone reports the failure and never restarts the blocked agent.
 
 With `swarm.unattended_members` enabled (the default), sandboxed Codex
 members run without permission prompts. Other runtimes retain their approval
-policy. The setting is evaluated at each member's next launch.
+policy. The setting is evaluated at each member's next launch. On Linux,
+`git add` and `git commit` fail inside Codex's sandbox, so `swarm create`
+refuses an unattended Codex member there before creating anything; give
+that member another runtime (#437).
 
 The full [permission boundaries and cache options](security.md#unattended-agents-and-writable-directories)
 explain the Git grants, machine-wide `agents.writable_dirs`, and the
@@ -203,8 +215,10 @@ model.
 
 Creating a swarm always starts fresh conversations, including when a completed
 or disbanded swarm name is reused. Saved state from an earlier swarm cannot
-replace the new issue’s role briefs and roster. Ordinary agent starts retain
-their automatic continuation behavior.
+replace the new issue’s role briefs and roster. Ordinary agent starts also begin
+fresh conversations; only an explicit `agent resume` or `start --resume` requests
+a previous conversation. Project handoffs and shared memory carry progress
+between fresh sessions, including when the next session uses a different CLI.
 
 ## Registration, checkpoints and shared tests
 
@@ -216,10 +230,13 @@ Backbone does not silently replace intentionally configured ownership.
 
 Coordinators assign research to scouts, implementation to coders and independent
 verification to reviewers. Scouts are read-only by instruction, not a filesystem
-security boundary. Do not assign every role a production slice. Each shared fix
+security boundary. A swarm's `reviewer` role checks work inside the swarm; the
+independent review a branch needs before its pull request runs from the
+initiating agent's session ([deep reviews](deep-reviews.md)), because unattended
+Codex members cannot start a reviewer outside their sandbox. Do not assign every role a production slice. Each shared fix
 has one owner; consuming swarms integrate its reviewed commit rather than editing
 another copy. Work labels for newly registered members use their explicit swarm
-task tag, not incidental issue references or theme color values in output.
+task tag.
 
 Members and coordinators run `backbone inbox` between meaningful steps and before
 commits/handoffs, then acknowledge applied or superseded messages using their `ack_token` with `--ack`. Keep
@@ -228,10 +245,9 @@ Messages to/from active swarm members do not expire during a long turn; this doe
 not interrupt the turn or replace cooperative reads.
 
 Serialize terminal suites sharing host resources with an agreed lock path inside
-all participating sandboxes; keep unit/static work parallel. A lock does not
-remove CPU/process-spawn latency. Generate time-sensitive input gestures without
-slow queries between their events. Retain assertions and product timing budgets;
-record reproduced causes instead of attributing every failure to contention.
+all participating sandboxes; keep unit/static work parallel. Keep assertions
+and product timing budgets unchanged when diagnosing
+resource contention.
 
 Swarm participants never publish human-facing progress reports or send status
 updates directly to Telegram. Members report to the coordinator; the coordinator

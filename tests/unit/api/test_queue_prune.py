@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import FastAPI
 
@@ -23,14 +23,25 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
     app.state.db = SimpleNamespace(
         deliveries=SimpleNamespace(prune=AsyncMock(return_value=2)),
         events=SimpleNamespace(prune=AsyncMock(return_value=3)),
-        queue=SimpleNamespace(prune=AsyncMock(return_value=4)),
+        queue=SimpleNamespace(
+            prune=AsyncMock(return_value=4), active_ids=AsyncMock(return_value=set())
+        ),
         diagnostics=SimpleNamespace(prune=AsyncMock(return_value=6)),
         reports=SimpleNamespace(prune=AsyncMock(return_value=7)),
+        signing=SimpleNamespace(
+            prune=AsyncMock(return_value=8), prune_receipts=AsyncMock(return_value=9)
+        ),
     )
+    manager = MagicMock()
+    manager.attach_mock(app.state.db.signing.prune_receipts, "receipts")
+    manager.attach_mock(app.state.db.deliveries.prune, "deliveries")
+    manager.attach_mock(app.state.db.queue.active_ids, "active_ids")
+    manager.attach_mock(app.state.db.queue.prune, "queue")
     with (
         patch("agent_backbone.services.scheduler.PeriodicScheduler") as scheduler,
         patch("agent_backbone.services.jobs.UpgradeWatch"),
         patch("agent_backbone.services.agents.rotate_action_log", return_value=5),
+        patch("agent_backbone.api.app.batch_receipts", return_value=[tmp_path / "1.taken"]),
     ):
         _register_jobs(app)
         job = next(
@@ -43,8 +54,11 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
             "deliveries": 2,
             "events": 3,
             "queue": 4,
+            "context_receipts": 1,
             "diagnostics": 6,
             "reports": 7,
+            "signing_audit": 8,
+            "signing_receipts": 9,
             "action_log_lines": 5,
         }
     for repo in (
@@ -53,5 +67,12 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
         app.state.db.queue,
         app.state.db.diagnostics,
         app.state.db.reports,
+        app.state.db.signing,
     ):
         repo.prune.assert_awaited_once_with(9)
+    # Receipts take their delivery times from records that the deliveries prune removes.
+    order = [c[0] for c in manager.mock_calls if c[0] in ("receipts", "deliveries")]
+    assert order == ["receipts", "deliveries"]
+    # Hook receipts go before the queue rows whose ids pruning frees.
+    order = [c[0] for c in manager.mock_calls if c[0] in ("active_ids", "queue")]
+    assert order == ["active_ids", "queue"]

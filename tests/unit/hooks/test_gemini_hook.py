@@ -53,6 +53,18 @@ class TestDerive:
         record, _ = hook.derive(_payload("AfterAgent", prompt_response="All green."), None)
         assert record["last_message"] == "All green."
 
+    def test_after_agent_reads_the_model_from_the_session_record(self, tmp_path):
+        # Gemini CLI 0.46's session JSONL, as its hooks name it (live, 2026-09-28).
+        transcript = tmp_path / "session-2026-01-01T00-00-d0d9.jsonl"
+        transcript.write_text(
+            '{"sessionId":"d0d9-gemini","kind":"main"}\n'
+            '{"type":"user","content":[{"text":"use model gemini-9"}]}\n'
+            '{"type":"gemini","content":"ok","model":"gemini-2.5-pro"}\n'
+            '{"$set":{"lastUpdated":"2026-01-01T00:00:00.000Z"}}\n'
+        )
+        record, _ = hook.derive(_payload("AfterAgent", transcript_path=str(transcript)), None)
+        assert record["model"] == "gemini-2.5-pro"
+
     def test_issue_from_prompt(self):
         record, _ = hook.derive(_payload("BeforeAgent", prompt="issue #12 please"), None)
         assert record["issue"] == 12

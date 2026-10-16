@@ -1,0 +1,330 @@
+"""The shared skills store: list, add, retag, preview and validate."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import getpass
+import os
+import sys
+from pathlib import Path
+
+from agent_backbone.cli import _common
+from agent_backbone.cli.presentation import note, print_record, print_table
+from agent_backbone.services.agents import skills_preview
+from agent_backbone.services.agents.operations import relink_skills
+from agent_backbone.skills import (
+    ALL_TAG,
+    add_skill,
+    commit_store,
+    is_git_repository,
+    parse_skill,
+    read_store,
+    store_lock,
+    write_tags,
+)
+
+SKILL_COMMANDS = ("list", "show", "path", "add", "tag", "preview", "validate")
+
+
+def expand_shorthand(argv: list[str]) -> list[str]:
+    """``backbone skills NAME`` means ``backbone skills preview NAME``.
+
+    The everyday question is "what does this agent get?", so the agent's
+    name alone answers it; the verbs stay for everything else.
+    """
+    # Global options (`-v`) may precede the command.
+    index = next((i for i, arg in enumerate(argv) if not arg.startswith("-")), None)
+    if (
+        index is not None
+        and argv[index] == "skills"
+        and len(argv) > index + 1
+        and argv[index + 1] not in SKILL_COMMANDS
+        and not argv[index + 1].startswith("-")
+    ):
+        return [*argv[: index + 1], "preview", *argv[index + 1 :]]
+    return argv
+
+
+def add_skill_commands(sub) -> None:
+    parser = sub.add_parser("skills", help="the shared skills store and who receives what")
+    commands = parser.add_subparsers(dest="skills_command", required=True)
+    p = commands.add_parser("list", help="store skills, their tags and the agents they reach")
+    p.add_argument("--tag", help="only skills carrying this tag")
+    p.add_argument("--json", action="store_true")
+    p = commands.add_parser("show", help="print a store skill's SKILL.md")
+    p.add_argument("name")
+    p = commands.add_parser("path", help="print the store directory, or one skill's")
+    p.add_argument("name", nargs="?")
+    p = commands.add_parser(
+        "add", help="move a skill directory into the store and tag it (never a copy)"
+    )
+    p.add_argument("path", help="a directory containing SKILL.md")
+    p.add_argument("--name", help="store it under this name instead of the directory's")
+    p.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        metavar="TAG",
+        help=f"agents with this tag receive it (repeatable; `{ALL_TAG}` = everyone)",
+    )
+    p.add_argument("--replace", action="store_true", help="overwrite a store skill of that name")
+    p.add_argument(
+        "--local",
+        action="store_true",
+        help="move it from this terminal instead of the running backbone "
+        "(a path outside every agent's directory)",
+    )
+    p = commands.add_parser("tag", help="replace a store skill's tags; none clears them")
+    p.add_argument("name")
+    p.add_argument("tags", nargs="*", metavar="TAG")
+    p = commands.add_parser(
+        "preview", help="what an agent's next launch links, and where (`skills NAME` for short)"
+    )
+    p.add_argument("agent")
+    p.add_argument("--json", action="store_true")
+    p = commands.add_parser("validate", help="check the store and every agent's selection")
+    p.add_argument("agent", nargs="?")
+    parser.set_defaults(func=cmd_skills)
+
+
+def _actor() -> str:
+    return os.environ.get("BACKBONE_AGENT") or getpass.getuser()
+
+
+def _print_preview(view: dict) -> None:
+    print_record(
+        f"Skills for {view['name']}",
+        [
+            ("CLI", view["runtime"]),
+            ("Tags", ", ".join(view["tags"]) or "none"),
+            ("Store", view["store"] or "disabled"),
+            ("Directories", ", ".join(view["directories"]) or "none for this runtime"),
+            ("User-level", ", ".join(view.get("user_directories", [])) or "none recorded"),
+        ],
+    )
+    print_table(
+        "Shared skills (store, by tag)",
+        ("Skill", "Tags", "Link state"),
+        [
+            (
+                skill["name"],
+                " ".join(skill["tags"]),
+                "\n".join(f"{directory}: {state}" for directory, state in skill["links"].items())
+                or "no directory",
+            )
+            for skill in view["skills"]
+        ],
+        empty="No store skill is tagged for this agent.",
+    )
+    print_table(
+        "Repository skills",
+        ("Skill", "Purpose", "Where", "State"),
+        [
+            (
+                entry["name"],
+                f"INVALID: {entry['error']}" if entry["error"] else entry["description"],
+                "\n".join(entry["directories"]),
+                entry["state"],
+            )
+            for entry in view.get("repository", [])
+        ],
+        empty="The repository has no skills of its own.",
+    )
+    print_table(
+        "User-level skills",
+        ("Skill", "Purpose", "Directory"),
+        [
+            (
+                entry["name"],
+                f"INVALID: {entry['error']}" if entry["error"] else entry["description"],
+                entry["directory"],
+            )
+            for entry in view.get("user", [])
+        ],
+        empty="None in this CLI's user-level directories.",
+    )
+    for notice in view["notices"]:
+        note(f"Notice: {notice}", style="yellow")
+
+
+def _print_warnings(warnings: list[str]) -> None:
+    """What did not happen although the change did (the store's history, for one)."""
+    for warning in warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+
+
+def _print_relinked(relinked: list[str]) -> None:
+    """Which running agents the change reached now; the rest get it at their next launch."""
+    if relinked:
+        note("Running agents, links updated now:\n" + "\n".join(f"  {line}" for line in relinked))
+    note("Agents not running get the change at their next launch.")
+
+
+async def _skills(args: argparse.Namespace) -> int:
+    sub = args.skills_command
+    config = await _common.read_config()
+    store = config.skills.store_path
+    if store is None:
+        raise ValueError(
+            "skills.store is empty: set it with `backbone config set skills.store ~/skills`"
+        )
+
+    if sub == "path":
+        print(store / args.name if args.name else store)
+        return 0
+    if sub == "show":
+        skill = parse_skill(store / args.name)
+        if not skill.valid and skill.error in ("not a directory", "no SKILL.md"):
+            raise ValueError(f"unknown skill '{args.name}' ({skill.error})")
+        print((store / args.name / "SKILL.md").read_text(), end="")
+        return 0
+    if sub == "list":
+        entries = read_store(store)
+        if args.tag:
+            entries = [entry for entry in entries if args.tag in entry.tags]
+        rows = []
+        for entry in entries:
+            reaches = [
+                spec.name
+                for spec in config.agents
+                if entry.valid
+                and set(entry.tags)
+                & ({t.lower() for t in spec.tags} | {ALL_TAG, f"agent:{spec.name.lower()}"})
+            ]
+            rows.append(
+                {
+                    "name": entry.name,
+                    "tags": list(entry.tags),
+                    "description": entry.description,
+                    "path": str(entry.path),
+                    "error": entry.error,
+                    "reaches": reaches,
+                }
+            )
+        if args.json:
+            _common.print_json(
+                {"store": str(store), "git": is_git_repository(store), "items": rows}
+            )
+            return 0
+        note(f"Store: {store}{'' if is_git_repository(store) else ' (not a git repository)'}")
+        print_table(
+            "Skills",
+            ("Skill", "Purpose", "Tags", "Agents", "State"),
+            [
+                (
+                    row["name"],
+                    row["description"],
+                    "\n".join(row["tags"]) or "none",
+                    "\n".join(row["reaches"]) or "none",
+                    f"INVALID: {row['error']}" if row["error"] else "valid",
+                )
+                for row in rows
+            ],
+            empty="No skills match. Add one: backbone skills add PATH --tag TAG",
+        )
+        note("Full skill: backbone skills show NAME\nAgent links: backbone skills preview AGENT")
+        return 0
+    if sub == "add":
+        body = {
+            "path": str(Path(args.path).expanduser().resolve()),
+            "name": args.name,
+            "tags": args.tag,
+            "replace": args.replace,
+            "actor": _actor(),
+        }
+        if not args.local and await _common.api_up(config):
+            response = await _common.api(config, "POST", "/api/skills", json_body=body)
+            if not response or response[0] != 200:
+                detail = response[1] if response else "API unreachable"
+                detail = detail.get("detail", detail) if isinstance(detail, dict) else detail
+                raise ValueError(f"could not add skill: {detail}")
+            skill = response[1]
+            name, tags, relinked = skill["name"], skill["tags"], skill.get("relinked", [])
+            warnings = skill.get("warnings", [])
+        else:
+            async with store_lock(config.data_dir, store):  # the API may change it too
+                added = add_skill(
+                    store, body["path"], name=args.name, tags=tuple(args.tag), replace=args.replace
+                )
+                failure = await commit_store(
+                    store, f"add {added.name} [{' '.join(added.tags)}] by {_actor()}"
+                )
+            warnings = [f"store history not recorded: {failure}"] if failure else []
+            name, tags = added.name, list(added.tags)
+            relinked = await relink_skills(config, list(config.agents), skill=name)
+        print(f"Added {name} to {store} with tags: {' '.join(tags) or 'none (reaches nobody)'}")
+        _print_relinked(relinked)
+        _print_warnings(warnings)
+        return 0
+    if sub == "tag":
+        if await _common.api_up(config):
+            path = f"/api/skills/{args.name}/tags"
+            response = await _common.api(
+                config, "PUT", path, json_body={"tags": args.tags, "actor": _actor()}
+            )
+            if not response:
+                # Relinking running agents can outlast the wait: the backbone
+                # may have applied the change after this request gave up.
+                raise ValueError(
+                    f"{_common.unreachable(path)}; `backbone skills list` shows its tags "
+                    "and `backbone skills preview AGENT` an agent's links"
+                )
+            if response[0] != 200:
+                detail = response[1]
+                detail = detail.get("detail", detail) if isinstance(detail, dict) else detail
+                raise ValueError(f"could not retag skill: {detail}")
+            tags, relinked = response[1]["tags"], response[1].get("relinked", [])
+            warnings = response[1].get("warnings", [])
+        else:
+            current = parse_skill(store / args.name)
+            if current.error in ("not a directory", "no SKILL.md"):
+                raise ValueError(f"unknown skill '{args.name}' ({current.error})")
+            async with store_lock(config.data_dir, store):
+                write_tags(store / args.name, tuple(args.tags))
+                failure = await commit_store(
+                    store, f"tag {args.name} [{' '.join(args.tags)}] by {_actor()}"
+                )
+            warnings = [f"store history not recorded: {failure}"] if failure else []
+            tags = list(parse_skill(store / args.name).tags)
+            relinked = await relink_skills(config, list(config.agents), skill=args.name)
+        print(f"{args.name}: {' '.join(tags) or 'no tags (reaches nobody)'}")
+        _print_relinked(relinked)
+        _print_warnings(warnings)
+        return 0
+    specs = [config.agents.get(args.agent)] if args.agent else list(config.agents)
+    if any(spec is None for spec in specs):
+        raise ValueError(f"unknown agent '{args.agent}'")
+    if sub == "validate":
+        errors = [f"{entry.name}: {entry.error}" for entry in read_store(store) if not entry.valid]
+        summaries = []
+        for spec in specs:
+            view = skills_preview(spec, config)
+            broken = [
+                f"{spec.name}: {skill['name']} {directory} {state}"
+                for skill in view["skills"]
+                for directory, state in skill["links"].items()
+                if "broken" in state
+            ]
+            errors.extend(broken)
+            summaries.append((spec.name, len(view["skills"]), "problems" if broken else "valid"))
+        print_table("Skill validation", ("Agent", "Skills", "Link state"), summaries)
+        for error in errors:
+            print(error, file=sys.stderr)
+        if not errors:
+            print("Skills valid.")
+        return 1 if errors else 0
+    view = skills_preview(specs[0], config)
+    if args.json:
+        _common.print_json(view)
+    else:
+        _print_preview(view)
+    return 0
+
+
+def cmd_skills(args: argparse.Namespace) -> int:
+    try:
+        return asyncio.run(_skills(args))
+    except (OSError, ValueError) as exc:
+        print(f"skills: {exc}", file=sys.stderr)
+        return 1

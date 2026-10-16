@@ -11,18 +11,23 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from agent_backbone.config import session_secret_keys
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.git import git_write_paths
+from agent_backbone.hooks.backbone_state import clear_agent_context, offer_steer
+from agent_backbone.models import BRIEF_SOURCE
 from agent_backbone.services.agents._file_reader import (
     clear_starting_marker,
+    read_launch_session,
     read_state_file,
     write_starting_marker,
 )
 from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.instructions import instruction_preview
 from agent_backbone.services.agents.models import AgentState
+from agent_backbone.services.database import now_iso
 from agent_backbone.services.runtimes import (
     AGENT_ENV_KEY,
     RUNTIME_ENV_KEY,
@@ -30,6 +35,7 @@ from agent_backbone.services.runtimes import (
     STATE_DIR_ENV_KEY,
     Runtime,
     get_runtime,
+    project_skill_dirs,
     read_brief,
     resolve_runtime,
     sanitize_pane_content,
@@ -40,6 +46,7 @@ from agent_backbone.services.terminal import (
     start_session,
     stop_session,
 )
+from agent_backbone.skills import manifest_path, materialize, read_store, select_skills
 
 if TYPE_CHECKING:
     from agent_backbone.config import AgentSpec, BackboneConfig
@@ -48,23 +55,39 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+OPERATION_ENV_KEY = "BACKBONE_OPERATION_ID"
+"""The launch's operation id, in the session's environment (``launch_environment``)."""
+
+
 def launch_environment(
     name: str,
     runtime: str,
     state_dir: Path | str | None = None,
     extra: dict[str, str] | None = None,
+    *,
+    operation_id: str | None = None,
 ) -> dict[str, str]:
     """Environment exported into an agent session so shipped hooks can find the backbone.
 
     This is the whole contract: the runtime, the agent's name, the state
-    directory, and whatever the agent itself is configured with. The
-    backbone's secrets are not part of it and are stripped from the session
-    (see ``session_secret_keys`` and ``start_session``'s ``scrub``).
+    directory, the launch's operation (``BACKBONE_OPERATION_ID``, how a
+    recovered restart recognises the session it started), and whatever the
+    agent itself is configured with. The backbone's secrets are not part of
+    it and are stripped from the session (see ``session_secret_keys`` and
+    ``start_session``'s ``scrub``).
     """
-    env = {RUNTIME_ENV_KEY: runtime, AGENT_ENV_KEY: name}
+    env = {RUNTIME_ENV_KEY: runtime, AGENT_ENV_KEY: name, "BACKBONE_LAUNCH_ID": uuid4().hex}
+    if operation_id:
+        env[OPERATION_ENV_KEY] = operation_id
     if state_dir:
         env[STATE_DIR_ENV_KEY] = str(state_dir)
-    reserved = {RUNTIME_ENV_KEY, AGENT_ENV_KEY, STATE_DIR_ENV_KEY}
+    reserved = {
+        RUNTIME_ENV_KEY,
+        AGENT_ENV_KEY,
+        STATE_DIR_ENV_KEY,
+        "BACKBONE_LAUNCH_ID",
+        OPERATION_ENV_KEY,
+    }
     for key, value in (extra or {}).items():
         if key in reserved:
             log.warning("Ignoring reserved variable %s in agent env for '%s'", key, name)
@@ -88,17 +111,14 @@ class StartResult:
     evidence: tuple[str, ...] = ()
 
 
-def resolve_resume(config: BackboneConfig, name: str, runtime: str, resume: bool | None) -> bool:
-    """Auto-resume only this agent's saved conversation in a capable runtime."""
-    if resume is not None:
-        return resume
-    last = read_state_file(config.state_dir, name)
-    return bool(
-        get_runtime(runtime).supports_exact_resume
-        and last
-        and last.session_id
-        and last.runtime in (None, runtime)
-    )
+def _age(timestamp: float, now: float) -> str:
+    """``"3h"``-style age of a hook timestamp, for the start evidence."""
+    seconds = max(0, int(now - timestamp))
+    if seconds < 3600:
+        return f"{max(1, seconds // 60)}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
 
 
 async def start_agent(
@@ -107,7 +127,8 @@ async def start_agent(
     *,
     runtime: str | None = None,
     model: str | None = None,
-    resume: bool | None = None,
+    resume: bool = False,
+    session_id: str | None = None,
     brief_file: Path | str | None = None,
     db: BackboneDB | None = None,
     wait: bool = True,
@@ -115,13 +136,20 @@ async def start_agent(
 ) -> StartResult:
     """Start an agent and retain a bounded record of the attempt and its outcome.
 
+    A start is a fresh conversation unless ``resume`` is asked for: the
+    owner decides when an agent continues, because a resumed agent trusts
+    its own context over what happened in the checkout since (other
+    runtimes, swarms, the shared memory). The saved runtime and model are
+    reused either way. ``session_id`` resumes exactly that conversation and
+    nothing else: a runtime that cannot open a session by id is refused.
+
     Diagnostic details contain classifications only. The human-facing result
     may include terminal evidence, paths or a session id; none of those are
     copied into the diagnostic history.
     """
-    resume = resolve_resume(config, spec.name, runtime or spec.runtime, resume)
     operation_id = operation_id or uuid.uuid4().hex
     started = time.monotonic()
+    resume = resume or session_id is not None
     details: dict = {
         "stage": "preflight",
         "requested_runtime": runtime,
@@ -177,10 +205,12 @@ async def start_agent(
             runtime=runtime,
             model=model,
             resume=resume,
+            session_id=session_id,
             brief_file=brief_file,
             db=db,
             wait=wait,
             details=details,
+            operation_id=operation_id,
             observe=observe,
         )
     except Exception as exc:
@@ -214,11 +244,13 @@ async def _start_agent(
     runtime: str | None,
     model: str | None,
     resume: bool,
+    session_id: str | None = None,
     brief_file: Path | str | None,
     db: BackboneDB | None,
     wait: bool,
     details: dict,
     observe: Callable[[str], Awaitable[None]],
+    operation_id: str | None = None,
 ) -> StartResult:
     """Start an agent in its tmux session.
 
@@ -226,10 +258,12 @@ async def _start_agent(
     (``agents.pre_trust``). The agent's brief — the common backbone brief
     (``agents.inject_brief``), or ``brief_file`` when the caller has its own,
     such as a swarm role brief — reaches the runtime the way its
-    ``brief_mode`` says: at launch (Claude Code, Codex, Gemini, OpenCode) or
+    ``brief_mode`` says: at launch (Claude Code, Gemini, OpenCode) or
     queued as the first message the agent receives once it is at its prompt
-    (Aider). A resumed session already has its brief; a plain shell has
-    nobody to brief (pasting it would run it as commands).
+    (Codex, Aider). A resumed session keeps the brief it started with, so a
+    runtime whose hook can add session context is handed the current one
+    there (``brief_refresh``); a plain shell has nobody to brief (pasting it
+    would run it as commands).
     """
     if await session_exists(spec.name):
         log.info("Agent '%s' already running", spec.name)
@@ -246,6 +280,9 @@ async def _start_agent(
         log.error("Cannot start agent '%s': unknown runtime %s", spec.name, runtime_id)
         return StartResult(ok=False, evidence=(f"unknown runtime: {runtime_id}",))
     rt = RUNTIMES[runtime_id]
+    if session_id is not None and not rt.supports_exact_resume:
+        details["reason"] = "exact_resume_unsupported"
+        return StartResult(ok=False, evidence=(f"{rt.id} cannot open a session by id",))
     effective_model = model if model is not None else spec.model
     section = config.launch
     details["stage"] = "preparation"
@@ -270,21 +307,66 @@ async def _start_agent(
         except (OSError, ValueError) as exc:
             details.update(reason="brief_failed", error_type=type(exc).__name__)
             return StartResult(ok=False, evidence=(str(exc),))
+    skill_evidence, skill_error = _materialize_skills(config, spec, rt)
+    if skill_error is not None:
+        details.update(reason="skills_failed")
+        return StartResult(ok=False, evidence=(skill_error, *skill_evidence))
     resume_target: bool | str = resume
-    resume_evidence: list[str] = []
-    if resume:
-        last = read_state_file(config.state_dir, spec.name)
-        # A session id from *another* runtime means nothing here. A record
-        # without a runtime (an older state file, or a hook wired by hand
-        # outside a backbone session) is this agent's own: still resumed.
-        if last is not None and last.session_id and last.runtime not in (None, rt.id):
-            resume_evidence.append(
-                f"last session id belongs to {last.runtime}; using {rt.id}'s own resume"
+    resume_evidence: list[str] = skill_evidence
+    last = read_state_file(config.state_dir, spec.name)
+    if last is not None and last.session_id and last.runtime:
+        from agent_backbone.hooks.backbone_state import remember_usage_session
+
+        try:
+            remember_usage_session(
+                config.state_dir,
+                spec.name,
+                {"runtime": last.runtime, "session_id": last.session_id, "ts": last.timestamp},
             )
-        elif last is not None and last.session_id and rt.supports_exact_resume:
-            resume_target = last.session_id
-            details["resume_selection"] = "known_session"
-            resume_evidence.append(f"resuming the session the backbone last saw: {last.session_id}")
+        except OSError:
+            log.warning("Could not retain usage identity for %s", spec.name)
+
+    # A session id from *another* runtime means nothing here. A record
+    # without a runtime (an older state file, or a hook wired by hand
+    # outside a backbone session) is this agent's own.
+    own_session = (
+        last.session_id
+        if last is not None and last.session_id and last.runtime in (None, rt.id)
+        else None
+    )
+    saved_age = _age(last.timestamp, time.time()) if last is not None else ""
+    # The last launch's conversation is the id its hook reported or, before
+    # that, the one it resumed by id. A launch that ended before either leaves
+    # only an earlier session's id behind, which is never resumed.
+    reported = read_state_file(config.state_dir, spec.name, current_launch=True)
+    if reported is not None and reported.session_id and reported.runtime in (None, rt.id):
+        last_launch = reported.session_id
+        how = f"reported: {last_launch} ({_age(reported.timestamp, time.time())} old)"
+    else:
+        last_launch = read_launch_session(config.state_dir, spec.name, rt.id)
+        how = f"opened: {last_launch}"
+    if session_id is not None:
+        resume_target = session_id
+        details["resume_selection"] = "known_session"
+        resume_evidence.append(f"resuming the saved session: {session_id}")
+    elif resume and last_launch and rt.supports_exact_resume:
+        resume_target = last_launch
+        details["resume_selection"] = "known_session"
+        resume_evidence.append(f"resuming the session the last launch {how}")
+    elif resume and last is not None and last.session_id and own_session is None:
+        resume_evidence.append(
+            f"last session id belongs to {last.runtime}; using {rt.id}'s own resume"
+        )
+    elif resume and own_session and rt.supports_exact_resume:
+        resume_evidence.append(
+            f"the last launch reported no session id; {own_session} ({saved_age} old) is from "
+            f"an earlier session, so using {rt.id}'s own resume"
+        )
+    elif not resume and last_launch and rt.supports_exact_resume:
+        resume_evidence.append(
+            f"fresh conversation; the previous one ({saved_age} old) is still available: "
+            f"backbone agent resume {spec.name}"
+        )
     details["stage"] = "command"
     try:
         command = rt.build_command(
@@ -297,6 +379,7 @@ async def _start_agent(
             unattended=unattended,
             writable_dirs=_writable_dirs(spec.path, section.writable_dirs),
             auto_review=section.auto_review,
+            env={**rt.default_env, **spec.env},
         )
     except RuntimeError as exc:
         details.update(reason="command_failed", error_type=type(exc).__name__)
@@ -304,10 +387,12 @@ async def _start_agent(
         return StartResult(ok=False, evidence=(str(exc),))
 
     details["stage"] = "preparation"
-    if unattended:
-        rt.prepare_unattended()
-
-    extra_env = {**spec.env, **rt.launch_env(rt.split_model(effective_model)[0])}
+    extra_env = {**rt.default_env, **spec.env, **rt.launch_env(*rt.split_model(effective_model))}
+    resume_evidence.extend(
+        f"user-level instructions: {path}" for path in rt.user_instructions(extra_env, spec.path)
+    )
+    if memory := rt.native_memory(extra_env, spec.path):
+        resume_evidence.append(f"native memory: {memory}")
     environment = launch_environment(
         spec.name,
         rt.id,
@@ -316,6 +401,7 @@ async def _start_agent(
             **extra_env,
             **rt.hook_launch_env(config.data_dir, config.state_dir, env=extra_env),
         },
+        operation_id=operation_id,
     )
     # `starting` lives in its own marker file, written before the launch: a
     # hook write newer than the marker outranks it, ``wait_until_ready``
@@ -323,7 +409,50 @@ async def _start_agent(
     # trusting it after a short window regardless.
     details["stage"] = "launch"
     launched_at = time.time()
-    write_starting_marker(config.state_dir, spec.name, launched_at)
+    # Hook-context offers belong to the session they were written for: the
+    # new session must not have the old one's guidance injected on its
+    # first tool call. Queue rows behind a batch survive and are pasted;
+    # what the old session already took stays to be settled, never re-pasted.
+    clear_agent_context(config.state_dir, spec.name)
+    # Likewise a brief queued for an earlier launch that never received it:
+    # this launch brings its own, and the old one must not reach it (#290).
+    retired = await _retire_stale_briefs(db, spec.name)
+    if retired is None:
+        details["reason"] = "brief_retirement_failed"
+        return StartResult(
+            ok=False, evidence=("could not retire an earlier launch's undelivered brief",)
+        )
+    # Queued before the session exists, so no message sent once it is ready
+    # can go ahead of it; a launch that fails leaves it for the next one to retire.
+    # A resumed conversation whose brief never reached it gets the current one,
+    # unless its hook hands it over below (once is enough).
+    if (
+        rt.brief_mode == "message"
+        and brief is not None
+        and (not resume or (retired > 0 and rt.brief_refresh != "hook_context"))
+        and not await _queue_brief(db, spec.name, brief)
+    ):
+        details["reason"] = "brief_queue_failed"
+        return StartResult(ok=False, evidence=("could not queue the agent's brief",))
+    # A resumed session keeps the brief it started with: a runtime whose hook
+    # can add session context is handed the current one there. A chat message
+    # is never used for that, because a peer's message can imitate it (#294).
+    refresh = resume and rt.brief_mode != "none" and brief is not None
+    if (
+        refresh
+        and rt.brief_refresh == "hook_context"
+        # The hook that takes the offer must be wired into this launch too.
+        and not (
+            rt.hook_launch_args(config.data_dir, config.state_dir)
+            and _offer_refreshed_brief(config, spec.name, environment["BACKBONE_LAUNCH_ID"], brief)
+        )
+    ):
+        details["reason"] = "brief_refresh_failed"
+        return StartResult(ok=False, evidence=("could not hand the current brief to the session",))
+    write_starting_marker(
+        config.state_dir, spec.name, launched_at, launch_id=environment["BACKBONE_LAUNCH_ID"]
+    )
+    session_started = now_iso()  # it may receive messages before it is ready
     ok = await start_session(
         spec.name,
         working_dir=str(spec.path),
@@ -336,6 +465,32 @@ async def _start_agent(
         details["reason"] = "session_failed"
         clear_starting_marker(config.state_dir, spec.name)
         return StartResult(ok=False, evidence=("tmux could not create the session",))
+    if db is not None and (
+        not resume_target
+        or command is None
+        or (isinstance(resume_target, str) and resume_target != last_launch)
+    ):
+        # A fresh conversation (a plain shell has none to resume), or a saved one
+        # other than the last launch's: what was delivered before no longer
+        # counts for it (a restored one may be offered an issue again, rather
+        # than miss one the newer conversation received). Recorded before the
+        # readiness wait, which a backbone restart can cut short. The session
+        # is already up, so a failed write must not fail the start (a swarm
+        # would roll back a member that keeps running).
+        try:
+            await db.agents.conversation_started(spec.name, session_started)
+        except Exception:
+            log.warning("Could not record the start of '%s'", spec.name, exc_info=True)
+    if isinstance(resume_target, str):
+        # Recorded once the session runs: the conversation this launch holds
+        # until its hook reports. A launch that never ran records none.
+        write_starting_marker(
+            config.state_dir,
+            spec.name,
+            launched_at,
+            launch_id=environment["BACKBONE_LAUNCH_ID"],
+            opened=(rt.id, resume_target),
+        )
     extra = f", model: {effective_model}" if effective_model else ""
     if unattended:
         extra += ", unattended"
@@ -355,11 +510,56 @@ async def _start_agent(
             observe=observe,
         )
 
-    # No launch-time injection for this runtime: the brief is queued as the
-    # first message, delivered by the monitor once the agent is at its prompt.
-    if rt.brief_mode == "message" and brief is not None and not resume and ready != "exited":
-        await _queue_brief(db, spec.name, brief)
     return StartResult(ok=True, ready=ready, evidence=tuple(resume_evidence + evidence))
+
+
+def _materialize_skills(
+    config: BackboneConfig, spec: AgentSpec, rt: Runtime
+) -> tuple[list[str], str | None]:
+    """Link the skills tagged for this agent into the directories its runtime reads.
+
+    Evidence lines for the start result, and an error when a selected skill
+    does not resolve (the store's referential integrity is checked at every
+    launch, like a missing policy). A name the repository already owns is
+    skipped, not fatal: the repository's own skill wins. The repository's
+    own skills in a directory this runtime does not read are linked where
+    it does, so they reach whichever CLI runs the agent.
+    """
+    store = config.skills.store_path
+    if store is None or not rt.skill_dirs:
+        return [], None
+    try:
+        selected = select_skills(read_store(store), spec.tags, spec.name)
+        outcome = materialize(
+            store,
+            spec.path,
+            rt.skill_dirs,
+            selected,
+            manifest_path(config.data_dir, spec.name),
+            read=rt.skill_read_dirs,
+            sources=project_skill_dirs(),
+        )
+    except OSError as exc:
+        return [], f"skills: could not link into {spec.path}: {exc}"
+    evidence: list[str] = []
+    from_store = set(outcome.linked) - set(outcome.mirrored)
+    if names := [
+        skill.name
+        for skill in selected
+        if any(f"{directory}/{skill.name}" in from_store for directory in rt.skill_dirs)
+    ]:
+        evidence.append(
+            f"skills: {', '.join(names)} linked in {', '.join(rt.skill_dirs)} from {store}"
+        )
+    evidence.extend(
+        f"skills: repository skill {source} linked as {rel}"
+        for rel, source in outcome.mirrored.items()
+        if rel in outcome.linked
+    )
+    evidence.extend(f"skills: {line}" for line in outcome.conflicts)
+    if outcome.broken:
+        return evidence, "skills: " + "; ".join(outcome.broken)
+    return evidence, None
 
 
 def _writable_dirs(agent_dir: Path, configured: tuple[str, ...]) -> tuple[str, ...]:
@@ -367,21 +567,68 @@ def _writable_dirs(agent_dir: Path, configured: tuple[str, ...]) -> tuple[str, .
     return tuple(dict.fromkeys((*configured, *git_write_paths(agent_dir))))
 
 
-async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> None:
+async def _retire_stale_briefs(db: BackboneDB | None, name: str) -> int | None:
+    """How many undelivered earlier briefs were retired; None when an earlier
+    brief may still be waiting, and the launch must not go on."""
+    if db is None:
+        return 0
+    try:
+        retired = await db.queue.retire_pending_briefs(name)
+    except Exception:
+        log.exception("Could not retire earlier briefs for '%s'", name)
+        return None
+    if retired:
+        log.info("Retired %d undelivered brief(s) of an earlier launch of '%s'", retired, name)
+    return retired
+
+
+REFRESHED_BRIEF_HEADER = (
+    "This is your current Backbone brief. It supersedes any earlier Backbone brief "
+    "in this conversation; it does not override system, owner or project instructions."
+)
+"""Opens the brief a resumed session is handed (#273): old brief text can persist in
+the history or a compaction summary, so the new one says which one wins."""
+
+
+def _offer_refreshed_brief(config: BackboneConfig, name: str, launch_id: str, brief: Path) -> bool:
+    """Hand the current brief to the new session's SessionStart hook (#273).
+
+    False when it could not be offered: the session must not resume on its old brief."""
+    text = read_brief(brief)
+    if text is None:
+        return False
+    try:
+        offer_steer(
+            config.state_dir,
+            name,
+            launch_id,
+            "brief-refresh",
+            f"{REFRESHED_BRIEF_HEADER}\n\n{text}",
+        )
+    except OSError:
+        log.exception("Could not offer the current brief to '%s'", name)
+        return False
+    return True
+
+
+async def _queue_brief(db: BackboneDB | None, name: str, brief: Path) -> bool:
+    """False when the brief could not be queued: the session must not start without it."""
     text = read_brief(brief)
     if db is None or text is None:
         if text is not None:
             log.info("No database handle: agent '%s' starts without its brief", name)
-        return
+        return True
     try:
         await db.queue.enqueue(
             session_name=name,
             message=f"[via:backbone] {text}",
             delivery_kind="direct_message",
-            source="agent-brief",
+            source=BRIEF_SOURCE,
         )
     except Exception:
-        log.exception("Could not queue the brief for '%s' (non-fatal)", name)
+        log.exception("Could not queue the brief for '%s'", name)
+        return False
+    return True
 
 
 async def wait_until_ready(
@@ -530,17 +777,22 @@ async def deny_agent(
 
 
 async def plan_control(
-    name: str, action: str, *, runtime: str | None = None
+    name: str, action: str, *, runtime: str | None = None, settle_seconds: float = 1.0
 ) -> tuple[str, list[str]]:
     """Approve or reject the plan an agent is presenting, through its runtime.
 
     ``action`` is ``approve`` or ``reject``. Returns ``(outcome, evidence)``:
     ``approved`` / ``rejected`` (the runtime's keys were sent), ``unsupported``
     (the runtime has no plan mode the backbone can drive — nothing is typed,
-    so Claude Code's key sequence can never reach a Codex or OpenCode
-    terminal), ``offline`` or ``failed``. Rejecting only leaves plan mode;
-    the feedback itself is a ``plan_response`` delivery through
-    ``safe_deliver``. Callers gate on ``security.allow_remote_plan_control``
+    so one runtime's key sequence can never reach another runtime's
+    terminal), ``not_waiting`` (the runtime's plan dialog is not on screen:
+    answered meanwhile, so its keys would land in the prompt), ``offline`` or
+    ``failed``. Rejecting only declines the plan;
+    the feedback itself is an ordinary message through ``safe_deliver``.
+    After the keys it waits ``settle_seconds`` for the
+    runtime to take its dialog down, so what follows (a rejection's feedback)
+    reads the answered state and goes in at once. Callers gate on
+    ``security.allow_remote_plan_control``
     and on the agent actually waiting for a plan decision.
     """
     if action not in ("approve", "reject"):
@@ -553,20 +805,27 @@ async def plan_control(
         return "unsupported", [
             f"{rt.display_name} has no plan mode the backbone can drive; nothing was sent"
         ]
+    if rt.plan_markers and not rt.detect_plan_dialog(pane):
+        return "not_waiting", [f"no {rt.display_name} plan dialog on screen; nothing was sent"]
     keys = rt.plan_approve_keys if action == "approve" else rt.plan_reject_keys
     sent = await (rt.approve_plan(name) if action == "approve" else rt.reject_plan(name))
-    if sent == 0:
-        return "failed", ["tmux refused the keys; nothing was sent"]
     if sent < len(keys):
-        # Part of the sequence went in (Claude: Escape without "[Z" leaves
-        # plan mode without accepting) — say exactly what happened.
         return "failed", [
-            f"sent {' '.join(keys[:sent])} but tmux refused {keys[sent]}; "
-            f"the {rt.id} session may have left plan mode — check it before retrying"
+            f"tmux refused {keys[sent]} after {sent} of {len(keys)} keys; "
+            f"check the {rt.id} session before retrying"
         ]
     outcome = "approved" if action == "approve" else "rejected"
     log.info("Plan %s on '%s' via %s", outcome, name, rt.id)
-    return outcome, [f"sent {' '.join(keys)} to {rt.id}"]
+    evidence = f"sent {' '.join(keys)} to {rt.id}"
+    await asyncio.sleep(settle_seconds)
+    if rt.plan_markers:
+        after = await capture_pane(name, lines=60)
+        if not after:
+            evidence += "; the screen could not be read to confirm"
+        else:
+            cleared = "still visible" if rt.detect_plan_dialog(after) else "cleared"
+            evidence += f"; plan dialog {cleared}"
+    return outcome, [evidence]
 
 
 async def stop_agent(name: str) -> bool:

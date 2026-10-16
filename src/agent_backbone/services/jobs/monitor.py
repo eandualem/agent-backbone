@@ -13,12 +13,13 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from agent_backbone.services.agents import StateSnapshot, agent_state
+from agent_backbone.services.agents import StateSnapshot, agent_state, collect_usage
 from agent_backbone.services.github import QueueSnapshot
-from agent_backbone.services.jobs.copy_mode import handle_copy_mode_recovery
+from agent_backbone.services.jobs.context_note import note_context_size
 from agent_backbone.services.jobs.diagnostics import observe_job, observe_runtime
 from agent_backbone.services.jobs.escalation import (
     check_blocked,
+    check_permission_denials,
     check_permission_waiting,
     check_plan_waiting,
     handle_offline,
@@ -46,10 +47,11 @@ AgentStates = dict[str, StateSnapshot]
 async def read_states(config: BackboneConfig, active_sessions: set[str]) -> AgentStates:
     """One reconciled snapshot per configured agent whose session is up."""
     states: AgentStates = {}
-    for name in config.agents.names:
-        if name in active_sessions:
-            pane = await capture_pane(name)
-            states[name] = await agent_state(config, name, pane_content=pane)
+    for spec in config.agents:
+        # An inbox-only agent has no session: one with its name is not its own.
+        if spec.name in active_sessions and not spec.inbox_only:
+            pane = await capture_pane(spec.name)
+            states[spec.name] = await agent_state(config, spec.name, pane_content=pane)
     return states
 
 
@@ -100,7 +102,6 @@ async def monitor_agents(
         states = await read_states(config, active_sessions)
         await observe_runtime(db, config, states)
         await sync_states(db, states)
-
         if gh is not None:
             try:
                 await sync_dependencies(config, db, gh)
@@ -168,6 +169,19 @@ async def monitor_agents(
             await observe_job(db, source="agent-monitor", stage="blocked_notification")
 
         try:
+            await check_permission_denials(config)
+        except Exception as exc:
+            log.exception("Permission-denied notification failed (non-fatal)")
+            await observe_job(
+                db,
+                source="agent-monitor",
+                stage="denial_notification",
+                error_type=type(exc).__name__,
+            )
+        else:
+            await observe_job(db, source="agent-monitor", stage="denial_notification")
+
+        try:
             await check_permission_waiting(config, states)
         except Exception as exc:
             log.exception("Permission-waiting notification failed (non-fatal)")
@@ -179,19 +193,6 @@ async def monitor_agents(
             )
         else:
             await observe_job(db, source="agent-monitor", stage="permission_notification")
-
-        try:
-            await handle_copy_mode_recovery(config, active_sessions)
-        except Exception as exc:
-            log.exception("Copy-mode recovery failed (non-fatal)")
-            await observe_job(
-                db,
-                source="agent-monitor",
-                stage="copy_mode",
-                error_type=type(exc).__name__,
-            )
-        else:
-            await observe_job(db, source="agent-monitor", stage="copy_mode")
 
         if on_change is not None:
             try:
@@ -227,6 +228,35 @@ async def monitor_agents(
             )
         else:
             await observe_job(db, source="agent-monitor", stage="queue_drain")
+
+        # Usage is read after the drain: it can take a second, and queued work
+        # waits on nothing it measures. The context note reads what it records.
+        try:
+            usage_result = await collect_usage(config, db)
+        except Exception as exc:
+            log.exception("Usage collection failed (non-fatal)")
+            await observe_job(
+                db, source="agent-monitor", stage="usage_collection", error_type=type(exc).__name__
+            )
+        else:
+            for check in usage_result.get("checks", []):
+                await observe_job(db, source="agent-monitor", **check)
+            await observe_job(
+                db,
+                source="agent-monitor",
+                stage="usage_collection",
+                error_type="usage_collection_errors" if usage_result.get("errors") else None,
+            )
+
+        try:
+            await note_context_size(config, db, states)
+        except Exception as exc:
+            log.exception("Context-size note failed (non-fatal)")
+            await observe_job(
+                db, source="agent-monitor", stage="context_note", error_type=type(exc).__name__
+            )
+        else:
+            await observe_job(db, source="agent-monitor", stage="context_note")
 
         if gh is None:
             return {}

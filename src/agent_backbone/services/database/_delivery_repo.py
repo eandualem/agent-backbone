@@ -63,9 +63,31 @@ class DeliveryRepo(Repo):
         repo: str = "",
         preview: str = "",
         operation_id: str | None = None,
+        since: str | None = None,
     ) -> int | None:
-        """Reserve an issue delivery slot before sending to avoid duplicate sends."""
+        """Reserve an issue delivery slot before sending to avoid duplicate sends.
+
+        ``since`` is when the agent's current session started: a slot an earlier
+        session holds is superseded, since that session's delivery never reached
+        this one."""
         async with self._tx() as conn:
+            if since is not None:
+                await conn.execute(
+                    text(
+                        """UPDATE deliveries SET superseded_at = :now
+                           WHERE kind = 'issue' AND repo = :repo
+                             AND issue_number = :issue_number AND session_name = :session_name
+                             AND outcome IN ('attempting','delivered','retried')
+                             AND superseded_at IS NULL AND created_at < :since"""
+                    ),
+                    {
+                        "now": now_iso(),
+                        "repo": repo,
+                        "issue_number": issue_number,
+                        "session_name": session_name,
+                        "since": since,
+                    },
+                )
             result = await conn.execute(
                 text(
                     """INSERT INTO deliveries
@@ -77,6 +99,7 @@ class DeliveryRepo(Repo):
                        WHERE kind = 'issue'
                          AND issue_number IS NOT NULL
                          AND outcome IN ('attempting','delivered','retried')
+                         AND superseded_at IS NULL
                        DO NOTHING
                        RETURNING id"""
                 ),
@@ -112,6 +135,20 @@ class DeliveryRepo(Repo):
                 {"id": delivery_id, "outcome": outcome, "operation_id": operation_id},
             )
 
+    async def settle(self, delivery_id: int, outcome: str, *, expected: str) -> bool:
+        """Move a delivery from ``expected`` to ``outcome`` (a steer's
+        ``offered`` → ``handed_off`` | ``not_taken`` | ``cancelled``). False when
+        the row was not in the expected state."""
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(
+                    "UPDATE deliveries SET outcome = :outcome, settled_at = :at"
+                    " WHERE id = :id AND outcome = :expected"
+                ),
+                {"id": delivery_id, "outcome": outcome, "expected": expected, "at": now_iso()},
+            )
+            return result.rowcount > 0
+
     async def reclaim_stale(
         self,
         max_age_minutes: int = 5,
@@ -137,11 +174,15 @@ class DeliveryRepo(Repo):
         *,
         repo: str | None = None,
         kind: str | None = None,
+        operation_id: str | None = None,
     ) -> list[dict]:
         """Query delivery records with optional filters."""
         async with self._tx() as conn:
             conditions: list[str] = []
             params: dict[str, object] = {}
+            if operation_id is not None:
+                conditions.append("operation_id = :operation_id")
+                params["operation_id"] = operation_id
             if issue_number is not None:
                 conditions.append("issue_number = :issue_number")
                 params["issue_number"] = issue_number

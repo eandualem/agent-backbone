@@ -4,8 +4,8 @@ agent-backbone is a **control plane for terminal AI agents** on one machine.
 You run Claude Code, Codex, Gemini CLI, OpenCode, Deep Code or Aider in tmux sessions;
 the backbone starts those sessions, knows whether each one is ready to
 receive input, delivers text to them safely, and connects them to GitHub
-Issues, to people through **integrations** (Telegram today), and to each
-other.
+Issues, to inbound **sources** they subscribe to (Gmail today), to people
+through **integrations** (Telegram today), and to each other.
 
 It is *not* an agent framework (it does not call models), not a workflow
 engine (there are no DAGs), and not a dashboard (it feeds one).
@@ -34,6 +34,12 @@ app: ready — claude repo acme/app
   (`backbone agent watch orch acme/app acme/web`). Inside its own session
   an agent can subscribe itself: `backbone agent watch acme/app` (the name
   defaults to `$BACKBONE_AGENT`).
+- **Subscriptions** — inbound events from a [source](sources.md) the agent
+  wants (`backbone agent subscribe desk gmail "from:alerts@example.com" --priority high`):
+  a source, a filter in that source's own query language, and a priority
+  (`normal` waits for the prompt, batched; `high` reaches a working Claude Code,
+  Codex or OpenCode agent on its next tool call through hook context, or on Codex when a long-running
+  command exits; other runtimes first when ready).
 
 There are no roles, groups or hierarchies. An orchestrator is an ordinary
 agent whose directory is its own repository and which watches the others.
@@ -91,18 +97,28 @@ Derived from the state plus the terminal, right before anything is pasted:
 
 | Condition | Meaning | Deliverable? |
 |---|---|---|
-| `offline` | no session | no — queued |
+| `offline` | no session, or an [inbox-only](configuration.md#agents) agent | no — queued (an inbox-only agent reads its messages with `backbone inbox`) |
 | `waiting_for_human` | agent is asking a person something | no — queued |
 | `agent_working` | starting, busy, or blocked on a usage limit or provider failure | no — queued (never bypassed) |
+| `human_reading` | someone is selecting text or reading tmux scrollback | no — queued, even with `priority` |
+| `unattended_copy_mode` | the pane is in tmux copy mode and no client is viewing it | no — queued, even with `priority`, until someone attaches and presses `q` |
 | `human_typing` | someone typed text into the prompt | no — queued, unless `priority` |
-| `settling` | hook reported idle less than `timing.grace_period_seconds` ago | not yet, unless `priority` |
+| `settling` | hook reported idle less than `timing.grace_period_seconds` ago, or a fresh session's brief (Codex, aider) is not delivered yet | not yet, unless `priority`; the brief goes first even then |
 | `ready` | idle, empty prompt | **yes** |
 | `unknown` | no signal either way | yes, best effort |
 
-tmux **copy mode** (someone scrolled the pane) is not a condition: the
-backbone cancels it automatically before delivering and on every monitor
-tick. If the cancel fails, the session is reported as `human_typing`
-(a frozen pane swallows pastes) and the message is queued.
+tmux **copy mode** preserves scrollback and text selection. Backbone observes it
+without cancelling it: otherwise-ready agents report `human_reading`, and
+messages wait until the human leaves copy mode (normally `q` or Escape).
+Monitoring and priority delivery never clear a selection. The agent's own state
+still takes precedence: a busy agent remains `agent_working` while you read.
+
+tmux keeps a pane in copy mode after its last client detaches. When no client
+is viewing the pane's window, the agent reports `unattended_copy_mode` instead:
+messages still wait, and `backbone agent inspect` and `backbone doctor` say to
+attach to the session and press `q`. A sender whose message expires in the
+queue is told the condition that held it, so they can tell whether a resend
+would meet it too.
 
 ## Message
 
@@ -114,24 +130,34 @@ knows where it came from:
 [via:backbone from:elias] review PR 12 and summarise the risks
 [via:github issue:42] New issue targeting you: acme/app#42 [bug] "Fix flaky auth test" (from planner, blocking). Link: https://…
 [via:telegram from:alice] status?
+[via:gmail] New gmail messages matching your subscriptions. …
+- 199a4f2c3d1e0b7a · from «Alerts <alerts@example.com>» · subject «Outage: build queue stalled» · 2026-09-17 14:02Z · https://mail.google.com/mail/#all/199a4f2c3d1e0b7a
 ```
 
 ## Delivery
 
 One attempt to hand a message to a session, recorded with its **kind**
 (`issue`, `comment`, `review`, `pull_request`, `direct_message`, `watch`,
-`escalation`, `plan_response`), repository, outcome and a preview — direct
-messages included. A `plan_response` (an answer typed into a plan prompt)
-is the one kind that is **never queued**: it goes in only while the agent
-is waiting for a plan decision, and is refused as `not_waiting` otherwise. What cannot be delivered now is **queued** in the database and
+`escalation`, `subscription`, `steer`), repository, outcome and a preview — direct
+messages included. A `steer` (`backbone tell --steer`) is never queued or
+pasted: it is offered to a working agent's hook and its record moves from
+`offered` to `handed_off`, `not_taken` or `cancelled`. What cannot be delivered now is **queued** in the database and
 delivered by the background jobs — a message that waited at least two
 minutes is delivered with `(queued N min ago)` (`N h` from two hours) after
 its envelope, so a review or comment drained after a long busy stretch
 does not read as current; queued messages expire after
-`timing.queue_expiry_minutes` (30), except active swarm coordination and inbox holds.
+`timing.queue_expiry_minutes` (30), except active swarm coordination, inbox holds,
+direct messages to an inbox-only agent, an agent's startup brief and `subscription` batches (facts, not conversation: they grow while the agent
+is busy and are retired only when delivered). Nothing expires for an agent whose
+queue is held by an unconfirmed (`uncertain`) delivery: that wait measures the
+hold, not whether the message is still wanted. Once the hold is acknowledged,
+the waiting messages get a full expiry window from that moment.
 An expired message leaves a
 delivery with outcome `expired` (kind, source and preview kept), so
-`agent inspect` shows what never arrived. The sender is told whether a row
+`agent inspect` shows what never arrived, and the recipient and each registered
+agent that sent one get a `[via:backbone]` notice listing them (source
+`queue-expiry`; notices never expire). A sender without a Backbone inbox, such as
+GitHub or an external caller, keeps only that record. The sender is told whether a row
 exists (`stored`), whether the same message from them was already
 waiting (`already_queued`), or whether storing it failed (`failed`) —
 "queued" is never claimed for a message that is not in the database.
@@ -145,7 +171,8 @@ leased row instead of inserting an age-stamped copy.
 
 ## Event
 
-Every inbound GitHub event (webhook or poll) is stored before it is
+Every inbound GitHub event (webhook or poll) and every subscribed source
+item (a matched Gmail message) is stored before it is
 routed, with what the backbone did about it. That table is the activity
 feed (`GET /api/events`, `backbone status` shows the last event per
 repository) and the dedup record used by overlapping polls. A separate durable
@@ -165,6 +192,17 @@ Report age and missing reports are explicit. This authored account is separate
 from the runtime's measured state and from operational diagnostics. See
 [Agent progress reports](reports.md) for publishing tools and enforced length limits.
 
+## Skill
+
+A directory with a `SKILL.md` that an agent's CLI loads on demand. The
+**store** (`skills.store`, `~/skills`) holds the one shared copy of each;
+a skill's frontmatter names the **tags** of the agents that receive it
+(`all` for everyone, `agent:NAME` for one). At launch, and for a running
+agent whenever a skill or its tags change, the backbone links the selected
+skills into the directory the runtime reads. It never changes a skill the
+repository owns, and links one kept where only another CLI reads it, so the
+repository's skills reach whichever CLI runs the agent. See [Skills](skills.md).
+
 ## Settings
 
 Everything tunable is a key in the database with a built-in default:
@@ -178,11 +216,18 @@ Background loops inside the backbone process:
 
 | Job | Every | Does |
 |---|---|---|
-| `agent-monitor` | `timing.monitor_interval_seconds` (60 s) | refresh agents/settings, read every agent's state once and mirror it to the database, stall and dead-session reports, plan-waiting alerts, copy-mode clear, queue drain, next pending issue to idle agents, Socket.IO snapshot |
+| `agent-monitor` | `timing.monitor_interval_seconds` (60 s) | refresh agents/settings, read every agent's state once and mirror it to the database, stall and dead-session reports, plan-waiting alerts, queue drain, next pending issue to idle agents, Socket.IO snapshot |
 | `delivery-retry` | `timing.retry_interval_seconds` (5 min) | retry failed issue deliveries, drain the queue |
+| `steer-settle` | 15 s | record what became of each steer offer: `handed_off`, `not_taken` when the turn ended first or after 300 s, `cancelled` when the session was replaced |
+| `agent-transitions` | 5 s | explicit one-time stop/restart requests (`agent restart`): stop the session, start the replacement when its wait is over, hand it the continuation message |
 | `github-poll` | `github.poll_interval_seconds` (60 s) | poll intake only |
-| `github-backfill` | once at startup | webhook intake only: catch up on what happened while the backbone was down |
+| `sources-poll` | `sources.poll_interval_seconds` (60 s) | only with a configured [source](sources.md): search each source for new items matching any subscription filter and deliver them |
+| `github-backfill` | starts at startup | webhook intake only: catch up on downtime; `delivery-retry` retries unfinished repositories until catch-up succeeds |
 | `prune` | 6 h | delete old deliveries, events and completed queue bodies; rotate the hook action log |
+| `integrations-sync` | 5 min | re-provision each integration's per-agent surfaces, such as Telegram topics |
+| `report-notifications` | 30 s | post new [progress reports](reports.md) to the integrations |
+| `report-audio` | 30 s | send report voice messages, when `telegram.report_audio` is on |
+| `upgrade-watch` | 60 s | restart the backbone itself onto new code when the installed version changes, or the checkout moves on the branch it started on (not when it switches branches), with no active upgrade hold and nothing being routed; off with `backbone.restart_on_upgrade` |
 
 ## What the backbone does not decide
 
@@ -191,7 +236,9 @@ Background loops inside the backbone process:
   expected to do](github.md#what-an-agent-is-expected-to-do) is the whole
   protocol.
 - **Who may talk to whom.** Any agent can message any agent through the API.
-- **Whether to restart a dead agent.** It reports; it never restarts.
+- **Whether to restart a dead agent.** It reports; it never restarts on its
+  own. The one restart it performs is the explicit `agent restart` an agent
+  or a person asked for.
 
 Runtime registration is declared in `services/runtimes/catalog.json`: IDs,
 detection order and hook files feed configuration, the runtime registry and

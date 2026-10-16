@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -10,12 +11,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent_backbone.config import AgentsConfig, AgentSpec
-from agent_backbone.models import EventType
+from agent_backbone.models import EventType, IssueEvent
 from agent_backbone.services.jobs.github_poll import (
     GitHubPoller,
     comment_event_from_api,
     issue_event_from_api,
 )
+from agent_backbone.services.routing import dispatch_event
 from tests.conftest import TEST_REPO, make_agents, make_config
 
 
@@ -28,6 +30,21 @@ def _issue(number: int, *, state="open", created="2026-08-31T10:00:00Z", updated
         "updated_at": updated or created,
         "html_url": f"https://github.com/{TEST_REPO}/issues/{number}",
         "labels": [{"name": name} for name in labels],
+    }
+
+
+def _listed_pull(number: int, *, state="open", created="2026-08-31T10:00:00Z", updated=None):
+    """A pull request as the issues listing returns it."""
+    item = _issue(number, state=state, created=created, updated=updated)
+    return {**item, "pull_request": {"url": "x"}}
+
+
+def _pull(number: int):
+    """A pull request as the pulls endpoint (and the webhook) returns it."""
+    return {
+        **_issue(number),
+        "body": "Closes #1",
+        "head": {"ref": "fix/thing", "repo": {"full_name": TEST_REPO}},
     }
 
 
@@ -120,6 +137,30 @@ def config(tmp_path):
 
 
 class TestGitHubPoller:
+    @pytest.mark.parametrize("retry_repo", [TEST_REPO, TEST_REPO.upper()])
+    async def test_backfill_retries_an_incomplete_batch_then_stops(
+        self, config, db, dispatch, frozen_now, retry_repo
+    ):
+        gh = AsyncMock()
+        gh.list_issues_since.return_value = []
+        gh.list_comments_since.return_value = [_comment(9, 7, "hello")]
+        gh.get_issue_raw.side_effect = [TimeoutError("temporary hydration error"), _issue(7)]
+        poller = GitHubPoller(lambda: config, db, gh)
+        with pytest.raises(RuntimeError, match="backfill incomplete"):
+            await poller.backfill()
+        boundary = await db.events.poll_cursor(TEST_REPO)
+        config = replace(
+            config,
+            agents=AgentsConfig(specs={"ike": replace(config.agents.get("ike"), repo=retry_repo)}),
+        )
+        frozen_now.now.return_value = datetime(2026, 9, 5, tzinfo=UTC)
+        await poller.backfill()
+        await poller.backfill()
+        assert gh.list_comments_since.await_count == 2
+        # An unfinished batch retains its startup spelling and persisted window.
+        assert gh.list_comments_since.await_args_list[1].args == (TEST_REPO, boundary)
+        dispatch.issue_dispatcher.assert_awaited_once()
+
     async def test_dispatches_new_issue_and_comment_once(self, config, db, dispatch, frozen_now):
         gh = AsyncMock()
         gh.list_issues_since = AsyncMock(return_value=[_issue(1, labels=["for:ike"])])
@@ -185,6 +226,81 @@ class TestGitHubPoller:
 
         assert summary == {"deduped": 1}
         assert dispatch.issue_dispatcher.await_count == 1
+
+    async def test_pull_request_opened_in_window_is_announced(self, config, db, dispatch):
+        gh = AsyncMock()
+        gh.list_issues_since = AsyncMock(
+            return_value=[
+                _listed_pull(5),
+                _listed_pull(6, created="2026-08-31T08:00:00Z", updated="2026-08-31T10:00:00Z"),
+                _listed_pull(7, state="closed"),
+            ]
+        )
+        gh.list_comments_since = AsyncMock(return_value=[])
+        gh.get_pull_raw = AsyncMock(return_value=_pull(5))
+        poller = GitHubPoller(config, db, gh)
+        poller._since[TEST_REPO] = "2026-08-31T09:00:00Z"
+
+        assert await poller.run() == {"dispatch": 1}
+
+        gh.get_pull_raw.assert_awaited_once_with(5, TEST_REPO)
+        event = dispatch.issue_dispatcher.await_args.args[0]
+        assert event.event_type == EventType.PULL_REQUEST_OPENED
+        assert (event.issue.number, event.issue.head_ref) == (5, "fix/thing")
+
+    @pytest.mark.parametrize("webhook_first", [True, False])
+    async def test_webhook_and_poll_announce_a_pull_request_once(
+        self, config, db, dispatch, webhook_first
+    ):
+        gh = AsyncMock()
+        gh.list_issues_since = AsyncMock(return_value=[_listed_pull(5)])
+        gh.list_comments_since = AsyncMock(return_value=[])
+        gh.get_pull_raw = AsyncMock(return_value=_pull(5))
+        poller = GitHubPoller(config, db, gh)
+        poller._since[TEST_REPO] = "2026-08-31T09:00:00Z"
+
+        def webhook(action, guid):
+            payload = {"pull_request": _pull(5), "repository": {"full_name": TEST_REPO.upper()}}
+            return IssueEvent.from_webhook("pull_request", action, payload, guid)
+
+        if webhook_first:
+            await dispatch_event(webhook("opened", "guid-1"), config, db, gh)
+            await poller.run()
+        else:
+            await poller.run()
+            await dispatch_event(webhook("opened", "guid-1"), config, db, gh)
+        assert dispatch.issue_dispatcher.await_count == 1
+        # A reopen is a new event, as before.
+        await dispatch_event(webhook("reopened", "guid-2"), config, db, gh)
+        assert dispatch.issue_dispatcher.await_count == 2
+
+    async def test_a_late_replay_still_recognises_the_opener(self, config, db):
+        # ike ran `gh pr create` when the pull request was created, weeks before this replay.
+        entry = {
+            "ts": datetime(2026, 8, 31, 10, tzinfo=UTC).timestamp(),
+            "session": "ike",
+            "action": "pull_request",
+            "phase": "succeeded",
+            "repo": TEST_REPO,
+            "head_repo": TEST_REPO,
+            "branch": "fix/thing",
+        }
+        config.action_log_path.parent.mkdir(parents=True, exist_ok=True)
+        config.action_log_path.write_text(json.dumps(entry) + "\n")
+        gh = AsyncMock()
+        gh.list_issues_since = AsyncMock(return_value=[_listed_pull(5)])
+        gh.list_comments_since = AsyncMock(return_value=[])
+        gh.get_pull_raw = AsyncMock(return_value=_pull(5))
+        poller = GitHubPoller(config, db, gh)
+        poller._since[TEST_REPO] = "2026-08-31T09:00:00Z"
+
+        with patch(
+            "agent_backbone.services.routing._router.safe_deliver", new_callable=AsyncMock
+        ) as deliver:
+            await poller.run()
+
+        deliver.assert_not_called()  # the opener is not told about its own pull request
+        assert await db.acks.exists(1, "ike", repo=TEST_REPO)  # "Closes #1"
 
     async def test_initial_boundary_is_independent_of_receipt_time(self, config, db, dispatch):
         await db.events.record(

@@ -3,10 +3,11 @@
 Used two ways:
 
 * **poll intake** (no webhook secret): every ``github.poll_interval_seconds``
-  ask GitHub for issues and comments updated since the last run in every
-  repository an agent owns or watches.
-* **backfill** (webhook intake): run once at startup to catch what happened
-  while the backbone was down.
+  ask GitHub for issues, pull requests and comments updated since the last run
+  in every repository an agent owns or watches. Of pull requests, only one
+  opened inside the window is an event.
+* **backfill** (webhook intake): catch what happened while the backbone was
+  down; the existing retry job retries unfinished startup repositories.
 
 Both produce the same ``IssueEvent`` objects the webhook produces and hand
 them to ``dispatch_event``. Delivery ids are synthesised from the item id and
@@ -20,12 +21,13 @@ successful batch, with overlap for late arrivals in the same timestamp second.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from agent_backbone.models import IssueEvent
 from agent_backbone.services.github import review_started_event, review_status_event
+from agent_backbone.services.jobs._cursor import OVERLAP, iso, parse, saved_cursor
 from agent_backbone.services.jobs.diagnostics import observe_job
 from agent_backbone.services.routing import IssueClosedHook, dispatch_event
 
@@ -35,19 +37,6 @@ if TYPE_CHECKING:
     from agent_backbone.services.github import GitHubClient
 
 log = logging.getLogger(__name__)
-
-_OVERLAP = timedelta(minutes=2)
-
-
-def _iso(dt: datetime) -> str:
-    return dt.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _parse(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        raise ValueError("poll timestamps must include a timezone")
-    return parsed.astimezone(UTC)
 
 
 def issue_event_from_api(
@@ -90,6 +79,14 @@ def comment_event_from_api(
     return IssueEvent.from_webhook("issue_comment", "created", payload, delivery_id)
 
 
+def pull_opened_event(pull: dict[str, Any], repo_full_name: str) -> IssueEvent:
+    """The ``pull_request opened`` event the webhook would have sent."""
+    delivery_id = f"poll:pull:{repo_full_name}#{pull.get('number')}"
+    repository = {"full_name": repo_full_name}
+    payload = {"action": "opened", "pull_request": pull, "repository": repository}
+    return IssueEvent.from_webhook("pull_request", "opened", payload, delivery_id)
+
+
 def issue_number_from_url(url: str) -> int | None:
     try:
         return int(url.rstrip("/").rsplit("/", 1)[-1])
@@ -113,6 +110,7 @@ class GitHubPoller:
         self._gh = gh
         self._issue_closed_hooks = tuple(issue_closed_hooks)
         self._since: dict[str, str] = {}
+        self._backfill_pending: set[str] | None = None
 
     @property
     def _config(self) -> BackboneConfig:
@@ -121,21 +119,14 @@ class GitHubPoller:
     async def _since_for(self, repo: str) -> str:
         if repo in self._since:
             return self._since[repo]
-        saved = await self._db.events.poll_cursor(repo)
         now = datetime.now(UTC)
-        if saved is not None:
-            try:
-                boundary = _parse(saved)
-                if boundary > now:
-                    raise ValueError("poll cursor is in the future")
-                since = _iso(boundary)
-            except (TypeError, AttributeError, ValueError, OverflowError):
-                log.warning("Invalid poll cursor for %s; resetting to configured lookback", repo)
-            else:
-                self._since[repo] = since
-                return since
+        boundary = await saved_cursor(self._db, repo, now, reset="resetting to configured lookback")
+        if boundary is not None:
+            since = iso(boundary)
+            self._since[repo] = since
+            return since
         lookback = timedelta(hours=self._config.github.backfill_lookback_hours)
-        since = _iso(now - lookback)
+        since = iso(now - lookback)
         # Receipt times from partial dispatch are not a safe restart boundary.
         # Persist the initial window before any GitHub request or event write.
         await self._db.events.save_poll_cursor(repo, since)
@@ -144,11 +135,36 @@ class GitHubPoller:
 
     async def run(self) -> dict[str, int]:
         config = self._config
+        summary, _ = await self._run_repos(config, config.agents.repos)
+        return summary
+
+    async def backfill(self) -> dict[str, int]:
+        """Complete startup catch-up; later attempts visit only unfinished repos."""
+        config = self._config
+        if self._backfill_pending is None:
+            self._backfill_pending = set(config.agents.repos)
+        configured = {repo.casefold() for repo in config.agents.repos}
+        # Keep the startup spelling and replay cursor across case-only edits.
+        self._backfill_pending = {
+            repo for repo in self._backfill_pending if repo.casefold() in configured
+        }
+        summary, incomplete = await self._run_repos(config, sorted(self._backfill_pending))
+        self._backfill_pending = incomplete
+        if incomplete:
+            raise RuntimeError(f"GitHub startup backfill incomplete for {len(incomplete)} repos")
+        return summary
+
+    async def _run_repos(
+        self, config: BackboneConfig, repos: Collection[str]
+    ) -> tuple[dict[str, int], set[str]]:
         summary: dict[str, int] = {}
-        for repo in config.agents.repos:
+        incomplete: set[str] = set()
+        for repo in repos:
             try:
-                await self._poll_repo(repo, config, summary)
+                if not await self._poll_repo(repo, config, summary):
+                    incomplete.add(repo)
             except Exception as exc:
+                incomplete.add(repo)
                 # A read, fetch, conversion or cursor save failure must not
                 # move this boundary or prevent another repository's poll.
                 log.exception("GitHub poll failed for %s (non-fatal)", repo)
@@ -163,9 +179,9 @@ class GitHubPoller:
                 await observe_job(self._db, source="github-poll", stage="repository", repo=repo)
         if summary:
             log.info("GitHub poll: %s", summary)
-        return summary
+        return summary, incomplete
 
-    async def _poll_repo(self, repo: str, config: BackboneConfig, summary: dict[str, int]) -> None:
+    async def _poll_repo(self, repo: str, config: BackboneConfig, summary: dict[str, int]) -> bool:
         since = await self._since_for(repo)
         poll_started = datetime.now(UTC)
         newest = since
@@ -186,17 +202,31 @@ class GitHubPoller:
                     due = True
                 else:
                     due = (
-                        poll_started - _parse(saved)
+                        poll_started - parse(saved)
                     ).total_seconds() >= config.github.review_poll_interval_seconds
                 if due:
                     events.extend(
-                        await self._review_events(repo, _iso(_parse(saved) - _OVERLAP), config)
+                        await self._review_events(repo, iso(parse(saved) - OVERLAP), config)
                     )
-                    review_boundary = _iso(poll_started)
+                    review_boundary = iso(poll_started)
             except Exception:
                 log.exception("Review poll failed for %s (issues/comments continue)", repo)
                 had_errors = True
         for item in issues:
+            number = item.get("number")
+            if (
+                "pull_request" in item
+                and item.get("state") == "open"
+                and item.get("created_at", "") >= since
+            ):
+                try:
+                    # The issues listing lacks the head branch that identifies the opener.
+                    pull = await self._gh.get_pull_raw(number, repo)
+                except Exception:
+                    log.warning("Could not fetch pull request %s#%s (retried)", repo, number)
+                    had_errors = True
+                else:
+                    events.append(pull_opened_event(pull, repo))
             event = issue_event_from_api(item, repo, since)
             if event is not None:
                 events.append(event)
@@ -246,8 +276,8 @@ class GitHubPoller:
                 await self._db.events.save_poll_cursor(review_cursor_key, review_boundary)
             boundary = max(
                 since,
-                _iso(poll_started - _OVERLAP),
-                _iso(_parse(newest) - _OVERLAP),
+                iso(poll_started - OVERLAP),
+                iso(parse(newest) - OVERLAP),
             )
             if boundary > since:
                 # Commit first: a failed write leaves both caches at the
@@ -261,6 +291,7 @@ class GitHubPoller:
             repo=repo,
             error_type="IncompleteBatch" if had_errors else None,
         )
+        return not had_errors
 
     async def _review_events(self, repo, since, config) -> list[IssueEvent]:
         events = []

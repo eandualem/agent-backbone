@@ -23,9 +23,11 @@ class EnrichedAgent(BaseModel):
     runtime: str | None = None
     """Runtime the session was launched with (live), else the configured runtime."""
     model: str | None = None
+    """The model observed by the runtime's hook while the session is up, else the saved one."""
     model_source: str = Field(
         default="configured",
-        description="The saved model selection; the running model is unverified.",
+        description="``observed`` (the runtime's hook saw it answer), ``configured`` "
+        "(saved selection, unverified) or ``runtime_default`` (nothing saved or seen).",
     )
     dir: str = ""
     repo: str = ""
@@ -50,6 +52,22 @@ class EnrichedAgent(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+class SubscriptionView(BaseModel):
+    """One subscription: a source, its filter and the priority of matches."""
+
+    id: int
+    source: str
+    filter: str
+    priority: str = "normal"
+
+
+def subscription_views(spec: AgentSpec | None) -> list[SubscriptionView]:
+    return [
+        SubscriptionView(id=sub.id, source=sub.source, filter=sub.filter, priority=sub.priority)
+        for sub in (spec.subscriptions if spec else ())
+    ]
+
+
 class AgentConfigView(BaseModel):
     """Non-secret view of a configured agent."""
 
@@ -59,10 +77,12 @@ class AgentConfigView(BaseModel):
     model: str | None = None
     repo: str = ""
     watches: list[str] = Field(default_factory=list)
+    subscriptions: list[SubscriptionView] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     description: str = ""
     always_on: bool = False
     unattended: bool = False
+    inbox_only: bool = False
 
     @classmethod
     def from_spec(cls, spec: AgentSpec) -> AgentConfigView:
@@ -73,10 +93,12 @@ class AgentConfigView(BaseModel):
             model=spec.model,
             repo=spec.repo,
             watches=list(spec.watches),
+            subscriptions=subscription_views(spec),
             tags=list(spec.tags),
             description=spec.description,
             always_on=spec.always_on,
             unattended=spec.unattended,
+            inbox_only=spec.inbox_only,
         )
 
 
@@ -87,9 +109,14 @@ async def build_enriched_agent(
     tmux_info: dict | None = None,
 ) -> EnrichedAgent:
     """Build an EnrichedAgent for a session (configured agent or ad-hoc session)."""
-    online = session in active_sessions
     spec = config.agents.get(session)
-    if online:
+    inbox_only = spec is not None and spec.inbox_only
+    if inbox_only:
+        # It has no session: a tmux session with its name, or a hook file
+        # left by one it had before, is not its own (``agent_state``).
+        active_sessions, tmux_info = set(), None
+    online = session in active_sessions
+    if online or inbox_only:
         snapshot = await agent_state(config, session)
     else:
         # The shared tmux listing already proved the session absent. Reconcile
@@ -123,12 +150,17 @@ async def build_enriched_agent(
         with contextlib.suppress(Exception):
             runtime = await query_environment_var(session, RUNTIME_ENV_KEY) or runtime
 
+    observed = snapshot.model if online else None
+    configured_model = spec.model if spec else None
     return EnrichedAgent(
         name=session,
         session=session,
         configured=spec is not None,
         runtime=runtime,
-        model=spec.model if spec else None,
+        model=observed or configured_model,
+        model_source=(
+            "observed" if observed else "configured" if configured_model else "runtime_default"
+        ),
         dir=str(spec.path) if spec else "",
         repo=spec.repo if spec else "",
         tags=list(spec.tags) if spec else [],
@@ -164,7 +196,19 @@ def listable_sessions(config: BackboneConfig, active_sessions: set[str]) -> list
 async def build_session_snapshot(config: BackboneConfig) -> list[EnrichedAgent]:
     """The full enriched snapshot of every listable session, uncached."""
     rich_sessions = await list_sessions_rich()
-    tmux_lookup = {session["name"]: session for session in rich_sessions}
+    # Sessions in one tmux group (``new-session -t leo``, as terminal viewers
+    # create) share their windows: one agent, not several. Keep the configured
+    # members, otherwise the session named after the group, otherwise the oldest.
+    groups: dict[str, list[dict]] = {}
+    for session in rich_sessions:
+        groups.setdefault(session.get("group") or session["name"], []).append(session)
+    tmux_lookup: dict[str, dict] = {}
+    for group, members in groups.items():
+        kept = [m for m in members if m["name"] in config.agents] or [
+            next((m for m in members if m["name"] == group), None)
+            or min(members, key=lambda m: m.get("created", 0))
+        ]
+        tmux_lookup.update((m["name"], m) for m in kept)
     active_sessions = set(tmux_lookup.keys())
     coros = [
         build_enriched_agent(session, config, active_sessions, tmux_lookup.get(session))

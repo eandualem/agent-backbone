@@ -4,20 +4,25 @@ One object per runtime holds it all: how to recognise the CLI in a pane
 (prompt, busy marker, permission dialog), how to paste into it, how to
 answer its permission prompt, how to launch it (binary, model, resume,
 brief injection, trust dialog, state hooks). Adding a runtime is one new
-module in this package that subclasses ``Runtime`` and registers itself in
-``__init__``.
+module in this package that subclasses ``Runtime`` and exports ``RUNTIME``,
+an entry in ``catalog.json`` (which ``__init__`` loads), and a cell in every
+row of the capability contract (``capabilities.py``).
 """
 
 from __future__ import annotations
 
 import asyncio
+import codecs
 import hashlib
 import json
 import logging
 import re
 import shutil
+import subprocess
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal
 
 from agent_backbone.hooks import install as hooks
@@ -30,6 +35,7 @@ from agent_backbone.services.runtimes._pane import (
     prompt_tail_line_pairs,
     runtime_analysis_text,
     sanitize_pane_content,
+    sgr_attributes,
 )
 from agent_backbone.services.terminal import (
     capture_pane,
@@ -48,6 +54,9 @@ _FALLBACK_DIRS = (
     Path.home() / ".local" / "bin",
     Path.home() / ".npm-global" / "bin",
 )
+
+# A version as a word of its own: ``v2.1.284`` is 2.1.284, never 1.284.
+_VERSION = re.compile(r"(?<![\w.])v?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?)(?![\w.-])")
 
 BriefMode = Literal["system_prompt", "initial_prompt", "message", "none"]
 
@@ -75,34 +84,28 @@ class RuntimeDiagnostic:
         return hashlib.sha256(encoded.encode()).hexdigest()
 
 
-def _error_foreground(raw: str) -> bool:
-    """Whether visible text has a red foreground (ANSI, palette or true color)."""
+def _error_foreground(raw: str, glyphs: str = "") -> bool:
+    """Whether visible text, or one of ``glyphs``, has a red foreground (ANSI,
+    palette or true color)."""
     red = False
     for part in re.split(r"(\x1b\[[0-9;]*m)", raw):
         if not part.startswith("\x1b["):
-            if red and any(ch.isalpha() for ch in part):
+            if red and any(ch.isalpha() or ch in glyphs for ch in part):
                 return True
             continue
-        codes = [int(value or 0) for value in part[2:-1].split(";")]
-        i = 0
-        while i < len(codes):
-            code = codes[i]
+        for attribute in sgr_attributes(part[2:-1]):
+            code = attribute[0]
             if code in (0, 39) or 30 <= code <= 37 or 90 <= code <= 97:
                 red = code in (31, 91)
-            elif code in (38, 48) and codes[i + 1 : i + 2] == [2] and i + 4 < len(codes):
-                r, g, b = codes[i + 2 : i + 5]
-                if code == 38:
-                    red = r > 100 and r > g * 1.3 and r > b * 1.3
-                i += 4
-            elif code in (38, 48) and codes[i + 1 : i + 2] == [5] and i + 2 < len(codes):
-                color = codes[i + 2]
-                if code == 38:
-                    cube = color - 16
-                    red = color in (1, 9) or (
-                        16 <= color <= 231 and cube // 36 > max(cube // 6 % 6, cube % 6)
-                    )
-                i += 2
-            i += 1
+            elif code == 38 and len(attribute) == 5 and attribute[1] == 2:
+                r, g, b = attribute[2:]
+                red = r > 100 and r > g * 1.3 and r > b * 1.3
+            elif code == 38 and len(attribute) == 3 and attribute[1] == 5:
+                color = attribute[2]
+                cube = color - 16
+                red = color in (1, 9) or (
+                    16 <= color <= 231 and cube // 36 > max(cube // 6 % 6, cube % 6)
+                )
     return False
 
 
@@ -128,6 +131,47 @@ def read_brief(brief_file: Path | str) -> str | None:
     return text or None
 
 
+def has_text(path: Path) -> bool:
+    """Whether ``path`` is a file with more than whitespace (Unicode, and a byte
+    order mark, as the CLIs trim it) in it, read in chunks up to the first that
+    has some."""
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    try:
+        if not path.is_file():
+            return False
+        with path.open("rb") as handle:
+            while chunk := handle.read(64 * 1024):
+                if decoder.decode(chunk).strip().strip("\ufeff"):
+                    return True
+    except OSError:
+        return False
+    return bool(decoder.decode(b"", final=True).strip())
+
+
+def git_root(directory: Path) -> Path | None:
+    """The nearest directory, ``directory`` itself included, with a ``.git``."""
+    return next((d for d in (directory, *directory.parents) if (d / ".git").exists()), None)
+
+
+def main_checkout(root: Path) -> Path | None:
+    """The main checkout of a git worktree at ``root`` (its ``.git`` is a file
+    naming the worktree's git directory, whose ``commondir`` leads back)."""
+    try:
+        line = (root / ".git").read_text().strip()
+        if not line.startswith("gitdir:"):
+            return None
+        gitdir = root / line.removeprefix("gitdir:").strip()
+        common = gitdir / (gitdir / "commondir").read_text().strip()
+    except (OSError, ValueError):
+        return None
+    return common.resolve().parent
+
+
+def agent_home(env: dict[str, str]) -> Path:
+    """The home directory the agent's CLI sees: its own ``HOME``, else ours."""
+    return Path(env["HOME"]).expanduser() if env.get("HOME") else Path.home()
+
+
 def split_model_effort(spec: str | None) -> tuple[str | None, str | None]:
     """Split a ``model[:effort]`` spec into ``(model, effort)``.
 
@@ -150,6 +194,31 @@ class SubmissionUnconfirmed(RuntimeError):
     """Text may already belong to the runtime; never blindly paste it again."""
 
 
+@dataclass(frozen=True)
+class TranscriptEntry:
+    """One user-facing message of the agent, complete, from its runtime's own record."""
+
+    time: str
+    """``HH:MM:SS`` (UTC) when the record carries a timestamp, else empty."""
+    role: str
+    """``assistant`` — the agent speaking to the person (progress, commentary, replies)."""
+    text: str
+    """The whole message text, never shortened."""
+    start: int = 0
+    """Byte offset where the record begins in the transcript file (the
+    record's own position when the runtime keeps a database instead)."""
+    end: int = 0
+    """Offset just after the record (the cursor to continue from)."""
+
+
+def transcript_clock(timestamp: object) -> str:
+    """``HH:MM:SS`` out of an ISO 8601 timestamp, or empty."""
+    if not isinstance(timestamp, str) or "T" not in timestamp:
+        return ""
+    clock = timestamp.split("T", 1)[1]
+    return clock[:8] if len(clock) >= 8 and clock[2] == ":" else ""
+
+
 class Runtime:
     """Behavioural contract for one interactive CLI. Subclasses set the data."""
 
@@ -163,6 +232,17 @@ class Runtime:
     """How the agent brief reaches the runtime at launch: appended to the
     system prompt, passed as the first (initial) prompt, delivered as the
     first message once the agent is at its prompt, or not at all."""
+    brief_refresh: Literal["hook_context", "none"] = "none"
+    """How a resumed session gets its current brief (it keeps the one it
+    started with): handed to its ``SessionStart`` hook as context, which a
+    peer's message cannot imitate, or not at all (a gap: start the agent
+    fresh to apply a changed brief). Never as a chat message (#294)."""
+    default_env: Mapping[str, str] = MappingProxyType({})
+    """Launch environment the agent's own ``env`` can override (an opt-in)."""
+    declared_capabilities: frozenset[str] = frozenset()
+    """Contract rows (``capabilities.py``) this CLI provides by itself, where
+    no other adapter attribute shows it (loading ``AGENTS.md``, declining a
+    forged brief): the registry test holds the contract to these."""
     models: tuple[str, ...] = ()
     """Model ids known to work with ``--model`` (aliases or ids seen live).
     Examples for `backbone runtimes`, not an exhaustive list — the CLI's own
@@ -174,6 +254,13 @@ class Runtime:
     silently dropped."""
     model_tags: bool = False
     """Model IDs use literal colon tags, so ``:suffix`` is not an effort setting."""
+    skill_dirs: tuple[str, ...] = ()
+    """Project-relative directories this CLI reads skills from, measured live
+    (``docs/skills.md``). Empty: the backbone materialises no skills for it."""
+    skill_read_dirs: tuple[str, ...] = ()
+    """Every project-relative directory this CLI loads skills from, measured
+    live; empty means ``skill_dirs`` alone. A repository skill in a directory
+    another CLI reads is linked into ``skill_dirs`` for this one."""
     unattended_args: tuple[str, ...] | None = None
     """The CLI's own switch that stops it asking a person before acting — the
     launch arguments for an ``unattended`` agent, as the CLI spells them
@@ -187,12 +274,21 @@ class Runtime:
     a sandbox, ``unattended`` means free inside a wall; without one it means
     free on the machine — which is why a swarm only makes sandboxed members
     unattended by default."""
+    sandbox_commit_block: str = ""
+    """Why ``git add`` and ``git commit`` fail inside this runtime's sandbox on
+    this machine; empty when they work. An unattended member cannot ask to
+    commit outside it, so ``swarm create`` refuses one (#437)."""
     mouse_scroll: bool = False
     """Enable tmux mouse handling for this runtime's session so wheel events
     scroll terminal history. False leaves the user's tmux setting alone."""
     auto_review_args: tuple[str, ...] = ()
     """Opt into the runtime's permission reviewer while retaining its sandbox.
     Empty means no support; unattended mode takes precedence."""
+    refusal_check: str = ""
+    """What refuses an action without a dialog, as the refusal alert names it
+    ("Claude's auto-mode safety check"). Empty: no such refusal is reported."""
+    refusal_allow: str = ""
+    """The command in the session that allows a refused action (``/permissions``)."""
 
     # --- pane recognition -------------------------------------------------
     prompt_prefixes: tuple[str, ...] = ()
@@ -207,6 +303,17 @@ class Runtime:
     """Anchored error-banner patterns for provider capacity, quota or rate limits."""
     provider_error_prefixes: tuple[str, ...] = ()
     """Runtime error glyphs distinguish banners from ordinary response text."""
+    hooks_miss_failed_turns: bool = False
+    """Whether no hook reports a turn that failed at the provider, so a fresh
+    ``busy`` record outlives it. True: the terminal is read for a provider
+    failure while that record is fresh (#360)."""
+    interrupt_patterns: tuple[str, ...] = ()
+    """Anchored patterns for the line a runtime leaves when a person interrupts
+    its turn and no hook reports it. Empty: the hooks report interrupts, and
+    the terminal is not read for one while a hook state is fresh."""
+    notice_fragments: tuple[str, ...] = ()
+    """Fragments of the notices a runtime draws at the right edge above its
+    input box, which may follow an interrupt line (lowercase)."""
     prompt_markers: tuple[str, ...] = ()
     """Fragments shown when the runtime is asking the human a yes/no question."""
     approve_keys: tuple[str, ...] = ()
@@ -222,10 +329,15 @@ class Runtime:
     question and never approved: ``Enter`` there would choose, not permit."""
     plan_approve_keys: tuple[str, ...] = ()
     """tmux key names that accept the plan the runtime is presenting (Claude
-    Code: Shift+Tab). Empty: the runtime has no plan mode the backbone can
+    Code, Codex: "1"). Empty: the runtime has no plan mode the backbone can
     drive, and every plan action is refused as unsupported — nothing is typed."""
     plan_reject_keys: tuple[str, ...] = ()
-    """tmux key names that leave plan mode so feedback can follow as a message."""
+    """tmux key names that decline the plan so feedback can follow as a message
+    (the runtime stays in plan mode and revises the plan)."""
+    plan_markers: tuple[str, ...] = ()
+    """Fragments of the dialog in which the runtime asks to approve its plan,
+    all of them present (lowercase). Such a dialog is a plan decision, not a
+    question. Empty: the runtime's hooks alone report a plan (OpenCode's plugin)."""
 
     # --- state hooks ---------------------------------------------------------
     hook_script: str | None = None
@@ -234,12 +346,20 @@ class Runtime:
     source of state."""
     hook_events: hooks.Events = ()
     """``(event, matcher)`` pairs the hook listens to, in the CLI's own names."""
+    hook_context: bool = False
+    """The hook can add context to the model mid-turn (``hookSpecificOutput.
+    additionalContext``; OpenCode's plugin adds a user message to the running
+    turn): how a steer or a high-priority subscription batch reaches a working
+    agent without a paste. False: a batch waits for the prompt, a steer is refused."""
     hook_timeout: int = 10
     """Per-hook timeout in the unit the CLI uses (seconds for Claude Code and
     Codex, milliseconds for Gemini CLI)."""
 
     # --- paste behaviour ---------------------------------------------------
-    submission_checks: int = 2
+    # Observations after the one Enter, 0.1 s apart. Claude Code 2.1.280 was
+    # measured taking about 0.5 s to clear a submitted prompt; two checks
+    # reported submitted prompts as unconfirmed.
+    submission_checks: int = 10
     paste_settle_seconds: float = 0.2
 
     def __repr__(self) -> str:
@@ -251,14 +371,60 @@ class Runtime:
         """Whether the binary is installed (a shell always is)."""
         return self.binary is None or resolve_command(self.binary) is not None
 
+    def installed_version(self) -> str | None:
+        """The installed CLI's version, the first ``N.N[.N]`` that ``--version``
+        prints as a word of its own, with any prerelease suffix (``0.157.1-alpha.1``);
+        ``None`` when it cannot be read (#359). A CLI that prints it differently
+        overrides this in its own module."""
+        path = resolve_command(self.binary) if self.binary else None
+        if path is None:
+            return None
+        try:
+            done = subprocess.run(
+                [path, "--version"],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        match = _VERSION.search(done.stdout) if done.returncode == 0 else None
+        return match.group(1) if match else None
+
+    def user_instructions(self, env: dict[str, str], project: Path | None = None) -> list[Path]:
+        """The user-level instruction files this CLI adds to its sessions, as it
+        would pick them now, with content only (#274). ``env`` holds the agent's
+        own overrides of the process environment; ``project``, when given, is the
+        directory the session starts in."""
+        return []
+
+    def user_skill_dirs(self, env: dict[str, str]) -> list[Path]:
+        """The user-level skill directories this CLI loads in every project, as
+        it would pick them now (measured live; ``docs/skills.md``). ``env`` as
+        for ``user_instructions``; ``skills preview`` lists what they hold."""
+        return []
+
+    def reload_skills(self, state_dir: Path, session: str) -> str | None:
+        """Have a running session load its skills again after the backbone
+        changed its links; what it will do, for the evidence. ``None``: the CLI
+        loads a linked or changed skill mid-session by itself (measured live)."""
+        return None
+
+    def native_memory(self, env: dict[str, str], project: Path | None = None) -> str | None:
+        """The CLI's own memory across sessions, when the settings Backbone can
+        read leave it on for an agent (#292): what it is and how to turn it
+        off. ``None`` when it is off or the CLI keeps none. ``env`` and
+        ``project`` as for ``user_instructions``."""
+        return None
+
     def pre_trust(self, directory: Path | str) -> None:
         """Answer the runtime's folder-trust dialog ahead of launch, if it has one."""
 
-    def prepare_unattended(self) -> None:
-        """Record any consent needed for an explicitly unattended launch."""
-
-    def launch_env(self, model: str | None) -> dict[str, str]:
-        """Extra environment the session needs (runtimes that take the model from a variable)."""
+    def launch_env(self, model: str | None, effort: str | None = None) -> dict[str, str]:
+        """Extra environment the session needs (runtimes that take the model or
+        the effort from a variable)."""
         return {}
 
     def split_model(self, spec: str | None) -> tuple[str | None, str | None]:
@@ -336,6 +502,10 @@ class Runtime:
             return None
         hooks.save_settings(path, hooks.remove_hooks(hooks.load_settings(path)))
         return path
+
+    def env_args(self, env: Mapping[str, str]) -> list[str]:
+        """Launch flags that depend on the agent's launch environment."""
+        return []
 
     def effort_args(self, effort: str | None) -> list[str]:
         """Arguments that set the reasoning effort for this launch.
@@ -419,13 +589,18 @@ class Runtime:
         unattended: bool = False,
         writable_dirs: tuple[str, ...] = (),
         auto_review: bool = False,
+        env: Mapping[str, str] | None = None,
     ) -> list[str] | None:
         """The launch command, or None for a plain shell.
 
+        ``env`` is the agent's launch environment, for flags that depend on it
+        (``env_args``).
+
         ``brief_file`` is only handed over when ``brief_mode`` injects at
-        launch; a resumed session already has its brief, so initial-prompt
-        runtimes are not re-briefed on ``resume`` (a system prompt is
-        re-applied every launch). ``unattended`` adds the runtime's own
+        launch; on ``resume`` initial-prompt runtimes get none here. A
+        resumed session keeps its original brief, Claude Code's stored
+        system prompt included; a runtime with ``brief_refresh`` is handed
+        the current one through its hook instead. ``unattended`` adds the runtime's own
         no-approval switch (``unattended_args``) and ``writable_dirs`` the
         directories a sandboxed runtime may write outside the agent's own,
         both on a fresh start and on ``resume`` alike. Raises RuntimeError
@@ -462,6 +637,9 @@ class Runtime:
                 data_dir=data_dir,
                 state_dir=state_dir,
             ),
+            # Last: a flag here may take several values (Claude Code's
+            # --disallowedTools) and would swallow a positional argument after it.
+            *self.env_args(env or {}),
         ]
 
     # --- pane recognition ----------------------------------------------------
@@ -512,7 +690,7 @@ class Runtime:
         for raw in pane_content.splitlines()[-25:]:
             clean = sanitize_pane_content(raw)
             previous = sanitize_pane_content(lines[-1]).strip() if lines else ""
-            banner = previous.lstrip("│┃■●⎿✕✖! ").strip()
+            banner = previous.lstrip("│┃■●⏺⎿✕✖! ").strip()
             if (
                 clean.startswith("  ")
                 and clean.strip()
@@ -536,13 +714,13 @@ class Runtime:
                 continue
             if line in self.prompt_prefixes or line.lower() in self.placeholder_fragments:
                 continue
-            text = line.lstrip("│┃■●⎿✕✖! ").strip()
+            text = line.lstrip("│┃■●⏺⎿✕✖! ").strip()
             if any(
                 re.match(pattern, text, re.IGNORECASE) for pattern in self.provider_error_patterns
             ):
                 # The words alone may be a final answer quoting an error. Require
                 # the runtime's banner glyph or red error foreground as well.
-                if not line.startswith(self.provider_error_prefixes) and not _error_foreground(raw):
+                if not self._opens_with_error_glyph(raw) and not _error_foreground(raw):
                     return None
                 return "\n".join([text, *reversed(detail)])[:500]
             if re.match(
@@ -553,6 +731,58 @@ class Runtime:
             # A later response/tool output means the earlier error is history.
             return None
         return None
+
+    def _opens_with_error_glyph(self, raw: str) -> bool:
+        """Whether a line opens with one of this runtime's error-banner glyphs."""
+        return sanitize_pane_content(raw).strip().startswith(self.provider_error_prefixes)
+
+    def detect_interrupted(self, pane_content: str) -> bool:
+        """Whether the prompt is back because a person interrupted the turn.
+
+        The interrupt line must head the latest output above the prompt, with
+        nothing working and no dialog on screen: a newer turn below it is
+        history. A block's head starts at most two columns in. Below it may
+        follow only its own wrap (indented to its text, joined before
+        matching) and known notices (``notice_fragments``) ending two columns
+        short of the input box's border, as Claude Code draws them (live
+        captures, 80 to 202 columns). Any other line is newer output.
+        """
+        if not self.interrupt_patterns or not self.detect_idle(pane_content):
+            return False
+        lines = [sanitize_pane_content(raw).rstrip() for raw in pane_content.splitlines()]
+        # Blank padding may fill the pane above the input box.
+        lines = [line for line in lines if line.strip()][-40:]
+        prompt = max(
+            (i for i, line in enumerate(lines) if line.lstrip().startswith(self.prompt_prefixes)),
+            default=None,
+        )
+        above = lines[:prompt]
+        border = next((len(line) for line in reversed(above) if is_box_line(line.strip())), None)
+        below: list[str] = []
+        for line in reversed(above):
+            text = line.strip()
+            if is_box_line(text) or self._is_status_chrome_line(text):
+                continue
+            indent = len(line) - len(line.lstrip(" "))
+            if indent > 2:
+                below.insert(0, line)
+                continue
+            head = re.match(r"\s*\S+\s+", line)
+            column = head.end() if head else indent
+            notices = False
+            for more in below:
+                if (
+                    border is not None
+                    and len(more) == border - 2
+                    and any(fragment in more.lower() for fragment in self.notice_fragments)
+                ):
+                    notices = True
+                elif notices or len(more) - len(more.lstrip(" ")) != column:
+                    return False
+                else:
+                    text += " " + more.strip()
+            return any(re.match(pattern, text) for pattern in self.interrupt_patterns)
+        return False
 
     def diagnostics(self, pane_content: str) -> tuple[RuntimeDiagnostic, ...]:
         """Recognized terminal observations; they never make a delivery/state decision."""
@@ -572,6 +802,12 @@ class Runtime:
             return False
         tail = sanitize_pane_content(pane_content).strip().splitlines()[-15:]
         lowered = "\n".join(line.lower() for line in tail)
+        return any(marker in lowered for marker in self.prompt_markers)
+
+    def detect_permission_prompt(self, pane_content: str) -> bool:
+        """Whether the dialog on screen is a known permission prompt, not
+        some other question (``prompt_markers`` near the end of the pane)."""
+        lowered = sanitize_pane_content(pane_content).lower()[-2000:]
         return any(marker in lowered for marker in self.prompt_markers)
 
     def detect_dialog_chrome(self, pane_content: str) -> bool:
@@ -626,9 +862,18 @@ class Runtime:
     def _dialog_block(pane_content: str) -> tuple[list[str], list[str]]:
         """``(above, options)`` of the dialog on screen: the lines leading up
         to its numbered options (at most eight) and the options themselves.
-        Anything earlier in the pane is not the dialog."""
-        lines = [ln.strip() for ln in sanitize_pane_content(pane_content).strip().splitlines()]
-        lines = [ln for ln in lines[-24:] if ln and not is_box_line(ln)]
+        Anything earlier in the pane is not the dialog, nor is anything above
+        the frame a dialog is drawn in (Gemini CLI: ``╭─╮``, ``│ … │`` sides)."""
+        lines: list[str] = []
+        for raw in sanitize_pane_content(pane_content).strip().splitlines()[-24:]:
+            line = raw.strip()
+            if line.startswith("╭"):
+                lines.clear()
+                continue
+            while line[:1] == "│" or line[-1:] == "│":
+                line = line.strip("│").strip()
+            if line and not is_box_line(line.strip("╭╮╰╯")):
+                lines.append(line)
         first = next((i for i, ln in enumerate(lines) if DIALOG_OPTION_RE.match(ln)), None)
         if first is None:
             return [], []
@@ -645,6 +890,28 @@ class Runtime:
         above, options = self._dialog_block(pane_content)
         text = " ".join([*above[-4:], *options]).lower()
         return any(marker in text for marker in self.choice_markers)
+
+    def detect_plan_dialog(self, pane_content: str) -> bool:
+        """Whether the active dialog asks to approve a plan (see ``plan_markers``).
+
+        Only the latest dialog counts: the options around the last selection
+        cursor and the few lines introducing them. Plan text further up the
+        pane (an earlier plan dialog) must never turn a permission prompt
+        into a plan, whose approve key would then allow it."""
+        if not self.plan_markers or not self.detect_active_dialog(pane_content):
+            return False
+        lines = [ln.strip() for ln in sanitize_pane_content(pane_content).splitlines()]
+        lines = [ln for ln in lines[-24:] if ln and not is_box_line(ln)]
+        cursors = [i for i, line in enumerate(lines) if DIALOG_CURSOR_RE.match(line)]
+        if not cursors:
+            return False
+        first = last = cursors[-1]
+        while first > 0 and DIALOG_OPTION_RE.match(lines[first - 1]):
+            first -= 1
+        while last + 1 < len(lines) and DIALOG_OPTION_RE.match(lines[last + 1]):
+            last += 1
+        text = " ".join(lines[max(0, first - 4) : last + 1]).lower()
+        return all(marker in text for marker in self.plan_markers)
 
     def dialog_summary(self, pane_content: str, *, limit: int = 300) -> str:
         """What the dialog on screen asks, for a person who cannot see it.
@@ -716,6 +983,58 @@ class Runtime:
         lowered = line.lower()
         return any(fragment in lowered for fragment in self.status_fragments)
 
+    usage_supported = False
+
+    def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
+        """Locate only the conversation explicitly associated with this agent."""
+        return []
+
+    transcript_supported = False
+    """The runtime keeps its own conversation record that ``usage_paths``
+    locates and ``transcript_entries`` (a JSONL file) or ``transcript_page``
+    (a database, or a log that repeats a message when it changes) can read
+    (``backbone agent output``)."""
+
+    def transcript_entries(self, records: list[dict]) -> list[TranscriptEntry]:
+        """The agent's user-facing messages out of parsed JSONL records, oldest
+        first and complete. Each record carries ``_start``/``_end`` byte
+        offsets. Tool calls, tool results, reasoning and bookkeeping records
+        are not messages and are left out."""
+        return []
+
+    def transcript_page(
+        self,
+        path: Path,
+        session_id: str,
+        *,
+        limit: int,
+        since: int | None = None,
+        before: int | None = None,
+        end: int | None = None,
+    ) -> tuple[list[TranscriptEntry], bool, bool] | None:
+        """A page of messages out of a record that cannot be read a chunk at
+        a time, as ``(messages, more_before, more_after)``, navigated by the
+        record's own positions the way ``read_messages`` navigates byte
+        offsets. ``None``: the record is JSONL, read with
+        ``transcript_entries``."""
+        return None
+
+    def usage_children(
+        self, path: Path, session_id: str, env: dict[str, str]
+    ) -> list[tuple[str, Path]]:
+        """Runtime-proven child conversations, never inferred from shared directories."""
+        return []
+
+    def read_usage(self, path: Path, offset: int, state: dict):
+        """Read a bounded chunk from this runtime's usage source."""
+        from agent_backbone.services.runtimes._usage import read_jsonl
+
+        return read_jsonl(path, offset, state, self.parse_usage)
+
+    def parse_usage(self, record: dict, state: dict):
+        """Project one source record into numeric usage, updating an opaque cursor."""
+        return None
+
     # --- typing into the session -----------------------------------------------
 
     async def approve_prompt(self, session_name: str) -> bool:
@@ -740,6 +1059,12 @@ class Runtime:
                 return False
         return True
 
+    def plan_approval_needs(self, env: dict[str, str]) -> str | None:
+        """What an agent's environment (its ``env``, then the backbone's) lacks
+        before its plans ask for approval, when the runtime's plan step is
+        optional; None when nothing is missing."""
+        return None
+
     @property
     def supports_plan_control(self) -> bool:
         """Whether the backbone can approve or reject this runtime's plans."""
@@ -762,7 +1087,7 @@ class Runtime:
         return await self._send_all(session_name, self.plan_approve_keys)
 
     async def reject_plan(self, session_name: str) -> int:
-        """Leave plan mode so feedback can follow as a message; see ``approve_plan``."""
+        """Decline the plan so feedback can follow as a message; see ``approve_plan``."""
         return await self._send_all(session_name, self.plan_reject_keys)
 
     async def deliver_message(self, session_name: str, message: str) -> bool:

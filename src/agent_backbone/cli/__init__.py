@@ -13,7 +13,7 @@ backbone runtimes                    supported CLIs, installed or not, example m
 backbone service install|uninstall|status   start the backbone at login (launchd / systemd --user)
 backbone config list|get|set|unset   settings (stored in the database)
 backbone agent start [--dir D]       discover + start an agent (waits for its prompt)
-backbone agent list|stop|inspect|set|watch|unwatch|forget
+backbone agent list|stop|inspect|set|watch|unwatch|subscribe|unsubscribe|forget
 backbone swarm create|list|status|disband   coordinator+members on one issue
 backbone tell <agent> <msg>          deliver a message to an agent (or a swarm)
 backbone reply <text>                answer the humans on their channel (Telegram topic, …)
@@ -31,19 +31,31 @@ import argparse
 import logging
 import os
 import sys
+from pathlib import Path
 
 from agent_backbone import __version__
-from agent_backbone.cli.agents import cmd_agent, cmd_hooks, cmd_inbox, cmd_reply, cmd_tell
+from agent_backbone.cli.agents import (
+    cmd_agent,
+    cmd_chrome,
+    cmd_hooks,
+    cmd_inbox,
+    cmd_reply,
+    cmd_tell,
+)
 from agent_backbone.cli.completion import cmd_completion, complete
 from agent_backbone.cli.diagnostics import add_diagnostics_parser
+from agent_backbone.cli.fleet import add_fleet_parser
 from agent_backbone.cli.instructions import add_instruction_commands
 from agent_backbone.cli.reports import add_report_parsers
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_up
 from agent_backbone.cli.service import cmd_service
 from agent_backbone.cli.setup import cmd_doctor, cmd_init, cmd_runtimes, cmd_secrets
+from agent_backbone.cli.signing import cmd_message, cmd_signing
+from agent_backbone.cli.skills import add_skill_commands, expand_shorthand
 from agent_backbone.cli.status import add_status_options, cmd_status
 from agent_backbone.cli.swarms import cmd_docs, cmd_help, cmd_swarm
 from agent_backbone.cli.upgrade import cmd_upgrade
+from agent_backbone.cli.usage import cmd_usage
 from agent_backbone.config import RUNTIMES
 
 
@@ -115,6 +127,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("up", help="run the backbone")
     p.add_argument("--detach", "-d", action="store_true", help="run inside a tmux session")
     p.add_argument("--reload", action="store_true", help="auto-reload on code changes (dev)")
+    p.add_argument(
+        "--log-file",
+        type=Path,
+        default=None,
+        help="write the log to this file, rotated by size (the login service sets it)",
+    )
     p.set_defaults(func=cmd_up)
 
     p = sub.add_parser("down", help="stop a detached backbone")
@@ -132,7 +150,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_status)
 
     add_diagnostics_parser(sub)
+    add_fleet_parser(sub)
     add_instruction_commands(sub)
+    add_skill_commands(sub)
     add_report_parsers(sub)
 
     p = sub.add_parser("config", help="settings (stored in the database)")
@@ -181,14 +201,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--resume",
         dest="resume",
         action="store_true",
-        default=None,
-        help="resume even without a saved session ID, using the runtime's last conversation",
+        default=False,
+        help="continue the conversation the backbone last saw for this agent "
+        "(the runtime's latest when none is saved); same as `backbone agent resume`",
     )
     conversation.add_argument(
         "--fresh",
         dest="resume",
         action="store_false",
-        help="start a new conversation; keep the agent's saved runtime and model",
+        default=False,
+        help="start a new conversation (the default); keep the agent's saved runtime and model",
     )
     ps.add_argument(
         "--always-on",
@@ -203,21 +225,133 @@ def build_parser() -> argparse.ArgumentParser:
         help="also watch this repository (repeatable)",
     )
     ps.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        metavar="TAG",
+        help="add this tag before launching, so the first session already has "
+        "the skills and policies it selects (repeatable)",
+    )
+    ps.add_argument(
         "--no-wait",
         action="store_true",
         help="return immediately instead of waiting for the prompt",
     )
     ps.add_argument("--attach", action="store_true", help="attach to this agent after starting")
+    ps.add_argument(
+        "--inbox-only",
+        action="store_true",
+        help="register a client without a terminal instead of launching: never typed into; "
+        "it reads its messages with `backbone inbox --agent NAME`",
+    )
     pr = asub.add_parser("resume", help="resume a known agent's previous conversation")
     pr.add_argument("names", nargs="+", metavar="NAME")
     pr.add_argument("--attach", action="store_true", help="attach after resuming")
     pr.add_argument("--no-wait", action="store_true")
     pr.set_defaults(resume=True, dir=None, runtime=None, model=None, watch=None, group=True)
+    prs = asub.add_parser(
+        "restart",
+        help="stop an agent (your own session included) and start its replacement after a wait",
+        description=(
+            "The backbone owns the transition: it accepts the request, stops the session on its "
+            "next tick and starts the replacement when the wait is over, so asking for your own "
+            "session is safe. Save your memory first. NAME defaults to $BACKBONE_AGENT."
+        ),
+    )
+    prs.add_argument("name", nargs="?", default=None, metavar="NAME")
+    prs.add_argument(
+        "--runtime", default=None, help=f"{' | '.join(RUNTIMES)} (default: the saved runtime)"
+    )
+    prs.add_argument(
+        "--model",
+        default=None,
+        help="model for the replacement, optionally `model:effort` (default: the saved model)",
+    )
+    next_conversation = prs.add_mutually_exclusive_group()
+    next_conversation.add_argument(
+        "--resume",
+        dest="resume",
+        action="store_true",
+        default=False,
+        help="continue the saved conversation (same CLI only)",
+    )
+    next_conversation.add_argument(
+        "--fresh",
+        dest="resume",
+        action="store_false",
+        default=False,
+        help="start a new conversation (the default)",
+    )
+    prs.add_argument(
+        "--in",
+        dest="delay",
+        default=None,
+        metavar="DURATION",
+        help="wait between the stop and the start: 90s, 20m, 3h20m (default: 1m)",
+    )
+    prs.add_argument(
+        "--at",
+        dest="start_at",
+        default=None,
+        metavar="TIME",
+        help="start at this time instead (ISO 8601; local time unless an offset is given)",
+    )
+    prs.add_argument(
+        "--message",
+        default=None,
+        help="continuation message handed to the replacement once it is at its prompt",
+    )
+    prs.add_argument("--stop-only", action="store_true", help="stop the session; start nothing")
+    prs.add_argument(
+        "--from",
+        dest="sender",
+        default=os.environ.get("BACKBONE_AGENT") or os.environ.get("USER", "cli"),
+        help="who is asking (default: $BACKBONE_AGENT or $USER)",
+    )
+    prs.add_argument("--json", action="store_true")
     pa = asub.add_parser("attach", help="open an agent session; detach with Ctrl-b d")
     pa.add_argument("name")
     pa.add_argument("--read-only", action="store_true", help="watch without sending input")
     pst = asub.add_parser("stop", help="stop agent sessions")
     pst.add_argument("names", nargs="+", metavar="NAME")
+    po = asub.add_parser(
+        "output",
+        help="what the agent has said: its messages in full, else its screen",
+        description=(
+            "Reads only. Claude Code, Codex, Gemini CLI and OpenCode keep a transcript; the "
+            "backbone shows the "
+            "agent's user-facing messages from it, complete, a page at a time: the last "
+            "--lines by default, earlier ones with --before OFFSET, later ones with --since "
+            "OFFSET (--end OFFSET bounds a range). Each page prints the offsets to continue "
+            "either way. Tool calls, results and thinking are not shown; --screen shows the "
+            "terminal instead. NAME defaults to $BACKBONE_AGENT."
+        ),
+    )
+    po.add_argument("name", nargs="?", default=None, metavar="NAME")
+    po.add_argument("--lines", type=int, default=20, help="messages per page (default 20, max 200)")
+    po.add_argument(
+        "--before",
+        type=int,
+        default=None,
+        metavar="OFFSET",
+        help="go back: the messages ending at or before this offset",
+    )
+    po.add_argument(
+        "--since",
+        type=int,
+        default=None,
+        metavar="OFFSET",
+        help="continue: the messages starting at or after this offset",
+    )
+    po.add_argument(
+        "--end",
+        type=int,
+        default=None,
+        metavar="OFFSET",
+        help="with --since: stop at this offset (a start/end range)",
+    )
+    po.add_argument("--screen", action="store_true", help="show the terminal instead")
+    po.add_argument("--json", action="store_true")
     pi = asub.add_parser("inspect", help="show state, delivery readiness and the evidence")
     pi.add_argument("name")
     pi.add_argument("--json", action="store_true")
@@ -254,6 +388,24 @@ def build_parser() -> argparse.ArgumentParser:
         "unwatch", help="stop watching repositories (NAME optional inside an agent session)"
     )
     pu.add_argument("targets", nargs="+", metavar="[NAME] OWNER/REPO")
+    psub = asub.add_parser(
+        "subscribe",
+        help="subscribe to inbound events (NAME optional inside an agent session)",
+        description=(
+            "Subscribe an agent to events from a source, matched by a filter written in the "
+            "source's own query language (gmail: Gmail search syntax such as "
+            "'from:alerts@example.com subject:outage'). High priority reaches a working agent "
+            "at once; normal waits for its prompt, batched."
+        ),
+    )
+    psub.add_argument("targets", nargs="+", metavar="[NAME] SOURCE FILTER")
+    psub.add_argument(
+        "--priority", choices=("normal", "high"), default="normal", help="default: normal"
+    )
+    puns = asub.add_parser(
+        "unsubscribe", help="remove a subscription by id (NAME optional inside an agent session)"
+    )
+    puns.add_argument("targets", nargs="+", metavar="[NAME] ID")
     pf = asub.add_parser("forget", help="remove an agent from the backbone")
     pf.add_argument("name")
     for verb in ("tag", "untag"):
@@ -284,6 +436,14 @@ def build_parser() -> argparse.ArgumentParser:
             "default: the user's global settings",
         )
     p.set_defaults(func=cmd_hooks)
+
+    p = sub.add_parser(
+        "chrome", help="name agents' Claude-in-Chrome tab groups after the agent (optional)"
+    )
+    csub = p.add_subparsers(dest="chrome_command", required=True)
+    csub.add_parser("install", help="register the native host and copy the extension")
+    csub.add_parser("uninstall", help="remove the native host and the copied extension")
+    p.set_defaults(func=cmd_chrome)
 
     p = sub.add_parser("swarm", help="run a coordinator+members swarm on an issue")
     ssub = p.add_subparsers(dest="swarm_command", required=True)
@@ -317,10 +477,54 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("path", nargs="*", help="optional subcommands, e.g. help agent start")
     p.set_defaults(func=cmd_help)
 
-    usage = sub.add_parser(
-        "usage", help="quick guide: start agents, read reports, rename and find help"
+    signing_parser = sub.add_parser(
+        "signing", help="signed senders: who approves their key changes in Telegram"
     )
-    usage.set_defaults(func=cmd_docs, page="usage")
+    signing_sub = signing_parser.add_subparsers(dest="signing_command", required=True)
+    owner = signing_sub.add_parser(
+        "owner", help="set the Telegram user who approves key changes (once; later changes wait)"
+    )
+    owner.add_argument("user_id", type=int, help="the numeric Telegram user id")
+    owner.add_argument("--json", action="store_true")
+    owner.set_defaults(func=cmd_signing)
+
+    message_parser = sub.add_parser("message", help="owner-confirmed messages: validate one")
+    message_sub = message_parser.add_subparsers(dest="message_command", required=True)
+    validate = message_sub.add_parser(
+        "validate",
+        help="claim an owner confirmation delivered to this agent and print its exact text",
+    )
+    validate.add_argument("confirmation_id", help="the id in the owner-confirmed marker")
+    validate.add_argument("--done", action="store_true", help="close the claim once finished")
+    validate.add_argument("--json", action="store_true")
+    validate.set_defaults(func=cmd_message)
+
+    usage = sub.add_parser(
+        "usage", help="token usage by agent and CLI session; optional cost estimates"
+    )
+    usage.add_argument("view", nargs="?", choices=["session", "limits"])
+    usage.add_argument("session", nargs="?")
+    usage.add_argument("--agent")
+    usage.add_argument("--runtime")
+    usage.add_argument(
+        "--current", action="store_true", help="only current conversations and their children"
+    )
+    usage.add_argument("--since", help="ISO timestamp or relative interval, e.g. 24h")
+    usage.add_argument("--until", help="exclusive end timestamp")
+    usage.add_argument("--by", choices=["session", "model"], default="session")
+    usage.add_argument(
+        "--cost", action="store_true", help="show secondary API-equivalent estimates"
+    )
+    usage.add_argument(
+        "--reprice",
+        action="store_true",
+        help="estimate with the current catalog without changing history",
+    )
+    usage.add_argument("--no-refresh", action="store_true", help="read retained accounting only")
+    usage.add_argument("--limit", type=int, default=100)
+    usage.add_argument("--offset", type=int, default=0)
+    usage.add_argument("--json", action="store_true")
+    usage.set_defaults(func=cmd_usage)
     p = sub.add_parser("docs", help="the documentation shipped with this install")
     p.add_argument("page", nargs="?", default=None)
     p.set_defaults(func=cmd_docs)
@@ -343,6 +547,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="sender label for the provenance envelope (default: $BACKBONE_AGENT, then $USER)",
     )
     p.add_argument("--priority", action="store_true", help="deliver even while someone is typing")
+    p.add_argument(
+        "--steer",
+        action="store_true",
+        help="guidance for the agent's CURRENT task: offered through its hook while it works "
+        "(Claude Code, Codex, OpenCode), never queued or pasted; refused when it is not working",
+    )
     p.set_defaults(func=cmd_tell)
 
     p = sub.add_parser(
@@ -365,11 +575,11 @@ def main(argv: list[str] | None = None) -> None:
     if argv[:1] == ["_complete"]:
         words = argv[2:] if argv[1:2] == ["--"] else argv[1:]
         sys.exit(complete(parser, words))
-    args = parser.parse_args(argv)
+    args = parser.parse_args(expand_shorthand(argv))
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
     sys.exit(args.func(args))
 

@@ -3,14 +3,16 @@
 A swarm is one coordinator plus members sharing a single worktree and
 branch, created to complete one pre-existing GitHub issue. Members are
 ordinary backbone agents; all communication runs through the existing
-delivery pipeline. The issue is the channel between the swarm and its
-initiator; members talk to their coordinator with ``backbone tell``.
+delivery pipeline. Members talk to their coordinator, and the coordinator
+to its initiator, with ``backbone tell``; issue comments are reserved for
+the coordinator's PR handoff.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import shlex
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +21,7 @@ from typing import TYPE_CHECKING
 from agent_backbone.config import AgentSpec
 from agent_backbone.services.agents import agent_state, lifecycle_lock, start_agent
 from agent_backbone.services.routing import safe_deliver
+from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.swarm._roster import (
     COORDINATOR_ROLE,
     member_names,
@@ -43,6 +46,8 @@ log = logging.getLogger(__name__)
 
 _ISSUE_REF_RE = re.compile(r"^(?P<repo>[\w.-]+/[\w.-]+)#(?P<number>\d{1,7})$")
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
+# A member's own identity; every other tag of the initiator is inherited.
+_OWN_TAG_PREFIXES = ("role:", "agent:", "swarm:", "task:")
 
 
 class SwarmError(Exception):
@@ -112,6 +117,12 @@ def _facts(
         "issue_url": _issue_url(repo, issue_number),
         "branch": branch,
         "base_branch": base_branch,
+        # For commands the brief has an agent run: a branch name may hold `$(…)`.
+        "branch_shell": shlex.quote(branch),
+        "base_branch_shell": shlex.quote(base_branch),
+        "repo_shell": shlex.quote(repo),
+        "coordinator_shell": shlex.quote(coordinator),
+        "initiator_shell": shlex.quote(initiator or "(human operator)"),
         "worktree": str(worktree),
         "members": ", ".join(members),
     }
@@ -152,7 +163,7 @@ async def create_swarm(
     title = await _verify_issue(gh, repo, issue_number)
     try:
         kickoff_body = render(
-            read_template("swarm:kickoff", config.data_dir),
+            read_template("swarm:kickoff", config.template_dirs),
             {
                 "repo": repo,
                 "issue_number": str(issue_number),
@@ -198,6 +209,16 @@ async def create_swarm(
     for agent_name in all_names:
         if config.agents.get(agent_name) is not None or await session_exists(agent_name):
             raise SwarmError(f"agent name '{agent_name}' is already in use")
+    # An unattended member cannot ask to commit outside its sandbox: refuse it
+    # here rather than let the swarm stall at its first commit.
+    for agent_name, spec in named:
+        rt = RUNTIMES.get(spec.runtime or config.launch.default_runtime)
+        if rt is not None and rt.sandbox_commit_block and config.swarm.unattended_members:
+            raise SwarmError(
+                f"member '{agent_name}' would run unattended on {rt.id}: "
+                f"{rt.sandbox_commit_block}. Give it another runtime (role@runtime), "
+                "or set swarm.unattended_members false so it can ask"
+            )
 
     try:
         base_branch = await current_branch(repo_dir)
@@ -227,6 +248,12 @@ async def create_swarm(
     occupied: list[str] = []
     launches: list[tuple[AgentSpec, Path]] = []
     default_runtime = config.launch.default_runtime
+    # The initiator's tag policies and skills reach the members doing the work.
+    inherited = tuple(
+        tag
+        for tag in (init_spec.tags if init_spec is not None else ())
+        if not tag.lower().startswith(_OWN_TAG_PREFIXES)
+    )
     try:
         briefs_dir.mkdir(parents=True, exist_ok=True)
         for agent_name, spec in named:
@@ -245,7 +272,7 @@ async def create_swarm(
                 base_branch=base_branch,
             )
             brief_file = briefs_dir / f"{agent_name}.md"
-            brief_file.write_text(render_brief(spec.role, facts, data_dir=config.data_dir))
+            brief_file.write_text(render_brief(spec.role, facts, dirs=config.template_dirs))
 
             agent = AgentSpec(
                 name=agent_name,
@@ -256,7 +283,12 @@ async def create_swarm(
                 # Whether the member asks before acting is decided at each
                 # launch from `swarm.unattended_members` and its runtime's
                 # sandbox (``start_agent``), never persisted here.
-                tags=(f"swarm:{name}", f"role:{spec.role}", f"task:{repo}#{issue_number}"),
+                tags=(
+                    f"swarm:{name}",
+                    f"role:{spec.role}",
+                    f"task:{repo}#{issue_number}",
+                    *inherited,
+                ),
             )
             await store.register(agent)
             launches.append((agent, brief_file))
@@ -406,10 +438,7 @@ async def teardown_swarm(
                 f"disband '{name}' again"
             )
         for member in members:
-            try:
-                await store.forget(member.name)
-            except Exception:
-                log.warning("Could not forget swarm member %s", member.name)
+            await store.forget(member.name)
         await db.swarms.set_status(name, status)
         log.info("Swarm '%s' torn down (%s): %d members", name, status, len(members))
         return [m.name for m in members]

@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 761f09f031b6
+Revision ID: 7c02e74cce0a
 Revises:
-Create Date: 2026-09-09 10:07:46.158829
+Create Date: 2026-10-14 16:47:34.046381
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "761f09f031b6"
+revision: str = "7c02e74cce0a"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -44,6 +44,53 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("session_name", name=op.f("pk_agent_states")),
     )
     op.create_table(
+        "agent_subscriptions",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("agent_name", sa.Text(), nullable=False),
+        sa.Column("source", sa.Text(), nullable=False),
+        sa.Column("query", sa.Text(), nullable=False),
+        sa.Column("priority", sa.Text(), server_default="normal", nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_agent_subscriptions")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("agent_subscriptions", schema=None) as batch_op:
+        batch_op.create_index(
+            "uq_subscriptions_query", ["agent_name", "source", "query"], unique=True
+        )
+
+    op.create_table(
+        "agent_transitions",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("agent_name", sa.Text(), nullable=False),
+        sa.Column("requested_by", sa.Text(), server_default="", nullable=False),
+        sa.Column("requested_at", sa.Text(), nullable=False),
+        sa.Column("runtime", sa.Text(), nullable=True),
+        sa.Column("model", sa.Text(), nullable=True),
+        sa.Column("resume", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column("start", sa.Integer(), server_default=sa.text("1"), nullable=False),
+        sa.Column("delay_seconds", sa.Integer(), server_default=sa.text("(60)"), nullable=False),
+        sa.Column("start_at", sa.Text(), nullable=True),
+        sa.Column("message", sa.Text(), nullable=True),
+        sa.Column("status", sa.Text(), server_default="pending", nullable=False),
+        sa.Column("stopped_at", sa.Text(), nullable=True),
+        sa.Column("launch_operation_id", sa.Text(), nullable=True),
+        sa.Column("completed_at", sa.Text(), nullable=True),
+        sa.Column("result", sa.Text(), server_default="{}", nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_agent_transitions")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("agent_transitions", schema=None) as batch_op:
+        batch_op.create_index("idx_transitions_agent", ["agent_name", "status"], unique=False)
+        batch_op.create_index(
+            "uq_transitions_open",
+            ["agent_name"],
+            unique=True,
+            postgresql_where=sa.text("status = 'pending'"),
+            sqlite_where=sa.text("status = 'pending'"),
+        )
+
+    op.create_table(
         "agent_watches",
         sa.Column("agent_name", sa.Text(), nullable=False),
         sa.Column("repo", sa.Text(), nullable=False),
@@ -62,9 +109,11 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), server_default="", nullable=False),
         sa.Column("always_on", sa.Integer(), server_default=sa.text("0"), nullable=False),
         sa.Column("unattended", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column("inbox_only", sa.Integer(), server_default=sa.text("0"), nullable=False),
         sa.Column("created_at", sa.Text(), nullable=False),
         sa.Column("updated_at", sa.Text(), nullable=False),
         sa.Column("last_started_at", sa.Text(), nullable=True),
+        sa.Column("conversation_started_at", sa.Text(), nullable=True),
         sa.Column("report_identity", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("name", name=op.f("pk_agents")),
     )
@@ -84,6 +133,8 @@ def upgrade() -> None:
         sa.Column("source", sa.Text(), server_default="", nullable=False),
         sa.Column("preview", sa.Text(), server_default="", nullable=False),
         sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("settled_at", sa.Text(), nullable=True),
+        sa.Column("superseded_at", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_deliveries")),
     )
     with op.batch_alter_table("deliveries", schema=None) as batch_op:
@@ -96,10 +147,10 @@ def upgrade() -> None:
             ["repo", "issue_number", "session_name"],
             unique=True,
             postgresql_where=sa.text(
-                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
             sqlite_where=sa.text(
-                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
         )
 
@@ -163,10 +214,27 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_events")),
     )
     with op.batch_alter_table("events", schema=None) as batch_op:
+        # Autogenerate skips expression indexes: written by hand (#394).
+        batch_op.create_index(
+            "idx_events_delivery_id_lower", [sa.text("lower(delivery_id)")], unique=False
+        )
         batch_op.create_index("idx_events_received", ["received_at"], unique=False)
         batch_op.create_index("idx_events_repo", ["repo"], unique=False)
         batch_op.create_index("uq_events_delivery_id", ["delivery_id"], unique=True)
 
+    op.create_table(
+        "fleet_snapshots",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("created_by", sa.Text(), server_default="", nullable=False),
+        sa.Column("note", sa.Text(), nullable=True),
+        sa.Column("stop", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column("force", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column("agents", sa.Text(), server_default="[]", nullable=False),
+        sa.Column("resumes", sa.Text(), server_default="[]", nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_fleet_snapshots")),
+        sqlite_autoincrement=True,
+    )
     op.create_table(
         "issue_dependencies",
         sa.Column("repo", sa.Text(), server_default="", nullable=False),
@@ -197,6 +265,7 @@ def upgrade() -> None:
         sa.Column("leased_at", sa.Text(), nullable=True),
         sa.Column("sender", sa.Text(), server_default="", nullable=False),
         sa.Column("dedup_key", sa.Text(), nullable=True),
+        sa.Column("priority", sa.Integer(), server_default=sa.text("0"), nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_message_queue")),
     )
     with op.batch_alter_table("message_queue", schema=None) as batch_op:
@@ -292,6 +361,161 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("key", name=op.f("pk_settings")),
     )
     op.create_table(
+        "signing_audit",
+        sa.Column("seq", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("at", sa.Text(), nullable=False),
+        sa.Column("kind", sa.Text(), nullable=False),
+        sa.Column("sender_key", sa.Text(), server_default="", nullable=False),
+        sa.Column("sender", sa.Text(), server_default="", nullable=False),
+        sa.Column("method", sa.Text(), server_default="", nullable=False),
+        sa.Column("path", sa.Text(), server_default="", nullable=False),
+        sa.Column("target", sa.Text(), server_default="", nullable=False),
+        sa.Column("outcome", sa.Text(), nullable=False),
+        sa.Column("detail", sa.Text(), server_default="", nullable=False),
+        sa.Column("operation_id", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("seq", name=op.f("pk_signing_audit")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("signing_audit", schema=None) as batch_op:
+        batch_op.create_index(
+            "idx_signing_audit_sender", ["sender_key", "kind", "seq"], unique=False
+        )
+
+    op.create_table(
+        "signing_enrollments",
+        sa.Column("sender_key", sa.Text(), nullable=False),
+        sa.Column("sender", sa.Text(), nullable=False),
+        sa.Column("public_key", sa.Text(), nullable=False),
+        sa.Column("fingerprint", sa.Text(), nullable=False),
+        sa.Column("epoch", sa.Integer(), nullable=False),
+        sa.Column("enrolled_at", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("sender_key", name=op.f("pk_signing_enrollments")),
+    )
+    op.create_table(
+        "signing_grants",
+        sa.Column("confirmation_id", sa.Text(), nullable=False),
+        sa.Column("agent", sa.Text(), nullable=False),
+        sa.Column("workspace", sa.Text(), nullable=False),
+        sa.Column("claimed_at", sa.BigInteger(), nullable=False),
+        sa.Column("expires_at", sa.BigInteger(), nullable=False),
+        sa.Column("status", sa.Text(), server_default="open", nullable=False),
+        sa.Column("closed_at", sa.BigInteger(), nullable=True),
+        sa.PrimaryKeyConstraint("confirmation_id", name=op.f("pk_signing_grants")),
+    )
+    op.create_table(
+        "signing_install",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("audience", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_signing_install")),
+    )
+    op.create_table(
+        "signing_keys",
+        sa.Column("sender_key", sa.Text(), nullable=False),
+        sa.Column("epoch", sa.Integer(), nullable=False),
+        sa.Column("sender", sa.Text(), nullable=False),
+        sa.Column("public_key", sa.Text(), nullable=False),
+        sa.Column("fingerprint", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("retired_at", sa.Text(), nullable=True),
+        sa.Column("retired_by", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("sender_key", "epoch", name=op.f("pk_signing_keys")),
+    )
+    op.create_table(
+        "signing_nonces",
+        sa.Column("sender_key", sa.Text(), nullable=False),
+        sa.Column("epoch", sa.Integer(), nullable=False),
+        sa.Column("nonce", sa.Text(), nullable=False),
+        sa.Column("request_hash", sa.Text(), nullable=False),
+        sa.Column("seen_at", sa.BigInteger(), nullable=False),
+        sa.Column("response", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("sender_key", "epoch", "nonce", name=op.f("pk_signing_nonces")),
+    )
+    with op.batch_alter_table("signing_nonces", schema=None) as batch_op:
+        batch_op.create_index("idx_signing_nonces_seen", ["seen_at"], unique=False)
+
+    op.create_table(
+        "signing_owner",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("telegram_user_id", sa.BigInteger(), nullable=True),
+        sa.Column("set_at", sa.Text(), nullable=True),
+        sa.Column("pending_user_id", sa.BigInteger(), nullable=True),
+        sa.Column("pending_at", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_signing_owner")),
+    )
+    op.create_table(
+        "signing_receipt_watermarks",
+        sa.Column("sender_key", sa.Text(), nullable=False),
+        sa.Column("pruned_through", sa.Integer(), nullable=False),
+        sa.PrimaryKeyConstraint("sender_key", name=op.f("pk_signing_receipt_watermarks")),
+    )
+    op.create_table(
+        "signing_receipts",
+        sa.Column("seq", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("confirmation_id", sa.Text(), nullable=False),
+        sa.Column("sender", sa.Text(), nullable=False),
+        sa.Column("sender_key", sa.Text(), nullable=False),
+        sa.Column("recipient", sa.Text(), nullable=False),
+        sa.Column("delivered_to", sa.Text(), nullable=False),
+        sa.Column("kind", sa.Text(), nullable=False),
+        sa.Column("text", sa.Text(), nullable=False),
+        sa.Column("text_sha256", sa.Text(), nullable=False),
+        sa.Column("source", sa.Text(), nullable=False),
+        sa.Column("confirmed_at", sa.Text(), nullable=False),
+        sa.Column("key_epoch", sa.Integer(), nullable=False),
+        sa.Column("operation_id", sa.Text(), nullable=False),
+        sa.Column("status", sa.Text(), server_default="admitted", nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("delivered_at", sa.Text(), nullable=True),
+        sa.Column("revoked_at", sa.Text(), nullable=True),
+        sa.Column("attempted_at", sa.Text(), nullable=True),
+        sa.Column("outcome", sa.Text(), nullable=True),
+        sa.Column("offer_state", sa.Text(), nullable=True),
+        sa.Column("offer_claimed_at", sa.BigInteger(), nullable=True),
+        sa.Column("offer_token", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("seq", name=op.f("pk_signing_receipts")),
+        sa.UniqueConstraint("confirmation_id", name=op.f("uq_signing_receipts_confirmation_id")),
+        sa.UniqueConstraint("operation_id", name=op.f("uq_signing_receipts_operation_id")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("signing_receipts", schema=None) as batch_op:
+        batch_op.create_index("idx_signing_receipts_sender", ["sender_key", "seq"], unique=False)
+
+    op.create_table(
+        "signing_transitions",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("request_id", sa.Text(), nullable=False),
+        sa.Column("sender", sa.Text(), nullable=False),
+        sa.Column("sender_key", sa.Text(), nullable=False),
+        sa.Column("action", sa.Text(), nullable=False),
+        sa.Column("audience", sa.Text(), nullable=False),
+        sa.Column("expected_epoch", sa.Integer(), nullable=False),
+        sa.Column("new_epoch", sa.Integer(), nullable=True),
+        sa.Column("new_public_key", sa.Text(), nullable=True),
+        sa.Column("new_fingerprint", sa.Text(), nullable=False),
+        sa.Column("digest", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("expires_at", sa.BigInteger(), nullable=False),
+        sa.Column("status", sa.Text(), server_default="pending", nullable=False),
+        sa.Column("resolved_at", sa.Text(), nullable=True),
+        sa.Column("resolved_by", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_signing_transitions")),
+        sa.UniqueConstraint("digest", name=op.f("uq_signing_transitions_digest")),
+        sa.UniqueConstraint("request_id", name=op.f("uq_signing_transitions_request_id")),
+    )
+    with op.batch_alter_table("signing_transitions", schema=None) as batch_op:
+        batch_op.create_index(
+            "idx_signing_transitions_sender", ["sender_key", "status"], unique=False
+        )
+        batch_op.create_index(
+            "uq_signing_transitions_pending",
+            ["sender_key"],
+            unique=True,
+            postgresql_where=sa.text("status = 'pending'"),
+            sqlite_where=sa.text("status = 'pending'"),
+        )
+
+    op.create_table(
         "swarms",
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("repo", sa.Text(), nullable=False),
@@ -314,11 +538,53 @@ def upgrade() -> None:
             sqlite_where=sa.text("status = 'active'"),
         )
 
+    op.create_table(
+        "usage_events",
+        sa.Column("session", sa.Text(), nullable=False),
+        sa.Column("event_key", sa.Text(), nullable=False),
+        sa.Column("at", sa.Text(), nullable=False),
+        sa.Column("model", sa.Text(), nullable=False),
+        sa.Column("data", sa.Text(), nullable=False),
+        sa.Column("cost", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("session", "event_key", name=op.f("pk_usage_events")),
+    )
+    with op.batch_alter_table("usage_events", schema=None) as batch_op:
+        batch_op.create_index("idx_usage_events_at", ["at", "session"], unique=False)
+
+    op.create_table(
+        "usage_sessions",
+        sa.Column("id", sa.Text(), nullable=False),
+        sa.Column("agent_name", sa.Text(), nullable=False),
+        sa.Column("runtime", sa.Text(), nullable=False),
+        sa.Column("session_id", sa.Text(), nullable=False),
+        sa.Column("parent_id", sa.Text(), nullable=True),
+        sa.Column("first_seen", sa.Text(), nullable=False),
+        sa.Column("last_seen", sa.Text(), nullable=False),
+        sa.Column("source_path", sa.Text(), server_default="", nullable=False),
+        sa.Column("offset", sa.BigInteger(), server_default="0", nullable=False),
+        sa.Column("cursor", sa.Text(), server_default="{}", nullable=False),
+        sa.Column("coverage", sa.Text(), server_default="unavailable", nullable=False),
+        sa.Column("detail", sa.Text(), server_default="", nullable=False),
+        sa.Column("launches", sa.Text(), server_default="[]", nullable=False),
+        sa.Column("context_noted", sa.BigInteger(), server_default="0", nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_usage_sessions")),
+    )
+    with op.batch_alter_table("usage_sessions", schema=None) as batch_op:
+        batch_op.create_index("idx_usage_sessions_agent", ["agent_name", "last_seen"], unique=False)
+
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
+    with op.batch_alter_table("usage_sessions", schema=None) as batch_op:
+        batch_op.drop_index("idx_usage_sessions_agent")
+
+    op.drop_table("usage_sessions")
+    with op.batch_alter_table("usage_events", schema=None) as batch_op:
+        batch_op.drop_index("idx_usage_events_at")
+
+    op.drop_table("usage_events")
     with op.batch_alter_table("swarms", schema=None) as batch_op:
         batch_op.drop_index(
             "uq_swarms_active_issue",
@@ -327,6 +593,33 @@ def downgrade() -> None:
         )
 
     op.drop_table("swarms")
+    with op.batch_alter_table("signing_transitions", schema=None) as batch_op:
+        batch_op.drop_index(
+            "uq_signing_transitions_pending",
+            postgresql_where=sa.text("status = 'pending'"),
+            sqlite_where=sa.text("status = 'pending'"),
+        )
+        batch_op.drop_index("idx_signing_transitions_sender")
+
+    op.drop_table("signing_transitions")
+    with op.batch_alter_table("signing_receipts", schema=None) as batch_op:
+        batch_op.drop_index("idx_signing_receipts_sender")
+
+    op.drop_table("signing_receipts")
+    op.drop_table("signing_receipt_watermarks")
+    op.drop_table("signing_owner")
+    with op.batch_alter_table("signing_nonces", schema=None) as batch_op:
+        batch_op.drop_index("idx_signing_nonces_seen")
+
+    op.drop_table("signing_nonces")
+    op.drop_table("signing_keys")
+    op.drop_table("signing_install")
+    op.drop_table("signing_grants")
+    op.drop_table("signing_enrollments")
+    with op.batch_alter_table("signing_audit", schema=None) as batch_op:
+        batch_op.drop_index("idx_signing_audit_sender")
+
+    op.drop_table("signing_audit")
     op.drop_table("settings")
     op.drop_table("review_lifecycle")
     with op.batch_alter_table("reports", schema=None) as batch_op:
@@ -370,10 +663,12 @@ def downgrade() -> None:
         batch_op.drop_index("idx_deps_sub")
 
     op.drop_table("issue_dependencies")
+    op.drop_table("fleet_snapshots")
     with op.batch_alter_table("events", schema=None) as batch_op:
         batch_op.drop_index("uq_events_delivery_id")
         batch_op.drop_index("idx_events_repo")
         batch_op.drop_index("idx_events_received")
+        batch_op.drop_index("idx_events_delivery_id_lower")
 
     op.drop_table("events")
     with op.batch_alter_table("event_outbox", schema=None) as batch_op:
@@ -390,10 +685,10 @@ def downgrade() -> None:
         batch_op.drop_index(
             "uq_deliveries_active_owner",
             postgresql_where=sa.text(
-                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
             sqlite_where=sa.text(
-                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
         )
         batch_op.drop_index("idx_deliveries_outcome")
@@ -407,6 +702,19 @@ def downgrade() -> None:
 
     op.drop_table("agents")
     op.drop_table("agent_watches")
+    with op.batch_alter_table("agent_transitions", schema=None) as batch_op:
+        batch_op.drop_index(
+            "uq_transitions_open",
+            postgresql_where=sa.text("status = 'pending'"),
+            sqlite_where=sa.text("status = 'pending'"),
+        )
+        batch_op.drop_index("idx_transitions_agent")
+
+    op.drop_table("agent_transitions")
+    with op.batch_alter_table("agent_subscriptions", schema=None) as batch_op:
+        batch_op.drop_index("uq_subscriptions_query")
+
+    op.drop_table("agent_subscriptions")
     op.drop_table("agent_states")
     op.drop_table("acknowledgments")
     # ### end Alembic commands ###

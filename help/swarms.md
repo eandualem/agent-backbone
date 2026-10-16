@@ -46,10 +46,11 @@ a swarm costs several times the tokens.
    by running). Any other role gets a generic brief. 3–5 members total
    is the sweet spot; prefer cheap fast models for scouts.
 3. **Talk only to the coordinator**: `backbone tell NAME "…"` reaches it.
-   Members report to their coordinator; the coordinator reports to you
-   on the issue (and may `tell` you directly).
+   Members report to their coordinator; the coordinator reports directly to you
+   with `backbone tell`. The issue holds the final deliverable.
 4. **Completion**: the coordinator opens a PR from `swarm/NAME` with
-   `Closes #N`. Merging it closes the issue, and the closed issue tears
+   `Closes #N`. Merging into the repository’s default branch closes the issue; otherwise
+   close the issue after the completed merge. The closed issue tears
    the swarm down automatically — members stopped, worktree removed,
    branch kept.
 5. `backbone swarm status NAME` shows the roster;
@@ -100,7 +101,7 @@ verification to reviewers. Scouts are read-only by instruction, not a filesystem
 security boundary. Do not assign every role a production slice. Each shared fix
 has one owner; consuming swarms integrate its reviewed commit rather than editing
 another copy. Work labels for newly registered members use their explicit swarm
-task tag, not incidental issue references or theme color values in output.
+task tag.
 
 Members and coordinators run `backbone inbox` between meaningful steps and before
 commits/handoffs, then acknowledge applied or superseded messages using their `ack_token` with `--ack`. Keep
@@ -109,7 +110,6 @@ Messages to/from active swarm members do not expire during a long turn; this doe
 not interrupt the turn or replace cooperative reads.
 
 Serialize terminal suites sharing host resources with an agreed lock path inside
-all participating sandboxes; keep unit/static work parallel. A lock does not
-remove CPU/process-spawn latency. Generate time-sensitive input gestures without
-slow queries between their events. Retain assertions and product timing budgets;
-record reproduced causes instead of attributing every failure to contention.
+all participating sandboxes; keep unit/static work parallel. Keep assertions
+and product timing budgets unchanged when diagnosing
+resource contention.

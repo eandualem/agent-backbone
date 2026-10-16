@@ -19,14 +19,17 @@ States written (runtime-agnostic vocabulary):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import suppress
 from pathlib import Path
 
 STATE_IDLE = "idle"
@@ -39,6 +42,7 @@ REASON_PLAN = "plan"
 REASON_PERMISSION = "permission"
 REASON_QUESTION = "question"
 REASON_QUOTA = "quota"
+REASON_PROVIDER = "provider"
 
 LAST_MESSAGE_CHARS = 500
 
@@ -195,6 +199,7 @@ def _gh_arguments(argv: list[str]) -> tuple[list[str], dict[str, str]] | None:
         "-T": "template",
         "--template": "template",
         "--recover": "recover",
+        "--attach": "attach",  # gh 2.99+: an image or video to upload (#434)
     }
     flags = {
         "--draft",
@@ -408,6 +413,213 @@ def response_succeeded(response: object) -> bool:
     return response.get("success") is True or response.get("isError") is False
 
 
+_WORD = re.compile(r"[a-z][a-z0-9_-]{0,30}")
+
+
+_KNOWN_PROGRAMS = frozenset(
+    {
+        "backbone",
+        "brew",
+        "cat",
+        "cd",
+        "chmod",
+        "claude",
+        "codex",
+        "cp",
+        "curl",
+        "docker",
+        "find",
+        "gh",
+        "git",
+        "grep",
+        "kill",
+        "kubectl",
+        "ls",
+        "mkdir",
+        "mv",
+        "node",
+        "npm",
+        "npx",
+        "open",
+        "osascript",
+        "pip",
+        "pnpm",
+        "python",
+        "python3",
+        "rm",
+        "rsync",
+        "scp",
+        "sed",
+        "ssh",
+        "tar",
+        "uv",
+        "wget",
+        "yarn",
+    }
+)
+"""Programs named in a refusal notice; any other program is "a local command"."""
+_GH_GROUPS = frozenset(
+    {"issue", "pr", "repo", "release", "run", "workflow", "label", "gist", "api", "auth", "search"}
+)
+_GH_VERBS = frozenset(
+    {
+        "create",
+        "edit",
+        "close",
+        "reopen",
+        "comment",
+        "merge",
+        "view",
+        "list",
+        "delete",
+        "ready",
+        "review",
+        "checkout",
+        "diff",
+        "status",
+        "clone",
+        "fork",
+        "sync",
+        "rename",
+        "archive",
+        "download",
+        "upload",
+        "cancel",
+        "rerun",
+        "watch",
+        "lock",
+        "unlock",
+        "transfer",
+        "pin",
+    }
+)
+_SUBCOMMANDS = {
+    "git": frozenset(
+        {
+            "add",
+            "am",
+            "branch",
+            "checkout",
+            "cherry-pick",
+            "clean",
+            "clone",
+            "commit",
+            "diff",
+            "fetch",
+            "init",
+            "log",
+            "merge",
+            "mv",
+            "pull",
+            "push",
+            "rebase",
+            "remote",
+            "reset",
+            "restore",
+            "revert",
+            "rm",
+            "show",
+            "stash",
+            "status",
+            "switch",
+            "tag",
+            "worktree",
+        }
+    ),
+    "backbone": frozenset(
+        {
+            "agent",
+            "tell",
+            "inbox",
+            "report",
+            "reply",
+            "status",
+            "swarm",
+            "skills",
+            "chrome",
+            "hooks",
+            "config",
+            "up",
+            "down",
+            "service",
+            "diagnostics",
+            "usage",
+            "upgrade",
+        }
+    ),
+    "docker": frozenset({"build", "run", "exec", "push", "pull", "rm", "stop", "start", "compose"}),
+    "npm": frozenset({"install", "ci", "run", "test", "publish", "uninstall", "update"}),
+    "uv": frozenset({"run", "sync", "add", "remove", "pip", "tool", "build", "publish"}),
+    "brew": frozenset({"install", "uninstall", "upgrade", "update"}),
+}
+"""Subcommands a summary may name; any other word may be user content and stops it."""
+_SEPARATORS = frozenset({"&&", "||", ";", "|", "&", ";;", "\n"})
+
+
+def command_summary(command: str) -> str:
+    """``cd; gh issue edit`` for ``cd x && gh issue edit 40 --body-file …``:
+    known programs and their subcommands only, never arguments or file names."""
+    # An unquoted newline separates commands too; a quoted one stays inside its word.
+    lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n")
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        tokens = command.split()
+    segments, current = [], []
+    for token in tokens:
+        # Adjacent operators and newlines come as one token ("&&\n", ";\n\n").
+        if token in _SEPARATORS or not token.strip() or set(token) <= set("();&|\n"):
+            segments.append(current)
+            current = []
+        else:
+            current.append(token)
+    segments.append(current)
+    parts = []
+    for words in segments:
+        words = [w for w in words if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
+        if not words:
+            continue
+        program = os.path.basename(words[0])
+        if program not in _KNOWN_PROGRAMS:
+            summary = "a local command"
+        elif program == "gh" and len(words) > 1 and words[1] in _GH_GROUPS:
+            verb = words[2] if len(words) > 2 and words[1] != "api" else ""
+            summary = " ".join(["gh", words[1], *([verb] if verb in _GH_VERBS else [])])
+        elif len(words) > 1 and words[1] in _SUBCOMMANDS.get(program, ()):
+            summary = f"{program} {words[1]}"
+        else:
+            summary = program
+        if summary not in parts:
+            parts.append(summary)
+    return "; ".join(parts[:3]) or "a shell command"
+
+
+def action_summary(tool: str, tool_input) -> str:
+    """What was refused, safely: names of programs and actions, not their input."""
+    tool_input = tool_input if isinstance(tool_input, dict) else {}
+    if tool == "Bash":
+        return command_summary(str(tool_input.get("command") or ""))
+    match = re.fullmatch(r"mcp__(.+?)__(.+)", tool)
+    if not match:
+        return tool
+    server, name = match.groups()
+    if server != "claude-in-chrome":
+        return f"{server}: {name}"  # another tool's fields may be user content
+    steps = []
+    for action in tool_input.get("actions") or [tool_input]:
+        if not isinstance(action, dict):
+            continue
+        step = str(action.get("name") or name)
+        inner = action.get("input") if isinstance(action.get("input"), dict) else action
+        if _WORD.fullmatch(str(inner.get("action") or "")):
+            step += f":{inner['action']}"
+        if _WORD.fullmatch(step.replace(":", "_")) and step not in steps:
+            steps.append(step)
+    return f"{server}: {name}" + (f" ({', '.join(steps[:4])})" if steps and steps != [name] else "")
+
+
 def plan_title(plan: str) -> str:
     for line in plan.splitlines():
         stripped = line.strip().lstrip("#").strip()
@@ -416,14 +628,98 @@ def plan_title(plan: str) -> str:
     return "Untitled plan"
 
 
+TRANSCRIPT_TAIL_BYTES = 256 * 1024
+
+
+def observed_model(payload: dict, current: dict | None, event: str) -> str | None:
+    """The model the runtime is actually answering with, when it can be known.
+
+    No CLI puts the model in its hook payload today (Claude Code 2.1.267
+    measured 2026-09-10), but Claude Code and Gemini CLI name the transcript,
+    and every reply entry there carries ``"model": "…"``. The tail of that
+    file is read on the events that follow a reply; other events carry the
+    last observation forward. A payload ``model`` field, if one appears, wins.
+    """
+    current = current or {}
+    direct = payload.get("model")
+    if isinstance(direct, str) and direct.strip() and not direct.startswith("<"):
+        return direct.strip()
+    if event in ("Stop", "SessionStart", "UserPromptSubmit", "AfterAgent"):
+        transcript = payload.get("transcript_path")
+        if isinstance(transcript, str) and transcript:
+            found = _model_from_transcript(Path(transcript))
+            if found:
+                return found
+    return current.get("model") or None
+
+
+def transcript_records(path: Path) -> Iterator[dict]:
+    """The JSON records at the end of a JSONL transcript, newest first
+    (the last ``TRANSCRIPT_TAIL_BYTES``; nothing when it cannot be read)."""
+    try:
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            start = max(0, size - TRANSCRIPT_TAIL_BYTES)
+            stream.seek(start)
+            tail = stream.read().decode("utf-8", "replace")
+    except OSError:
+        return
+    if start:
+        tail = tail.partition("\n")[2]  # the first record may be truncated
+    for line in reversed(tail.splitlines()):
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict):
+            yield record
+
+
+def _model_from_transcript(path: Path) -> str | None:
+    """The last reply record's model, never a nested tool argument: Claude
+    Code's ``assistant`` message, or Gemini CLI's ``gemini`` record (0.46)."""
+    for record in transcript_records(path):
+        if record.get("type") == "assistant":
+            message = record.get("message")
+            model = message.get("model") if isinstance(message, dict) else None
+        elif record.get("type") == "gemini":
+            model = record.get("model")
+        else:
+            continue
+        if isinstance(model, str) and 0 < len(model) <= 120 and not any(c in model for c in "<>"):
+            return model
+    return None
+
+
+def prompt_digest(text: str) -> str:
+    """A prompt's identity, whitespace collapsed. Delivery compares it with the
+    digest of the message it pasted: equal means that very message. A runtime
+    that wraps a paste removes its wrapper in its own hook script first."""
+    normalized = " ".join(text.split())
+    return hashlib.sha256(normalized.encode()).hexdigest()
+
+
 def record_factory(payload: dict, current: dict | None, event: str) -> Callable[..., dict]:
     """A ``state(new_state, reason=None, **extra)`` builder that keeps ``issue``,
     ``repo`` and ``started_at`` stable across events and stamps the runtime's
-    session id and the event that produced the record."""
+    session id, the observed model and the event that produced the record.
+    ``prompted_at`` is when the runtime last took a prompt (``UserPromptSubmit``)
+    and ``prompt_digest`` which prompt it was, both kept through the turn's
+    later records: delivery's receipt for a paste."""
     now = time.time()
     current = current or {}
     session_id = payload.get("session_id") or current.get("session_id")
     runtime = os.environ.get("BACKBONE_RUNTIME", "").strip() or current.get("runtime")
+    # An observed model belongs to one session of one runtime: a new one starts without it.
+    moved = any(
+        mine and theirs and mine != theirs
+        for mine, theirs in (
+            (session_id, current.get("session_id")),
+            (runtime, current.get("runtime")),
+        )
+    )
+    model = observed_model(payload, {} if moved else current, event)
 
     def state(new_state: str, reason: str | None = None, **extra) -> dict:
         record = {
@@ -437,10 +733,22 @@ def record_factory(payload: dict, current: dict | None, event: str) -> Callable[
         }
         if session_id:
             record["session_id"] = session_id
+        if launch_id := os.environ.get("BACKBONE_LAUNCH_ID"):
+            record["launch_id"] = launch_id
         if runtime:
             record["runtime"] = runtime
+        if model:
+            record["model"] = model
         if current.get("last_message") is not None:
             record["last_message"] = current["last_message"]
+        if event == "UserPromptSubmit":
+            prompted_at, digest = now, prompt_digest(str(payload.get("prompt") or ""))
+        else:
+            prompted_at, digest = current.get("prompted_at"), current.get("prompt_digest")
+        if prompted_at is not None:
+            record["prompted_at"] = prompted_at
+        if digest:
+            record["prompt_digest"] = digest
         record.update(extra)
         return record
 
@@ -454,6 +762,14 @@ def clip_message(text: str | None) -> str | None:
     return text[:LAST_MESSAGE_CHARS] + ("…" if len(text) > LAST_MESSAGE_CHARS else "")
 
 
+def launch_state_path(state_dir: Path, agent: str, launch_id: object) -> Path | None:
+    """A launch owns its state file: a delayed older writer cannot replace it."""
+    if not isinstance(launch_id, str) or not launch_id:
+        return None
+    identity = hashlib.sha256(launch_id.encode()).hexdigest()
+    return state_dir / "launches" / agent / f"{identity}.json"
+
+
 def write_state(state_dir: Path, agent: str, record: dict) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     plan_text = record.pop("plan_text", None)
@@ -463,9 +779,42 @@ def write_state(state_dir: Path, agent: str, record: dict) -> None:
         plan_path = plans_dir / f"{agent}.md"
         plan_path.write_text(plan_text)
         record["plan_file"] = str(plan_path)
-    target = state_dir / f"{agent}.json"
-    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")  # never shared with another writer
-    tmp.write_text(json.dumps(record))
+    targets = [state_dir / f"{agent}.json"]
+    if scoped := launch_state_path(state_dir, agent, record.get("launch_id")):
+        targets.insert(0, scoped)
+    for target in targets:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(record))
+        os.replace(tmp, target)
+
+
+def remember_usage_session(state_dir: Path, agent: str, record: dict) -> None:
+    """Keep session identity after the next start replaces the current state file."""
+    runtime, session_id = record.get("runtime"), record.get("session_id")
+    if not isinstance(runtime, str) or not isinstance(session_id, str):
+        return
+    if not runtime or not session_id or len(runtime) > 100 or len(session_id) > 300:
+        return
+    launch = record.get("launch_id")
+    identity = hashlib.sha256(
+        f"{agent}\0{runtime}\0{session_id}\0{launch or chr(45)}".encode()
+    ).hexdigest()
+    directory = state_dir / "usage-sessions"
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / (identity + ".json")
+    if target.exists():
+        return  # identity is immutable; collection consumes it after the DB commit
+    value = {
+        "agent": agent,
+        "runtime": runtime,
+        "session_id": session_id,
+        "observed_at": record.get("ts") or time.time(),
+    }
+    if launch:
+        value["launch_id"] = launch
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(value))
     os.replace(tmp, target)
 
 
@@ -475,15 +824,337 @@ def append_action(state_dir: Path, agent: str, action: dict) -> None:
         fh.write(json.dumps({**action, "session": agent}) + "\n")
 
 
-def read_current(state_dir: Path, agent: str) -> dict | None:
+CONTEXT_DIR = "context"
+"""``<state_dir>/context/<agent>/`` — text the backbone offers a *working*
+agent through its runtime's hook, because nothing is ever pasted into a busy
+terminal. The backbone writes ``<key>.md``; whoever renames it first owns it:
+the hook renames it to ``<key>.taken`` and returns the text as hook context,
+the backbone renames it to ``<key>.claimed`` when it is about to paste the
+same message at the prompt instead. ``clear_context`` removes what is left."""
+
+
+def _context_dir(state_dir: Path, agent: str) -> Path:
+    return state_dir / CONTEXT_DIR / agent
+
+
+def offer_context(state_dir: Path, agent: str, key: str, text: str) -> bool:
+    """Backbone side: offer ``text`` under ``key``. False when the hook already took it.
+
+    An offer already there is left as it is (a batch's text never changes).
+    Checked before the receipt, against the hook's rename of ``.md`` to
+    ``.taken``: an offer the hook takes meanwhile is never written again."""
+    directory = _context_dir(state_dir, agent)
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"{key}.md"
+    if target.exists():
+        return True
+    if (directory / f"{key}.taken").exists():
+        return False
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, target)
+    return True
+
+
+def claim_context(state_dir: Path, agent: str, key: str) -> str:
+    """Backbone side, before pasting: ``claimed`` (the offer is withdrawn),
+    ``taken`` (the hook delivered it; do not paste) or ``missing`` (never offered)."""
+    directory = _context_dir(state_dir, agent)
     try:
-        return json.loads((state_dir / f"{agent}.json").read_text())
+        os.rename(directory / f"{key}.md", directory / f"{key}.claimed")
+    except FileNotFoundError:
+        return "taken" if (directory / f"{key}.taken").exists() else "missing"
+    (directory / f"{key}.claimed").unlink(missing_ok=True)
+    return "claimed"
+
+
+def clear_context(state_dir: Path, agent: str, key: str) -> None:
+    directory = _context_dir(state_dir, agent)
+    for suffix in ("md", "taken", "claimed"):
+        (directory / f"{key}.{suffix}").unlink(missing_ok=True)
+
+
+def batch_receipts(state_dir: Path) -> list[Path]:
+    """Backbone side: every queued batch's ``<id>.taken`` receipt. Only numeric
+    keys are batches; steers and notes settle their own."""
+    try:
+        agents = [path for path in (state_dir / CONTEXT_DIR).iterdir() if path.is_dir()]
+    except OSError:
+        return []
+    return [
+        path for directory in agents for path in directory.glob("*.taken") if path.stem.isdigit()
+    ]
+
+
+def prune_context_receipts(receipts: list[Path], keep: set[str]) -> int:
+    """Backbone side: remove the batch receipts whose row is settled. Queue ids
+    can be used again after old rows are pruned, and a receipt left by a
+    restart would then settle a new batch unseen. List the receipts before
+    reading which rows are active: one taken since is never removed."""
+    removed = 0
+    for path in receipts:
+        if path.stem not in keep:
+            path.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
+def clear_agent_context(state_dir: Path, agent: str) -> None:
+    """Backbone side, before a new session: drop every offer left for the
+    previous one. An offer is meant for the session it was written for; the
+    queue row behind a batch survives and is pasted at the new prompt.
+
+    What the previous session already took stays for the backbone to
+    settle: a batch's ``<key>.taken`` (the drain records it delivered rather
+    than pasting it again) and a steer's ``.taken`` or ``.missed``
+    (``settle_steers``)."""
+    directory = _context_dir(state_dir, agent)
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return
+    for path in entries:
+        if not path.is_dir():
+            if path.suffix != ".taken":
+                path.unlink(missing_ok=True)
+            continue
+        try:
+            files = list(path.iterdir())
+        except OSError:
+            continue
+        for item in files:
+            if item.is_dir():
+                shutil.rmtree(item, ignore_errors=True)
+            elif not (item.name.startswith(STEER_PREFIX) and item.suffix in (".taken", ".missed")):
+                item.unlink(missing_ok=True)
+        with suppress(OSError):
+            path.rmdir()  # only once nothing is left to settle
+
+
+def take_context(state_dir: Path, agent: str, launch_id: str | None = None) -> list[str]:
+    """Hook side: claim every offered text (oldest first) and return it.
+
+    Offers for the agent (subscription batches) come first, then the offers
+    scoped to this session (steers under ``<agent>/<launch_id>/``, see
+    ``offer_steer``); ``launch_id`` defaults to the session's own
+    ``BACKBONE_LAUNCH_ID``, so a steer written for another session of the
+    same agent is never taken here. A steer offered to an earlier turn, or
+    to an earlier conversation of this session, is marked ``.missed``
+    instead (see ``offer_steer``); so is an agent offer with a ``.turn``
+    naming an earlier conversation (the context-size note)."""
+    launch_id = launch_id or os.environ.get("BACKBONE_LAUNCH_ID", "").strip()
+    directories = [_context_dir(state_dir, agent)]
+    if launch_id:
+        directories.append(_steer_dir(state_dir, agent, launch_id))
+    current = read_current(state_dir, agent) or {}
+    texts: list[str] = []
+    for directory in directories:
+        try:
+            # Queue ids are monotonic; no stat, so a file the backbone claims
+            # meanwhile cannot abort the whole take.
+            offers = sorted(
+                directory.glob("*.md"),
+                key=lambda path: (
+                    not path.stem.isdigit(),
+                    int(path.stem) if path.stem.isdigit() else 0,
+                    path.stem,
+                ),
+            )
+        except OSError:
+            continue
+        for offer in offers:
+            if _for_an_earlier_turn(offer, current):
+                # That turn ended with no hook event (an interrupt, a provider
+                # failure): its steer is never the next task's.
+                with suppress(OSError):
+                    os.rename(offer, offer.with_suffix(".missed"))
+                continue
+            taken = offer.with_suffix(".taken")
+            try:
+                # Read before renaming: once it is ``.taken`` the backbone may
+                # settle and remove it.
+                text = offer.read_text(encoding="utf-8")
+                os.rename(offer, taken)
+                texts.append(text)
+            except OSError:
+                continue  # the backbone claimed it first, or it is already gone
+    return texts
+
+
+STEER_PREFIX = "steer-"
+"""Offer files under ``<agent>/<launch_id>/`` are ``steer-<8-digit delivery id>``:
+a namespace of their own, so they never collide with a batch's numeric key."""
+
+
+def _steer_dir(state_dir: Path, agent: str, launch_id: str) -> Path:
+    return _context_dir(state_dir, agent) / launch_id
+
+
+def steer_key(delivery_id: int) -> str:
+    return f"{STEER_PREFIX}{delivery_id:08d}"
+
+
+def offer_steer(
+    state_dir: Path,
+    agent: str,
+    launch_id: str,
+    key: str,
+    text: str,
+    turn: dict | None = None,
+) -> bool:
+    """Backbone side: offer a steer to one session of the agent. False when
+    that key was already taken.
+
+    ``turn`` names the turn it is offered to: the hook record's
+    ``prompted_at`` and ``session_id``, read before the offer. They go to
+    ``<key>.turn`` before the offer exists, and the hook hands the offer over
+    only within that turn of that conversation. Without them, the session's
+    next tool call takes the offer, whichever turn that is."""
+    directory = _steer_dir(state_dir, agent, launch_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    if (directory / f"{key}.taken").exists():
+        return False
+    marks = {name: value for name, value in (turn or {}).items() if value is not None}
+    if marks:
+        (directory / f"{key}.turn").write_text(json.dumps(marks), encoding="utf-8")
+    target = directory / f"{key}.md"
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, target)
+    return True
+
+
+def _for_an_earlier_turn(offer: Path, current: dict) -> bool:
+    """Whether a steer was offered to a turn before the current one: its
+    ``.turn`` file names that turn's prompt and conversation, and the current
+    record names another (a newer prompt, or a new conversation after
+    ``/clear``). The values are compared for equality, not ordered, so no
+    clock boundary can misplace an offer. A value missing on either side is
+    not compared; with none, the offer is handed over."""
+    try:
+        offered_to = json.loads(offer.with_suffix(".turn").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(offered_to, dict):
+        return False
+    return any(
+        offered_to.get(name) is not None
+        and current.get(name) is not None
+        and offered_to[name] != current[name]
+        for name in ("prompted_at", "session_id")
+    )
+
+
+def retire_steers(state_dir: Path, agent: str, launch_id: str | None = None) -> None:
+    """Hook side, when the turn ends: steers still offered to this session
+    are for the task that just ended, never the next one; mark them
+    ``.missed`` for the backbone to record as ``not_taken``."""
+    launch_id = launch_id or os.environ.get("BACKBONE_LAUNCH_ID", "").strip()
+    if not launch_id:
+        return
+    try:
+        offers = list(_steer_dir(state_dir, agent, launch_id).glob(f"{STEER_PREFIX}*.md"))
+    except OSError:
+        return
+    for offer in offers:
+        with suppress(OSError):
+            os.rename(offer, offer.with_suffix(".missed"))
+
+
+SteerOffer = tuple[str, str, int, str, float]
+"""``(agent, launch_id, delivery_id, state, age_seconds)`` of one steer file."""
+
+
+def steer_offers(state_dir: Path, agent: str | None = None) -> list[SteerOffer]:
+    """Backbone side: every steer offer on disk as
+    ``(agent, launch_id, delivery_id, state, age_seconds)``; ``state`` is
+    ``offered`` (``.md``), ``taken`` (``.taken``) or ``missed`` (``.missed``,
+    the turn ended first)."""
+    root = state_dir / CONTEXT_DIR
+    found: list[SteerOffer] = []
+    now = time.time()
+    try:
+        agents = [root / agent] if agent else [p for p in root.iterdir() if p.is_dir()]
+    except OSError:
+        return found
+    for agent_dir in agents:
+        try:
+            launches = [p for p in agent_dir.iterdir() if p.is_dir()]
+        except OSError:
+            continue
+        for launch_dir in launches:
+            try:
+                files = [
+                    path
+                    for suffix in ("md", "taken", "missed")
+                    for path in launch_dir.glob(f"{STEER_PREFIX}*.{suffix}")
+                ]
+            except OSError:
+                continue
+            for path in files:
+                digits = path.stem[len(STEER_PREFIX) :]
+                if not digits.isdigit():
+                    continue
+                try:
+                    age = now - path.stat().st_mtime
+                except OSError:
+                    continue
+                state = {".taken": "taken", ".missed": "missed"}.get(path.suffix, "offered")
+                found.append((agent_dir.name, launch_dir.name, int(digits), state, age))
+    return found
+
+
+def expire_steer(state_dir: Path, agent: str, launch_id: str, delivery_id: int) -> bool:
+    """Backbone side: claim an offer nobody took, atomically against the
+    hook's own rename. False when the hook took it first."""
+    offer = _steer_dir(state_dir, agent, launch_id) / f"{steer_key(delivery_id)}.md"
+    try:
+        os.rename(offer, offer.with_suffix(".missed"))
+    except OSError:
+        return False
+    return True
+
+
+def clear_steer(state_dir: Path, agent: str, launch_id: str, delivery_id: int) -> None:
+    directory = _steer_dir(state_dir, agent, launch_id)
+    for suffix in ("md", "taken", "missed", "turn"):
+        (directory / f"{steer_key(delivery_id)}.{suffix}").unlink(missing_ok=True)
+
+
+def hook_context_output(event: str, texts: list[str]) -> str:
+    """The JSON a Claude Code / Codex hook prints to add ``texts`` to the model's context."""
+    return json.dumps(
+        {"hookSpecificOutput": {"hookEventName": event, "additionalContext": "\n\n".join(texts)}}
+    )
+
+
+def read_current(state_dir: Path, agent: str) -> dict | None:
+    target = state_dir / f"{agent}.json"
+    scoped = launch_state_path(state_dir, agent, os.environ.get("BACKBONE_LAUNCH_ID"))
+    if scoped is not None and scoped.exists():
+        target = scoped
+    try:
+        return json.loads(target.read_text())
     except (OSError, ValueError):
         return None
 
 
-def run_hook(derive: Derive, argv: list[str] | None = None) -> int:
+def run_hook(
+    derive: Derive,
+    argv: list[str] | None = None,
+    *,
+    context_events: frozenset[str] = frozenset(),
+    turn_end_events: frozenset[str] = frozenset(),
+    observe: Callable[[dict, Path, str], None] | None = None,
+) -> int:
     """Read the CLI's JSON payload from stdin, derive the state, write it.
+
+    On an event in ``context_events`` (the CLI's hook events whose JSON output
+    may add context to the model) the hook also hands over whatever the
+    backbone offered under ``<state_dir>/context/<agent>/`` — see ``CONTEXT_DIR``.
+    On an event in ``turn_end_events`` it retires this session's open steers.
+    ``observe(payload, state_dir, agent)`` records anything else the runtime's
+    payload tells (Claude's Chrome tab group); its failure changes nothing else.
 
     Usage (as configured by the installer):
         <script> --state-dir /path/to/state [--agent NAME]
@@ -516,8 +1187,20 @@ def run_hook(derive: Derive, argv: list[str] | None = None) -> int:
         record, action = derive(payload, read_current(state_dir, agent))
         if record is not None:
             write_state(state_dir, agent, record)
+            with suppress(OSError):  # history must not suppress acknowledgements
+                remember_usage_session(state_dir, agent, record)
         for entry in action if isinstance(action, list) else ([action] if action else []):
             append_action(state_dir, agent, entry)
+        event = payload.get("hook_event_name", "")
+        if event in context_events:
+            texts = take_context(state_dir, agent)
+            if texts:
+                print(hook_context_output(event, texts))
+        if event in turn_end_events:
+            retire_steers(state_dir, agent)
+        if observe is not None:
+            with suppress(Exception):
+                observe(payload, state_dir, agent)
     except Exception:  # a hook must never make the CLI fail
         # An unexpected payload shape or an unwritable state dir: the
         # backbone falls back to the terminal; the agent is not disturbed.

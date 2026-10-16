@@ -6,7 +6,10 @@ import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from agent_backbone.api.session_updates import (
+    INBOX_PENDING_EVENT,
     SESSIONS_NAMESPACE,
     SESSIONS_UPDATE_EVENT,
     SessionFeed,
@@ -159,3 +162,81 @@ class TestEmit:
             await feed.snapshot()
             await feed.refresh_and_emit()
         assert sio.emit.await_args.args[1] == [_agent("other").model_dump(mode="json")]
+
+
+class TestInboxHint:
+    async def test_hints_once_per_new_row_without_message_text(self, db):
+        sio = MagicMock()
+        sio.emit = AsyncMock()
+        feed = _feed(sio)
+        await db.queue.enqueue(session_name="app", message="secret", delivery_kind="direct_message")
+        await db.queue.enqueue(session_name="app", message="issue", issue_number=7)
+        await feed.hint_inbox(lambda: db.queue.inbox_rows("app"))
+        await feed.hint_inbox(db.queue.inbox_rows, complete=True)  # a tick: nothing new
+        await db.queue.checkpoint("app")  # read, not acknowledged: nothing new
+        await feed.hint_inbox(db.queue.inbox_rows, complete=True)
+        sio.emit.assert_awaited_once_with(
+            INBOX_PENDING_EVENT, {"session": "app", "pending": 1}, namespace=SESSIONS_NAMESPACE
+        )
+
+    async def test_a_message_after_an_acknowledged_one_is_hinted(self, db):
+        sio = MagicMock()
+        sio.emit = AsyncMock()
+        feed = _feed(sio)
+        await db.queue.enqueue(session_name="app", message="one", delivery_kind="direct_message")
+        await feed.hint_inbox(lambda: db.queue.inbox_rows("app"))
+        (row,) = await db.queue.checkpoint("app")
+        await db.queue.acknowledge_checkpoint("app", [row["ack_token"]])
+        await db.queue.enqueue(session_name="app", message="two", delivery_kind="direct_message")
+        await feed.hint_inbox(lambda: db.queue.inbox_rows("app"))
+        assert sio.emit.await_count == 2
+        assert sio.emit.await_args.args[1] == {"session": "app", "pending": 1}
+
+    async def test_a_reused_id_or_an_older_row_now_readable_is_hinted(self):
+        sio = MagicMock()
+        sio.emit = AsyncMock()
+        feed = _feed(sio)
+        await feed.hint_inbox(AsyncMock(return_value={"app": frozenset({(2, "b")})}))
+        await feed.hint_inbox(
+            AsyncMock(return_value={"app": frozenset({(1, "a"), (2, "b")})})
+        )  # held as uncertain
+        await feed.hint_inbox(
+            AsyncMock(return_value={"app": frozenset({(2, "c")})})
+        )  # id 2 pruned and reused
+        assert sio.emit.await_count == 3
+
+    async def test_a_hint_that_failed_to_send_is_sent_again(self):
+        sio = MagicMock()
+        sio.emit = AsyncMock(side_effect=[RuntimeError("gone"), None])
+        feed = _feed(sio)
+        rows = AsyncMock(return_value={"app": frozenset({(1, "a")})})
+        with pytest.raises(RuntimeError):
+            await feed.hint_inbox(rows)
+        await feed.hint_inbox(rows, complete=True)
+        assert sio.emit.await_count == 2
+
+    async def test_an_older_read_never_replaces_a_newer_one(self):
+        sio = MagicMock()
+        sio.emit = AsyncMock()
+        feed = _feed(sio)
+        gate, order = asyncio.Event(), []
+
+        async def tick_read():
+            order.append("tick")
+            await gate.wait()
+            return {"app": frozenset({(1, "a")})}
+
+        async def tell_read():
+            order.append("tell")
+            return {"app": frozenset({(1, "a"), (2, "b")})}
+
+        tick = asyncio.create_task(feed.hint_inbox(tick_read, complete=True))
+        await asyncio.sleep(0)
+        tell = asyncio.create_task(feed.hint_inbox(tell_read))
+        await asyncio.sleep(0)
+        assert order == ["tick"]  # the tell reads after the tick is done
+        gate.set()
+        await tick
+        await tell
+        await feed.hint_inbox(tell_read, complete=True)  # the next tick: nothing new
+        assert sio.emit.await_count == 2

@@ -41,8 +41,13 @@ class TestMacOS:
         plist = tmp_path / "Library" / "LaunchAgents" / "dev.agent-backbone.plist"
         text = plist.read_text()
         assert "<string>/opt/bin/backbone</string><string>up</string>" in text
+        # The backbone rotates its own log; launchd keeps only stray output.
+        log = tmp_path / "data" / "backbone.log"
+        assert f"<string>--log-file</string><string>{log}</string>" in text
+        assert f"<key>StandardOutPath</key><string>{log.with_suffix('.out.log')}</string>" in text
         assert f"<string>{tmp_path / 'data'}</string>" in text
         assert "<key>KeepAlive</key><true/>" in text
+        assert "<key>ProcessType</key><string>Interactive</string>" in text
         assert run.call_args.args[0][:2] == ("launchctl", "bootstrap")
         assert "starts at login" in capsys.readouterr().out
 

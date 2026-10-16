@@ -96,9 +96,28 @@ class EventRepo(Repo):
         issue_number: int | None = None,
         sender: str = "",
         summary: str = "",
+        ignore_case: bool = False,
     ) -> int | None:
-        """Insert an event; returns the row id, or None if the delivery id was already stored."""
+        """Insert an event; returns the row id, or None if the delivery id was already stored.
+
+        ``ignore_case`` also takes a stored id that differs only in letter case
+        as this one: comment and review ids stored before #394 spell the
+        repository as GitHub sent it. Stored ids are never rewritten.
+        """
         async with self._tx() as conn:
+            if ignore_case:
+                stored = await conn.execute(
+                    text(
+                        "SELECT id, processed_at FROM events"
+                        " WHERE lower(delivery_id) = lower(:delivery_id)"
+                        " ORDER BY delivery_id = :delivery_id DESC, id LIMIT 1"
+                    ),
+                    {"delivery_id": delivery_id},
+                )
+                if (stored_row := stored.fetchone()) is not None:
+                    if stored_row._mapping["processed_at"] is None:
+                        return stored_row._mapping["id"]
+                    return None
             result = await conn.execute(
                 text(
                     """INSERT INTO events
@@ -135,12 +154,26 @@ class EventRepo(Repo):
                 return existing_row._mapping["id"]
             return None
 
-    async def mark_processed(self, event_id: int, outcome: str) -> None:
+    async def mark_processed(self, event_id: int, outcome: str, *, processed: bool = True) -> None:
+        """Record what routing did; ``processed=False`` notes a partial outcome
+        and leaves the event replayable."""
         async with self._tx() as conn:
             await conn.execute(
-                text("UPDATE events SET processed_at = :now, outcome = :outcome WHERE id = :id"),
+                text(
+                    "UPDATE events SET processed_at = :now, outcome = :outcome WHERE id = :id"
+                    if processed
+                    else "UPDATE events SET outcome = :outcome WHERE id = :id"
+                ),
                 {"now": now_iso(), "outcome": outcome[:500], "id": event_id},
             )
+
+    async def get(self, event_id: int) -> dict | None:
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text("SELECT * FROM events WHERE id = :id"), {"id": event_id}
+            )
+            row = result.mappings().first()
+            return dict(row) if row else None
 
     async def query(
         self,

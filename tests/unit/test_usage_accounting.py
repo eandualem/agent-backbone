@@ -1,0 +1,807 @@
+"""Accounting tests use numeric fixtures; no services or real user transcripts."""
+
+import json
+from dataclasses import replace
+from decimal import Decimal
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from agent_backbone.config import AgentsConfig, AgentSpec
+from agent_backbone.hooks.backbone_state import remember_usage_session
+from agent_backbone.services.agents import collect_usage, usage_view
+from agent_backbone.services.runtimes import RUNTIMES, read_usage_jsonl
+from agent_backbone.usage import DEFAULT_PRICES, UsageEvent, estimate, timestamp
+from tests.conftest import make_config
+
+T = "2026-09-12T10:00:00Z"
+T2 = "2026-09-12T10:01:00Z"
+
+
+@pytest.fixture(autouse=True)
+def isolated_sources(tmp_path, monkeypatch):
+    for key in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "XDG_DATA_HOME"):
+        monkeypatch.setenv(key, str(tmp_path / key))
+
+
+def claude(message="m1", at=T, output=20, model="claude-opus-5"):
+    return dict(
+        type="assistant",
+        timestamp=at,
+        message=dict(
+            id=message,
+            model=model,
+            usage=dict(
+                input_tokens=100,
+                cache_read_input_tokens=1000,
+                cache_creation_input_tokens=200,
+                output_tokens=output,
+                cache_creation={"ephemeral_1h_input_tokens": 100},
+            ),
+        ),
+    )
+
+
+def codex(total=100, output=20, at=T, cached=50, last=None):
+    values = dict(
+        input_tokens=total,
+        cached_input_tokens=cached,
+        output_tokens=output,
+        reasoning_output_tokens=5,
+        cache_write_input_tokens=0,
+    )
+    return dict(
+        type="event_msg",
+        timestamp=at,
+        payload=dict(
+            type="token_count", info=dict(total_token_usage=values, last_token_usage=last or values)
+        ),
+    )
+
+
+def gemini(message="g1", at=T, **counts):
+    tokens = dict(input=100, output=20, cached=40, thoughts=5, tool=0) | counts
+    return dict(
+        id=message, timestamp=at, type="gemini", content="", model="gemini-3-pro", tokens=tokens
+    )
+
+
+def append(path, *records):
+    with path.open("a") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+
+def config_for(tmp_path, runtime="claude"):
+    config = make_config(
+        tmp_path,
+        agents=AgentsConfig(
+            specs={"worker": AgentSpec(name="worker", dir=str(tmp_path), runtime=runtime)}
+        ),
+    )
+    return config
+
+
+def register(config, runtime="claude", sid="s1", launch=None):
+    remember_usage_session(
+        config.state_dir,
+        "worker",
+        dict(runtime=runtime, session_id=sid, ts=1789207200, launch_id=launch),
+    )
+
+
+async def test_request_revisions_resume_and_cli_switch_are_not_double_counted(
+    tmp_path, db, monkeypatch
+):
+    config = config_for(tmp_path)
+    transcript = tmp_path / "s1.jsonl"
+    append(transcript, claude(output=1), claude(at=T2), claude(at=T2))
+    monkeypatch.setattr(
+        type(RUNTIMES["claude"]),
+        "usage_paths",
+        lambda self, sid, env: [transcript] if sid == "s1" else [],
+    )
+    register(config, launch="launch1")
+    await collect_usage(config, db)
+    assert not list((config.state_dir / "usage-sessions").glob("*.json"))
+    assert (await db.usage.sessions())[0]["launches"] == ["launch1"]
+    await collect_usage(config, db)
+    register(config, launch="launch2")
+    await collect_usage(config, db)
+    events = await db.usage.events()
+    assert len(events) == 1 and events[0]["output_tokens"] == 20
+    assert events[0]["input_tokens"] == 100 and events[0]["cache_read_tokens"] == 1000
+    assert len((await db.usage.sessions())[0]["launches"]) == 2
+    # Same agent, new CLI: a separate conversation, never retroactive relabeling.
+    other = tmp_path / "s2.jsonl"
+    append(
+        other, dict(type="turn_context", payload=dict(model="gpt-6-astra", turn_id="t2")), codex()
+    )
+    monkeypatch.setattr(type(RUNTIMES["codex"]), "usage_paths", lambda self, sid, env: [other])
+    register(config, "codex", "s2")
+    switched = replace(
+        config,
+        agents=AgentsConfig(
+            specs={"worker": replace(config.agents.get("worker"), runtime="codex")}
+        ),
+    )
+    with patch("agent_backbone.services.terminal.session_exists", AsyncMock(return_value=False)):
+        view = await usage_view(switched, db)
+    assert {s["runtime"] for s in view["sessions"]} == {"claude", "codex"}
+    assert view["totals"]["total_tokens"] == 1320 + 120
+    assert len(view["items"]) == 2
+
+
+def test_codex_repeated_cumulative_events_and_model_change(tmp_path):
+    path = tmp_path / "c.jsonl"
+    append(
+        path,
+        dict(type="turn_context", payload=dict(model="gpt-6-astra", turn_id="t1")),
+        codex(),
+        codex(),
+        dict(type="turn_context", payload=dict(model="other", turn_id="t2")),
+        codex(
+            total=300,
+            output=50,
+            cached=150,
+            at=T2,
+            last=dict(input_tokens=200, cached_input_tokens=100, output_tokens=30),
+        ),
+    )
+    batch = read_usage_jsonl(path, 0, {}, RUNTIMES["codex"].parse_usage)
+    assert len(batch.events) == 2
+    assert [e.total_tokens for e in batch.events] == [120, 230]
+    assert [e.model for e in batch.events] == ["gpt-6-astra", "other"]
+    assert batch.events[0].reasoning_tokens == 5  # already within output
+    assert (
+        read_usage_jsonl(path, batch.offset, batch.state, RUNTIMES["codex"].parse_usage).events
+        == []
+    )
+
+
+def test_partial_line_is_retried_and_reset_is_explicit(tmp_path):
+    path = tmp_path / "c.jsonl"
+    append(path, codex())
+    line = json.dumps(codex(total=200, at=T2))
+    with path.open("a") as f:
+        f.write(line[:20])
+    batch = read_usage_jsonl(path, 0, {}, RUNTIMES["codex"].parse_usage)
+    assert len(batch.events) == 1 and not batch.caught_up
+    with path.open("a") as f:
+        f.write(line[20:] + "\n")
+    next_batch = read_usage_jsonl(path, batch.offset, batch.state, RUNTIMES["codex"].parse_usage)
+    assert next_batch.caught_up and next_batch.events[0].input_tokens == 100
+    append(path, codex(total=80, cached=10, at="2026-09-12T10:02:00Z"))
+    reset = read_usage_jsonl(
+        path, next_batch.offset, next_batch.state, RUNTIMES["codex"].parse_usage
+    )
+    assert reset.state["partial"] and reset.events[0].coverage == "partial"
+
+
+def test_cost_accounts_for_cache_duration_and_reasoning_once():
+    event = UsageEvent(
+        key="a",
+        at=T,
+        model="claude-opus-5",
+        input_tokens=1000000,
+        cache_read_tokens=1000000,
+        cache_write_tokens=2000000,
+        cache_write_1h_tokens=1000000,
+        output_tokens=1000000,
+        reasoning_tokens=500000,
+    )
+    assert event.total_tokens == 5000000
+    assert Decimal(estimate(event, DEFAULT_PRICES)["usd"]) == Decimal("46.75")
+    unknown = event.model_copy(update={"model": "unknown"})
+    assert estimate(unknown, DEFAULT_PRICES)["usd"] is None
+
+
+def test_long_context_rate_and_missing_context():
+    event = UsageEvent(
+        key="a",
+        at=T,
+        model="gpt-6-astra",
+        input_tokens=300000,
+        output_tokens=1000,
+        context_tokens=300000,
+    )
+    assert Decimal(estimate(event, DEFAULT_PRICES)["usd"]) == Decimal("6.075")
+    assert (
+        estimate(event.model_copy(update={"context_tokens": None}), DEFAULT_PRICES)["usd"] is None
+    )
+
+
+async def test_child_usage_and_time_filtered_pagination(tmp_path, db, monkeypatch):
+    config = config_for(tmp_path)
+    path = tmp_path / "s1.jsonl"
+    append(path, claude())
+    children = tmp_path / "s1" / "subagents"
+    children.mkdir(parents=True)
+    append(children / "agent-child.jsonl", claude("child", T2, output=40, model="claude-sonnet-5"))
+    monkeypatch.setattr(
+        type(RUNTIMES["claude"]),
+        "usage_paths",
+        lambda self, sid, env: [path] if sid == "s1" else [],
+    )
+    register(config)
+    with patch("agent_backbone.services.terminal.session_exists", AsyncMock(return_value=False)):
+        view = await usage_view(config, db, limit=1)
+        assert view["has_more"] and view["totals"]["observations"] == 2
+        child = next(s for s in view["sessions"] if s["parent_id"])
+        assert child["total_tokens"] == 1340
+        filtered = await usage_view(config, db, since=T2, refresh=False)
+        assert filtered["totals"]["total_tokens"] == 1340
+        models = await usage_view(config, db, by="model", refresh=False)
+        assert len(models["items"]) == 2
+
+
+async def test_cursor_and_events_commit_once_and_pricing_is_reproducible(tmp_path, db):
+    key = await db.usage.remember("worker", "claude", "s", at=T)
+    session = (await db.usage.sessions())[0]
+    event = UsageEvent(key="request", at=T, model="claude-opus-5", input_tokens=1000000)
+    args = dict(
+        path=str(tmp_path / "x"),
+        offset=10,
+        cursor={"x": 1},
+        events=[event],
+        coverage="measured",
+        detail="",
+        prices=DEFAULT_PRICES,
+        observed_at=timestamp(T),
+    )
+    assert await db.usage.ingest(session, **args)
+    assert not await db.usage.ingest(session, **args)
+    current = (await db.usage.sessions())[0]
+    revised = event.model_copy(update={"at": T2, "output_tokens": 1000000})
+    prices = {**DEFAULT_PRICES, "claude-opus-5": {**DEFAULT_PRICES["claude-opus-5"], "input": 999}}
+    assert await db.usage.ingest(
+        current, **{**args, "offset": 20, "events": [revised], "prices": prices}
+    )
+    row = (await db.usage.events(session=key))[0]
+    assert Decimal(row["cost"]["usd"]) == 30
+    assert row["at"] == T
+    with pytest.raises(ValueError):
+        await db.usage.remember("different", "claude", "s", at=T)
+
+
+def test_opencode_reasoning_and_cache_are_counted_once(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "opencode.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE message(id TEXT, session_id TEXT, time_updated INTEGER, data TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO message VALUES (?,?,?,?)",
+            (
+                "m",
+                "s",
+                1789207200000,
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "modelID": "example",
+                        "time": {"created": 1789207200000},
+                        "tokens": {
+                            "total": 10867,
+                            "input": 9965,
+                            "output": 100,
+                            "reasoning": 561,
+                            "cache": {"read": 241, "write": 0},
+                        },
+                    }
+                ),
+            ),
+        )
+    batch = RUNTIMES["opencode"].read_usage(path, 0, {"_session_id": "s"})
+    assert batch.error is None
+    assert batch.events[0].total_tokens == 10867
+    assert batch.events[0].output_tokens == 661
+    assert batch.events[0].reasoning_tokens == 561
+    assert RUNTIMES["opencode"].read_usage(path, 0, {"_session_id": "other"}).events == []
+
+
+async def test_gemini_response_counts_once_with_its_subagents(tmp_path, db, monkeypatch):
+    monkeypatch.setenv("GEMINI_CLI_HOME", str(tmp_path / "gemini"))
+    sid = "5a1e0c2d-7f00-4000-8000-000000000001"
+    chats = tmp_path / "gemini/.gemini/tmp/project/chats"
+    chats.mkdir(parents=True)
+    append(
+        chats / f"session-2026-09-12T10-00-{sid[:8]}.jsonl",
+        dict(sessionId=sid, projectHash="p", startTime=T, lastUpdated=T, kind="main"),
+        dict(id="u1", timestamp=T, type="user", content=[{"text": "hi"}]),
+        gemini(),
+        # 0.46 appends the whole message again whenever it changes.
+        dict(gemini(), toolCalls=[{"id": "c1", "status": "success"}]),
+        {"$set": {"lastUpdated": T2}},
+        {"$rewindTo": "u1"},
+    )
+    (chats / sid).mkdir()
+    append(
+        chats / sid / "child.jsonl",
+        dict(sessionId="child", projectHash="p", startTime=T2, lastUpdated=T2, kind="subagent"),
+        gemini("g2", T2, cached=0, thoughts=0, tool=7),
+    )
+    config = config_for(tmp_path, "gemini")
+    register(config, "gemini", sid)
+    await collect_usage(config, db)
+    await collect_usage(config, db)
+    main, child = await db.usage.events()
+    assert (main["input_tokens"], main["cache_read_tokens"]) == (60, 40)  # input includes cached
+    assert (main["output_tokens"], main["reasoning_tokens"]) == (25, 5)  # thoughts beside output
+    assert (main["model"], main["provider"]) == ("gemini-3-pro", "google")
+    assert main["context_tokens"] == 100
+    assert (child["input_tokens"], child["output_tokens"]) == (107, 20)
+    parent = next(s for s in await db.usage.sessions() if s["session_id"] == sid)
+    assert parent["coverage"] == "measured"
+
+
+def test_gemini_usage_after_an_unreadable_record_is_partial(tmp_path):
+    path = tmp_path / "session.jsonl"
+    append(path, gemini("g1"), dict(gemini("g2"), tokens="invalid"), gemini("g3"))
+    batch = read_usage_jsonl(path, 0, {}, RUNTIMES["gemini"].parse_usage)
+    assert [e.coverage for e in batch.events] == ["measured", "partial"]
+
+
+async def test_persistence_after_restart_and_partial_correction(tmp_path):
+    from agent_backbone.services.database import BackboneDB
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'history.db'}"
+    async with BackboneDB.connect(url) as database:
+        await database.usage.remember("worker", "claude", "s", at=T)
+        session = (await database.usage.sessions())[0]
+        event = UsageEvent(key="m", at=T, model="claude-opus-5", output_tokens=100)
+        assert await database.usage.ingest(
+            session,
+            path="missing",
+            offset=5,
+            cursor={},
+            events=[event],
+            coverage="measured",
+            detail="",
+            prices=DEFAULT_PRICES,
+            observed_at=T,
+        )
+    async with BackboneDB.connect(url) as database:
+        current = (await database.usage.sessions())[0]
+        assert current["offset"] == 5
+        # A later authoritative correction can decrease a counter; don't fabricate a max.
+        revision = event.model_copy(update={"at": T2, "output_tokens": 90})
+        assert await database.usage.ingest(
+            current,
+            path="missing",
+            offset=10,
+            cursor={},
+            events=[revision],
+            coverage="measured",
+            detail="",
+            prices=DEFAULT_PRICES,
+            observed_at=T2,
+        )
+        assert (await database.usage.events())[0]["output_tokens"] == 90
+
+
+async def test_current_session_uses_runtime_observation_not_configured_cli(
+    tmp_path, db, monkeypatch
+):
+    from agent_backbone.services.agents import AgentState, StateSnapshot
+
+    config = config_for(tmp_path, "claude")
+    await db.usage.remember("worker", "codex", "s1", at=T)
+    with (
+        patch("agent_backbone.services.terminal.session_exists", AsyncMock(return_value=True)),
+        patch(
+            "agent_backbone.services.agents._inference.agent_state",
+            AsyncMock(
+                return_value=StateSnapshot(state=AgentState.BUSY, runtime="codex", session_id="s1")
+            ),
+        ),
+    ):
+        await db.usage.remember("worker", "claude", "old", at=T)
+        view = await usage_view(config, db, refresh=False, current_only=True)
+    assert len(view["sessions"]) == 1
+    assert view["sessions"][0]["current"] is True
+    assert view["sessions"][0]["runtime"] == "codex"
+    assert view["sessions"][0]["coverage"] == "unavailable"
+    assert view["sessions"][0]["estimated_usd"] is None
+
+
+async def test_usage_api_auth_validation_and_payload(api_client, auth_headers):
+    assert (await api_client.get("/api/usage?refresh=false")).status_code == 401
+    api_client.headers.update(auth_headers)
+    response = await api_client.get("/api/usage?refresh=false")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["items"] == [] and data["totals"]["estimated_usd"] is None
+    assert (await api_client.get("/api/usage?limit=0")).status_code == 422
+    assert (await api_client.get("/api/usage?since=not-a-time")).status_code == 422
+    assert (await api_client.get("/api/usage?runtime=unknown")).status_code == 422
+
+
+def test_codex_fork_inherited_baseline_is_not_new_spend(tmp_path):
+    path = tmp_path / "fork.jsonl"
+    append(
+        path,
+        dict(type="session_meta", payload=dict(timestamp=T)),
+        codex(
+            total=10000,
+            output=500,
+            cached=9000,
+            last=dict(input_tokens=100, cached_input_tokens=50, output_tokens=20),
+        ),
+    )
+    batch = read_usage_jsonl(path, 0, {}, RUNTIMES["codex"].parse_usage)
+    assert batch.events[0].total_tokens == 120
+    assert batch.state["partial"]
+
+
+def test_codex_child_discovery_uses_explicit_lineage(tmp_path):
+    root = tmp_path / "sessions"
+    root.mkdir()
+    child = root / "child.jsonl"
+    append(
+        child,
+        dict(
+            type="session_meta",
+            payload=dict(
+                id="child", source={"subagent": {"thread_spawn": {"parent_thread_id": "parent"}}}
+            ),
+        ),
+    )
+    unrelated = root / "unrelated.jsonl"
+    append(unrelated, dict(type="session_meta", payload=dict(id="other", source="cli")))
+    assert RUNTIMES["codex"].usage_children(
+        root / "parent.jsonl", "parent", {"CODEX_HOME": str(tmp_path)}
+    ) == [("child", child)]
+
+
+def test_claude_copied_conversation_history_is_excluded():
+    record = {**claude(), "sessionId": "old"}
+    assert RUNTIMES["claude"].parse_usage(record, {"_session_id": "new"}) is None
+    assert RUNTIMES["claude"].parse_usage(record, {"_session_id": "old/agent-child"}) is not None
+
+
+def test_missing_cache_duration_is_unpriced_but_tokens_retained():
+    record = claude()
+    del record["message"]["usage"]["cache_creation"]
+    event = RUNTIMES["claude"].parse_usage(record, {})
+    assert event.total_tokens == 1320
+    assert estimate(event, DEFAULT_PRICES)["usd"] is None
+
+
+def test_opencode_large_history_makes_progress_across_equal_timestamps(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "opencode.db"
+    encoded = json.dumps(
+        {"role": "assistant", "time": {"created": 1789207200000}, "tokens": {"input": 1}}
+    )
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE TABLE message(id TEXT,session_id TEXT,time_updated INTEGER,data TEXT)")
+        c.executemany(
+            "INSERT INTO message VALUES (?,?,?,?)",
+            [(f"m{i:05}", "s", 1789207200000, encoded) for i in range(10002)],
+        )
+    first = RUNTIMES["opencode"].read_usage(path, 0, {"_session_id": "s"})
+    assert first.error is None and not first.caught_up and len(first.events) == 10000
+    second = RUNTIMES["opencode"].read_usage(path, first.offset, first.state)
+    assert second.caught_up and len(second.events) == 2
+    assert not {e.key for e in first.events} & {e.key for e in second.events}
+
+
+def test_codex_missing_observations_keep_tokens_but_do_not_price_gap(tmp_path):
+    path = tmp_path / "gap.jsonl"
+    append(
+        path,
+        codex(),
+        codex(
+            total=1000,
+            output=100,
+            at=T2,
+            last={"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 10},
+        ),
+    )
+    batch = RUNTIMES["codex"].read_usage(path, 0, {})
+    assert sum(e.total_tokens for e in batch.events) == 1100
+    assert batch.state["partial"] and batch.events[-1].coverage == "partial"
+
+
+def test_rotation_keeps_session_identity_filter(tmp_path):
+    path = tmp_path / "current.jsonl"
+    append(path, {**claude(), "sessionId": "current"})
+    before = RUNTIMES["claude"].read_usage(path, 0, {"_session_id": "current"})
+    replacement = tmp_path / "replacement"
+    append(replacement, {**claude("unrelated"), "sessionId": "other"})
+    replacement.replace(path)
+    after = RUNTIMES["claude"].read_usage(path, before.offset, before.state)
+    assert after.events == [] and after.state["partial"]
+    assert after.state["_session_id"] == "current"
+
+
+def test_opencode_malformed_observation_keeps_coverage_partial_after_recovery(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "opencode.db"
+
+    def message(n):
+        return json.dumps(
+            {
+                "role": "assistant",
+                "time": {"created": 1789207200000},
+                "tokens": {"input": n, "output": 1},
+            }
+        )
+
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE TABLE message(id TEXT,session_id TEXT,time_updated INTEGER,data TEXT)")
+        c.executemany(
+            "INSERT INTO message VALUES (?,?,?,?)",
+            [(str(i), "s", 1789207200000, message(n)) for i, n in enumerate([1, -1, 2])],
+        )
+    first = RUNTIMES["opencode"].read_usage(path, 0, {"_session_id": "s"})
+    assert first.error and first.state["partial"]
+    second = RUNTIMES["opencode"].read_usage(path, first.offset, first.state)
+    assert second.error is None and second.state["partial"]
+    assert [e.input_tokens for e in second.events] == [2]
+
+
+def test_rotation_between_open_and_stat_uses_descriptor(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    path = tmp_path / "live.jsonl"
+    append(path, claude("old"))
+    stat = path.stat()
+    replacement = tmp_path / "next.jsonl"
+    append(replacement, claude("new", output=100000))
+    original = Path.open
+    rotated = False
+
+    def rotating_open(p, *args, **kwargs):
+        nonlocal rotated
+        stream = original(p, *args, **kwargs)
+        if p == path and not rotated:
+            rotated = True
+            replacement.replace(path)
+        return stream
+
+    monkeypatch.setattr(Path, "open", rotating_open)
+    first = RUNTIMES["claude"].read_usage(path, 0, {})
+    assert first.state["_file"] == f"{stat.st_dev}:{stat.st_ino}"
+    second = RUNTIMES["claude"].read_usage(path, first.offset, first.state)
+    assert [e.key for e in second.events] == ["new"]
+
+
+def test_codex_counter_only_change_has_distinct_event_key(tmp_path):
+    path = tmp_path / "reasoning.jsonl"
+    first = codex()
+    second = codex(
+        last={
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 5,
+        }
+    )
+    second["payload"]["info"]["total_token_usage"]["reasoning_output_tokens"] = 10
+    append(path, first, second)
+    batch = RUNTIMES["codex"].read_usage(path, 0, {})
+    assert len({e.key for e in batch.events}) == 2
+    assert sum(e.total_tokens for e in batch.events) == 120
+
+
+@pytest.mark.parametrize("tokens", ["invalid", {"input": 1, "cache": "invalid"}])
+def test_opencode_invalid_structured_tokens_return_partial_batch(tmp_path, tokens):
+    import sqlite3
+
+    path = tmp_path / "opencode.db"
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE TABLE message(id TEXT,session_id TEXT,time_updated INTEGER,data TEXT)")
+        c.execute(
+            "INSERT INTO message VALUES (?,?,?,?)",
+            ("m", "s", 1789207200000, json.dumps({"role": "assistant", "tokens": tokens})),
+        )
+    batch = RUNTIMES["opencode"].read_usage(path, 0, {"_session_id": "s"})
+    assert batch.error == "ValueError" and batch.state["partial"]
+
+
+async def test_batch_revisions_keep_original_identity_prices_and_atomic_checkpoint(db):
+    key = await db.usage.remember("worker", "claude", "batch", at=T)
+    args = dict(
+        path="source",
+        offset=1,
+        cursor={},
+        coverage="measured",
+        detail="",
+        prices=DEFAULT_PRICES,
+        observed_at=T,
+    )
+    original = UsageEvent(key="old", at=T, model="claude-opus-5", input_tokens=1_000_000)
+    await db.usage.ingest(await db.usage.session(key), events=[original], **args)
+    new = original.model_copy(update={"key": "new", "turn_id": "first-turn"})
+    prices = {"claude-opus-5": {**DEFAULT_PRICES["claude-opus-5"], "input": 99}}
+    await db.usage.ingest(
+        await db.usage.session(key),
+        events=[
+            original.model_copy(update={"at": T2, "output_tokens": 1_000_000}),
+            new,
+            new.model_copy(update={"at": T2, "output_tokens": 2, "turn_id": "later-turn"}),
+            new.model_copy(update={"output_tokens": 999}),  # stale within the same batch
+            original,  # stale compared with the existing request's new revision
+        ],
+        **{**args, "offset": 2, "prices": prices},
+    )
+    rows = {e["key"]: e for e in await db.usage.events(session=key)}
+    assert Decimal(rows["old"]["cost"]["usd"]) == 30
+    assert Decimal(rows["new"]["cost"]["usd"]) == Decimal("99.00005")
+    assert rows["new"]["at"] == T and rows["new"]["turn_id"] == "first-turn"
+    with pytest.raises(ValueError):
+        await db.usage.ingest(
+            await db.usage.session(key),
+            events=[
+                new.model_copy(update={"key": "extra"}),
+                new.model_copy(update={"input_tokens": -1}),
+            ],
+            **{**args, "offset": 3},
+        )
+    assert (await db.usage.session(key))["offset"] == 2
+    assert len(await db.usage.events(session=key)) == 2
+
+
+@pytest.mark.parametrize("already_linked", [False, True])
+async def test_current_usage_links_previously_registered_children(
+    tmp_path, db, monkeypatch, already_linked
+):
+    from agent_backbone.services.agents import AgentState, StateSnapshot
+    from agent_backbone.usage import usage_id
+
+    config = config_for(tmp_path)
+    path = tmp_path / "s1.jsonl"
+    append(path, claude())
+    children = tmp_path / "s1" / "subagents"
+    children.mkdir(parents=True)
+    append(children / "agent-child.jsonl", claude("child"))
+    await db.usage.remember(
+        "worker",
+        "claude",
+        "s1/agent-child",
+        at=T,
+        parent_id=usage_id("claude", "s1") if already_linked else None,
+    )
+    monkeypatch.setattr(
+        type(RUNTIMES["claude"]),
+        "usage_paths",
+        lambda self, sid, env: [path] if sid == "s1" else [],
+    )
+    register(config)
+    with (
+        patch("agent_backbone.services.terminal.session_exists", AsyncMock(return_value=True)),
+        patch(
+            "agent_backbone.services.agents._inference.agent_state",
+            AsyncMock(
+                return_value=StateSnapshot(state=AgentState.BUSY, runtime="claude", session_id="s1")
+            ),
+        ),
+    ):
+        view = await usage_view(config, db, current_only=True)
+    child = next(s for s in view["sessions"] if s["session_id"] == "s1/agent-child")
+    assert child["parent_id"] and view["totals"]["observations"] == 2
+    with pytest.raises(ValueError, match="conflicting parent"):
+        await db.usage.remember("worker", "claude", "s1/agent-child", at=T, parent_id="other")
+
+
+def test_jsonl_oversized_record_progress_preserves_following_and_partial_lines(tmp_path):
+    path = tmp_path / "large.jsonl"
+    valid = json.dumps(claude()).encode() + b"\n"
+    budget = len(valid) + 10
+    path.write_bytes(
+        json.dumps({"tool_output": "x" * (budget * 3)}).encode() + b"\n" + valid + valid[:-1]
+    )
+    offset, state, events = 0, {}, []
+    for _ in range(8):
+        batch = read_usage_jsonl(path, offset, state, RUNTIMES["claude"].parse_usage, budget=budget)
+        assert 0 <= batch.offset - offset <= budget
+        offset, state = batch.offset, batch.state
+        events.extend(batch.events)
+    assert len(events) == 1 and state["partial"] and not batch.caught_up
+    with path.open("ab") as stream:
+        stream.write(b"\n")
+    last = read_usage_jsonl(path, offset, state, RUNTIMES["claude"].parse_usage, budget=budget)
+    assert len(last.events) == 1 and last.caught_up and last.state["partial"]
+
+
+def test_jsonl_rotation_while_skipping_and_unchanged_eof(tmp_path):
+    from pathlib import Path
+
+    path = tmp_path / "large.jsonl"
+    path.write_bytes(b"x" * 2000)
+    first = read_usage_jsonl(path, 0, {}, RUNTIMES["claude"].parse_usage, budget=1000)
+    assert first.state["_skip_line"]
+    replacement = tmp_path / "replacement.jsonl"
+    append(replacement, claude("replacement"))
+    replacement.replace(path)
+    changed = read_usage_jsonl(path, first.offset, first.state, RUNTIMES["claude"].parse_usage)
+    assert [e.key for e in changed.events] == ["replacement"]
+    assert changed.state["partial"] and "_skip_line" not in changed.state
+    with patch.object(Path, "open", side_effect=AssertionError("unchanged source reopened")):
+        same = read_usage_jsonl(path, changed.offset, changed.state, RUNTIMES["claude"].parse_usage)
+    assert same.caught_up and not same.events
+    append(path, claude("appended"))
+    later = read_usage_jsonl(path, same.offset, same.state, RUNTIMES["claude"].parse_usage)
+    assert [e.key for e in later.events] == ["appended"]
+
+
+async def test_streamed_usage_page_preserves_full_exact_totals(tmp_path, db):
+    from sqlalchemy import insert
+
+    from agent_backbone.services.database.models import UsageEventORM
+
+    key = await db.usage.remember("past-worker", "claude", "large", at=T)
+    event = UsageEvent(key="request", at=T, model="claude-opus-5", input_tokens=1)
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            insert(UsageEventORM),
+            [
+                dict(
+                    session=key,
+                    event_key=f"{i:04}",
+                    at=T,
+                    model=event.model,
+                    data=event.model_copy(update={"key": f"{i:04}"}).model_dump_json(),
+                    cost=json.dumps(
+                        {"usd": "0.000000000000000000001", "basis": None, "reason": None}
+                    ),
+                )
+                for i in range(1001)
+            ],
+        )
+    config = config_for(tmp_path)
+    view = await usage_view(config, db, session=key, refresh=False, offset=999, limit=1)
+    assert [e["key"] for e in view["items"]] == ["0999"]
+    assert view["total_items"] == 1001 and view["next_offset"] == 1000
+    assert view["totals"]["input_tokens"] == 1001
+    assert Decimal(view["totals"]["estimated_usd"]) == Decimal("0.000000000000000001001")
+    assert view["sessions"][0]["observations"] == 1001
+    current = await usage_view(config, db, refresh=False, current_only=True)
+    assert current["items"] == [] and current["totals"]["observations"] == 0
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_registration_conflict_has_safe_agent_scoped_evidence(tmp_path, db, runtime):
+    config = config_for(tmp_path, runtime)
+    await db.usage.remember("original-owner", runtime, "private-session", at=T)
+    register(config, runtime, "private-session")
+    register(config, runtime, "valid-session")
+    result = await collect_usage(config, db)
+    assert result["checks"] == [
+        {
+            "agent_name": "worker",
+            "runtime": runtime,
+            "stage": "usage_registration",
+            "error_type": "ValueError",
+        }
+    ]
+    assert "worker/" + runtime in result["errors"][0]
+    assert "private-session" not in str(result["checks"])
+    # A conflict is evidence, never permission to reassign somebody else's history.
+    assert {row["agent_name"] for row in await db.usage.sessions()} == {"worker", "original-owner"}
+    assert len(list((config.state_dir / "usage-sessions").glob("*.json"))) == 1
+
+
+async def test_usage_source_failure_is_separate_from_registration(tmp_path, db, monkeypatch):
+    config = config_for(tmp_path)
+    path = tmp_path / "source.jsonl"
+    append(path, claude())
+    monkeypatch.setattr(RUNTIMES["claude"], "usage_paths", lambda sid, env: [path])
+
+    def fail(*args):
+        raise OSError("private path or provider message")
+
+    monkeypatch.setattr(RUNTIMES["claude"], "read_usage", fail)
+    register(config)
+    result = await collect_usage(config, db)
+    assert {row["stage"]: row["error_type"] for row in result["checks"]} == {
+        "usage_registration": None,
+        "usage_source": "OSError",
+    }
+    assert "private path" not in str(result)

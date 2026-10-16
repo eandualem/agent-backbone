@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
 import sys
 import tempfile
 import uuid
+from pathlib import Path
 
 from agent_backbone.services.terminal import (
     capture_pane,
@@ -27,31 +30,58 @@ async def wait_for_output(session: str, expected: str) -> None:
 async def main() -> None:
     session = f"backbone-smoke-{uuid.uuid4().hex}"
     marker = uuid.uuid4().hex
+    # Characters tmux's command syntax treats specially, handed over on stdin.
+    value = f"$HOME ~ 'q' \"d\" \\ {marker[:8]}"
     program = (
-        "import sys\n"
-        "print('smoke-ready', flush=True)\n"
+        "import os, sys\n"
+        "print('smoke-ready:' + os.environ['BACKBONE_SMOKE'] + os.environ['SHELL'], flush=True)\n"
         "for line in sys.stdin:\n"
         "    print('received:' + line.strip(), flush=True)\n"
     )
-    with tempfile.TemporaryDirectory(prefix="backbone-smoke-") as directory:
+    # Under /tmp, tmux's own default: the socket path stays within macOS's 104 bytes.
+    with tempfile.TemporaryDirectory(prefix="backbone-smoke-", dir="/tmp") as directory:
+        # A private server, never the one the caller's own session runs in (#351).
+        os.environ.pop("TMUX", None)
+        os.environ.pop("TMUX_PANE", None)
+        os.environ["TMUX_TMPDIR"] = directory
+        tempfile.tempdir = directory  # where start_session writes the environment file
+        socket = Path(directory) / f"tmux-{os.getuid()}" / "default"
         try:
             if not await start_session(
-                session, working_dir=directory, command=[sys.executable, "-u", "-c", program]
+                session,
+                working_dir=directory,
+                command=[sys.executable, "-u", "-c", program],
+                # tmux sets SHELL in the pane; the agent's own value must win.
+                environment={"BACKBONE_SMOKE": value, "SHELL": "/smoke/sh"},
             ):
                 raise RuntimeError("could not start the smoke session")
-            await wait_for_output(session, "smoke-ready")
-            fields = await query_format_vars(session, "session_name=#{session_name}")
+            await wait_for_output(session, f"smoke-ready:{value}/smoke/sh")
+            fields = await query_format_vars(
+                session,
+                "session_name=#{session_name}\nsocket_path=#{socket_path}\n"
+                "start=#{pane_start_command}",
+            )
+            if marker[:8] in fields.get("start", ""):
+                raise RuntimeError(f"an environment value is in the start command: {fields!r}")
+            if leftover := list(Path(directory).glob("backbone-env-*")):
+                raise RuntimeError(f"the environment file outlived its reading: {leftover!r}")
             if fields.get("session_name") != session:
                 raise RuntimeError(f"display-message targeted the wrong session: {fields!r}")
+            server = Path(fields.get("socket_path", "")).resolve()
+            if not server.is_relative_to(Path(directory).resolve()):
+                raise RuntimeError(f"refusing to run on a server outside {directory}: {fields!r}")
             if not await paste_message(session, marker):
                 raise RuntimeError("paste_message failed")
             if not await send_keys(session, "Enter"):
                 raise RuntimeError("send_keys failed")
             await wait_for_output(session, f"received:{marker}")
         finally:
-            if not await stop_session(session):
+            removed = await stop_session(session)
+            # A user configuration with ``exit-empty off`` keeps an empty server alive.
+            subprocess.run(["tmux", "-S", str(socket), "kill-server"], capture_output=True)
+            if not removed:
                 raise RuntimeError(f"could not remove smoke session {session}")
-    print("tmux smoke passed: paste, keys, capture, display and cleanup")
+    print("tmux smoke passed: environment, paste, keys, capture, display and cleanup")
 
 
 if __name__ == "__main__":

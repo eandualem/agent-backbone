@@ -1,7 +1,6 @@
 """Behavioral regressions for the consolidated configuration backlog."""
 
 import asyncio
-import json
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
@@ -13,9 +12,8 @@ from agent_backbone.config import AgentsConfig, AgentSpec, build_config, validat
 from agent_backbone.services.agents import AgentStore, approve_agent
 from agent_backbone.services.integrations import Integration, Integrations
 from agent_backbone.services.runtimes import RUNTIMES
-from agent_backbone.services.runtimes.claude import pre_accept_bypass
 from agent_backbone.services.scheduler import PeriodicScheduler
-from agent_backbone.templates import render_agent_brief
+from agent_backbone.templates import TemplateDirs, render_agent_brief
 
 
 @pytest.mark.parametrize("question", ["Choose a session", "Quick safety check", "Unknown picker"])
@@ -35,34 +33,23 @@ async def test_unnumbered_choices_block_delivery_and_approval(question):
     assert not rt.detect_active_dialog(pane + "\n❯ ")
 
 
-def test_bypass_consent_preserves_config_and_handles_invalid_json(tmp_path):
-    path = tmp_path / "claude.json"
-    path.write_text('{"projects":{"a":{"hasTrustDialogAccepted":true}},"other":42}')
-    assert pre_accept_bypass(claude_config=path)
-    saved = json.loads(path.read_text())
-    assert saved["bypassPermissionsModeAccepted"] is True
-    assert saved["other"] == 42 and saved["projects"]["a"]["hasTrustDialogAccepted"]
-    path.write_text("broken")
-    assert not pre_accept_bypass(claude_config=path)
-    assert path.read_text() == "broken"
-
-
 def test_policy_order_literal_content_and_full_override(tmp_path):
+    dirs = TemplateDirs.default(tmp_path)
     policies = tmp_path / "policies"
     policies.mkdir()
     (policies / "pr.md").write_text("Review {literal} before merging.")
     (policies / "work.md").write_text("Record the result.")
-    brief = render_agent_brief({"agent_name": "a"}, tmp_path, policy_names=("pr", "work"))
+    brief = render_agent_brief({"agent_name": "a"}, dirs, policy_names=("pr", "work"))
     assert "backbone help" in brief
     assert brief.index("{literal}") < brief.index("Record the result")
     with pytest.raises(ValueError, match="Cannot read configured"):
-        render_agent_brief({}, tmp_path, policy_names=("missing",))
+        render_agent_brief({}, dirs, policy_names=("missing",))
     with pytest.raises(ValueError):
         validate_setting("agents.shared_policy", ["../secrets"])
     (tmp_path / "agent-brief.md").write_text("Full control")
     with pytest.raises(ValueError, match="Cannot read configured shared policy"):
-        render_agent_brief({}, tmp_path, policy_names=("missing",))
-    assert "Review {literal}" in render_agent_brief({}, tmp_path, policy_names=("pr",))
+        render_agent_brief({}, dirs, policy_names=("missing",))
+    assert "Review {literal}" in render_agent_brief({}, dirs, policy_names=("pr",))
 
 
 @pytest.mark.parametrize(

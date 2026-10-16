@@ -6,7 +6,7 @@ import logging
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agent_backbone.api.deps import (
     get_agent_store,
@@ -20,19 +20,25 @@ from agent_backbone.api.models import (
     AgentApproveResponse,
     AgentDenyResponse,
     AgentInspectResponse,
+    AgentOutputResponse,
+    AgentRestartRequest,
     AgentStartRequest,
     AgentStartResponse,
     AgentStateDetail,
     AgentStopResponse,
+    AgentTransitionView,
     AgentUpdateRequest,
     DeliveryRecord,
     ListEnvelope,
+    OutputMessage,
     RuntimeInfo,
     StateUpdateRequest,
+    SubscribeRequest,
+    UnsubscribeRequest,
     WatchRequest,
 )
 from agent_backbone.api.session_updates import SessionFeed
-from agent_backbone.config import BackboneConfig
+from agent_backbone.config import AgentSpec, BackboneConfig
 from agent_backbone.services.agents import (
     AgentConfigView,
     AgentStore,
@@ -42,16 +48,25 @@ from agent_backbone.services.agents import (
     deny_agent,
     read_state_file,
     record_answer,
+    subscription_views,
     write_state_file,
 )
 from agent_backbone.services.agents.operations import (
     StartRequest,
+    relink_skills,
     resolve_agent,
     start_resolved,
     stop_agent_session,
 )
 from agent_backbone.services.agents.operations import (
     forget_agent as forget_agent_op,
+)
+from agent_backbone.services.agents.transcript import MAX_MESSAGES, output_page
+from agent_backbone.services.agents.transitions import (
+    TransitionPending,
+    TransitionRequest,
+    parse_start_at,
+    request_transition,
 )
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.routing import get_session_intelligence
@@ -78,7 +93,14 @@ class AgentRenameRequest(BaseModel):
     name: str
 
 
-@router.post("/agents/{name}/tags", response_model=AgentConfigView)
+class AgentTagsView(AgentConfigView):
+    """An agent after ``tag``/``untag``, with what reached its running session."""
+
+    relinked: list[str] = Field(default_factory=list)
+    """Evidence lines from bringing a running session's skill links in line now."""
+
+
+@router.post("/agents/{name}/tags", response_model=AgentTagsView)
 async def tag_agent(
     name: str, body: AgentTagsRequest, store: AgentStore = Depends(get_agent_store)
 ):
@@ -88,7 +110,8 @@ async def tag_agent(
         raise HTTPException(status_code=404, detail=f"unknown agent '{name}'") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return AgentConfigView.from_spec(spec)
+    relinked = await relink_skills(store.config, [spec])
+    return AgentTagsView(**AgentConfigView.from_spec(spec).model_dump(), relinked=relinked)
 
 
 @router.post("/agents/{name}/rename", response_model=AgentConfigView)
@@ -138,7 +161,8 @@ async def inspect_agent(
 ):
     """Everything the backbone knows about an agent, with the evidence behind it."""
     spec = config.agents.get(name)
-    online = await session_exists(name)
+    # An inbox-only agent has no session: one with its name is not its own.
+    online = not (spec is not None and spec.inbox_only) and await session_exists(name)
     profile = await get_session_intelligence(name, config)
 
     tmux_vars: dict = {}
@@ -162,16 +186,20 @@ async def inspect_agent(
         recent = await db.deliveries.query(session_name=name, limit=10)
     except Exception:
         recent = []
+    transitions = await db.transitions.list_for(name, limit=1)
 
     return AgentInspectResponse(
         name=name,
         known=spec is not None,
         online=online,
         dir=str(spec.path) if spec else "",
+        description=spec.description if spec else "",
+        tags=list(spec.tags) if spec else [],
         runtime=profile.runtime if online else (spec.runtime if spec else ""),
         model=spec.model if spec else None,
         repo=spec.repo if spec else "",
         watches=list(spec.watches) if spec else [],
+        subscriptions=[view.model_dump() for view in subscription_views(spec)],
         state=profile.agent_state.value if online else "offline",
         reason=profile.reason,
         current_issue=profile.current_issue,
@@ -186,6 +214,7 @@ async def inspect_agent(
         tmux=tmux_vars,
         pane_tail=pane_tail,
         recent_deliveries=[DeliveryRecord(**row) for row in recent],
+        restart=AgentTransitionView.from_row(transitions[0]) if transitions else None,
     )
 
 
@@ -242,7 +271,9 @@ def _request(body: AgentStartRequest, *, name: str | None = None) -> StartReques
         model=body.model,
         resume=body.resume,
         watch=tuple(body.watch),
+        tags=tuple(body.tags),
         wait=body.wait,
+        inbox_only=body.inbox_only,
     )
 
 
@@ -286,6 +317,58 @@ async def stop_agent(
     return AgentStopResponse(ok=ok, session=session)
 
 
+@router.post("/agents/{session}/restart", response_model=AgentTransitionView)
+async def restart_agent(
+    session: str,
+    body: AgentRestartRequest | None = None,
+    config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
+):
+    """Accept a one-time stop/restart. Validated and persisted here; the
+    ``agent-transitions`` job stops the session and starts the replacement,
+    so a caller asking for its own session cannot lose the start."""
+    spec = registered_agent_or_404(config, session)
+    body = body or AgentRestartRequest()
+    try:
+        req = TransitionRequest(
+            runtime=body.runtime,
+            model=body.model,
+            resume=body.resume,
+            start=body.start,
+            delay_seconds=body.delay_seconds,
+            start_at=parse_start_at(body.start_at) if body.start_at else None,
+            message=body.message or None,
+            requested_by=body.from_entity,
+        )
+        row = await request_transition(db, config, spec, req)
+    except TransitionPending as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return AgentTransitionView.from_row(row)
+
+
+@router.get("/agents/{session}/restarts", response_model=list[AgentTransitionView])
+async def list_restarts(
+    session: str,
+    limit: int = Query(5, ge=1, le=50),
+    config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
+):
+    """Recent transitions of a registered agent, newest first, with their results."""
+    registered_agent_or_404(config, session)
+    rows = await db.transitions.list_for(session, limit)
+    return [AgentTransitionView.from_row(row) for row in rows]
+
+
+def _terminal_agent_or_409(config: BackboneConfig, name: str) -> AgentSpec:
+    """A registered agent that has a terminal to read or answer: never an inbox-only one."""
+    spec = registered_agent_or_404(config, name)
+    if spec.inbox_only:
+        raise HTTPException(status_code=409, detail=f"'{name}' is inbox-only: it has no terminal")
+    return spec
+
+
 _APPROVE_STATUS = {
     "not_waiting": 409,
     "not_permission": 409,
@@ -317,7 +400,7 @@ async def approve_agent_prompt(
                 "`backbone config set security.allow_remote_approval true` to enable."
             ),
         )
-    spec = registered_agent_or_404(config, name)
+    spec = _terminal_agent_or_409(config, name)
     approved_by = (body.from_entity if body else "") or "api"
     outcome, evidence = await approve_agent(name, runtime=spec.runtime)
     if outcome != "approved":
@@ -357,7 +440,7 @@ async def deny_agent_prompt(
                 "`backbone config set security.allow_remote_approval true` to enable."
             ),
         )
-    spec = registered_agent_or_404(config, name)
+    spec = _terminal_agent_or_409(config, name)
     denied_by = (body.from_entity if body else "") or "api"
     outcome, evidence = await deny_agent(name, runtime=spec.runtime)
     if outcome != "denied":
@@ -399,6 +482,8 @@ async def watch_repo(name: str, body: WatchRequest, store: AgentStore = Depends(
         spec = await store.watch(name, body.repo)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return AgentConfigView.from_spec(spec)
 
 
@@ -408,6 +493,34 @@ async def unwatch_repo(name: str, body: WatchRequest, store: AgentStore = Depend
     spec = store.agents.get(name)
     if spec is None:
         raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'")
+    return AgentConfigView.from_spec(spec)
+
+
+@router.post("/agents/{name}/subscribe", response_model=AgentConfigView)
+async def subscribe(
+    name: str, body: SubscribeRequest, store: AgentStore = Depends(get_agent_store)
+):
+    """Subscribe an agent to events on a source (``gmail``) matching a filter
+    written in that source's own query language, at ``normal`` or ``high`` priority."""
+    try:
+        spec = await store.subscribe(name, body.source, body.filter, body.priority)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return AgentConfigView.from_spec(spec)
+
+
+@router.post("/agents/{name}/unsubscribe", response_model=AgentConfigView)
+async def unsubscribe(
+    name: str, body: UnsubscribeRequest, store: AgentStore = Depends(get_agent_store)
+):
+    """Remove one subscription by its id (``agent inspect`` lists them)."""
+    if store.agents.get(name) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown agent '{name}'")
+    if not await store.unsubscribe(name, body.id):
+        raise HTTPException(status_code=404, detail=f"No subscription {body.id} on '{name}'")
+    spec = store.agents.get(name)
     return AgentConfigView.from_spec(spec)
 
 
@@ -436,11 +549,54 @@ async def get_terminal_output(
     config: BackboneConfig = Depends(get_config),
 ):
     """Recent terminal output from a registered agent's session."""
-    registered_agent_or_404(config, name)
+    _terminal_agent_or_409(config, name)
     output = await capture_pane(name, lines=lines)
     if not output and not await session_exists(name):
         raise HTTPException(status_code=404, detail=f"Session '{name}' not found")
     return {"session": name, "lines": lines, "content": output}
+
+
+@router.get("/sessions/{name}/output", response_model=AgentOutputResponse)
+async def get_agent_output(
+    name: str,
+    lines: int = Query(default=20, ge=1, le=MAX_MESSAGES),
+    since: int | None = Query(default=None, ge=0),
+    before: int | None = Query(default=None, ge=0),
+    end: int | None = Query(default=None, ge=0),
+    screen: bool = Query(default=False),
+    config: BackboneConfig = Depends(get_config),
+):
+    """A page of a registered agent's user-facing messages, complete, out of
+    its runtime's own transcript (Claude Code, Codex), else its visible
+    screen. Reads only. Default: the last ``lines`` messages; ``before``
+    reads the messages ending at or before that offset; ``since`` reads
+    forward from an offset, optionally up to ``end``; ``screen`` forces a
+    pane read. Every page says whether more lies before or after it."""
+    _terminal_agent_or_409(config, name)
+    if since is not None and before is not None:
+        raise HTTPException(
+            status_code=400, detail="give since (forward) or before (back), not both"
+        )
+    if end is not None and since is None:
+        raise HTTPException(status_code=400, detail="end needs since (a forward range)")
+    page = await output_page(
+        config, name, limit=lines, since=since, before=before, end=end, screen=screen
+    )
+    return AgentOutputResponse(
+        session=page.session,
+        source=page.source,
+        runtime=page.runtime,
+        messages=[
+            OutputMessage(time=m.time, role=m.role, text=m.text, start=m.start, end=m.end)
+            for m in page.messages
+        ],
+        range_start=page.range_start,
+        range_end=page.range_end,
+        more_before=page.more_before,
+        more_after=page.more_after,
+        lines=page.lines,
+        evidence=page.evidence,
+    )
 
 
 @router.post("/agents/{session}/state")

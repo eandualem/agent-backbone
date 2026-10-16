@@ -1,11 +1,7 @@
 """Swarm service — coordinator + members sharing one worktree, working one issue."""
 
 from agent_backbone.services.swarm._roster import MemberSpec, parse_member_spec, parse_roster
-from agent_backbone.services.swarm._templates import (
-    list_brief_templates,
-    render_brief,
-    template_paths,
-)
+from agent_backbone.services.swarm._templates import render_brief, template_paths
 from agent_backbone.services.swarm.interface import (
     SwarmError,
     SwarmResult,
@@ -21,7 +17,6 @@ __all__ = [
     "SwarmError",
     "SwarmResult",
     "create_swarm",
-    "list_brief_templates",
     "parse_issue_ref",
     "parse_member_spec",
     "parse_roster",

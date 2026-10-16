@@ -1,6 +1,6 @@
 """Vendor-neutral human notifications for callers without an integration instance.
 
-Scheduler jobs (dead-session, plan-waiting, copy-mode alerts) run against a
+Scheduler jobs (dead-session and plan-waiting alerts) run against a
 configuration snapshot, not the running integration objects. ``notify_humans``
 fans an alert out to every integration that is configured, using each one's
 config-driven static sender. Adding an integration means adding one entry to

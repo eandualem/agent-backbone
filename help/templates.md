@@ -15,12 +15,12 @@ backbone templates preview AGENT
 To customize with the owner's authorization, use `backbone templates edit NAME`
 with `$VISUAL` or `$EDITOR`, or edit `backbone templates path NAME`. Names are
 `base`, `swarm:ROLE`, and `policy:NAME`. `init` copies defaults without overwriting
-local edits. Files live in the installed data directory's `templates/` folder.
+local edits. Files default to `<data_dir>/templates/`; `templates.dir` can relocate them.
 
 Assign short policies globally with `backbone templates use NAME...`, or to a
 specific group with `backbone templates use NAME... --tag TAG`. Apply a group tag
 with `backbone agent tag AGENT TAG`; remove it with `backbone agent untag AGENT TAG`.
-Assignments replace that scope's list; no names clears it. Global rules come first,
+Names replace that scope’s list; no names shows it. Use `--clear` to empty it. Global rules come first,
 then matching tags alphabetically; each policy appears once. Required rules apply
 even with a custom base. Missing or empty selected policies fail launch clearly.
 

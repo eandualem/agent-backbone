@@ -56,3 +56,17 @@ def validate_agent_spec(spec: AgentSpec) -> None:
         raise ValueError("description must be a string")
     if not isinstance(spec.always_on, bool) or not isinstance(spec.unattended, bool):
         raise ValueError("always_on and unattended must be booleans")
+    if not isinstance(spec.inbox_only, bool):
+        raise ValueError("inbox_only must be a boolean")
+    if spec.inbox_only and (spec.always_on or spec.unattended):
+        raise ValueError(
+            "an inbox-only agent is never launched: always_on and unattended do not apply"
+        )
+    if spec.inbox_only and spec.subscriptions:
+        raise ValueError("an inbox-only agent reads only direct messages: unsubscribe it first")
+    if spec.inbox_only and spec.swarm:
+        raise ValueError("a swarm member runs in a session: it cannot be inbox-only")
+    if spec.inbox_only and (spec.repo or spec.watches):
+        raise ValueError(
+            "an inbox-only agent takes no part in GitHub routing: clear its repo and watches first"
+        )

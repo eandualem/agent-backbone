@@ -15,6 +15,7 @@ from agent_backbone.api.deps import (
     get_integrations,
     get_optional_github,
     get_scheduler,
+    get_sources,
 )
 from agent_backbone.api.models import (
     JobStatusResponse,
@@ -33,6 +34,7 @@ from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.github import GitHubClient
 from agent_backbone.services.integrations import Integrations
 from agent_backbone.services.scheduler import PeriodicScheduler
+from agent_backbone.services.sources import Sources
 from agent_backbone.services.terminal import list_sessions
 
 log = logging.getLogger(__name__)
@@ -114,6 +116,7 @@ async def get_service_health(
     scheduler: PeriodicScheduler | None = Depends(get_scheduler),
     integrations: Integrations | None = Depends(get_integrations),
     gh: GitHubClient | None = Depends(get_optional_github),
+    sources: Sources | None = Depends(get_sources),
 ):
     """Health of the backbone's own components."""
     health = ServiceHealth()
@@ -142,6 +145,8 @@ async def get_service_health(
 
     if integrations is not None:
         health.integrations = integrations.health()
+    if sources is not None:
+        health.sources = sources.health()
 
     if gh is not None:
         health.github = config.github_intake

@@ -14,7 +14,6 @@ is uploaded to the same Telegram group as the text. No paid speech service is us
 If a Kokoro-compatible service is already running, Backbone can reuse its loaded
 model. The endpoint receives JSON `{"text":"...","voice":"af_heart","speed":1.0}`
 and returns PCM WAV. Only HTTP loopback URLs are accepted, and redirects are refused.
-Alfred's Kokoro Speak Selection service uses this interface on port 8765.
 
 Install FFmpeg if it is not already available (`brew install ffmpeg` on macOS,
 or your Linux package manager). It converts WAV to Telegram's Ogg/Opus voice format.

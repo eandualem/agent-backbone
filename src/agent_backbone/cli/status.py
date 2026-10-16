@@ -78,7 +78,24 @@ def _work(agent: dict, *, compact: bool) -> str:
     if agent.get("current_issue"):
         issue = f"{repo}#{clean(agent['current_issue'])}"
         return issue if agent.get("online") else f"Last: {issue}"
-    return repo or clean(agent.get("description")) or "—"
+    # Without a repository or a description, the directory still says what it is.
+    folder = clean(agent.get("dir") or "").rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+    return repo or clean(agent.get("description")) or folder or "—"
+
+
+def _tags(agent: dict) -> str:
+    """Group tags in a fixed order; swarm identity tags are shown by the grouping."""
+    tags = [clean(t) for t in agent.get("tags", []) if not str(t).startswith("swarm:")]
+    return " ".join(sorted(tags))
+
+
+def _model(agent: dict) -> Text:
+    """The observed model in bold; a saved but unverified one plain; ``default`` dim."""
+    model = clean(agent.get("model") or "")
+    source = agent.get("model_source")
+    if not model:
+        return Text("default", "dim")
+    return Text(model, "bold" if source == "observed" else "")
 
 
 def status_view(data: dict, *, width: int, plain: bool = False, watch: bool = False) -> Group:
@@ -146,13 +163,24 @@ def status_view(data: dict, *, width: int, plain: bool = False, watch: bool = Fa
             )
             state_width = 8
             runtime_width = 6
-            model_width = min(24, 12 + (width - 80) // 2)
+            model_width = min(22, 12 + (width - 80) // 4)
+            tags_width = min(20, 8 + (width - 80) // 4)
             columns = [
                 ("Agent", name_width),
                 ("State", state_width),
                 ("CLI", runtime_width),
                 ("Model", model_width),
-                ("Work", width - 16 - name_width - state_width - runtime_width - model_width),
+                ("Tags", tags_width),
+                (
+                    "Work",
+                    width
+                    - 19
+                    - name_width
+                    - state_width
+                    - runtime_width
+                    - model_width
+                    - tags_width,
+                ),
             ]
         elif width >= 60:
             columns = [("Agent", 14), ("State", 8), ("CLI / Model", 13), ("Work", width - 48)]
@@ -168,16 +196,17 @@ def status_view(data: dict, *, width: int, plain: bool = False, watch: bool = Fa
         ordered = sorted(members, key=lambda a: (_state(a)[0], clean(a["name"]).casefold()))
         for index, agent in enumerate(ordered):
             _, label, style = _state(agent)
+            if agent.get("state_source") == "stale" and agent.get("online"):
+                label += "?"
             cells = [
                 Text(clean(agent["name"]), "bold" if agent.get("online") else "dim"),
                 Text(label, style),
             ]
             runtime = clean(agent.get("runtime") or "unknown")
-            model = clean(agent.get("model") or "default")
             if width >= 80:
-                cells.extend([Text(runtime), Text(model)])
+                cells.extend([Text(runtime), _model(agent), Text(_tags(agent))])
             elif width >= 60:
-                cells.append(Text(f"{runtime} / {model}"))
+                cells.append(Text(f"{runtime} / {clean(agent.get('model') or 'default')}"))
             cells.append(Text(_work(agent, compact=width < 100)))
             # A single divider separates live work from stopped sessions.
             end_section = (
@@ -198,14 +227,23 @@ def status_view(data: dict, *, width: int, plain: bool = False, watch: bool = Fa
     for agent in sorted(agents, key=lambda a: (_state(a)[0], clean(a["name"]).casefold())):
         information = []
         if data.get("details"):
+            source = {
+                "observed": " (observed)",
+                "configured": " (configured, unverified)",
+                "runtime_default": "",
+            }.get(agent.get("model_source") or "", "")
             information.append(
                 f"{clean(agent.get('runtime') or 'unknown')} / "
-                f"{clean(agent.get('model') or 'default')}"
+                f"{clean(agent.get('model') or 'default')}{source}"
             )
             if work := _work(agent, compact=False):
                 information.append(work)
+            if agent.get("description"):
+                information.append("Purpose: " + clean(agent["description"]))
             if agent.get("tags"):
                 information.append("Tags: " + clean(", ".join(agent["tags"])))
+        if agent.get("state_source") == "stale" and agent.get("online"):
+            information.append("Unconfirmed: stale hook state; the terminal was inconclusive")
         if reason := agent.get("reason"):
             information.append("Reason: " + clean(reason))
         for key, label in (
@@ -259,7 +297,15 @@ async def snapshot(args: argparse.Namespace) -> dict:
         swarms = swarm_body["items"]
     else:
         from agent_backbone.services.agents import build_session_snapshot
+        from agent_backbone.services.terminal import access_error
 
+        # Without the API or tmux nothing here can be observed; a table of
+        # "offline" agents would report the caller's sandbox as an outage.
+        if denied := await access_error():
+            raise ValueError(
+                "agent states unknown from this process: "
+                f"{_common.unreachable('/api/agents')}; tmux: {denied}"
+            )
         async with _common.Direct(config) as direct:
             agents = [
                 a.model_dump(mode="json") for a in await build_session_snapshot(direct.config)

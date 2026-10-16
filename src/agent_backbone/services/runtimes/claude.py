@@ -4,35 +4,78 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
+from types import MappingProxyType
 
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.hooks.install import save_settings
-from agent_backbone.services.runtimes._pane import sanitize_pane_content
-from agent_backbone.services.runtimes.base import Runtime
+from agent_backbone.services.runtimes._pane import sanitize_pane_content, sgr_attributes
+from agent_backbone.services.runtimes._usage import count
+from agent_backbone.services.runtimes.base import (
+    Runtime,
+    RuntimeDiagnostic,
+    TranscriptEntry,
+    agent_home,
+    git_root,
+    has_text,
+    main_checkout,
+    transcript_clock,
+)
+from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
 
 
-def pre_accept_bypass(*, claude_config: Path | None = None) -> bool:
-    """Record the owner's explicit unattended choice; never enable bypass mode.
-
-    Claude 2.1.261 still reads this legacy consent field and migrates it to
-    skipDangerousModePermissionPrompt. The launch flag remains the mode gate.
-    """
-    config_file = claude_config or (Path.home() / ".claude.json")
+def _json_object(path: Path) -> dict:
     try:
-        data = json.loads(config_file.read_text()) if config_file.is_file() else {}
-        if not isinstance(data, dict):
-            return False
-        if data.get("bypassPermissionsModeAccepted") is not True:
-            data["bypassPermissionsModeAccepted"] = True
-            atomic_write_text(config_file, json.dumps(data, indent=2))
-        return True
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        log.warning("Could not record bypass consent; the launch dialog will appear")
-        return False
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _truthy(value: object) -> bool:
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# A failed request ends in one banner (live captures, 2.1.283): "⏺ API Error:
+# 400 …", "API Error: Request rejected (429) · …", "API Error: Repeated 529
+# Overloaded errors…", or for a missing model "There's an issue with the
+# selected model (claude-…). …". The provider's message after it is not kept.
+_REQUEST_ERROR = re.compile(
+    r"⏺ API Error: (?:Repeated |Request rejected \()?(?P<status>[45]\d\d)\b"
+)
+_MODEL_UNAVAILABLE = re.compile(
+    r"⏺ There's an issue with the selected model \((?P<model>[A-Za-z0-9_./:@+\[\]\-]{1,160})\)"
+)
+# "⎿  Set model to Sonnet 5 and saved as your default for new sessions",
+# "… Sonnet 5 for this session only with xhigh effort": the display name.
+_MODEL_SET = re.compile(
+    r"⎿ +Set model to (?P<model>[A-Za-z0-9][A-Za-z0-9 ._()\[\]:@+/-]{0,159}?)"
+    r"(?: for this session only| and saved as your default for new sessions)?"
+    r"(?: with (?P<effort>low|medium|high|xhigh|max) effort)?"
+)
+
+
+def _runs(
+    raw: str, foreground: tuple[int, ...] | None = None
+) -> tuple[list[tuple[tuple[int, ...] | None, str]], tuple[int, ...] | None]:
+    """Visible text runs of one captured line, each with its foreground colour,
+    and the colour in effect at its end: tmux carries it onto the next line."""
+    runs: list[tuple[tuple[int, ...] | None, str]] = []
+    for part in re.split(r"(\x1b\[[0-9;]*m)", raw):
+        if not part.startswith("\x1b["):
+            if part.strip():
+                runs.append((foreground, part.strip()))
+            continue
+        for attribute in sgr_attributes(part[2:-1]):
+            if attribute[0] in (0, 39):
+                foreground = None
+            elif attribute[0] == 38 or 30 <= attribute[0] <= 37 or 90 <= attribute[0] <= 97:
+                foreground = attribute
+    return runs, foreground
 
 
 def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = None) -> bool:
@@ -67,11 +110,26 @@ def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = N
 class ClaudeCode(Runtime):
     supports_exact_resume = True
     id = "claude"
+    skill_dirs = (".claude/skills",)
     fallback_prompts = ("❯",)
     display_name = "Claude Code"
     aliases = ("claude-code", "claude code")
     binary = "claude"
     brief_mode = "system_prompt"
+    # A resumed session keeps its stored system prompt and declines a brief
+    # sent as a user message (measured on 2.1.282): its hook hands it over.
+    brief_refresh = "hook_context"
+    declared_capabilities = frozenset(
+        {
+            "trust",
+            "brief-after-compaction",
+            "project-instructions",
+            "browser-group-name",
+            "deep-review",
+            "message-authority",
+            "observed-model",
+        }
+    )
     models = ("opus", "sonnet", "haiku")  # Claude Code's own aliases
     # `claude --effort <level>`; levels as Claude Code itself lists them when
     # it rejects an unknown one (live capture).
@@ -79,7 +137,7 @@ class ClaudeCode(Runtime):
     # "--dangerously-skip-permissions  Bypass all permission checks." No OS
     # sandbox behind it: trust on the machine. Claude Code asks once per
     # machine to accept bypass mode; only an explicit unattended launch
-    # records consent before starting.
+    # carries that consent, in its own settings file (`hook_launch_args`).
     unattended_args = ("--dangerously-skip-permissions",)
 
     # An empty matcher means every tool; None omits the matcher.
@@ -88,11 +146,31 @@ class ClaudeCode(Runtime):
         ("SessionEnd", None),
         ("UserPromptSubmit", None),
         ("Stop", None),
+        # A turn that failed at the API runs this instead of Stop (2.1.284).
+        ("StopFailure", None),
         ("Notification", None),
         ("PreToolUse", "ExitPlanMode|AskUserQuestion|Bash|mcp__.*__add_issue_comment"),
         ("PostToolUse", ""),
+        # A refusal that shows no dialog (auto mode's classifier): the backbone
+        # tells the humans, since nothing else would.
+        ("PermissionDenied", ""),
     )
     hook_timeout = 10  # seconds
+    hook_context = True  # PostToolUse additionalContext
+    refusal_check = "Claude's auto-mode safety check"
+    refusal_allow = "/permissions"
+
+    # Claude-drafted feedback can send the session's transcript to Anthropic,
+    # which may hold private or third-party data. Off unless the agent's env
+    # sets CLAUDE_CODE_SEND_FEEDBACK=1: the variable defaults to 0, and the
+    # tool is disallowed at launch (`env_args`), which no settings file's env
+    # or allow rule can reopen.
+    default_env = MappingProxyType({"CLAUDE_CODE_SEND_FEEDBACK": "0"})
+
+    def env_args(self, env):
+        if env.get("CLAUDE_CODE_SEND_FEEDBACK") == "1":
+            return []
+        return ["--disallowedTools", "SendFeedback"]
 
     prompt_prefixes = ("❯",)
     prompt_suffixes = ("$", "%")
@@ -109,10 +187,18 @@ class ClaudeCode(Runtime):
     busy_markers = ("esc to interrupt",)
     provider_error_patterns = (
         r"^you(?:'ve| have) hit your (?:(?:usage|session|weekly|monthly spend) )?limit\b",
-        r"^API Error:\s*(?:429|529)\b",
+        # 2.1.283 also reads "API Error: Repeated 529 Overloaded errors…" and
+        # "API Error: Request rejected (429) · …" (live captures).
+        r"^API Error:\s*(?:Repeated |Request rejected \()?(?:429|529)\b",
         r"^(?:error:\s*)?(?:credit balance is too low|rate limit (?:reached|exceeded))\b",
     )
     provider_error_prefixes = ("⎿", "✕")
+    # Escape while a turn runs, or refusing its permission dialog, ends the
+    # turn with no hook event (2.1.284: no Stop, StopFailure,
+    # PostToolUseFailure or Notification) and leaves this line (live captures).
+    interrupt_patterns = (r"⎿\s+Interrupted · What should Claude do instead\?$",)
+    # Right-aligned above the input box (live captures, 2.1.284).
+    notice_fragments = ("restart to update", "tmux focus-events off")
     prompt_markers = (
         "do you want to proceed?",
         "do you want to make this edit",
@@ -134,16 +220,17 @@ class ClaudeCode(Runtime):
     # its footer says "Esc to cancel".
     approve_keys = ("Enter",)
     deny_keys = ("Escape",)
-    # Plan mode: Shift+Tab (sent as Escape then "[Z") accepts the plan;
-    # Escape leaves plan mode so feedback can follow as a message.
-    plan_approve_keys = ("Escape", "[Z")
+    # Plan mode (live, 2.1.284): the ExitPlanMode hook reports the plan, then
+    # "Exit plan mode? … ❯ 1. Yes, and switch to default (ask each time) for
+    # this session / 2. No". "1" approves. Escape rejects ("User rejected
+    # Claude's plan", plan mode stays on) and runs no hook, so the plan is
+    # pending, and its keys go in, only while the dialog is on screen.
+    plan_markers = ("exit plan mode?",)
+    plan_approve_keys = ("1",)
     plan_reject_keys = ("Escape",)
 
     def pre_trust(self, directory: Path | str) -> None:
         pre_trust_directory(directory)
-
-    def prepare_unattended(self) -> None:
-        pre_accept_bypass()
 
     @staticmethod
     def _unnumbered_dialog(pane_content: str) -> bool:
@@ -165,6 +252,97 @@ class ClaudeCode(Runtime):
         if any(re.match(r"\s*(?:❯\s*)?\d+[.)]\s", line) for line in options):
             return False
         return len(options) >= 2 and sum("❯" in line for line in options) == 1
+
+    # "✳ Harmonizing… (2m 42s · ↓ 10.1k tokens)" above the prompt while a turn
+    # runs (live capture, 2.1.280, which no longer shows "esc to interrupt");
+    # the glyph cycles. A finished turn reads "✻ Baked for 4m 11s", no "…(".
+    # It starts at column 0; the same text quoted in a reply is indented.
+    _SPINNER_RE = re.compile(r"^[·✢✳✶✻✽*] +\S[^\n]*…\s*\(\d")
+
+    def detect_busy(self, pane_content: str) -> bool:
+        if super().detect_busy(pane_content):
+            return True
+        tail = sanitize_pane_content(pane_content).strip().splitlines()[-25:]
+        return any(self._SPINNER_RE.match(line) for line in tail)
+
+    def diagnostics(self, pane_content: str) -> tuple[RuntimeDiagnostic, ...]:
+        """Observe request-error banners and model changes.
+
+        Claude Code draws a banner's glyph and every line of its text in one
+        warning colour, and a model name in a colour of its own; a reply
+        quoting either is drawn in the default colour and is not recorded.
+        Retry lines shown while Claude Code still retries are not recorded;
+        the final banner is.
+        """
+        observations = {item.observation_key: item for item in super().diagnostics(pane_content)}
+        lines = pane_content.splitlines()[-80:]
+        for index, raw in enumerate(lines):
+            head = re.match(r"\s*[⏺⎿]\s+", sanitize_pane_content(raw))
+            if not head:
+                continue
+            line = sanitize_pane_content(raw).strip()
+            # A narrow pane wraps a banner or a confirmation onto lines indented
+            # to its text; a right-aligned status line below it is not one.
+            runs, foreground = _runs(raw)
+            for more in lines[index + 1 : index + 4]:
+                text = sanitize_pane_content(more)
+                if not text.strip() or len(text) - len(text.lstrip(" ")) != head.end():
+                    break
+                line += " " + text.strip()
+                more_runs, foreground = _runs(more, foreground)
+                runs += more_runs
+            colour = runs[0][0]
+            if line.startswith("⏺") and colour and all(other == colour for other, _ in runs):
+                if error := _REQUEST_ERROR.match(line):
+                    signal = RuntimeDiagnostic(
+                        code="request_error", http_status=int(error["status"])
+                    )
+                elif unavailable := _MODEL_UNAVAILABLE.match(line):
+                    signal = RuntimeDiagnostic(
+                        code="request_error",
+                        reason="model_unavailable",
+                        model=unavailable["model"],
+                    )
+                else:
+                    continue
+            elif (changed := _MODEL_SET.fullmatch(line)) and any(
+                colour and text == changed["model"] for colour, text in runs
+            ):
+                signal = RuntimeDiagnostic(
+                    code="model_changed",
+                    severity="info",
+                    model=changed["model"],
+                    observed_effort=changed["effort"],
+                )
+            else:
+                continue
+            observations[signal.observation_key] = signal
+        return tuple(observations.values())
+
+    # "✻ Churned for 3m 6s · done 5:51 PM" is left where a turn ended (live
+    # capture, 2.1.283): chrome, not output that supersedes an error above it.
+    _TURN_DONE_RE = re.compile(
+        r"[·✢✳✶✻✽*] \S+ for \d+[hms](?: \d+[hms])*(?: · done \S+(?: [AP]M)?)?"
+    )
+
+    def provider_failure(self, pane_content: str) -> str | None:
+        # 2.1.283 draws its input box at the bottom of the pane and pads the
+        # space above it with blank lines: after /clear or at a fresh start a
+        # banner sits outside the shared window. One blank line of each run is
+        # kept, so separate blocks stay separate.
+        lines = pane_content.splitlines()
+        kept = [
+            raw
+            for index, raw in enumerate(lines)
+            if sanitize_pane_content(raw).strip()
+            or (index and sanitize_pane_content(lines[index - 1]).strip())
+        ]
+        return super().provider_failure("\n".join(kept))
+
+    def _is_status_chrome_line(self, line: str) -> bool:
+        return super()._is_status_chrome_line(line) or bool(
+            self._TURN_DONE_RE.fullmatch(line.strip())
+        )
 
     def detect_dialog_chrome(self, pane_content: str) -> bool:
         return self._unnumbered_dialog(pane_content) or super().detect_dialog_chrome(pane_content)
@@ -188,7 +366,11 @@ class ClaudeCode(Runtime):
         return Path("~/.claude/settings.json").expanduser()
 
     def hook_launch_args(
-        self, data_dir: Path | str | None, state_dir: Path | str | None
+        self,
+        data_dir: Path | str | None,
+        state_dir: Path | str | None,
+        *,
+        unattended: bool = False,
     ) -> list[str]:
         """``--settings <data_dir>/hooks/claude-settings.json``.
 
@@ -197,12 +379,30 @@ class ClaudeCode(Runtime):
         session it starts reports state without the user configuring hooks
         per repository (or at all). Nothing outside ``<data_dir>/hooks/`` is
         touched.
+
+        Every file pins ``tui`` to ``default``, the inline renderer Backbone
+        reads panes from (as Codex's launch pins inline output). An explicit
+        ``tui`` also stops Claude Code's one-time fullscreen-renderer offer,
+        which otherwise parks a fresh agent at startup (2.1.300, measured,
+        #440). It outranks the user's own ``tui`` only in Backbone's launches.
+
+        An ``unattended`` launch gets ``claude-settings-unattended.json``: the
+        same hooks plus ``skipDangerousModePermissionPrompt``, the one-time
+        bypass consent. Claude Code 2.1.300 honours that key in a
+        ``--settings`` file and ignores the legacy ``bypassPermissionsModeAccepted``
+        in ``~/.claude.json`` (measured, #438). A file of its own keeps the
+        consent to these launches; with two ``--settings`` flags only the
+        last one counts, so it carries the hooks too.
         """
         if data_dir is None or state_dir is None:
             return []
+        name = "claude-settings-unattended.json" if unattended else "claude-settings.json"
         try:
             _, settings = self.hook_settings(data_dir, state_dir)
-            path = Path(data_dir) / "hooks" / "claude-settings.json"
+            settings["tui"] = "default"
+            if unattended:
+                settings["skipDangerousModePermissionPrompt"] = True
+            path = Path(data_dir) / "hooks" / name
             save_settings(path, settings)
         except OSError as exc:
             log.warning("Could not write the launch hook settings: %s", exc)
@@ -226,6 +426,164 @@ class ClaudeCode(Runtime):
             args.extend(["--append-system-prompt-file", str(brief_file)])
         args.extend(self.hook_launch_args(data_dir, state_dir))
         return args
+
+    def build_command(self, *, unattended=False, **kwargs):
+        command = super().build_command(unattended=unattended, **kwargs)
+        # launch_args cannot tell an unattended launch: its hook file is
+        # swapped here for the one that also carries the consent.
+        if command is not None and unattended and "--settings" in command:
+            data_dir, state_dir = kwargs.get("data_dir"), kwargs.get("state_dir")
+            if consent := self.hook_launch_args(data_dir, state_dir, unattended=True):
+                command[command.index("--settings") + 1] = consent[1]
+        return command
+
+    def user_instructions(self, env, project=None):
+        home = Path(
+            env.get("CLAUDE_CONFIG_DIR")
+            or os.environ.get("CLAUDE_CONFIG_DIR")
+            or agent_home(env) / ".claude"
+        ).expanduser()
+        # User memory and user-level rules (2.1.283); a rule with `paths` loads
+        # once the session reads a matching file, so it may reach it too.
+        candidates = [home / "CLAUDE.md", *sorted((home / "rules").rglob("*.md"))]
+        return [path for path in candidates if has_text(path)]
+
+    def user_skill_dirs(self, env):
+        home = Path(
+            env.get("CLAUDE_CONFIG_DIR")
+            or os.environ.get("CLAUDE_CONFIG_DIR")
+            or agent_home(env) / ".claude"
+        ).expanduser()
+        # 2.1.294: claude.ai-synced skills sit nested under skills/synced/<id>/.
+        return [home / "skills"]
+
+    def native_memory(self, env, project=None):
+        home = Path(
+            env.get("CLAUDE_CONFIG_DIR")
+            or os.environ.get("CLAUDE_CONFIG_DIR")
+            or agent_home(env) / ".claude"
+        ).expanduser()
+        layers = [home / "settings.json"]
+        if project is not None:
+            # 2.1.283 keeps local settings at the canonical git root (a
+            # worktree's main checkout), after the directory's own legacy file,
+            # unless that root is the home directory (its ownership check is
+            # not repeated here).
+            here = Path(project).expanduser().resolve()
+            root = git_root(here)
+            canonical = root and (main_checkout(root) or root)
+            layers += [here / ".claude/settings.json", here / ".claude/settings.local.json"]
+            if canonical not in (None, here, agent_home(env).resolve()):
+                layers.append(canonical / ".claude/settings.local.json")
+        # 2.1.283: a settings file's `env` applies over the process environment,
+        # and the variables decide before `autoMemoryEnabled` (a later layer wins).
+        variables, enabled = {**os.environ, **env}, True
+        for path in layers:
+            settings = _json_object(path)
+            if isinstance(settings.get("env"), dict):
+                variables.update({k: str(v) for k, v in settings["env"].items()})
+            if isinstance(settings.get("autoMemoryEnabled"), bool):
+                enabled = settings["autoMemoryEnabled"]
+        switch = str(variables.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "")).strip().lower()
+        if _truthy(variables.get("CLAUDE_CODE_SAFE_MODE")) or _truthy(switch):
+            return None
+        forced = switch in ("0", "false", "no", "off")  # a falsy value forces it on
+        if not forced and (_truthy(variables.get("CLAUDE_CODE_SIMPLE")) or not enabled):
+            return None
+        return (
+            "auto-memory is on (off: `autoMemoryEnabled: false` in its settings, "
+            "or CLAUDE_CODE_DISABLE_AUTO_MEMORY=1)"
+        )
+
+    usage_supported = True
+
+    def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session_id):
+            return []
+        home = Path(
+            env.get("CLAUDE_CONFIG_DIR")
+            or os.environ.get("CLAUDE_CONFIG_DIR")
+            or agent_home(env) / ".claude"
+        ).expanduser()
+        return sorted(home.glob(f"projects/*/{session_id}.jsonl"))
+
+    transcript_supported = True
+
+    def transcript_entries(self, records: list[dict]) -> list[TranscriptEntry]:
+        """The ``text`` blocks of ``assistant`` records in Claude Code's
+        per-session JSONL: what the agent said to the person, complete.
+        Thinking, tool use, tool results, user records and the bookkeeping
+        record types are not messages."""
+        entries: list[TranscriptEntry] = []
+        for record in records:
+            if record.get("type") != "assistant" or record.get("isSidechain"):
+                continue
+            message = record.get("message")
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            clock = transcript_clock(record.get("timestamp"))
+            text = "\n\n".join(
+                block["text"]
+                for block in content
+                if isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+                and block["text"].strip()
+            )
+            if text:
+                entries.append(
+                    TranscriptEntry(
+                        clock, "assistant", text, record.get("_start", 0), record.get("_end", 0)
+                    )
+                )
+        return entries
+
+    def usage_children(
+        self, path: Path, session_id: str, env: dict[str, str]
+    ) -> list[tuple[str, Path]]:
+        return [
+            (session_id + "/" + p.stem, p)
+            for p in sorted((path.parent / path.stem / "subagents").glob("agent-*.jsonl"))
+        ]
+
+    def parse_usage(self, record: dict, state: dict):
+        expected = state.get("_session_id", "").split("/", 1)[0]
+        if expected and record.get("sessionId") and record["sessionId"] != expected:
+            return None  # copied history from another conversation is not new usage
+        message = record.get("message") or {}
+        if record.get("type") == "user":
+            state["turn_id"] = record.get("uuid")
+        if record.get("type") != "assistant" or not isinstance(message.get("usage"), dict):
+            return None
+        if str(message.get("model", "")).startswith("<"):
+            return None  # synthetic transcript notices do not represent API requests
+        u = message["usage"]
+        identity = message.get("id")
+        if not identity:
+            state["partial"] = True
+            return None
+        cache = u.get("cache_creation") or {}
+        return UsageEvent(
+            key=str(identity),
+            at=timestamp(record["timestamp"]),
+            model=message.get("model") or "unknown",
+            provider="anthropic",
+            turn_id=state.get("turn_id"),
+            input_tokens=count(u, "input_tokens"),
+            cache_read_tokens=count(u, "cache_read_input_tokens"),
+            cache_write_tokens=count(u, "cache_creation_input_tokens"),
+            cache_write_1h_tokens=count(cache, "ephemeral_1h_input_tokens"),
+            cache_duration_known=bool(cache) or not count(u, "cache_creation_input_tokens"),
+            output_tokens=count(u, "output_tokens"),
+            reasoning_tokens=(u.get("output_tokens_details") or {}).get("thinking_tokens"),
+            context_tokens=sum(
+                count(u, k)
+                for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+            ),
+            service_tier=u.get("service_tier") or "unknown",
+            coverage="partial" if state.get("partial") else "measured",
+        )
 
 
 RUNTIME = ClaudeCode()

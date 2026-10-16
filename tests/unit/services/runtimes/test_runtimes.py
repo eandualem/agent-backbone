@@ -31,7 +31,7 @@ class TestRegistry:
     def test_brief_modes(self):
         assert {r.id: r.brief_mode for r in RUNTIMES.values()} == {
             "claude": "system_prompt",
-            "codex": "initial_prompt",
+            "codex": "message",
             "gemini": "initial_prompt",
             "opencode": "initial_prompt",
             "deepcode": "initial_prompt",
@@ -124,7 +124,7 @@ class TestRuntimePaste:
             ) as submit,
             patch(
                 "agent_backbone.services.runtimes.base.capture_pane",
-                AsyncMock(side_effect=[envelope, "❯" if consumed else envelope]),
+                AsyncMock(side_effect=[envelope] * 5 + ["❯" if consumed else envelope] * 6),
             ),
             patch("agent_backbone.services.runtimes.base.asyncio.sleep", AsyncMock()),
         ):
@@ -279,7 +279,15 @@ class TestLaunchEnvironment:
     def test_includes_agent_runtime_and_state_dir(self):
         from agent_backbone.services.agents.launch import launch_environment
 
-        env = launch_environment("reviewer", "claude", "/data/state", {"FOO": "1"})
+        env = launch_environment(
+            "reviewer", "claude", "/data/state", {"FOO": "1", "BACKBONE_LAUNCH_ID": "spoofed"}
+        )
+        launch_id = env.pop("BACKBONE_LAUNCH_ID")
+        assert len(launch_id) == 32
+        assert (
+            launch_environment("reviewer", "claude", "/data/state", {})["BACKBONE_LAUNCH_ID"]
+            != launch_id
+        )
         assert env == {
             "BACKBONE_RUNTIME": "claude",
             "BACKBONE_AGENT": "reviewer",
@@ -332,6 +340,22 @@ class TestClaudeCodeUi:
         pane = self._IDLE.replace("\u276f \n", "\u276f fix the flaky test\n")
         assert runtime.prompt_has_pending_input(pane) is True
 
+    @pytest.mark.parametrize(
+        "style,pending",
+        [
+            ("38;2;180;180;180", True),
+            ("48;2;180;180;180", True),
+            ("38;5;2", True),
+            ("2;38;2;0;22;180", False),
+            ("2;48;5;22", False),
+            ("2;38;2;180;180;180;22", True),
+            ("2;38;5;180;0", True),
+        ],
+    )
+    def test_color_operands_do_not_change_whether_prompt_text_is_dim(self, style, pending):
+        pane = self._IDLE.replace("❯ \n", f"❯ \x1b[{style}mReview this change\x1b[0m\n")
+        assert RUNTIMES["claude"].prompt_has_pending_input(pane) is pending
+
     async def test_input_buffered_while_busy_counts_as_queued(self):
         runtime = RUNTIMES["claude"]
         busy_with_input = self._BUSY.replace(
@@ -373,13 +397,30 @@ class TestPaneLinePairing:
 
 
 class TestPlanControlCapability:
-    def test_only_claude_code_has_a_plan_mode_the_backbone_drives(self):
+    def test_claude_code_codex_and_opencode_have_a_plan_mode_the_backbone_drives(self):
         from agent_backbone.services.runtimes import RUNTIMES, get_runtime
 
         supported = {name for name in RUNTIMES if get_runtime(name).supports_plan_control}
-        assert supported == {"claude"}
-        assert get_runtime("claude").plan_approve_keys == ("Escape", "[Z")
-        assert get_runtime("claude").plan_reject_keys == ("Escape",)
+        assert supported == {"claude", "codex", "opencode"}
+
+    @pytest.mark.parametrize(
+        ("env", "asks"),
+        [
+            ({}, False),
+            ({"OPENCODE_EXPERIMENTAL_PLAN_MODE": "1"}, True),
+            ({"OPENCODE_EXPERIMENTAL_PLAN_MODE": "TRUE"}, False),  # read case-sensitively
+            ({"OPENCODE_EXPERIMENTAL": "true"}, True),  # the flag's fallback
+            ({"OPENCODE_EXPERIMENTAL": "true", "OPENCODE_EXPERIMENTAL_PLAN_MODE": "0"}, False),
+        ],
+    )
+    def test_opencode_asks_to_approve_a_plan_only_with_its_flag(self, monkeypatch, env, asks):
+        from agent_backbone.services.runtimes import get_runtime
+
+        for flag in ("OPENCODE_EXPERIMENTAL_PLAN_MODE", "OPENCODE_EXPERIMENTAL"):
+            monkeypatch.delenv(flag, raising=False)
+        needs = get_runtime("opencode").plan_approval_needs(env)
+        assert (needs is None) is asks
+        assert get_runtime("claude").plan_approval_needs({}) is None
 
     async def test_unsupported_runtime_sends_nothing(self):
         from unittest.mock import AsyncMock, patch
@@ -389,8 +430,8 @@ class TestPlanControlCapability:
         with patch(
             "agent_backbone.services.runtimes.base.send_keys", new_callable=AsyncMock
         ) as keys:
-            approved = await get_runtime("codex").approve_plan("x")
-            rejected = await get_runtime("codex").reject_plan("x")
+            approved = await get_runtime("gemini").approve_plan("x")
+            rejected = await get_runtime("gemini").reject_plan("x")
         assert type(approved) is int and approved == 0  # a count, not a bool
         assert type(rejected) is int and rejected == 0
         keys.assert_not_awaited()

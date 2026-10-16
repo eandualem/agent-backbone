@@ -121,6 +121,28 @@ class TestListAgents:
         assert scratch["configured"] is False
         assert scratch["online"] is True
 
+    async def test_excludes_a_viewer_grouped_with_an_agent(
+        self, api_client, auth_headers, tmux_svc
+    ):
+        tmux_svc.list_sessions_rich.return_value.append(
+            {"name": "tw-1", "windows": 1, "created": 1, "attached": True, "group": "ike"}
+        )
+        resp = await api_client.get("/api/agents", headers=auth_headers)
+        assert "tw-1" not in {a["name"] for a in resp.json()["items"]}
+
+    async def test_keeps_a_session_whose_group_has_no_live_session(
+        self, api_client, auth_headers, tmux_svc
+    ):
+        tmux_svc.list_sessions_rich.return_value.append(
+            {"name": "scratch", "windows": 1, "created": 1, "attached": False, "group": "work"}
+        )
+        tmux_svc.list_sessions_rich.return_value.append(
+            {"name": "tw-2", "windows": 1, "created": 2, "attached": True, "group": "work"}
+        )
+        resp = await api_client.get("/api/agents", headers=auth_headers)
+        names = {a["name"] for a in resp.json()["items"]}
+        assert "scratch" in names and "tw-2" not in names
+
     async def test_requires_auth(self, api_client):
         assert (await api_client.get("/api/agents")).status_code == 401
 
@@ -154,7 +176,7 @@ class TestStartAgent:
         data = resp.json()
         assert data["ok"] is True and data["runtime"] == "claude"
         assert data["working_directory"].endswith("/ike")
-        assert data["ready"] == "ready" and data["evidence"] == ["hook reported idle"]
+        assert data["ready"] == "ready" and data["evidence"][-1] == "hook reported idle"
         launch.start_session.assert_awaited_once()
         kwargs = launch.start_session.await_args.kwargs
         assert kwargs["command"] == ["/usr/bin/claude"]
@@ -197,13 +219,18 @@ class TestStartAgent:
         assert queued[0]["delivery_kind"] == "direct_message"
         assert queued[0]["source"] == "agent-brief"
 
-    async def test_launch_injected_and_resumed_runtimes_are_not_rebriefed(
+    async def test_launch_injected_runtimes_and_shells_get_no_queued_brief(
         self, api_client, auth_headers, launch, api_app
     ):
         await api_client.post("/api/agents/ike/start", headers=auth_headers)  # claude
         await api_client.post(
             "/api/agents/ike/start", json={"runtime": "shell"}, headers=auth_headers
         )
+        assert await api_app.state.db.queue.sessions_with_pending() == []
+
+    async def test_a_resumed_session_is_never_queued_a_brief(
+        self, api_client, auth_headers, launch, api_app
+    ):
         await api_client.post(
             "/api/agents/ike/start",
             json={"runtime": "aider", "resume": True},
@@ -261,7 +288,10 @@ class TestStartAgent:
         listed = await api_client.get("/api/config/agents", headers=auth_headers)
         assert "scratch-app" in [a["name"] for a in listed.json()]
 
-    async def test_inspect_reports_evidence(self, api_client, auth_headers, tmux_svc):
+    async def test_inspect_reports_evidence(self, api_client, api_app, auth_headers, tmux_svc):
+        await api_app.state.agent_store.update(
+            "ike", description="Maintains Python services", tags=["backend", "python"]
+        )
         tmux_svc.session_exists.return_value = True
         with patch(
             f"{_ROUTE}.get_session_intelligence",
@@ -284,6 +314,8 @@ class TestStartAgent:
         data = resp.json()
         assert data["state"] == "busy" and data["delivery"] == "agent_working"
         assert data["current_issue"] == 4 and data["current_repo"] == "example/ike"
+        assert data["description"] == "Maintains Python services"
+        assert data["tags"] == ["backend", "python"]
         assert data["evidence"] == ["hook state 'busy' written 3s ago (fresh)"]
         assert data["known"] is True and data["online"] is True
 
@@ -322,6 +354,36 @@ class TestStartAgent:
             "/api/agents/ike/unwatch", json={"repo": "acme/web"}, headers=auth_headers
         )
         assert "acme/web" not in resp.json()["watches"]
+        resp = await api_client.post(
+            "/api/agents/ike/subscribe",
+            json={
+                "source": "gmail",
+                "filter": "from:alerts@example.com  subject:outage",
+                "priority": "high",
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        (sub,) = resp.json()["subscriptions"]
+        assert (sub["source"], sub["filter"], sub["priority"]) == (
+            "gmail",
+            "from:alerts@example.com subject:outage",
+            "high",
+        )
+        bad = await api_client.post(
+            "/api/agents/ike/subscribe",
+            json={"source": "carrier-pigeon", "filter": "x"},
+            headers=auth_headers,
+        )
+        assert bad.status_code == 400 and "unknown source" in bad.json()["detail"]
+        missing = await api_client.post(
+            "/api/agents/ike/unsubscribe", json={"id": sub["id"] + 1}, headers=auth_headers
+        )
+        assert missing.status_code == 404
+        resp = await api_client.post(
+            "/api/agents/ike/unsubscribe", json={"id": sub["id"]}, headers=auth_headers
+        )
+        assert resp.json()["subscriptions"] == []
         tmux_svc.session_exists.return_value = True
         assert (await api_client.delete("/api/agents/ike", headers=auth_headers)).status_code == 409
         tmux_svc.session_exists.return_value = False
@@ -356,6 +418,157 @@ class TestStopAgent:
         )
         resp = await api_client.post("/api/agents/ike/stop", headers=auth_headers)
         assert resp.status_code == 400
+
+
+class TestAgentOutput:
+    async def test_a_page_of_messages_with_navigation(self, api_client, auth_headers, tmux_svc):
+        from agent_backbone.services.agents.transcript import OutputPage
+        from agent_backbone.services.runtimes import TranscriptEntry
+
+        page = OutputPage(
+            "ike",
+            "transcript",
+            "claude",
+            [TranscriptEntry("10:00:00", "assistant", "hi " * 2000, 100, 6200)],
+            100,
+            6200,
+            True,
+            False,
+            [],
+            ["t"],
+        )
+        with patch(f"{_ROUTE}.output_page", new_callable=AsyncMock, return_value=page) as read:
+            resp = await api_client.get(
+                "/api/sessions/ike/output?lines=3&before=7", headers=auth_headers
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["source"] == "transcript" and data["messages"][0]["text"] == "hi " * 2000
+        assert (data["range_start"], data["range_end"]) == (100, 6200)
+        assert data["more_before"] is True and data["more_after"] is False
+        assert read.await_args.kwargs == {
+            "limit": 3,
+            "since": None,
+            "before": 7,
+            "end": None,
+            "screen": False,
+        }
+
+    async def test_bounds_directions_and_registration(self, api_client, auth_headers):
+        assert (
+            await api_client.get("/api/sessions/ike/output?lines=201", headers=auth_headers)
+        ).status_code == 422
+        resp = await api_client.get(
+            "/api/sessions/ike/output?since=1&before=2", headers=auth_headers
+        )
+        assert resp.status_code == 400 and "not both" in resp.json()["detail"]
+        resp = await api_client.get("/api/sessions/ike/output?end=5", headers=auth_headers)
+        assert resp.status_code == 400 and "needs since" in resp.json()["detail"]
+        resp = await api_client.get("/api/sessions/stray/output", headers=auth_headers)
+        assert resp.status_code == 404
+
+
+class TestRestartAgent:
+    async def test_accepts_and_persists_without_stopping_anything(
+        self, api_client, auth_headers, api_app, tmux_svc, launch
+    ):
+        resp = await api_client.post(
+            "/api/agents/ike/restart",
+            json={
+                "runtime": "claude",
+                "model": "opus",
+                "message": "carry on",
+                "from_entity": "ike",
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["status"] == "pending" and data["session"] == "ike"
+        assert data["delay_seconds"] == 60 and data["start_at"] is None
+        assert data["model"] == "opus" and data["message"] == "carry on"
+        tmux_svc.stop_session.assert_not_awaited()
+        launch.start_session.assert_not_awaited()
+        assert (await api_app.state.db.transitions.open_for("ike"))["id"] == data["id"]
+
+    async def test_explicit_delay_and_start_time(self, api_client, auth_headers, launch):
+        resp = await api_client.post(
+            "/api/agents/ike/restart", json={"delay_seconds": 12000}, headers=auth_headers
+        )
+        assert resp.json()["delay_seconds"] == 12000
+        resp = await api_client.post(
+            "/api/agents/leo/restart",
+            json={"start_at": "2030-01-01T10:00:00+02:00"},
+            headers=auth_headers,
+        )
+        assert resp.json()["start_at"] == "2030-01-01T08:00:00.000000Z"
+        resp = await api_client.post(
+            "/api/agents/feynman/restart", json={"start_at": "soon"}, headers=auth_headers
+        )
+        assert resp.status_code == 400 and "ISO 8601" in resp.json()["detail"]
+
+    async def test_the_continuation_sender_must_fit_the_envelope(
+        self, api_client, auth_headers, launch
+    ):
+        resp = await api_client.post(
+            "/api/agents/ike/restart",
+            json={"message": "carry on", "from_entity": "app owner-confirmed:abc"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422
+
+    async def test_cross_cli_resume_is_400(self, api_client, auth_headers, launch):
+        resp = await api_client.post(
+            "/api/agents/ike/restart",
+            json={"runtime": "codex", "resume": True},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400
+        assert "same CLI" in resp.json()["detail"]
+
+    async def test_second_request_while_one_is_open_is_409(self, api_client, auth_headers, launch):
+        first = await api_client.post("/api/agents/ike/restart", headers=auth_headers)
+        resp = await api_client.post("/api/agents/ike/restart", headers=auth_headers)
+        assert resp.status_code == 409
+        assert f"#{first.json()['id']}" in resp.json()["detail"]
+
+    async def test_unregistered_and_backbone_sessions(self, api_client, auth_headers, api_app):
+        assert (
+            await api_client.post("/api/agents/stray/restart", headers=auth_headers)
+        ).status_code == 404
+        from dataclasses import replace
+
+        from agent_backbone.config import BackboneSection
+
+        api_app.state.config = replace(
+            api_app.state.config, backbone=BackboneSection(session_name="ike")
+        )
+        resp = await api_client.post("/api/agents/ike/restart", headers=auth_headers)
+        assert resp.status_code == 400
+
+    async def test_list_and_inspect_show_the_transition(
+        self, api_client, auth_headers, api_app, launch
+    ):
+        accepted = (
+            await api_client.post(
+                "/api/agents/ike/restart", json={"start": False}, headers=auth_headers
+            )
+        ).json()
+        await api_app.state.db.transitions.finish(accepted["id"], "completed", {"stopped": True})
+        listed = (await api_client.get("/api/agents/ike/restarts", headers=auth_headers)).json()
+        assert [t["id"] for t in listed] == [accepted["id"]]
+        assert listed[0]["status"] == "completed" and listed[0]["result"] == {"stopped": True}
+        from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+
+        with patch(f"{_ROUTE}.get_session_intelligence", new_callable=AsyncMock) as intel:
+            intel.return_value = SessionProfile("ike", SessionIntelligence.OFFLINE, runtime="")
+            inspected = (
+                await api_client.get("/api/agents/ike/inspect", headers=auth_headers)
+            ).json()
+            assert inspected["restart"]["id"] == accepted["id"]
+            assert inspected["restart"]["status"] == "completed"
+            other = (await api_client.get("/api/agents/leo/inspect", headers=auth_headers)).json()
+        assert other["restart"] is None
 
 
 class TestSessions:
@@ -434,8 +647,33 @@ class TestApproveAgent:
 
 
 class TestPostAgentState:
-    async def test_writes_the_hook_state_file(self, api_client, auth_headers, api_app):
-        from agent_backbone.services.agents import get_agent_state, read_state_file
+    @pytest.mark.parametrize("after_managed_hook", [False, True])
+    async def test_writes_the_hook_state_file(
+        self, api_client, auth_headers, api_app, after_managed_hook
+    ):
+        from agent_backbone.services.agents import (
+            get_agent_state,
+            read_state_file,
+            write_state_file,
+        )
+        from agent_backbone.services.agents._file_reader import (
+            clear_starting_marker,
+            write_starting_marker,
+        )
+
+        state_dir = api_app.state.config.state_dir
+        if after_managed_hook:
+            write_starting_marker(state_dir, "ike", time.time() - 10, launch_id="current")
+            write_state_file(
+                state_dir,
+                "ike",
+                {
+                    "state": "idle",
+                    "ts": time.time() - 1,
+                    "launch_id": "current",
+                },
+            )
+            clear_starting_marker(state_dir, "ike")
 
         resp = await api_client.post(
             "/api/agents/ike/state",
@@ -561,6 +799,18 @@ async def test_group_tags_are_persistent_and_validated(api_client, auth_headers)
         "/api/agents/missing/tags", headers=auth_headers, json={"tags": ["python"]}
     )
     assert response.status_code == 404
+
+
+async def test_tagging_an_agent_relinks_its_skills_now(api_client, auth_headers):
+    outcome = ["ike: skills: could not relink now (OSError)"]
+    with patch(f"{_ROUTE}.relink_skills", AsyncMock(return_value=outcome)) as relink:
+        response = await api_client.post(
+            "/api/agents/ike/tags", headers=auth_headers, json={"tags": ["python"]}
+        )
+    assert response.status_code == 200
+    (spec,) = relink.await_args.args[1]
+    assert spec.name == "ike" and "python" in spec.tags
+    assert response.json()["relinked"] == outcome  # the tag is saved; the outcome is shown
 
 
 async def test_offline_agent_retains_expired_session_end_recap(config):

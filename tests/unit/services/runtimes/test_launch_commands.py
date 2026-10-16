@@ -9,20 +9,28 @@ from unittest.mock import patch
 
 import pytest
 
+from agent_backbone.hooks.install import save_settings
 from agent_backbone.services.runtimes import RUNTIMES, split_model_effort
 from agent_backbone.services.runtimes.claude import pre_trust_directory
 from agent_backbone.services.runtimes.codex import pre_trust_codex_directory
 
 _BASE = "agent_backbone.services.runtimes.base"
-_HOME = Path.home()
 # Every Codex launch opens the sandbox to the network so members reach the API.
 _NET = ["-c", "sandbox_workspace_write.network_access=true"]
+_STANDARD_TIER = ["-c", "service_tier=default"]
+_NO_UPDATE_PROMPT = ["-c", "check_for_update_on_startup=false"]
 # Unattended Codex: never ask, and pin the sandbox the promise rests on.
 _NEVER_ASK = ["-a", "never", "-s", "workspace-write"]
+_NO_FEEDBACK = ["--disallowedTools", "SendFeedback"]  # Claude Code, unless the agent opts in
 
 
 def _resolve(binary: str):
     return patch(f"{_BASE}.resolve_command", return_value=binary)
+
+
+def _codex_on_macos():
+    """File roots and paths that do not exist yet are passed as given (#433)."""
+    return patch("agent_backbone.services.runtimes.codex._DIRECTORY_ROOTS_ONLY", False)
 
 
 class TestHookLaunchArgs:
@@ -69,16 +77,53 @@ class TestBuildCommand:
         assert command[3] == "--settings"
         assert command[4].endswith("claude-settings.json")
 
+    def test_claude_unattended_settings_carry_the_bypass_consent(self, tmp_path):
+        with _resolve("/usr/bin/claude"):
+            command = RUNTIMES["claude"].build_command(
+                data_dir=tmp_path, state_dir=tmp_path / "state", unattended=True
+            )
+        assert "--dangerously-skip-permissions" in command and command.count("--settings") == 1
+        path = tmp_path / "hooks" / "claude-settings-unattended.json"
+        assert command[command.index("--settings") + 1] == str(path)
+        saved = json.loads(path.read_text())
+        assert saved["skipDangerousModePermissionPrompt"] is True
+        assert "SessionStart" in saved["hooks"] and saved["tui"] == "default"
+        attended = json.loads((tmp_path / "hooks" / "claude-settings.json").read_text())
+        assert "skipDangerousModePermissionPrompt" not in attended
+
+    def test_claude_unattended_keeps_the_hooks_when_its_file_cannot_be_written(self, tmp_path):
+        def save(path, settings):
+            if path.name == "claude-settings-unattended.json":
+                raise OSError("read-only")
+            save_settings(path, settings)
+
+        with (
+            _resolve("/usr/bin/claude"),
+            patch("agent_backbone.services.runtimes.claude.save_settings", side_effect=save),
+        ):
+            command = RUNTIMES["claude"].build_command(
+                data_dir=tmp_path, state_dir=tmp_path / "state", unattended=True
+            )
+        path = tmp_path / "hooks" / "claude-settings.json"
+        assert command[command.index("--settings") + 1] == str(path)
+        assert "SessionStart" in json.loads(path.read_text())["hooks"]
+
     def test_claude_without_dirs_has_no_settings(self):
         with _resolve("/usr/bin/claude"):
-            assert RUNTIMES["claude"].build_command() == ["/usr/bin/claude"]
+            assert RUNTIMES["claude"].build_command() == ["/usr/bin/claude", *_NO_FEEDBACK]
 
     def test_claude_brief_is_a_system_prompt_file(self, tmp_path):
         brief = tmp_path / "brief.md"
         brief.write_text("You are agent x.")
         with _resolve("/usr/bin/claude"):
             command = RUNTIMES["claude"].build_command(brief_file=brief, resume=True)
-        assert command == ["/usr/bin/claude", "--resume", "--append-system-prompt-file", str(brief)]
+        assert command == [
+            "/usr/bin/claude",
+            "--resume",
+            "--append-system-prompt-file",
+            str(brief),
+            *_NO_FEEDBACK,
+        ]
 
     def test_shell_stays_none(self, tmp_path):
         assert RUNTIMES["shell"].build_command(data_dir=tmp_path, state_dir=tmp_path) is None
@@ -92,7 +137,9 @@ class TestBuildCommand:
             else:
                 raise AssertionError("expected RuntimeError")
 
-    def test_codex_brief_becomes_initial_prompt(self, tmp_path):
+    def test_codex_brief_stays_off_the_command_line(self, tmp_path):
+        # tmux caps a launch command at 16 KB; the brief is queued as the first
+        # message instead of riding along as the initial prompt.
         brief = tmp_path / "brief.md"
         brief.write_text("You are agent x.")
         with _resolve("/bin/codex"):
@@ -100,10 +147,11 @@ class TestBuildCommand:
         assert command == [
             "/bin/codex",
             *_NET,
+            *_STANDARD_TIER,
+            *_NO_UPDATE_PROMPT,
             "--no-alt-screen",
             "--model",
             "gpt-5.2",
-            "You are agent x.",
         ]
 
     def test_codex_resume_is_a_subcommand(self):
@@ -113,6 +161,8 @@ class TestBuildCommand:
                 "resume",
                 "--last",
                 *_NET,
+                *_STANDARD_TIER,
+                *_NO_UPDATE_PROMPT,
                 "--no-alt-screen",
             ]
 
@@ -126,10 +176,31 @@ class TestBuildCommand:
         assert fresh[1:3] == _NET
         assert resumed[1:3] == ["resume", "sess-1"] and resumed[3:5] == _NET
 
-    def test_codex_unreadable_brief_degrades(self, tmp_path):
+    @pytest.mark.parametrize("resume", [False, True, "sess-1"])
+    @pytest.mark.parametrize("model", [None, "gpt-6-astra:high", "gpt-6-astra:ultra"])
+    def test_codex_launch_pins_standard_tier_independently_of_effort(self, resume, model):
         with _resolve("/bin/codex"):
-            command = RUNTIMES["codex"].build_command(brief_file=tmp_path / "missing.md")
-        assert command == ["/bin/codex", *_NET, "--no-alt-screen"]
+            command = RUNTIMES["codex"].build_command(model=model, resume=resume)
+        overrides = [command[i + 1] for i, arg in enumerate(command) if arg == "-c"]
+        assert [value for value in overrides if value.startswith("service_tier=")] == [
+            "service_tier=default"
+        ]
+        if model:
+            assert command[command.index("--model") + 1] == "gpt-6-astra"
+            assert f"model_reasoning_effort={model.split(':')[1]}" in overrides
+        else:
+            assert "--model" not in command
+            assert not any(value.startswith("model_reasoning_effort=") for value in overrides)
+        # Set the starting tier without disabling a later operator choice.
+        assert not any(value.startswith("features.fast_mode=") for value in overrides)
+
+    @pytest.mark.parametrize("resume", [False, "sess-1"])
+    def test_codex_launch_skips_the_update_dialog(self, resume):
+        # An update prompt at launch would hold the session on a numbered dialog.
+        with _resolve("/bin/codex"):
+            command = RUNTIMES["codex"].build_command(resume=resume)
+        overrides = [command[i + 1] for i, arg in enumerate(command) if arg == "-c"]
+        assert "check_for_update_on_startup=false" in overrides
 
     def test_gemini_flags(self, tmp_path):
         brief = tmp_path / "brief.md"
@@ -322,12 +393,28 @@ class TestDeepCode:
         assert resumed == ["/bin/deepcode", "--last"]
 
     def test_model_travels_in_the_environment(self):
-        # deepcode has no --model flag; MODEL in the environment selects it.
+        # deepcode has no --model flag; DEEPCODE_MODEL in the environment selects it.
         with _resolve("/bin/deepcode"):
             assert RUNTIMES["deepcode"].build_command(model="deepseek-v4-pro") == ["/bin/deepcode"]
-        assert RUNTIMES["deepcode"].launch_env("deepseek-v4-pro") == {"MODEL": "deepseek-v4-pro"}
+        assert RUNTIMES["deepcode"].launch_env("deepseek-v4-pro") == {
+            "DEEPCODE_MODEL": "deepseek-v4-pro"
+        }
         assert RUNTIMES["deepcode"].launch_env(None) == {}
         assert RUNTIMES["codex"].launch_env("x") == {}
+
+    def test_effort_travels_in_the_environment(self):
+        # DEEPCODE_REASONING_EFFORT, sent only in thinking mode, which the effort turns on.
+        with _resolve("/bin/deepcode"):
+            assert RUNTIMES["deepcode"].build_command(model="deepseek-v4-pro:high") == [
+                "/bin/deepcode"
+            ]
+            with pytest.raises(RuntimeError, match="no effort 'medium'"):
+                RUNTIMES["deepcode"].build_command(model="deepseek-v4-pro:medium")
+        assert RUNTIMES["deepcode"].launch_env("deepseek-v4-pro", "high") == {
+            "DEEPCODE_MODEL": "deepseek-v4-pro",
+            "DEEPCODE_REASONING_EFFORT": "high",
+            "DEEPCODE_THINKING_ENABLED": "true",
+        }
 
 
 class TestEffort:
@@ -350,6 +437,8 @@ class TestEffort:
             "-c",
             "model_reasoning_effort=high",
             *_NET,
+            *_STANDARD_TIER,
+            *_NO_UPDATE_PROMPT,
             "--no-alt-screen",
             "--model",
             "gpt-6-astra",
@@ -358,13 +447,15 @@ class TestEffort:
     def test_claude_effort_is_a_flag(self):
         with _resolve("/usr/bin/claude"):
             command = RUNTIMES["claude"].build_command(model="opus:xhigh")
-        assert command == ["/usr/bin/claude", "--effort", "xhigh", "--model", "opus"]
+        assert command == ["/usr/bin/claude", "--effort", "xhigh", "--model", "opus", *_NO_FEEDBACK]
 
     def test_no_effort_leaves_the_command_untouched(self):
         with _resolve("/bin/codex"):
             assert RUNTIMES["codex"].build_command(model="gpt-6-astra") == [
                 "/bin/codex",
                 *_NET,
+                *_STANDARD_TIER,
+                *_NO_UPDATE_PROMPT,
                 "--no-alt-screen",
                 "--model",
                 "gpt-6-astra",
@@ -422,39 +513,36 @@ class TestUnattended:
                 == RUNTIMES[runtime].build_command()
             )
 
-    def test_codex_never_asks_and_keeps_its_sandbox(self, tmp_path):
-        brief = tmp_path / "brief.md"
-        brief.write_text("You are a scout.")
+    def test_codex_never_asks_and_keeps_its_sandbox(self):
         with _resolve("/bin/codex"):
-            command = RUNTIMES["codex"].build_command(
-                model="gpt-6-astra:high", brief_file=brief, unattended=True
-            )
+            command = RUNTIMES["codex"].build_command(model="gpt-6-astra:high", unattended=True)
         assert command == [
             "/bin/codex",
             "-c",
             "model_reasoning_effort=high",
             *_NEVER_ASK,
             *_NET,
+            *_STANDARD_TIER,
+            *_NO_UPDATE_PROMPT,
             "--no-alt-screen",
             "--model",
             "gpt-6-astra",
-            "You are a scout.",
         ]
         assert not any(arg.startswith("--dangerously-bypass") for arg in command)
         assert RUNTIMES["codex"].sandboxed
 
     def test_codex_switch_and_writable_dirs_survive_resume(self):
         # Global options, valid before the `resume` subcommand like `-c`.
-        with _resolve("/bin/codex"):
+        with _resolve("/bin/codex"), _codex_on_macos():
             command = RUNTIMES["codex"].build_command(
                 resume="sess-1", unattended=True, writable_dirs=("~/.cache/uv",)
             )
-        cache = str(_HOME / ".cache/uv")
+        cache = str(Path.home() / ".cache/uv")
         assert command[:8] == ["/bin/codex", *_NEVER_ASK, "--add-dir", cache, "resume"]
 
     def test_writable_dirs_open_only_a_sandbox(self):
         # A runtime without a sandbox has nothing to open: everything already is.
-        with _resolve("/bin/codex"):
+        with _resolve("/bin/codex"), _codex_on_macos():
             codex = RUNTIMES["codex"].build_command(writable_dirs=("/a", "/b"))
         assert codex[1:5] == ["--add-dir", "/a", "--add-dir", "/b"]
         with _resolve("/bin/opencode"):
@@ -478,6 +566,7 @@ class TestUnattended:
                 "--dangerously-skip-permissions",
                 "--model",
                 "opus",
+                *_NO_FEEDBACK,
             ]
 
     def test_attended_is_the_default_and_adds_nothing(self):
@@ -489,3 +578,20 @@ class TestUnattended:
         # The shell included: it would otherwise start silently as a plain shell.
         with _resolve("/bin/x"), pytest.raises(RuntimeError, match="no unattended switch"):
             RUNTIMES[runtime].build_command(unattended=True)
+
+
+@pytest.mark.parametrize(
+    ("runtime", "env", "flag"),
+    [
+        ("claude", {}, True),
+        ("claude", {"CLAUDE_CODE_SEND_FEEDBACK": "0"}, True),
+        ("claude", {"CLAUDE_CODE_SEND_FEEDBACK": "1"}, False),  # the agent opted in
+        ("codex", {}, False),
+        ("opencode", {}, False),
+    ],
+)
+def test_drafted_feedback_is_disallowed_unless_the_agent_opts_in(runtime, env, flag):
+    with _resolve(f"/bin/{runtime}"):
+        command = RUNTIMES[runtime].build_command(env=env)
+    assert (" ".join(_NO_FEEDBACK) in " ".join(command)) is flag
+    assert command.count("--disallowedTools") == int(flag)  # one flag, never two

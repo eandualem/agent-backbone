@@ -36,8 +36,32 @@ Read `backbone docs security` for the trust model.
 - Ordinary queued messages expire after `timing.queue_expiry_minutes` (default
   30). Messages to or from a member of an active swarm are retained until
   delivery or the swarm ends. Inbox messages and uncertain submissions remain
-  held until acknowledged. Use issues for the durable task/decision record.
+  held until acknowledged, and messages queued behind an uncertain submission
+  wait with it, then get a full expiry window once it is acknowledged. When messages expire, you get a `[via:backbone]` notice listing
+  those sent to you, and those you sent: ask or send again if one still
+  matters. Use issues for the durable task/decision record.
 - Multi-line messages arrive intact as a single message.
+
+## Steering a working peer — guidance for its current task
+
+```bash
+backbone tell <agent> "the lock is held by the retry job; wait for it" --steer
+```
+
+`--steer` is for a clarification, a correction or context the peer lacks
+**about the task it is doing now**. It is not a new task and not a way to
+jump the queue: it goes to the peer's runtime hook as a transient offer and
+arrives as context on its next tool call (Claude Code and Codex; on Codex a
+command still running when its call returns hands it over when it exits; on
+OpenCode as a message in its running turn), never as a paste and never as a later prompt. While the peer is at its prompt, on
+another runtime, or offline, it is refused with the reason and nothing is
+queued — send an ordinary message then. The result is at-most-once handoff:
+`backbone agent inspect <agent>` shows the `steer` record as `offered`,
+`handed_off` (the hook took it), `not_taken` (the turn ended first, or nothing
+took it within five minutes, checked every 15 seconds) or `cancelled` (the session was replaced). A handoff means the
+peer saw it, not that it did what you asked. When you receive one, it reads
+`[via:backbone from:X] (steer for your current task) …`: input from that
+sender about your current work, to weigh, not an order.
 
 ## Checking on other agents
 

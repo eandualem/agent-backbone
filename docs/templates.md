@@ -12,8 +12,6 @@ short required rules with a group of tagged agents.
 - `docs/` contains the user reference, read with `backbone docs PAGE`.
 
 These directories are at the repository root and ship in the installed package.
-Historical review snapshots live in Git history; their actionable work is tracked
-in issues and pull requests, rather than mixed into the current reference.
 
 ## Find and edit
 
@@ -34,12 +32,30 @@ Names are `base`, `swarm:ROLE`, or `policy:NAME`. Bare names also select policie
 `swarm:worker`. `swarm:kickoff` is the coordinator's initial work message; its
 provenance envelope is supplied by code. `instructions` remains a command alias.
 
-Edits go to `<data_dir>/templates/`, normally
-`~/.local/share/agent-backbone/templates/`. `path NAME` prints the editable target;
-`list` shows the effective source and any legacy override. Edit an individual file,
-or use `backbone templates init` to copy all available templates there. You can
-also name specific templates, such as `backbone templates init base swarm:scout`.
-Existing copies are never overwritten. Copies are pinned: future package updates
+Edits go to your **configuration directory**: the `templates.dir` setting, or
+`<data_dir>/templates/` (normally `~/.local/share/agent-backbone/templates/`) when
+it is empty. It holds only what you author — `base.md`, `swarm/`, `policies/` — so
+give it a directory of its own and make that a git repository. Move the files
+first, then point the setting at them (only one directory is read):
+
+```bash
+mv ~/.local/share/agent-backbone/templates ~/backbone-config   # or copy, then git init
+backbone config set templates.dir ~/backbone-config              # absolute path
+backbone templates init                       # adds bundled defaults you have not edited
+```
+
+`templates path` prints the directory; `path NAME` prints the editable target;
+`list` shows the effective source and any legacy override; `backbone doctor`
+reports the directory. Both warn when files are left under the old default
+location, where they are no longer read. Policy assignments stay database settings (below); a
+fresh machine restores them with `backbone templates use`. Nothing in this
+repository is user-specific: it ships generic defaults and one example policy,
+and the [templates README](../templates/README.md) explains which kind of text
+belongs where.
+
+Edit an individual file, or use `backbone templates init` to copy all available
+templates there; you can also name specific templates, such as
+`backbone templates init base swarm:scout`. Existing copies are never overwritten. Copies are pinned: future package updates
 change bundled defaults, not your local instructions. Delete an override to follow
 the bundled default again (or a legacy override, if one still exists).
 
@@ -61,15 +77,25 @@ backbone templates preview api
 ```
 
 Assignments replace that scope's current list; pass several names to keep several
-policies. `backbone templates use --tag python` clears that tag's assignment;
-`backbone templates use` clears global assignments. `backbone agent untag api python`
-removes the tag from that agent. Tags persist across runtime switches. The
+policies. With no names the command only prints the scope's current assignment:
+`backbone templates use` shows the global list, `backbone templates use --tag python`
+that tag's. Clearing takes an explicit `--clear` (`backbone templates use --clear
+--tag python` removes that tag's assignment; `backbone templates use --clear` the
+global one). `backbone agent untag api python` removes the tag from that agent. Tags persist across runtime switches. The
 `python-example` policy ships as an optional starting point and is **not assigned**.
 
 For swarm roles, assign policies with `--tag role:scout` or `--tag role:coordinator`.
-Swarm members automatically receive their role and `swarm:NAME` tags. The tag/untag
+Swarm members automatically receive their role and `swarm:NAME` tags, and inherit
+every other tag of the agent that started the swarm. The tag/untag
 commands cannot change these identity tags. New rules apply when a new conversation
 starts; tagging does not interrupt or send messages to an existing session.
+
+The base brief tells every agent what the `## Shared policy:` sections are: fleet
+rules injected at each fresh start (global assignments plus the agent's tags),
+maintained by
+`templates.maintainer` (rendered as `{policy_maintainer}`; empty reads "the owner
+of this backbone"), changed by proposing to that maintainer rather than copying a
+rule into a repository.
 
 Composition is deterministic:
 
@@ -86,10 +112,12 @@ braces in examples. Keep them short and review them with `preview`.
 
 ## Placeholders and launch behavior
 
-The base brief supports `{agent_name}` and `{repo}`. Swarm role/common templates
+The base brief supports `{agent_name}`, `{repo}` and `{policy_maintainer}`. Swarm role/common templates
 support `{swarm_name}`, `{agent_name}`, `{role}`, `{repo}`, `{issue_number}`, `{issue_url}`,
 `{branch}`, `{worktree}`, `{base_branch}`, `{coordinator}`, `{initiator}`,
-and `{members}`. The kickoff supports `{swarm}`, `{repo}`, `{issue_number}`, `{title}`,
+and `{members}`, plus `{branch_shell}`, `{base_branch_shell}`, `{repo_shell}`,
+`{coordinator_shell}` and `{initiator_shell}`: the same values quoted for a
+shell. Use these in any command a brief has an agent run. The kickoff supports `{swarm}`, `{repo}`, `{issue_number}`, `{title}`,
 and `{issue_url}`. Other braces remain literal.
 
 `{shared_policy}` optionally chooses where policies appear in the base or combined

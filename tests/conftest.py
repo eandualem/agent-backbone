@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -83,6 +85,61 @@ def reset_module_state():
 
     yield
     _dedup.clear()
+
+
+@pytest.fixture(autouse=True)
+def isolated_skills_store(tmp_path, monkeypatch):
+    """The suite never reads or links the developer's own ``~/skills``.
+
+    Both routes to the store are redirected: the settings default (configs
+    built from settings) and the section's own default (configs built
+    directly), so a test config always points into ``tmp_path``.
+    """
+    from agent_backbone.config import SETTINGS_DEFAULTS, SkillsConfig
+
+    default = str(tmp_path / "skills-store")
+    monkeypatch.setitem(SETTINGS_DEFAULTS, "skills.store", default)
+    monkeypatch.setattr(
+        SkillsConfig,
+        "store_path",
+        property(
+            lambda self: (
+                Path(default if self.store == "~/skills" else self.store).expanduser()
+                if self.store
+                else None
+            )
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def isolated_user_instructions(tmp_path_factory, monkeypatch):
+    """The suite never reads the developer's own user-level instruction files
+    (``~/.claude/CLAUDE.md``, ``~/.codex/AGENTS.md`` …, #274): an empty home,
+    outside ``tmp_path`` so tests that inspect it see only their own files."""
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+    for key in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "XDG_CONFIG_HOME"):
+        monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def isolated_backbone_environment(monkeypatch):
+    """The suite never inherits a running backbone's session environment.
+
+    Run from an agent's own session, ``BACKBONE_STATE_DIR`` and
+    ``BACKBONE_DATA_DIR`` name the real directories and ``TMUX`` the real
+    server; hooks and config prefer them over a test's own values (#351).
+    A test that needs one sets it itself.
+    """
+    for key in list(os.environ):
+        if key.startswith("BACKBONE_") or key in ("TMUX", "TMUX_PANE"):
+            monkeypatch.delenv(key)
+
+
+@pytest.fixture(autouse=True)
+def isolated_temp_dir(tmp_path_factory, monkeypatch):
+    """Temporary files the code writes (a session's environment file) stay in the test tree."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path_factory.mktemp("tmp")))
 
 
 @pytest.fixture(autouse=True)
@@ -239,8 +296,10 @@ async def api_app(config):
     app.state.feed = SessionFeed(lambda: app.state.config)
     app.state.issue_closed_hooks = ()
     from agent_backbone.services.integrations import build_integrations
+    from agent_backbone.services.sources import build_sources
 
     app.state.integrations = build_integrations(lambda: app.state.config, db=db)
+    app.state.sources = build_sources(lambda: app.state.config)
     app.state.scheduler = None
 
     yield app
@@ -263,3 +322,9 @@ def api_key():
 @pytest.fixture
 def auth_headers(api_key):
     return {"Authorization": f"Bearer {api_key}"}
+
+
+@pytest.fixture(autouse=True)
+def _no_prompt_hook_wait(monkeypatch):
+    """An unconfirmed paste waits for the runtime's prompt hook; tests have none."""
+    monkeypatch.setattr("agent_backbone.services.routing._delivery.PROMPT_HOOK_WAIT_SECONDS", 0.0)

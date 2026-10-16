@@ -142,6 +142,32 @@ def _always_on(config, name: str):
 
 
 class TestOffline:
+    @pytest.mark.parametrize("raises", [False, True])
+    async def test_failed_offline_alert_is_retried_before_clearing_state(self, config, db, raises):
+        config = _always_on(replace(config, escalation=EscalationConfig(target="leo")), "ike")
+        await db.states.set("ike", "busy", current_issue=3)
+        gh = AsyncMock()
+        gh.list_issues.return_value = []
+        first = (
+            RuntimeError("queue unavailable")
+            if raises
+            else DeliveryReport(DeliveryOutcome.AGENT_WORKING, "failed")
+        )
+        with (
+            patch(
+                f"{_ESC}.safe_deliver",
+                side_effect=[first, DeliveryReport(DeliveryOutcome.AGENT_WORKING, "stored")],
+            ) as deliver,
+            patch(f"{_ESC}.notify_humans", return_value=False),
+        ):
+            await esc.handle_offline(config, {"leo"}, db, gh)
+            assert (await db.states.get("ike"))["state"] == "busy"
+            assert not esc._escalated.seen(("ike", "offline"))
+            await esc.handle_offline(config, {"leo"}, db, gh)
+            await esc.handle_offline(config, {"leo"}, db, gh)
+        assert deliver.await_count == 2
+        assert (await db.states.get("ike"))["state"] == "unknown"
+
     async def test_detects_and_clears_offline_agent(self, config, db):
         config = _always_on(replace(config, escalation=EscalationConfig(target="leo")), "ike")
         await db.states.set("ike", "busy", current_issue=3)
@@ -153,6 +179,21 @@ class TestOffline:
         assert "offline unexpectedly" in d.await_args.args[1]
         assert "1 pending issue" in d.await_args.args[1]
         assert (await db.states.get("ike"))["state"] == "unknown"
+
+    async def test_a_planned_restart_is_not_an_unexpected_absence(self, config, db):
+        config = _always_on(replace(config, escalation=EscalationConfig(target="leo")), "ike")
+        await db.states.set("ike", "busy", current_issue=3)
+        await db.transitions.create(agent_name="ike", requested_by="ike")
+        gh = AsyncMock()
+        gh.list_issues = AsyncMock(return_value=[_issue(3)])
+        with (
+            patch(f"{_ESC}.safe_deliver", new_callable=AsyncMock) as d,
+            patch(f"{_ESC}.notify_humans", new_callable=AsyncMock, return_value=True) as tg,
+        ):
+            assert await esc.check_for_unexpected_offline(config, {"leo"}, db, gh) == []
+            await esc.handle_offline(config, {"leo"}, db, gh)
+        d.assert_not_called()
+        tg.assert_not_called()
 
     async def test_an_ordinary_agent_going_offline_is_not_reported(self, config, db):
         """Agents are not expected to stay up; the state is cleared quietly."""
@@ -490,6 +531,60 @@ _IDLE = {"ike": _snap(AgentState.IDLE)}
 
 
 class TestDeliverPendingIssues:
+    @pytest.mark.parametrize("stage", ["lookup", "delivery"])
+    @pytest.mark.parametrize(
+        "diagnostic_failure", [None, "pending_issues_failed", "pending_issues_recovered"]
+    )
+    async def test_one_agent_failure_does_not_starve_the_next(
+        self, config, db, stage, diagnostic_failure, caplog
+    ):
+        fail = True
+
+        async def queue(config, name, gh, *, db):
+            if fail and name == "ike" and stage == "lookup":
+                raise TimeoutError("repository unavailable")
+            return [_issue(7, name)]
+
+        async def deliver(name, *args, **kwargs):
+            if fail and name == "ike" and stage == "delivery":
+                raise RuntimeError("delivery unavailable")
+            return DeliveryReport(DeliveryOutcome.DELIVERED)
+
+        record_diagnostic = db.diagnostics.record
+
+        async def record(**kwargs):
+            if kwargs["agent_name"] == "ike" and kwargs["code"] == diagnostic_failure:
+                raise RuntimeError("diagnostics unavailable")
+            return await record_diagnostic(**kwargs)
+
+        gh = AsyncMock()
+        gh.list_comments.return_value = []
+        states = {name: _snap(AgentState.IDLE) for name in ("ike", "ada")}
+        with (
+            patch(f"{_PEND}.list_open_queue_for_target", side_effect=queue),
+            patch(f"{_PEND}.safe_deliver", side_effect=deliver),
+        ):
+            with patch.object(db.diagnostics, "record", side_effect=record):
+                assert await deliver_pending_issues(config, states, db, gh) == {
+                    "ike": "failed",
+                    "ada": "delivered_#7",
+                }
+                fail = False
+                assert await deliver_pending_issues(config, states, db, gh) == {
+                    "ike": "delivered_#7",
+                    "ada": "delivered_#7",
+                }
+            if diagnostic_failure == "pending_issues_recovered":
+                # A failed diagnostic write is retried on the next observed success.
+                await deliver_pending_issues(config, states, db, gh)
+        rows = await db.diagnostics.query(agent_name="ike")
+        expected = {"pending_issues_failed", "pending_issues_recovered"}
+        if diagnostic_failure == "pending_issues_failed":
+            expected.remove("pending_issues_failed")
+        assert {row["code"] for row in rows} == expected
+        if diagnostic_failure:
+            assert "Failed to record pending issue diagnostic for ike" in caplog.text
+
     async def test_delivers_first_pending_to_idle_agent(self, config, db):
         gh = AsyncMock()
         gh.list_issues = AsyncMock(return_value=[_issue(7), _issue(8)])
@@ -547,6 +642,25 @@ class TestDeliverPendingIssues:
         d.assert_not_called()
         assert await db.acks.exists(7, "ike", repo=_REPO)
 
+    async def test_backfills_ack_for_an_agent_with_capitals_in_its_name(self, config, db):
+        from agent_backbone.config import AgentSpec
+        from agent_backbone.models import CommentData
+
+        spec = AgentSpec(name="Builder", dir=str(config.data_dir), repo=_REPO)
+        config = replace(config, agents=AgentsConfig(specs={"Builder": spec}))
+        gh = AsyncMock()
+        gh.list_issues = AsyncMock(return_value=[_issue(7, target="Builder")])
+        gh.list_comments = AsyncMock(
+            return_value=[CommentData(body="[from:Builder] on it", user_login="bot")]
+        )
+        with patch(f"{_PEND}.safe_deliver", new_callable=AsyncMock) as d:
+            result = await deliver_pending_issues(
+                config, {"Builder": _snap(AgentState.IDLE)}, db, gh
+            )
+        assert result["Builder"] == "no_deliverable"
+        d.assert_not_called()
+        assert await db.acks.exists(7, "Builder", repo=_REPO)
+
     async def test_skips_recently_delivered(self, config, db):
         await db.deliveries.record(
             issue_number=7,
@@ -592,7 +706,6 @@ class TestMonitorAgents:
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock) as stalls,
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock) as offline,
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock) as plans,
-            patch(f"{_MON}.handle_copy_mode_recovery", new_callable=AsyncMock) as copy,
             patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock, return_value={}) as drain,
             patch(
                 f"{_MON}.deliver_pending_issues",
@@ -604,7 +717,7 @@ class TestMonitorAgents:
             result = await monitor_agents(config, db, gh, on_change=on_change)
 
         assert result == {"ike": "no_pending"}
-        for mock in (sync, stalls, offline, plans, copy, on_change, drain, pend):
+        for mock in (sync, stalls, offline, plans, on_change, drain, pend):
             mock.assert_awaited_once()
 
     async def test_step_failure_is_isolated(self, config, db):
@@ -621,7 +734,6 @@ class TestMonitorAgents:
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock, side_effect=RuntimeError("x")),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(f"{_MON}.handle_copy_mode_recovery", new_callable=AsyncMock),
             patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock, return_value={}),
             patch(
                 f"{_MON}.deliver_pending_issues", new_callable=AsyncMock, return_value={}
@@ -643,7 +755,6 @@ class TestMonitorAgents:
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(f"{_MON}.handle_copy_mode_recovery", new_callable=AsyncMock),
             patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock, return_value={}) as drain,
             patch(f"{_MON}.deliver_pending_issues", new_callable=AsyncMock) as pend,
         ):
@@ -660,7 +771,6 @@ class TestMonitorAgents:
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock) as offline,
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(f"{_MON}.handle_copy_mode_recovery", new_callable=AsyncMock),
             patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock, return_value={}) as drain,
             patch(f"{_MON}.deliver_pending_issues", new_callable=AsyncMock, return_value={}),
         ):
@@ -670,3 +780,45 @@ class TestMonitorAgents:
         assert snapshot.client is gh
         offline.assert_awaited_once_with(config, set(), db, snapshot)
         drain.assert_awaited_once()
+
+
+async def test_monitor_records_usage_stage_without_blocking_delivery(config, db):
+    check = {
+        "agent_name": "worker",
+        "runtime": "codex",
+        "stage": "usage_registration",
+        "error_type": "ValueError",
+    }
+    with (
+        patch(f"{_MON}.list_sessions", return_value=[]),
+        patch(f"{_MON}.handle_offline"),
+        patch(f"{_MON}.collect_usage", return_value={"errors": ["conflict"], "checks": [check]}),
+        patch(f"{_MON}.drain_message_queue", return_value={}) as drain,
+    ):
+        await monitor_agents(config, db, None)
+    drain.assert_awaited_once()
+    rows = await db.diagnostics.query()
+    assert {row["code"] for row in rows} == {"usage_registration_failed", "usage_collection_failed"}
+    (failure,) = [row for row in rows if row["code"] == "usage_registration_failed"]
+    assert (failure["agent_name"], failure["runtime"]) == ("worker", "codex")
+
+
+async def test_queue_drain_does_not_wait_for_usage_collection(config, db):
+    order = []
+
+    async def drain(*args, **kwargs):
+        order.append("drain")
+        return {}
+
+    async def usage(*args, **kwargs):
+        order.append("usage")
+        return {}
+
+    with (
+        patch(f"{_MON}.list_sessions", return_value=[]),
+        patch(f"{_MON}.handle_offline"),
+        patch(f"{_MON}.collect_usage", side_effect=usage),
+        patch(f"{_MON}.drain_message_queue", side_effect=drain),
+    ):
+        await monitor_agents(config, db, None)
+    assert order == ["drain", "usage"]

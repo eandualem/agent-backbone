@@ -15,12 +15,12 @@ import sys
 from pathlib import Path
 
 from agent_backbone.cli import _common
+from agent_backbone.cli.presentation import note, print_record, print_table
 from agent_backbone.config import (
     SECRET_ENV_KEYS,
     bootstrap_config,
     env_file_keys,
 )
-from agent_backbone.services.database.engine import redact_url
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +42,8 @@ BACKBONE_API_KEY={api_key}
 
 
 def cmd_init(args: argparse.Namespace) -> int:
+    from agent_backbone.services.database.engine import redact_url
+
     config = bootstrap_config(args.data_dir)
     data_dir = config.data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -162,11 +164,15 @@ def cmd_secrets(args: argparse.Namespace) -> int:
         return 0
     if sub == "list":
         present = _env_keys(env_path)
-        for key in SECRET_ENV_KEYS:
-            print(f"  {'✓' if key in present else '-'} {key}")
-        for key in sorted(present - set(SECRET_ENV_KEYS)):
-            print(f"  ✓ {key}")
-        print(f"\n{env_path}" if env_path.is_file() else f"\n{env_path} (not created yet)")
+        print_table(
+            "Secrets (names only)",
+            ("Name", "State"),
+            [
+                (key, "set" if key in present else "not set")
+                for key in [*SECRET_ENV_KEYS, *sorted(present - set(SECRET_ENV_KEYS))]
+            ],
+        )
+        note(str(env_path) if env_path.is_file() else f"{env_path} (not created yet)")
         return 0
 
     key = args.key.strip().upper()
@@ -198,54 +204,68 @@ def cmd_runtimes(args: argparse.Namespace) -> int:
     """Every runtime, whether its binary is installed, and example model ids."""
     from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
 
+    rows = []
     for rt in REGISTRY.values():
         installed = "installed" if rt.available() else "not found"
-        models = ", ".join(rt.models) if rt.models else "use the CLI's own model picker"
-        efforts = ", ".join(rt.efforts) if rt.efforts else "-"
+        rows.append((rt.id, rt.display_name, installed, rt.reports_state))
+    print_table("Runtimes", ("CLI", "Name", "Availability", "State reporting"), rows)
+    for rt in REGISTRY.values():
         if rt.unattended_args:
             wall = "sandboxed" if rt.sandboxed else "no sandbox"
             unattended = f"{' '.join(rt.unattended_args)} ({wall})"
         else:
-            unattended = "-"
-        print(
-            f"  {rt.id:<10s} {rt.display_name:<12s} {installed:<10s} "
-            f"state: {rt.reports_state:<17s} models: {models}"
+            unattended = "unsupported"
+        print_record(
+            rt.id,
+            [
+                ("Example models", ", ".join(rt.models) or "use the CLI's own model picker"),
+                ("Effort", ", ".join(rt.efforts) or "unsupported"),
+                ("Unattended", unattended),
+            ],
         )
-        print(f"  {'':<10s} {'':<12s} {'':<10s} effort: {efforts}")
-        print(f"  {'':<10s} {'':<12s} {'':<10s} unattended: {unattended}")
-    print("\nA plain model id is passed to the CLI verbatim; these are examples, not a")
-    print("complete list. Effort rides on the model as `model:effort` (e.g.")
-    print("`gpt-6-astra:high`), so every surface that names a model can name an effort:")
-    print("`--model`, `agent set model=…`, and a roster entry `coordinator@codex/…:high`.")
-    print("Such a spec is split: the CLI gets the bare model plus its own effort switch.")
-    print("`unattended` is the switch an `unattended=true` agent is launched with (its")
-    print("runtime then never asks a person). `sandboxed` means an OS sandbox still")
-    print("confines it to its directory; `no sandbox` means trust on the machine. `-`:")
-    print("the backbone refuses to start that runtime unattended rather than guess.")
+    note("\nA plain model id is passed to the CLI verbatim; these are examples, not a")
+    note("complete list. Effort rides on the model as `model:effort` (e.g.")
+    note("`gpt-6-astra:high`), so every surface that names a model can name an effort:")
+    note("`--model`, `agent set model=…`, and a roster entry `coordinator@codex/…:high`.")
+    note("Such a spec is split: the CLI gets the bare model plus its own effort switch.")
+    note("`unattended` is the switch an `unattended=true` agent is launched with (its")
+    note("runtime then never asks a person). `sandboxed` means an OS sandbox still")
+    note("confines it to its directory; `no sandbox` means trust on the machine. `unsupported`:")
+    note("the backbone refuses to start that runtime unattended rather than guess.")
     return 0
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
+    from agent_backbone.config import invalid_settings
+    from agent_backbone.services.database.engine import redact_url
     from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
+    from agent_backbone.services.runtimes import (
+        agent_clis,
+        install_hint,
+        unavailable,
+        verified_versions,
+    )
+    from agent_backbone.services.terminal import in_copy_mode, list_sessions, window_viewers
 
     ok = True
 
     def check(label: str, passed: bool, hint: str = "") -> None:
         nonlocal ok
-        mark = "✓" if passed else "✗"
-        print(f"  {mark} {label}" + (f"  — {hint}" if (hint and not passed) else ""))
+        mark = "OK" if passed else "FAIL"
+        note(f"  {mark} {label}" + (f"  — {hint}" if (hint and not passed) else ""))
         ok = ok and passed
 
     async def run() -> int:
         nonlocal ok
         boot = bootstrap_config()
-        print("Storage")
+        note("Storage")
         check(f"data dir exists: {boot.data_dir}", boot.data_dir.is_dir(), "run `backbone init`")
         check(f".env present: {boot.env_path}", boot.env_path.is_file(), "run `backbone init`")
         try:
             async with _common.Direct(boot) as direct:
                 config = direct.config
                 check(f"database reachable: {redact_url(config.database_url)}", True)
+                stored = await direct.db.settings.all()
         except Exception as exc:
             check(
                 f"database reachable: {redact_url(boot.database_url)}",
@@ -253,32 +273,122 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 f"{exc}; run `backbone init`",
             )
             return 1
+        # A value an older release accepted may now be ignored for its default.
+        for key, reason in invalid_settings(stored).items():
+            check(
+                f"setting {key}",
+                False,
+                f"ignored: {reason}; fix with `backbone config set {key} …`",
+            )
+        templates = config.template_dirs.editable
+        origin = "templates.dir" if config.templates.dir else "default"
+        check(
+            f"templates dir ({origin}): {templates}",
+            templates.is_dir() or origin == "default",
+            "create it, or `backbone config set templates.dir ''` for the default",
+        )
+        if unread := config.template_dirs.unread_default_files():
+            note(
+                f"  ! {len(unread)} template file(s) left under "
+                f"{boot.data_dir / 'templates'} are not read"
+            )
 
-        print("Agents")
+        note("Agents")
         if not config.agents:
-            print("  - none yet (run `backbone agent start` from a project directory)")
+            note("  - none yet (run `backbone agent start` from a project directory)")
+        sessions = set(await list_sessions()) if shutil.which("tmux") else set()
         for spec in config.agents:
             check(f"'{spec.name}' dir exists: {spec.path}", spec.path.is_dir())
             installed = spec.runtime in REGISTRY and REGISTRY[spec.runtime].available()
             check(f"'{spec.name}' runtime '{spec.runtime}' installed", installed)
+            if spec.runtime in REGISTRY and (
+                needs := REGISTRY[spec.runtime].plan_approval_needs(spec.env)
+            ):
+                note(f"  ! '{spec.name}': {needs}")
             if not spec.repo:
-                print(f"  ! '{spec.name}' has no GitHub remote — issue routing is off for it")
+                note(f"  ! '{spec.name}' has no GitHub remote — issue routing is off for it")
+            # tmux keeps copy mode after its last client detaches; messages wait for it.
+            if (
+                spec.name in sessions
+                and not spec.inbox_only
+                and await in_copy_mode(spec.name)
+                and await window_viewers(spec.name) == 0
+            ):
+                note(
+                    f"  ! '{spec.name}' is in tmux copy mode with no one viewing it — "
+                    "messages wait: attach to its session and press q"
+                )
 
-        print("Tools")
+        note("Tools")
         check("tmux on PATH", shutil.which("tmux") is not None, "install tmux")
-        found = [rt.id for rt in REGISTRY.values() if rt.binary and rt.available()]
-        print(f"  - runtimes installed: {', '.join(found) or 'none'}")
+        found = [rt.id for rt in REGISTRY.values() if rt.id in agent_clis() and rt.available()]
+        # Starting an agent needs one: without it the next step fails.
+        check("an agent CLI on PATH", bool(found), install_hint())
+        if found:
+            note(f"  - runtimes installed: {', '.join(found)}")
+            # Reported, not failed: the file may be meant, but never unnoticed (#274).
+            for runtime_id in found:
+                runtime = REGISTRY[runtime_id]
+                for path in runtime.user_instructions({}):
+                    note(f"  ! {runtime.display_name} user-level instructions: {path}")
+                if memory := runtime.native_memory({}):
+                    note(f"  ! {runtime.display_name} native memory: {memory}")
+            # The capability contract: what each installed runtime lacks, and its issue.
+            gaps = [
+                (
+                    runtime_id,
+                    "\n".join(
+                        cap.id
+                        + (f" (#{cell.issue})" if (cell := cap.cells[runtime_id]).issue else "")
+                        for cap in missing
+                    ),
+                )
+                for runtime_id in found
+                if (missing := unavailable(runtime_id))
+            ]
+            if gaps:
+                print_table(
+                    "Unavailable on installed runtimes", ("CLI", "Capability (issue)"), gaps
+                )
+            # What depends on the CLI's own dialogs, keys or hooks, and the version it was
+            # verified on: a newer CLI may have changed it (#356).
+            verified = [
+                (runtime_id, version, ", ".join(ids))
+                for runtime_id in found
+                for version, ids in verified_versions(runtime_id).items()
+            ]
+            if verified:
+                print_table(
+                    "Verified on a CLI version (check again after upgrading)",
+                    ("CLI", "Verified on", "Capability"),
+                    verified,
+                )
+            # The installed CLI against those versions: advice, never a failure (#359).
+            for runtime_id in found:
+                recorded = [v for v in verified_versions(runtime_id) if v != "not recorded"]
+                if not recorded:
+                    continue
+                runtime = REGISTRY[runtime_id]
+                if (installed := runtime.installed_version()) is None:
+                    unread = f"({runtime.binary} --version)"
+                    note(f"  ! {runtime_id}: installed version unreadable {unread}")
+                elif differ := [v for v in recorded if v != installed]:
+                    note(
+                        f"  ! {runtime_id}: installed {installed}, verified on "
+                        f"{', '.join(differ)}: check those capabilities again"
+                    )
+            note("    details: `backbone docs runtime-capabilities`")
 
-        print("Security")
+        note("Security")
         check(
             "API key configured",
             bool(config.api_key) or config.security.allow_unauthenticated,
             "set BACKBONE_API_KEY in .env",
         )
         if config.security.allow_unauthenticated:
-            print("  ! API authentication is disabled (security.allow_unauthenticated)")
+            note("  ! API authentication is disabled (security.allow_unauthenticated)")
 
-        print("Integrations")
+        note("Integrations")
         if config.github_app_ready and not config.github_token:
             try:
                 import cryptography  # noqa: F401
@@ -286,18 +396,18 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 check(
                     "GitHub App auth dependencies installed",
                     False,
-                    "install the extra: uv tool install 'agent-backbone[github-app]'",
+                    "reinstall required dependencies: uv tool install --reinstall agent-backbone",
                 )
             key_ok = Path(config.github_app_private_key_path).expanduser().is_file()
             check(f"GitHub App private key: {config.github_app_private_key_path}", key_ok)
         if config.github_ready:
-            print(f"  ✓ GitHub credentials found — intake: {config.github_intake}")
+            note(f"  ✓ GitHub credentials found — intake: {config.github_intake}")
             if config.github_intake == "poll":
-                print(
+                note(
                     "    (set GITHUB_WEBHOOK_SECRET + expose /webhooks/github for instant delivery)"
                 )
         else:
-            print(
+            note(
                 "  - GitHub not configured (optional): `backbone secrets set GITHUB_TOKEN` "
                 f"(writes {config.env_path})"
             )
@@ -308,15 +418,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 "backbone config set telegram.allowed_chat_ids '[<chat id>]'",
             )
         else:
-            print(
+            note(
                 "  - Telegram not configured (optional): `backbone secrets set TELEGRAM_TOKEN` "
                 f"(writes {config.env_path})"
             )
 
-        print("Backbone")
+        note("Backbone")
         api_state = "up" if await _common.api_up(config) else "down"
-        print(f"  - API: {api_state} ({_common.api_url(config, '')})")
-        print("\nAll good." if ok else "\nSome checks failed.")
+        note(f"  - API: {api_state} ({_common.api_url(config, '')})")
+        note("\nAll good." if ok else "\nSome checks failed.")
         return 0 if ok else 1
 
     return asyncio.run(run())

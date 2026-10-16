@@ -1,13 +1,14 @@
 # Status and roadmap
 
-Honest inventory of what works, what is missing, and what is next. Updated
-2026-09-06.
+Capabilities and limitations of this checkout. Documentation checked 2026-09-22;
+the dated runtime observations below are historical tests, not a guarantee for
+every later CLI version or account.
 
 ## Implemented and checked
 
 - Agents discovered from directories: name, runtime, repository from
-  `git remote origin`; `agent start` returns when the agent is at its prompt
-  and reports a folder-trust question instead of timing out.
+  `git remote origin`; `agent start` waits for readiness and reports prompts or timeouts
+  that need attention.
 - Runtime-agnostic states (`idle`, `busy`, `waiting_for_human` with reason,
   `starting`, `blocked` with quota/provider reason, `unknown`, and `offline`)
   from the runtime's hooks first and the terminal second, with evidence (`agent inspect`). Hooks ship for Claude Code,
@@ -18,11 +19,18 @@ Honest inventory of what works, what is missing, and what is next. Updated
 - State-gated delivery: a message sent while the agent is busy is queued
   and retried when it is free, until expiry; `priority` never interrupts a
   busy or provider-blocked agent. Current-issue comments obey the same gate.
-  Copy mode is cleared automatically, and delivery attempts are recorded.
+  Copy mode is preserved and blocks delivery as `human_reading`, or as
+  `unattended_copy_mode` when no client is viewing the pane; delivery
+  attempts are recorded.
   A crash after terminal submission but before receipt storage can repeat a
   message; see [delivery receipts](github.md#delivery-receipts-and-retries).
-- Database-only configuration: settings with defaults, edited live with
+- Database-backed settings with defaults, edited live with
   `backbone config`; secrets only in `.env`.
+- Event subscriptions ([sources](sources.md)): agents subscribe to Gmail
+  with Gmail search filters and a priority; normal events batch in the queue
+  until the agent is ready, high events reach a working Claude Code, Codex or
+  OpenCode agent through its hook context. Unit-tested end to end with the IMAP
+  client mocked; live mailbox validation is still pending.
 - GitHub per repository: owner / `for:` / `from:` / watch routing,
   one-issue-at-a-time with acknowledgement, close-then-next, sub-issue
   unblock, poll intake with a durable replay cursor, webhook intake
@@ -43,31 +51,37 @@ Honest inventory of what works, what is missing, and what is next. Updated
 - A unit suite that runs with no services (SQLite in memory, tmux mocked) in
   a short local run.
   `make check` is the CI gate (GitHub Actions on 3.11–3.13); `make smoke` checks
-  real tmux independently. Historical audits remain in Git history and their
-  linked issues and pull requests.
+  real tmux independently.
 - Packaging: published to PyPI by a manual workflow (never on a push or
   merge), which then tags `v<version>`; the wheel carries the documentation
   (`backbone docs`) and the agent playbooks (`backbone help`), so an agent
   can install and set the backbone up from the package alone.
 
-## Missing on purpose (not yet built)
+## Runtimes
 
-| Gap | Why it matters | Plan |
-|---|---|---|
-| Hooks for Deep Code / Aider | The shipped adapters read those runtimes from the terminal; the signal is weaker than a hook | Add hooks if a supported lifecycle API becomes available |
-| Scheduled messages (`08:00 → tell app "daily triage"`) | Recurring nudges without a cron job | A `schedules` table → scheduler jobs that call `safe_deliver` |
-| Auto-registering per-repo webhooks for token users | Personal accounts have no account-wide webhook; today token+webhook means clicking per repository | On agent discovery, `POST /repos/{owner}/{repo}/hooks` when a token with `admin:repo_hook` is present (the App path already avoids this entirely) |
-| Other trackers (GitLab, Linear) | GitHub-only today | Only if someone needs it; the GitHub client is the only tracker-specific code |
-| Windows | tmux-only | Not planned |
+Seven adapters are shipped: `claude`, `codex`, `gemini`, `opencode`,
+`deepcode`, `aider` and `shell`. Which capabilities work on each, and the issue
+tracking each gap where one exists, is in [runtime capabilities](runtime-capabilities.md),
+generated from the capability contract; `backbone doctor` reports from the
+same source. Use `backbone runtimes` to see which CLIs are installed locally.
+
+## Current limits
+
+- Deep Code and Aider use terminal detection; no lifecycle hooks are shipped.
+- Issue routing supports GitHub. Other trackers are not integrated.
+- Token-based webhook setup is per repository; a GitHub App can cover all
+  repositories in its installation.
+- macOS and Linux are supported. Windows is not supported because sessions
+  depend on tmux.
 
 ## Known rough edges
 
 - Claude Code's folder-trust prompt is answered by the backbone at
   `agent start` (`agents.pre_trust`, on by default). With it disabled, a
   human answers once per directory (`start` tells you; `tmux attach`).
-- An ordinary queued message expires after 30 minutes (`timing.queue_expiry_minutes`);
-  active swarm coordination and inbox holds are retained
-  and leaves a delivery with outcome `expired`. Comments that expire are
+- An ordinary queued message expires after 30 minutes (`timing.queue_expiry_minutes`)
+  and leaves a delivery with outcome `expired`. Active swarm messages,
+  subscription events and inbox holds have separate retention rules. Comments that expire are
   still on GitHub; the agent finds them when it reads the issue.
 - The `shell` runtime treats the `[via:…]` envelope as a glob. It exists for
   testing the plumbing, not for real use.
@@ -77,17 +91,6 @@ Honest inventory of what works, what is missing, and what is next. Updated
   install may deliver day-old open issues. Close or label what you do not want
   delivered before adding the token.
 
-## Where feedback is most useful right now
-
-- Is one-issue-at-a-time per agent the right granularity, or should an
-  agent be able to opt into N concurrent issues?
-- Should acknowledgement be a comment (today) or a label the agent adds?
-- Escalations go to one agent plus Telegram; is a per-agent escalation
-  target needed?
-- The GitHub App path: is a one-time App setup acceptable for an open-source
-  user, or should the token path stay the primary one?
-
-
-
 See [message checkpoints](cli.md#cooperative-message-checkpoints) for safe mid-turn
-coordination, acknowledgement and retention.
+coordination, acknowledgement and retention. Report reproducible problems through
+[GitHub Issues](https://github.com/eandualem/agent-backbone/issues).

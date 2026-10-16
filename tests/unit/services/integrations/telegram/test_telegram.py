@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from telegram.error import NetworkError
+from telegram.ext import Application
+from telegram.request import BaseRequest
 
 from agent_backbone.config import SecurityConfig, TelegramConfig
 from agent_backbone.models import DeliveryOutcome
@@ -324,6 +328,112 @@ class TestAuthorization:
         assert (await bot.health_check())["healthy"] is True
 
 
+@pytest.mark.parametrize(
+    ("stage", "error", "cleanup_error"),
+    [
+        ("polling", TimeoutError, None),
+        ("polling", asyncio.CancelledError, None),
+        ("sync", asyncio.CancelledError, None),
+        ("polling", TimeoutError, RuntimeError),
+        ("sync", asyncio.CancelledError, RuntimeError),
+        ("polling", TimeoutError, asyncio.CancelledError),
+    ],
+)
+async def test_failed_start_closes_partial_application(config, stage, error, cleanup_error, caplog):
+    bot = _bot(replace(config, telegram_token="t"))
+    failure = error("startup failed")
+    app = MagicMock(
+        initialize=AsyncMock(), start=AsyncMock(), stop=AsyncMock(), shutdown=AsyncMock()
+    )
+    app.stop.side_effect = cleanup_error("cleanup failed") if cleanup_error else None
+    app.bot.shutdown = AsyncMock()
+    app.running = True
+    app.updater.running = stage == "sync"
+    app.updater.stop = AsyncMock()
+    app.updater.start_polling = AsyncMock(side_effect=failure if stage == "polling" else None)
+    bot.sync_agents = AsyncMock(side_effect=failure if stage == "sync" else None)
+    bot._app = app
+    with patch.object(bot, "build_app", return_value=app), pytest.raises(error) as raised:
+        await bot.start()
+    assert raised.value is failure
+    assert not bot.running and bot._app is None
+    app.stop.assert_awaited_once()
+    app.shutdown.assert_awaited_once()
+    app.bot.shutdown.assert_awaited_once()
+    assert app.updater.stop.await_count == (stage == "sync")
+    if cleanup_error:
+        assert "Telegram startup cleanup failed" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("phase", "error"),
+    [
+        ("updater", RuntimeError),
+        ("application", asyncio.CancelledError),
+        ("shutdown", RuntimeError),
+    ],
+)
+async def test_stop_attempts_remaining_cleanup_then_raises_first_failure(config, phase, error):
+    bot = _bot(config)
+    failure = error("first cleanup failed")
+    calls = []
+
+    async def cleanup(name):
+        calls.append(name)
+        if name == phase:
+            raise failure
+        if name == "bot":
+            raise RuntimeError("later cleanup failed")
+
+    app = MagicMock(running=True)
+    app.updater.running = True
+    app.updater.stop = lambda: cleanup("updater")
+    app.stop = lambda: cleanup("application")
+    app.shutdown = lambda: cleanup("shutdown")
+    app.bot.shutdown = lambda: cleanup("bot")
+    bot._app = app
+    bot._running = True
+    with pytest.raises(error) as raised:
+        await bot.stop()
+    assert raised.value is failure
+    assert calls == ["updater", "application", "shutdown", "bot"]
+    assert not bot.running and bot._app is None
+    await bot.stop()
+    assert len(calls) == 4
+
+
+@pytest.mark.parametrize("error", [NetworkError, asyncio.CancelledError])
+async def test_failed_get_me_closes_initialized_requests(config, error):
+    bot = _bot(replace(config, telegram_token="123:fake"))
+    failure = error("getMe failed")
+    requests = [
+        MagicMock(
+            spec=BaseRequest,
+            initialize=AsyncMock(),
+            shutdown=AsyncMock(),
+            post=AsyncMock(side_effect=failure),
+            read_timeout=1,
+        )
+        for _ in range(2)
+    ]
+    app = (
+        Application.builder()
+        .token("123:fake")
+        .request(requests[0])
+        .get_updates_request(requests[1])
+        .build()
+    )
+    bot._app = app
+    with patch.object(bot, "build_app", return_value=app), pytest.raises(error) as raised:
+        await bot.start()
+    assert raised.value is failure
+    assert not bot.running and bot._app is None
+    await bot.stop()  # Repeated cleanup is harmless.
+    for request in requests:
+        request.initialize.assert_awaited_once()
+        request.shutdown.assert_awaited_once()
+
+
 class TestTell:
     async def test_cmd_tell_uses_safe_deliver(self, config):
         bot = _bot(config)
@@ -610,7 +720,7 @@ class TestPlans:
             patch(
                 f"{_CMD}.plan_control",
                 new_callable=AsyncMock,
-                return_value=("approved", ["sent Escape [Z to claude"]),
+                return_value=("approved", ["sent 1 to claude"]),
             ) as approve,
         ):
             await bot.cmd_approve(update, _context(["ike"]))
@@ -825,12 +935,8 @@ class TestDiscoveryAuthorization:
         update.message.reply_text.assert_not_awaited()
 
 
-@pytest.mark.parametrize(
-    "saved_runtime,expected_resume", [("codex", True), ("claude", False), (None, False)]
-)
-async def test_telegram_start_uses_the_shared_automatic_resume(
-    config, db, saved_runtime, expected_resume
-):
+@pytest.mark.parametrize("saved_runtime", ["codex", "claude", None])
+async def test_telegram_start_is_fresh_with_the_saved_runtime_and_model(config, db, saved_runtime):
     import json
 
     from agent_backbone.config import AgentsConfig, AgentSpec
@@ -866,7 +972,7 @@ async def test_telegram_start_uses_the_shared_automatic_resume(
         ) as launch,
     ):
         await bot.cmd_start_agent(_update(), _context(["ike"]))
-    assert launch.await_args.kwargs["resume"] is expected_resume
+    assert launch.await_args.kwargs["resume"] is False
     assert launch.await_args.args[0].model == "gpt-6-astra:high"
     assert RUNTIMES["codex"].supports_exact_resume
 

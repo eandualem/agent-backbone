@@ -9,7 +9,7 @@ numbers.
 
 from __future__ import annotations
 
-from sqlalchemy import Index, Integer, Text, text
+from sqlalchemy import BigInteger, Index, Integer, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agent_backbone.services.database.base import Base
@@ -42,9 +42,14 @@ class AgentORM(Base):
     """1 when a dead session must be reported at once (``AgentSpec.always_on``)."""
     unattended: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     """1 when the runtime is launched with its no-approval switch (``AgentSpec.unattended``)."""
+    inbox_only: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    """1 for a client that is never launched or typed into (``AgentSpec.inbox_only``)."""
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     last_started_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conversation_started_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """When the agent's current conversation started fresh: issue deliveries from
+    before it reached an earlier conversation (#410). Empty until a fresh start."""
     report_identity: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Lazily assigned report author ID; survives rename, never reused after forget."""
 
@@ -102,6 +107,25 @@ class AgentWatchORM(Base):
     agent_name: Mapped[str] = mapped_column(Text, primary_key=True)
     repo: Mapped[str] = mapped_column(Text, primary_key=True)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class AgentSubscriptionORM(Base):
+    """Inbound events an agent wants: a source, a filter in that source's own
+    query language, and the priority of what matches (``normal`` / ``high``)."""
+
+    __tablename__ = "agent_subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent_name: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    priority: Mapped[str] = mapped_column(Text, nullable=False, server_default="normal")
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        Index("uq_subscriptions_query", "agent_name", "source", "query", unique=True),
+        {"sqlite_autoincrement": True},
+    )
 
 
 class SwarmORM(Base):
@@ -166,6 +190,8 @@ class EventORM(Base):
 
     __table_args__ = (
         Index("uq_events_delivery_id", "delivery_id", unique=True),
+        # Comment and review ids stored before #394 are matched ignoring case.
+        Index("idx_events_delivery_id_lower", text("lower(delivery_id)")),
         Index("idx_events_received", "received_at"),
         Index("idx_events_repo", "repo"),
     )
@@ -203,6 +229,11 @@ class DeliveryORM(Base):
     """Which code path made the attempt (``issue-dispatcher``, ``api-messages``, …)."""
     preview: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    settled_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """When a later outcome replaced the first (a steer's handoff time)."""
+    superseded_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """When the issue was delivered again to a later session of the agent, which
+    never saw this one; the row keeps its outcome but no longer owns the issue."""
 
     __table_args__ = (
         Index("idx_deliveries_issue", "repo", "issue_number"),
@@ -217,11 +248,11 @@ class DeliveryORM(Base):
             unique=True,
             postgresql_where=text(
                 "kind = 'issue' AND issue_number IS NOT NULL"
-                " AND outcome IN ('attempting','delivered','retried')"
+                " AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
             sqlite_where=text(
                 "kind = 'issue' AND issue_number IS NOT NULL"
-                " AND outcome IN ('attempting','delivered','retried')"
+                " AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
         ),
     )
@@ -242,6 +273,74 @@ class AgentStateORM(Base):
     ts: Mapped[str | None] = mapped_column(Text, nullable=True)
     plan_file: Mapped[str | None] = mapped_column(Text, nullable=True)
     plan_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AgentTransitionORM(Base):
+    """An explicit, one-time stop/restart an agent asked for (``backbone agent
+    restart``). The backbone owns the transition, so a caller stopping its
+    own session cannot lose the pending start."""
+
+    __tablename__ = "agent_transitions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent_name: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_by: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    requested_at: Mapped[str] = mapped_column(Text, nullable=False)
+    runtime: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Requested runtime; None keeps the agent's recorded one."""
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Requested ``model[:effort]``; None keeps the recorded one."""
+    resume: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    start: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    """0 for stop-only: the session is stopped and nothing is started."""
+    delay_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("60"))
+    start_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """When the replacement starts: the explicit time, else stop time plus delay."""
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Continuation message, delivered to the replacement once it is up."""
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    """``pending`` | ``completed`` | ``failed``."""
+    stopped_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    launch_operation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The startup operation identity, persisted before the replacement is
+    launched: after a backbone restart mid-launch, the startup diagnostics
+    under this id say whether the running session is this transition's."""
+    completed_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
+    """JSON: ``ready`` and ``evidence`` of the start, or ``reason`` of a failure."""
+
+    __table_args__ = (
+        Index("idx_transitions_agent", "agent_name", "status"),
+        # One open transition per agent, enforced where two requests race.
+        Index(
+            "uq_transitions_open",
+            "agent_name",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class FleetSnapshotORM(Base):
+    """The agents that were running at one moment, with the conversation each
+    was in (``backbone fleet save``), and every resume of that set since."""
+
+    __tablename__ = "fleet_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stop: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    force: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    agents: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    """JSON: one entry per saved agent, with the outcome of its stop."""
+    resumes: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    """JSON: every resume run of this snapshot, oldest first."""
+
+    __table_args__ = ({"sqlite_autoincrement": True},)
 
 
 class IssueDependencyORM(Base):
@@ -292,6 +391,9 @@ class MessageQueueORM(Base):
     dedup_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     """What makes a non-issue message *the same* message: the source event's
     identity when the caller has one, else a hash of sender and text."""
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    """1 for a high-priority subscription batch: drained ahead of the rest and
+    offered to a working agent through its runtime's hook context."""
 
     __table_args__ = (
         Index("idx_mq_status", "status"),
@@ -385,3 +487,233 @@ class DiagnosticORM(Base):
         Index("idx_diagnostics_last_seen", "last_seen_at"),
         Index("idx_diagnostics_agent", "agent_name", "last_seen_at"),
     )
+
+
+class UsageSessionORM(Base):
+    """Durable runtime conversations; changing an agent's CLI never rewrites these."""
+
+    __tablename__ = "usage_sessions"
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    agent_name: Mapped[str] = mapped_column(Text, nullable=False)
+    runtime: Mapped[str] = mapped_column(Text, nullable=False)
+    session_id: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_id: Mapped[str | None] = mapped_column(Text)
+    first_seen: Mapped[str] = mapped_column(Text, nullable=False)
+    last_seen: Mapped[str] = mapped_column(Text, nullable=False)
+    source_path: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    offset: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    cursor: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
+    coverage: Mapped[str] = mapped_column(Text, nullable=False, server_default="unavailable")
+    detail: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    launches: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    context_noted: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    """The highest context size the agent was told about in this conversation."""
+    __table_args__ = (Index("idx_usage_sessions_agent", "agent_name", "last_seen"),)
+
+
+class UsageEventORM(Base):
+    """One request observation, revised idempotently as streaming usage settles."""
+
+    __tablename__ = "usage_events"
+    session: Mapped[str] = mapped_column(Text, primary_key=True)
+    event_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    at: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    data: Mapped[str] = mapped_column(Text, nullable=False)
+    cost: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (Index("idx_usage_events_at", "at", "session"),)
+
+
+# --- Signed senders (docs/owner-confirmed-messages.md) ---
+
+
+class SigningInstallORM(Base):
+    """This install's audience id, created once (one row, id 1)."""
+
+    __tablename__ = "signing_install"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    audience: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class SigningEnrollmentORM(Base):
+    """A reserved sender name and its active key: one record, changed only by an
+    owner-approved transition or a rotation signed by the current key."""
+
+    __tablename__ = "signing_enrollments"
+    sender_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    """The name as compared (``signing.same_name``)."""
+    sender: Mapped[str] = mapped_column(Text, nullable=False)
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    enrolled_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class SigningKeyORM(Base):
+    """Every key a name has had, for audit; never used to admit a request."""
+
+    __tablename__ = "signing_keys"
+    sender_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    epoch: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sender: Mapped[str] = mapped_column(Text, nullable=False)
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    retired_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retired_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """``rotate``, ``replace`` or ``clear``."""
+
+
+class SigningTransitionORM(Base):
+    """An enrollment change waiting for the owner's approval in Telegram."""
+
+    __tablename__ = "signing_transitions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    sender: Mapped[str] = mapped_column(Text, nullable=False)
+    sender_key: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    audience: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    new_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """The epoch a set or replace takes: above any the name ever had."""
+    new_public_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    digest: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    """``pending``, ``applied``, ``expired``, ``superseded`` or ``cancelled``."""
+    resolved_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    __table_args__ = (
+        Index("idx_signing_transitions_sender", "sender_key", "status"),
+        # One pending transition per name, enforced where two requests race.
+        Index(
+            "uq_signing_transitions_pending",
+            "sender_key",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+    )
+
+
+class SigningNonceORM(Base):
+    """Nonces seen per sender and epoch, kept past the clock-skew window."""
+
+    __tablename__ = "signing_nonces"
+    sender_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    epoch: Mapped[int] = mapped_column(Integer, primary_key=True)
+    nonce: Mapped[str] = mapped_column(Text, primary_key=True)
+    request_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    """SHA-256 of the signed bytes: an identical retry has the same hash."""
+    seen_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The original result, returned again to an identical retry (messages and steer)."""
+    __table_args__ = (Index("idx_signing_nonces_seen", "seen_at"),)
+
+
+class SigningAuditORM(Base):
+    """Metadata-only record of signed-sender events: refusals, observations
+    while a transition is pending, and enrollment changes. Never a body."""
+
+    __tablename__ = "signing_audit"
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    """``refusal``, ``observation``, ``transition``, ``rotation`` or ``owner``."""
+    sender_key: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    sender: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    method: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    path: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    target: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    operation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    __table_args__ = (
+        Index("idx_signing_audit_sender", "sender_key", "kind", "seq"),
+        # seq is an observation cursor: never reuse a pruned value.
+        {"sqlite_autoincrement": True},
+    )
+
+
+class SigningOwnerORM(Base):
+    """The owner's Telegram user id that approves transitions (one row, id 1).
+    Set once while empty; changed only with the current owner's approval."""
+
+    __tablename__ = "signing_owner"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    set_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pending_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    pending_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SigningReceiptORM(Base):
+    """The immutable receipt of one owner confirmation (docs/owner-confirmed-messages.md).
+    Only ``delivered_at`` is set later, once; ``status`` records a revocation."""
+
+    __tablename__ = "signing_receipts"
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    confirmation_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    sender: Mapped[str] = mapped_column(Text, nullable=False)
+    sender_key: Mapped[str] = mapped_column(Text, nullable=False)
+    recipient: Mapped[str] = mapped_column(Text, nullable=False)
+    """``target_session`` exactly as sent: what the confirmation named."""
+    delivered_to: Mapped[str] = mapped_column(Text, nullable=False)
+    """The registered agent it went to (a swarm name resolves to its coordinator)."""
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    text_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    confirmed_at: Mapped[str] = mapped_column(Text, nullable=False)
+    key_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="admitted")
+    """``admitted`` or ``revoked`` (an owner-approved reset of its key)."""
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    delivered_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revoked_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempted_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """A message's paste began and no outcome was recorded yet: an attempt
+    interrupted there is held as uncertain, never pasted again."""
+    outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Why it was never delivered, kept past the queue and delivery records:
+    ``expired`` (a message) or ``not_taken`` / ``cancelled`` (a steer)."""
+    offer_state: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """A steer's offer: None, ``claiming`` (one request is offering it),
+    ``offered`` (permanent: it is never offered again) or ``failed`` (an
+    interrupted attempt that never reached the agent: confirm it again)."""
+    offer_claimed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    offer_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The claim's holder: only it may publish, mark offered or discard."""
+    __table_args__ = (
+        Index("idx_signing_receipts_sender", "sender_key", "seq"),
+        # seq is the reconciliation cursor: never reuse a pruned value.
+        {"sqlite_autoincrement": True},
+    )
+
+
+class SigningReceiptWatermarkORM(Base):
+    """Per sender, the highest receipt seq retention removed (a gap below it)."""
+
+    __tablename__ = "signing_receipt_watermarks"
+    sender_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    pruned_through: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class SigningGrantORM(Base):
+    """An agent's claim on an owner confirmation (``backbone message validate``):
+    bound to the agent it was delivered to and that agent's registered directory."""
+
+    __tablename__ = "signing_grants"
+    confirmation_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    agent: Mapped[str] = mapped_column(Text, nullable=False)
+    workspace: Mapped[str] = mapped_column(Text, nullable=False)
+    claimed_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="open")
+    """``open``, or ``done`` once the agent closed it."""
+    closed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

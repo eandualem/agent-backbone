@@ -6,8 +6,29 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.cli._common import read_client_config
+from agent_backbone.cli._common import api_url, read_client_config
 from agent_backbone.config import AgentsConfig, build_config
+
+
+@pytest.mark.parametrize(
+    "host,expected",
+    [
+        ("127.0.0.1", "http://127.0.0.1:7120/health"),
+        ("localhost", "http://localhost:7120/health"),
+        ("::1", "http://[::1]:7120/health"),
+        ("2001:db8::1", "https://[2001:db8::1]:7120/health"),
+        ("example.test", "https://example.test:7120/health"),
+    ],
+)
+def test_client_formats_ipv6_authorities_without_changing_tls(
+    host, expected, tmp_path, monkeypatch
+):
+    import httpx
+
+    monkeypatch.delenv("BACKBONE_PORT", raising=False)
+    config = build_config(tmp_path, settings={"backbone.host": host}, agents=AgentsConfig())
+    assert api_url(config, "/health") == expected
+    assert httpx.URL(expected).host == host
 
 
 @pytest.mark.parametrize(
@@ -92,10 +113,27 @@ async def test_offline_status_uses_registered_agents_and_settings(tmp_path, monk
 
     with (
         patch("agent_backbone.cli._common.api", AsyncMock(return_value=None)),
+        patch("agent_backbone.services.terminal.access_error", AsyncMock(return_value=None)),
         patch("agent_backbone.services.agents.build_session_snapshot", side_effect=build),
     ):
         result = await snapshot(build_parser().parse_args(["status"]))
     assert result["api_online"] is False
+
+
+async def test_status_without_api_or_tmux_access_is_unknown_not_offline(tmp_path, monkeypatch):
+    """A sandboxed caller must not see every live agent reported as offline."""
+    from agent_backbone.cli import build_parser
+    from agent_backbone.cli.status import snapshot
+
+    monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("BACKBONE_DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'backbone.db'}")
+    denied = "error connecting to /private/tmp/tmux-501/default (Operation not permitted)"
+    with (
+        patch("agent_backbone.cli._common.api", AsyncMock(return_value=None)),
+        patch("agent_backbone.services.terminal.access_error", AsyncMock(return_value=denied)),
+        pytest.raises(ValueError, match="agent states unknown from this process.*not permitted"),
+    ):
+        await snapshot(build_parser().parse_args(["status"]))
 
 
 async def test_offline_stop_protects_configured_backbone_session(tmp_path, monkeypatch, capsys):
@@ -129,3 +167,74 @@ def test_unreadable_roster_reports_error_without_repair(tmp_path, monkeypatch, c
         assert cmd_agent(build_parser().parse_args(["agent", "list"])) == 1
     assert "Could not read existing configuration" in capsys.readouterr().out
     assert database.read_bytes() == before
+
+
+def _connect_error(cause: OSError):
+    """As the async client raises it: the socket error under a generic OSError."""
+    import httpx
+
+    try:
+        try:
+            raise OSError("All connection attempts failed") from cause
+        except OSError as wrapper:
+            raise httpx.ConnectError(str(wrapper)) from wrapper
+    except httpx.ConnectError as exc:
+        return exc
+
+
+def test_unreachable_names_a_sandbox_denial_not_an_outage():
+    from agent_backbone.cli._common import _failure
+
+    reason = _failure(_connect_error(PermissionError(1, "Operation not permitted")), "u", 10)
+    assert "sandbox or permission boundary" in reason
+    assert "backbone up" not in reason
+
+
+def test_unreachable_suggests_starting_only_when_refused():
+    from agent_backbone.cli._common import _failure
+
+    reason = _failure(_connect_error(ConnectionRefusedError(61, "Connection refused")), "u", 10)
+    assert "is `backbone up` running?" in reason
+
+
+def test_a_read_timeout_says_the_outcome_is_unknown():
+    import httpx
+
+    from agent_backbone.cli._common import _failure
+
+    reason = _failure(httpx.ReadTimeout("timed out"), "u", 30)
+    assert "outcome is unknown" in reason
+
+
+def test_a_pool_timeout_says_nothing_was_sent():
+    import httpx
+
+    from agent_backbone.cli._common import _failure
+
+    assert "nothing was sent" in _failure(httpx.PoolTimeout("pool"), "u", 10)
+
+
+def test_a_denial_inside_an_exception_group_is_found():
+    """localhost with IPv4 and IPv6 addresses fails as an ExceptionGroup."""
+    group = ExceptionGroup(
+        "multiple connection attempts failed",
+        [
+            PermissionError(1, "Operation not permitted"),
+            PermissionError(1, "Operation not permitted"),
+        ],
+    )
+    from agent_backbone.cli._common import _failure
+
+    assert "sandbox or permission boundary" in _failure(_connect_error_from(group), "u", 10)
+
+
+def _connect_error_from(cause: BaseException):
+    import httpx
+
+    try:
+        try:
+            raise OSError("All connection attempts failed") from cause
+        except OSError as wrapper:
+            raise httpx.ConnectError(str(wrapper)) from wrapper
+    except httpx.ConnectError as exc:
+        return exc

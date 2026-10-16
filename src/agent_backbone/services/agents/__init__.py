@@ -34,7 +34,8 @@ from agent_backbone.services.agents.launch import (
     wait_until_ready,
 )
 from agent_backbone.services.agents.models import AgentState, StateSnapshot, prompt_id
-from agent_backbone.services.agents.store import AgentStore
+from agent_backbone.services.agents.skills_preview import skills_preview
+from agent_backbone.services.agents.store import AgentStore, case_twin
 
 __all__ = [
     "AgentConfigView",
@@ -48,7 +49,9 @@ __all__ = [
     "bind_task",
     "build_enriched_agent",
     "build_session_snapshot",
+    "case_twin",
     "clear_starting_marker",
+    "collect_usage",
     "deny_agent",
     "find_outgoing_comment",
     "find_outgoing_pull_request",
@@ -65,8 +68,11 @@ __all__ = [
     "read_state_file",
     "record_answer",
     "rotate_action_log",
+    "skills_preview",
     "start_agent",
     "stop_agent",
+    "subscription_views",
+    "usage_view",
     "wait_until_ready",
     "write_starting_marker",
     "write_state_file",
@@ -78,4 +84,6 @@ from agent_backbone.services.agents.queries import (
     build_enriched_agent,
     build_session_snapshot,
     listable_sessions,
+    subscription_views,
 )
+from agent_backbone.services.agents.usage import collect_usage, usage_view

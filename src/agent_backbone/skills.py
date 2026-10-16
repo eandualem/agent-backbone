@@ -1,0 +1,812 @@
+"""The shared skills store — one copy of every skill, materialised per agent.
+
+A skill is a directory with a ``SKILL.md`` (the Agent Skills format that
+Claude Code, Codex and OpenCode all read). The store — ``skills.store``,
+``~/skills`` by default — holds the only copy. Each skill names the tags of
+the agents that should have it in its frontmatter, under the spec's
+``metadata`` slot::
+
+    ---
+    name: backend-module-pattern
+    description: …
+    metadata:
+      backbone-tags: coder python
+    ---
+
+At launch an agent receives every skill whose tags intersect its own
+(``all`` reaches everyone; ``agent:NAME`` reaches one agent), as symlinks in
+the directory its runtime actually reads — ``.claude/skills`` for Claude
+Code, ``.agents/skills`` for Codex and OpenCode (measured 2026-09-10; see
+``docs/skills.md``). Links are the only thing the backbone creates inside a
+repository, every one is recorded in a manifest, and only manifest entries
+are ever removed: a real directory with the same name is the repository's
+own skill and wins. The link names are kept out of ``git status`` through a
+backbone-owned block in ``.git/info/exclude``, never a tracked file.
+
+Standard library only: this module is a leaf like ``templates``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import fcntl
+import hashlib
+import json
+import logging
+import os
+import re
+import shutil
+import tempfile
+from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from agent_backbone.fs import atomic_write_text
+
+log = logging.getLogger(__name__)
+
+TAGS_KEY = "backbone-tags"
+"""The ``metadata`` key carrying a skill's tags (space-separated)."""
+ALL_TAG = "all"
+"""The tag that reaches every agent."""
+AGENT_TAG_PREFIX = "agent:"
+"""``agent:NAME`` reaches exactly that agent, whatever its tags."""
+
+NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9]|-(?!-)){0,62}$")
+"""Spec skill names: lowercase, digits, single hyphens, no leading/trailing hyphen."""
+TAG_RE = re.compile(r"^[a-z0-9][a-z0-9:._-]{0,99}$")
+
+EXCLUDE_BEGIN = "# backbone-skills begin (managed by agent-backbone; edits inside are replaced)"
+EXCLUDE_END = "# backbone-skills end"
+
+
+@dataclass(frozen=True)
+class Skill:
+    """One store entry as read from disk; ``error`` explains an invalid one."""
+
+    name: str
+    path: Path
+    description: str = ""
+    tags: tuple[str, ...] = ()
+    error: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.error is None
+
+
+def _unquote(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+
+def _split_frontmatter(text: str) -> tuple[list[str], str] | None:
+    """``(frontmatter lines, rest)`` or None when the file has no frontmatter."""
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return None
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            return lines[1:index], "".join(lines[index + 1 :])
+    return None
+
+
+def _parse_frontmatter(lines: list[str]) -> dict[str, object]:
+    """A deliberately small YAML subset: ``key: value`` scalars (plain, quoted
+    or ``|``/``>`` blocks) and one level of nested ``key:`` mappings.
+
+    That covers every SKILL.md in the wild that the spec allows; anything
+    stranger is read as opaque text and left untouched by ``write_tags``.
+    """
+    result: dict[str, object] = {}
+    index = 0
+    while index < len(lines):
+        raw = lines[index].rstrip("\n")
+        index += 1
+        if not raw.strip() or raw.lstrip().startswith("#") or raw.startswith((" ", "\t")):
+            continue
+        key, sep, value = raw.partition(":")
+        if not sep:
+            continue
+        key = key.strip()
+        value = value.strip()
+        if value in ("|", ">", "|-", ">-"):
+            block: list[str] = []
+            while index < len(lines) and (
+                lines[index].startswith((" ", "\t")) or not lines[index].strip()
+            ):
+                block.append(lines[index].strip())
+                index += 1
+            joiner = "\n" if value.startswith("|") else " "
+            result[key] = joiner.join(part for part in block if part).strip()
+        elif value:
+            result[key] = _unquote(value)
+        else:
+            nested: dict[str, str] = {}
+            while index < len(lines) and (
+                lines[index].startswith((" ", "\t")) or not lines[index].strip()
+            ):
+                inner = lines[index].strip()
+                index += 1
+                if not inner or inner.startswith("#"):
+                    continue
+                inner_key, inner_sep, inner_value = inner.partition(":")
+                if inner_sep:
+                    nested[inner_key.strip()] = _unquote(inner_value)
+            result[key] = nested
+    return result
+
+
+def parse_tags(value: object) -> tuple[str, ...]:
+    """Tags from the frontmatter value: a space/comma-separated string or a list."""
+    if isinstance(value, str):
+        parts = re.split(r"[,\s]+", value.strip("[] "))
+    elif isinstance(value, (list, tuple)):
+        parts = [str(part) for part in value]
+    else:
+        parts = []
+    return tuple(dict.fromkeys(part.strip().lower() for part in parts if part.strip()))
+
+
+def validate_tags(tags: tuple[str, ...]) -> tuple[str, ...]:
+    """The tags, lowercased as ``parse_tags`` reads them (``agent:Builder`` → ``agent:builder``)."""
+    tags = tuple(dict.fromkeys(tag.lower() for tag in tags))
+    for tag in tags:
+        if not TAG_RE.match(tag):
+            raise ValueError(f"invalid tag {tag!r}: lowercase letters, digits, and : . _ -")
+    return tags
+
+
+def parse_skill(path: Path) -> Skill:
+    """Read one skill directory (or the file inside it) without trusting it."""
+    path = Path(path)
+    name = path.name
+    skill_file = path / "SKILL.md"
+    if not path.is_dir():
+        return Skill(name, path, error="not a directory")
+    if not skill_file.is_file():
+        return Skill(name, path, error="no SKILL.md")
+    try:
+        text = skill_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return Skill(name, path, error=f"unreadable SKILL.md: {exc}")
+    return _parse_skill_text(name, path, text)
+
+
+def _parse_skill_text(name: str, path: Path, text: str) -> Skill:
+    parts = _split_frontmatter(text)
+    if parts is None:
+        return Skill(name, path, error="SKILL.md has no frontmatter")
+    meta = _parse_frontmatter(parts[0])
+    declared = meta.get("name")
+    description = meta.get("description")
+    metadata = meta.get("metadata")
+    tags = parse_tags(metadata.get(TAGS_KEY)) if isinstance(metadata, dict) else ()
+    if not NAME_RE.match(name):
+        return Skill(name, path, error="directory name is not a valid skill name")
+    if declared != name:
+        return Skill(name, path, error=f"frontmatter name {declared!r} does not match directory")
+    if not isinstance(description, str) or not description.strip():
+        return Skill(name, path, error="frontmatter description is missing")
+    try:
+        validate_tags(tags)
+    except ValueError as exc:
+        return Skill(name, path, error=str(exc))
+    return Skill(name, path, description=description.strip(), tags=tags)
+
+
+def read_store(store: Path) -> list[Skill]:
+    """Every entry of the store, valid or not, sorted by name."""
+    store = Path(store)
+    if not store.is_dir():
+        return []
+    entries = [
+        parse_skill(child)
+        for child in sorted(store.iterdir())
+        if not child.name.startswith(".") and (child.is_dir() or child.is_symlink())
+    ]
+    return entries
+
+
+def select_skills(skills: list[Skill], tags: tuple[str, ...], agent_name: str) -> list[Skill]:
+    """The valid skills an agent with ``tags`` receives, in store order."""
+    mine = {tag.lower() for tag in tags} | {ALL_TAG, f"{AGENT_TAG_PREFIX}{agent_name.lower()}"}
+    return [skill for skill in skills if skill.valid and set(skill.tags) & mine]
+
+
+def write_tags(skill_dir: Path, tags: tuple[str, ...]) -> None:
+    """Set ``metadata.backbone-tags`` in ``SKILL.md``, leaving every other line as it is."""
+    skill_file = Path(skill_dir) / "SKILL.md"
+    text = skill_file.read_text(encoding="utf-8")
+    atomic_write_text(skill_file, _edit_frontmatter(text, tags))
+
+
+def _edit_frontmatter(text: str, tags: tuple[str, ...], *, name: str | None = None) -> str:
+    """Prepare a complete edit before a skill is moved or its file is replaced."""
+    tags = validate_tags(tags)
+    parts = _split_frontmatter(text)
+    if parts is None:
+        raise ValueError("SKILL.md has no frontmatter")
+    front, body = parts
+    value = " ".join(tags)
+    tag_line = f"  {TAGS_KEY}: {json.dumps(value)}\n" if tags else None
+    out: list[str] = []
+    index = 0
+    handled = False
+    named = False
+    while index < len(front):
+        line = front[index]
+        key, separator, inline = line.partition(":")
+        if name is not None and key.strip() == "name" and not line.startswith((" ", "\t")):
+            line = f"name: {name}\n"
+            named = True
+        if key.strip() == "metadata" and not line.startswith((" ", "\t")):
+            if separator and inline.strip():
+                raise ValueError(
+                    "metadata is an inline mapping; write it as an indented block first"
+                )
+            out.append("metadata:\n")
+            index += 1
+            while index < len(front) and (
+                front[index].startswith((" ", "\t")) or not front[index].strip()
+            ):
+                inner = front[index]
+                index += 1
+                if inner.strip().split(":", 1)[0].strip() == TAGS_KEY:
+                    continue
+                if inner.strip():
+                    out.append(inner)
+            if tag_line:
+                out.append(tag_line)
+            handled = True
+            # An emptied mapping would be invalid YAML; drop the key instead.
+            if out[-1] == "metadata:\n":
+                out.pop()
+            continue
+        out.append(line)
+        index += 1
+    if not handled and tag_line:
+        out.append("metadata:\n")
+        out.append(tag_line)
+    if name is not None and not named:
+        out.insert(0, f"name: {name}\n")
+    return "---\n" + "".join(out) + "---\n" + body
+
+
+def add_skill(
+    store: Path,
+    source: Path,
+    *,
+    name: str | None = None,
+    tags: tuple[str, ...] = (),
+    replace: bool = False,
+) -> Skill:
+    """Move a skill directory into the store and tag it.
+
+    A move, never a copy: the source directory is gone afterwards, so the
+    store holds the only instance. ``name`` renames on the way in (the
+    frontmatter ``name`` is rewritten to match, as the spec requires).
+    """
+    store = Path(store)
+    source = Path(source).expanduser().resolve()
+    if not source.is_dir() or not (source / "SKILL.md").is_file():
+        raise ValueError(f"{source} is not a skill directory (no SKILL.md)")
+    if store.exists() and store.resolve() in source.parents:
+        raise ValueError(f"{source} is already in the store")
+    target_name = name or source.name
+    if not NAME_RE.match(target_name):
+        raise ValueError(f"invalid skill name {target_name!r}")
+    tags = validate_tags(tags)
+    target = store / target_name
+    if (target.exists() or target.is_symlink()) and not replace:
+        raise ValueError(f"skill {target_name!r} already exists in the store (use --replace)")
+    if replace and not tags and target.is_dir():
+        # A replace without tags is an update of the content, not a re-tag.
+        tags = parse_skill(target).tags
+    # Everything that can be checked before touching the filesystem is
+    # checked here: a rejected skill leaves the source where it was.
+    draft = parse_skill(source)
+    # The name is rewritten on the way in, so a mismatched or invalid one is
+    # tolerated only when the caller renames; everything else is refused now.
+    renaming = name is not None
+    tolerated = draft.error is None or (
+        draft.error.startswith("frontmatter name")
+        or (renaming and draft.error == "directory name is not a valid skill name")
+    )
+    if not tolerated:
+        raise ValueError(f"{source.name}: {draft.error}")
+    edited = _edit_frontmatter(
+        (source / "SKILL.md").read_text(encoding="utf-8"), tags, name=target_name
+    )
+    skill = _parse_skill_text(target_name, target, edited)
+    if not skill.valid:
+        raise ValueError(f"{target_name}: {skill.error}")
+    store.mkdir(parents=True, exist_ok=True)
+    displaced = store / f".replaced-{target_name}"
+    if displaced.exists() or displaced.is_symlink():
+        raise ValueError(f"previous replacement data remains at {displaced}; recover it first")
+    staging = Path(tempfile.mkdtemp(prefix=f".incoming-{target_name}-", dir=store))
+    staged = staging / target_name
+    incoming = staged
+    try:
+        # Cross-device move can fail after copying, while removing the source.
+        # Keep that complete copy in staging and the existing store entry intact.
+        shutil.move(str(source), str(staged))
+        if target.exists() or target.is_symlink():
+            target.rename(displaced)
+        try:
+            staged.rename(target)
+            incoming = target
+            atomic_write_text(target / "SKILL.md", edited)
+        except BaseException as exc:
+            try:
+                if incoming == target:
+                    target.rename(staged)
+                    incoming = staged
+                if displaced.exists() or displaced.is_symlink():
+                    displaced.rename(target)
+                shutil.move(str(staged), str(source))
+                incoming = source
+            except BaseException as rollback_error:
+                exc.add_note(f"Skill rollback failed: {rollback_error}")
+            raise
+    except BaseException as exc:
+        recovery = [
+            str(path)
+            for path in (incoming, displaced)
+            if path != source and (path.exists() or path.is_symlink())
+        ]
+        if recovery:
+            detail = f"skill recovery data retained at {', '.join(recovery)}"
+            if isinstance(exc, Exception):
+                raise OSError(f"{exc}; {detail}") from exc
+            exc.add_note(detail)
+        raise
+    finally:
+        # Remove only an empty staging parent, never a recovery copy.
+        with suppress(OSError):
+            staging.rmdir()
+    if displaced.exists() or displaced.is_symlink():
+        try:
+            _remove(displaced)
+        except OSError as exc:
+            log.warning(
+                "Installed skill %s; could not finish removing previous entry at %s: %s",
+                target,
+                displaced,
+                exc,
+            )
+    return skill
+
+
+def _remove(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+# --- Materialisation ---------------------------------------------------------
+
+
+@dataclass
+class Materialization:
+    """What one launch did inside the repository."""
+
+    linked: list[str] = field(default_factory=list)
+    """``<dir>/<name>`` links present after the run (created or kept)."""
+    mirrored: dict[str, str] = field(default_factory=dict)
+    """``<dir>/<name>`` → ``<source>/<name>``: a repository skill linked where the CLI reads."""
+    removed: list[str] = field(default_factory=list)
+    conflicts: list[str] = field(default_factory=list)
+    """Selected skills the repository already owns under that name."""
+    broken: list[str] = field(default_factory=list)
+    """Links that do not resolve to a SKILL.md after the run."""
+
+    @property
+    def ok(self) -> bool:
+        return not self.conflicts and not self.broken
+
+
+def manifest_path(data_dir: Path, agent_name: str) -> Path:
+    return Path(data_dir) / "skills" / "materialized" / f"{agent_name}.json"
+
+
+def _read_manifest(path: Path) -> list[str]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    links = data.get("links") if isinstance(data, dict) else None
+    return [str(item) for item in links] if isinstance(links, list) else []
+
+
+def manifest_links(path: Path) -> set[str]:
+    """The ``<dir>/<name>`` links a manifest records."""
+    return set(_read_manifest(path))
+
+
+def _manifest_path(path: Path, key: str) -> Path | None:
+    """A path a manifest records (``repo``: the checkout its links are in,
+    ``store``: the store they point into), or None."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = data.get(key) if isinstance(data, dict) else None
+    return Path(value) if isinstance(value, str) else None
+
+
+def _write_manifest(path: Path, repo_dir: Path, links: list[str], store: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not links:
+        path.unlink(missing_ok=True)
+        return
+    tmp = path.with_suffix(".json.tmp")
+    body = {"repo": str(repo_dir), "store": str(store), "links": sorted(links)}
+    tmp.write_text(json.dumps(body, indent=1) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    if a == b:
+        return True
+    try:
+        return a.samefile(b)
+    except OSError:
+        return False
+
+
+def _links_of_others(manifest: Path, repo_dir: Path) -> set[str]:
+    """The links other agents' manifests record in this same checkout."""
+    links: set[str] = set()
+    for path in manifest.parent.glob("*.json") if manifest.parent.is_dir() else ():
+        if _same_file(path, manifest):  # its own, however the filesystem spells it
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if (
+            isinstance(data, dict)
+            and isinstance(data.get("repo"), str)
+            and Path(data["repo"]).resolve() == repo_dir.resolve()
+        ):
+            recorded = data.get("links")
+            if isinstance(recorded, list):
+                links.update(item for item in recorded if isinstance(item, str))
+    return links
+
+
+def recorded_links(manifest: Path, repo_dir: Path) -> set[str]:
+    """Every link the backbone made in ``repo_dir``: this manifest's, while it
+    records that checkout, and other agents' there."""
+    own = _manifest_path(manifest, "repo")
+    mine = set(_read_manifest(manifest)) if own is not None and _same_file(own, repo_dir) else set()
+    return mine | _links_of_others(manifest, repo_dir)
+
+
+def _links_sharing_git_dir(manifest_dir: Path, git_dir: Path) -> set[str]:
+    """Every manifest's links whose repository uses ``git_dir`` — several
+    agents can share one checkout, and worktrees share one ``info/exclude``."""
+    links: set[str] = set()
+    if not manifest_dir.is_dir():
+        return links
+    for path in manifest_dir.glob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict) or not isinstance(data.get("repo"), str):
+            continue
+        other = _common_git_dir(Path(data["repo"]))
+        if other is not None and other == git_dir:
+            recorded = data.get("links")
+            if isinstance(recorded, list):
+                links.update(item for item in recorded if isinstance(item, str))
+    return links
+
+
+def _points_into(link: Path, store: Path) -> bool:
+    """Whether ``link`` is a symlink whose target lies inside the store."""
+    if not link.is_symlink():
+        return False
+    try:
+        target = Path(os.readlink(link))
+    except OSError:
+        return False
+    if not target.is_absolute():
+        target = link.parent / target
+    try:
+        return store.resolve() in Path(os.path.normpath(target)).resolve().parents or (
+            Path(os.path.normpath(target)).resolve().parent == store.resolve()
+        )
+    except OSError:
+        return False
+
+
+def _mirrors_into(link: Path, repo_dir: Path) -> bool:
+    """Whether ``link`` is a relative symlink to the same-named skill in
+    another directory of ``repo_dir``: a repository skill linked where a CLI
+    reads. Only links a manifest records are ever judged by this."""
+    if not link.is_symlink():
+        return False
+    try:
+        target = Path(os.readlink(link))
+    except OSError:
+        return False
+    if target.is_absolute():
+        return False
+    resolved = Path(os.path.normpath(link.parent / target))
+    return (
+        resolved.name == link.name
+        and resolved.parent != link.parent
+        and Path(os.path.normpath(repo_dir)) in resolved.parents
+    )
+
+
+def repository_skills(
+    repo_dir: Path, sources: tuple[str, ...], store: Path | None, recorded: set[str] = frozenset()
+) -> dict[str, list[str]]:
+    """The repository's own skills: ``name -> [directories it is in]``.
+
+    Every entry with a ``SKILL.md`` under one of ``sources`` that the
+    backbone did not make: not a link into ``store`` and not a link a
+    manifest records (``recorded``, as ``<dir>/<name>``).
+    """
+    owned: dict[str, list[str]] = {}
+    for source in sources:
+        folder = Path(repo_dir) / source
+        if not folder.is_dir():
+            continue
+        for entry in sorted(folder.iterdir()):
+            rel = f"{source}/{entry.name}"
+            # A recorded path the repository replaced with its own directory is its own.
+            if entry.name.startswith(".") or (rel in recorded and entry.is_symlink()):
+                continue
+            if store is not None and _points_into(entry, store):
+                continue
+            if (entry / "SKILL.md").is_file():
+                owned.setdefault(entry.name, []).append(source)
+    return owned
+
+
+def materialize(
+    store: Path,
+    repo_dir: Path,
+    dirs: tuple[str, ...],
+    selected: list[Skill],
+    manifest: Path,
+    *,
+    read: tuple[str, ...] = (),
+    sources: tuple[str, ...] = (),
+) -> Materialization:
+    """Bring ``<repo>/<dir>/<name>`` links in line with ``selected``.
+
+    Links are created for selected skills, links recorded in the manifest
+    but no longer selected are removed (only while they still point into
+    the store), and nothing else in those directories is touched. When the
+    manifest records another checkout (the agent's directory changed), its
+    links there are released first, except those another agent there has.
+    A link into the store the manifest records is the backbone's too, so
+    moving the store relinks what it made.
+
+    ``read`` lists every directory the CLI loads skills from (``dirs`` when
+    empty); ``sources`` every directory any CLI does. A repository skill in
+    a source the CLI does not read is linked into ``dirs`` by a relative
+    link, so it reaches whichever CLI runs the agent, and it wins over a
+    store skill of the same name.
+    """
+    store = Path(store).expanduser()
+    repo_dir = Path(repo_dir)
+    result = Materialization()
+    previous = set(_read_manifest(manifest))
+    old_store = _manifest_path(manifest, "store")
+
+    def ours(link: Path, repo: Path) -> bool:
+        return (
+            _points_into(link, store)
+            or (old_store is not None and _points_into(link, old_store))
+            or _mirrors_into(link, repo)
+        )
+
+    old_repo = _manifest_path(manifest, "repo")
+    old_git: Path | None = None
+    if previous and old_repo is not None and not _same_file(old_repo, repo_dir):
+        for rel in sorted(previous - _links_of_others(manifest, old_repo)):
+            link = old_repo / rel
+            if ours(link, old_repo):
+                link.unlink()
+        old_git = _common_git_dir(old_repo)
+        previous = set()
+    # Another agent in this checkout may still be given the same link.
+    shared = _links_of_others(manifest, repo_dir)
+    read_dirs = set(read) | set(dirs)
+    scan = tuple(dict.fromkeys((*sources, *read, *dirs)))
+    owned = repository_skills(repo_dir, scan, store, previous | shared) if dirs else {}
+    wanted: dict[str, str] = {}
+    for directory in dirs:
+        for skill in selected:
+            rel = f"{directory}/{skill.name}"
+            places = owned.get(skill.name, [])
+            if places and directory not in places:
+                own = f"{places[0]}/{skill.name}"
+                result.conflicts.append(f"{rel}: the repository's own {own} wins")
+                continue
+            wanted[rel] = str(store / skill.name)
+    for name, places in owned.items():
+        if read_dirs & set(places):
+            continue  # the CLI already reads it where it is
+        for directory in dirs:
+            rel = f"{directory}/{name}"
+            wanted[rel] = os.path.relpath(repo_dir / places[0] / name, repo_dir / directory)
+            result.mirrored[rel] = f"{places[0]}/{name}"
+    for rel in sorted(previous - set(wanted) - shared):
+        link = repo_dir / rel
+        if ours(link, repo_dir):
+            link.unlink()
+            result.removed.append(rel)
+    kept: list[str] = []
+    for rel, target in sorted(wanted.items()):
+        link = repo_dir / rel
+        if link.is_symlink():
+            # A link recorded here, by this agent or another, is the backbone's.
+            recorded = rel in previous or rel in shared
+            if _points_into(link, store) or (recorded and ours(link, repo_dir)):
+                if os.readlink(link) != target:
+                    link.unlink()
+                    link.symlink_to(target, target_is_directory=True)
+            else:
+                result.conflicts.append(f"{rel} is a link the repository owns")
+                continue
+        elif link.exists():
+            result.conflicts.append(f"{rel} is the repository's own skill")
+            continue
+        else:
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(target, target_is_directory=True)
+        if (link / "SKILL.md").is_file():
+            kept.append(rel)
+            result.linked.append(rel)
+        else:
+            result.broken.append(f"{rel} -> {target} has no SKILL.md")
+            kept.append(rel)
+    _write_manifest(manifest, repo_dir, kept, store)
+    git_dir = _common_git_dir(repo_dir)
+    if git_dir is not None:
+        _update_exclude(git_dir, _links_sharing_git_dir(manifest.parent, git_dir))
+    if old_git is not None and old_git != git_dir:
+        _update_exclude(old_git, _links_sharing_git_dir(manifest.parent, old_git))
+    return result
+
+
+def _git_dir(repo_dir: Path) -> Path | None:
+    """The ``.git`` directory of a checkout or worktree, or None."""
+    dot_git = repo_dir / ".git"
+    if dot_git.is_dir():
+        return dot_git
+    if dot_git.is_file():
+        try:
+            line = dot_git.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        if line.startswith("gitdir:"):
+            path = Path(line.partition(":")[2].strip())
+            path = path if path.is_absolute() else repo_dir / path
+            return path if path.is_dir() else None
+    return None
+
+
+def _common_git_dir(repo_dir: Path) -> Path | None:
+    """The git directory whose ``info/exclude`` governs ``repo_dir`` — a
+    worktree's is its parent checkout's."""
+    git_dir = _git_dir(repo_dir)
+    if git_dir is None:
+        return None
+    common = git_dir / "commondir"
+    if common.is_file():
+        try:
+            rel = common.read_text(encoding="utf-8").strip()
+            git_dir = Path(os.path.normpath(git_dir / rel)) if rel else git_dir
+        except OSError:
+            pass
+    try:
+        return git_dir.resolve()
+    except OSError:
+        return git_dir
+
+
+def _update_exclude(git_dir: Path, links: set[str]) -> None:
+    """Rewrite the backbone-owned block of ``<git_dir>/info/exclude``.
+
+    ``info/exclude`` is git's per-clone ignore list: never committed, never
+    shared, so the repository's own files are untouched. Only the block
+    between the two markers is replaced.
+    """
+    exclude = git_dir / "info" / "exclude"
+    try:
+        existing = exclude.read_text(encoding="utf-8").splitlines() if exclude.is_file() else []
+    except OSError:
+        return
+    kept: list[str] = []
+    inside = False
+    for line in existing:
+        if line.strip() == EXCLUDE_BEGIN:
+            inside = True
+            continue
+        if line.strip() == EXCLUDE_END:
+            inside = False
+            continue
+        if not inside:
+            kept.append(line)
+    while kept and not kept[-1].strip():
+        kept.pop()
+    block = [EXCLUDE_BEGIN, *(f"/{rel}" for rel in sorted(links)), EXCLUDE_END] if links else []
+    if not block and not any(line.strip() == EXCLUDE_BEGIN for line in existing):
+        return
+    lines = kept + ([""] if kept and block else []) + block
+    try:
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        exclude.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    except OSError:
+        return
+
+
+def is_git_repository(store: Path) -> bool:
+    return (Path(store) / ".git").exists()
+
+
+def _git_failure(step: str, rc: int, stderr: str) -> str:
+    """Why a git step failed: the last line of its error output, which names the cause."""
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    return f"git {step} failed: {lines[-1] if lines else f'exit status {rc}'}"
+
+
+async def commit_store(store: Path, message: str) -> str | None:
+    """Commit every change in the store, initialising it as a git repository first.
+
+    The store's history is the audit trail for a skill other agents will
+    load: who changed what, and when — so history starts with the first
+    tool operation, not when someone remembers to ``git init``. Returns
+    why the change could not be recorded (no git author identity, git
+    missing, a failing hook), or None when it was committed or there was
+    nothing to commit.
+    """
+    from agent_backbone.git import run_git
+
+    store = Path(store)
+    if not store.is_dir():
+        return f"{store} is not a directory"
+    if not is_git_repository(store):
+        rc, _, err = await run_git(store, "init", "-q")
+        if rc != 0:
+            return _git_failure("init", rc, err)
+    rc, _, err = await run_git(store, "add", "-A")
+    if rc != 0:
+        return _git_failure("add", rc, err)
+    rc, _, _ = await run_git(store, "diff", "--cached", "--quiet")
+    if rc == 0:
+        return None
+    rc, _, err = await run_git(store, "commit", "-q", "-m", message)
+    return _git_failure("commit", rc, err) if rc != 0 else None
+
+
+@asynccontextmanager
+async def store_lock(data_dir: Path, store: Path):
+    """One change to a store and its commit at a time, across processes: the
+    backbone's API and ``skills add --local`` (or ``tag`` with the API down)
+    share one git index. Closing the file releases the lock. A waiter polls
+    rather than blocking a worker thread, so waiting holds up nothing else."""
+    key = hashlib.sha256(str(Path(store).expanduser().resolve()).encode()).hexdigest()[:16]
+    path = Path(data_dir) / "skills" / f"store-{key}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as handle:
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                await asyncio.sleep(0.05)
+        yield

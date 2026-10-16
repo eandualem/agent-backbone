@@ -48,7 +48,7 @@ def prompt_id(snapshot: StateSnapshot) -> str:
     monitor tick would look like a new prompt and re-alert. Answering is
     still gated on the dialog being on screen either way.
     """
-    if snapshot.source == "push":
+    if snapshot.source in ("push", "stale"):
         return f"{snapshot.timestamp:.3f}"
     return f"pane:{snapshot.prompt_ref or snapshot.reason or 'waiting'}"
 
@@ -73,12 +73,18 @@ class StateSnapshot:
     timestamp: float = 0.0
     source: str = "default"
     started_at: float | None = None
+    prompted_at: float | None = None
+    """When the runtime last took a prompt, as its hook reported it."""
+    prompt_digest: str | None = None
+    """Which prompt that was (``backbone_state.prompt_digest``)."""
     plan_file: str | None = None
     plan_title: str | None = None
     session_id: str | None = None
     """The runtime's own session id, when its hook reports one."""
     runtime: str | None = None
     """The runtime whose hook wrote the record (a session id is only good for that runtime)."""
+    model: str | None = None
+    """The model the runtime was observed answering with, when its hook could tell."""
     last_message: str | None = None
     """The agent's last reply (clipped), when its hook reports one."""
     event: str | None = None
@@ -90,7 +96,8 @@ class StateSnapshot:
     screen): stable while it is up, different for the next one."""
     evidence: list[str] = field(default_factory=list)
     diagnostics: tuple[RuntimeDiagnostic, ...] = ()
-    """Typed terminal observations, independent of the reconciled state."""
+    """Typed observations, the terminal's and those the hook recorded, independent of the
+    reconciled state."""
     diagnostics_observed: bool = False
     """Whether nonempty terminal output was available (empty also means capture failed)."""
 

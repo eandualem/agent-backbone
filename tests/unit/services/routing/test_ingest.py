@@ -5,8 +5,18 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from agent_backbone.models import EventType, IssueData, IssueEvent, ParsedLabels
+import pytest
+
+from agent_backbone.models import (
+    CommentData,
+    EventType,
+    IssueData,
+    IssueEvent,
+    ParsedLabels,
+    ReviewData,
+)
 from agent_backbone.services.routing._ingest import dispatch_event
+from agent_backbone.services.routing._router import _source_key
 from tests.conftest import TEST_REPO
 
 _INGEST = "agent_backbone.services.routing._ingest"
@@ -110,3 +120,48 @@ class TestDispatchEvent:
                 issue_closed_hooks=(AsyncMock(side_effect=RuntimeError("boom")),),
             )
         assert outcome.startswith("lifecycle:")
+
+
+def _feedback(kind: str, repo: str, delivery_id: str) -> IssueEvent:
+    """Comment or review 7 on issue 42, with the repository spelled as ``repo``."""
+    issue = IssueData(number=42, repo_full_name=repo, title="x", labels=ParsedLabels())
+    if kind == "comment":
+        return IssueEvent(
+            event_type=EventType.COMMENT_CREATED,
+            issue=issue,
+            comment=CommentData(id=7),
+            delivery_id=delivery_id,
+        )
+    return IssueEvent(
+        event_type=EventType.REVIEW_SUBMITTED,
+        issue=issue,
+        review=ReviewData(id=7),
+        delivery_id=delivery_id,
+    )
+
+
+@pytest.mark.parametrize("kind", ["comment", "review"])
+class TestRepositoryCasing:
+    """Webhook and poll can spell one repository in different letter case (#394)."""
+
+    async def test_one_event_from_both_intakes_is_routed_once(self, config, db, kind):
+        with patch(f"{_INGEST}._route", AsyncMock(return_value="ok")) as route:
+            await dispatch_event(_feedback(kind, "Acme/App", "d-1"), config, db, None)
+            outcome = await dispatch_event(_feedback(kind, "acme/app", "p-1"), config, db, None)
+        assert outcome == "deduped: event p-1 already stored"
+        assert route.await_count == 1
+
+    async def test_an_id_stored_before_the_change_still_dedups(self, config, db, kind):
+        event_id = await db.events.record(
+            delivery_id=f"{kind}:Acme/App:7", source="webhook", event_type="x"
+        )
+        await db.events.mark_processed(event_id, "ok")
+        with patch(f"{_INGEST}._route", AsyncMock(return_value="ok")) as route:
+            outcome = await dispatch_event(_feedback(kind, "acme/APP", "p-1"), config, db, None)
+        assert outcome == "deduped: event p-1 already stored"
+        route.assert_not_awaited()
+
+    def test_the_queued_copy_has_one_identity(self, kind):
+        assert _source_key(_feedback(kind, "Acme/App", "d-1"), kind) == _source_key(
+            _feedback(kind, "acme/app", "p-1"), kind
+        )

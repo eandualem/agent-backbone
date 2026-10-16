@@ -12,7 +12,8 @@ import tempfile
 from pathlib import Path
 
 from agent_backbone.cli import _common
-from agent_backbone.config import bootstrap_config, validate_setting
+from agent_backbone.cli.presentation import note, print_record, print_table
+from agent_backbone.config import validate_setting
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.services.agents import instruction_preview
 from agent_backbone.templates import (
@@ -51,11 +52,10 @@ def add_instruction_commands(sub) -> None:
     )
     p.add_argument("agent")
     p.add_argument("--json", action="store_true")
-    p = commands.add_parser(
-        "use", help="replace global or tag policy assignment; no names clears it"
-    )
+    p = commands.add_parser("use", help="show or replace the global or tag policy assignment")
     p.add_argument("policies", nargs="*", metavar="POLICY")
     p.add_argument("--tag", help="assign to this tag instead of all agents")
+    p.add_argument("--clear", action="store_true", help="remove the assignment")
     p = commands.add_parser("validate", help="check effective instructions for known agents")
     p.add_argument("agent", nargs="?")
     parser.set_defaults(func=cmd_instructions)
@@ -87,21 +87,19 @@ def edit_file(path: Path, initial: str, *, source: Path | None = None) -> None:
 
 async def _instructions(args: argparse.Namespace) -> int:
     sub = args.instructions_command
-    config = (
-        bootstrap_config()
-        if sub in ("show", "path", "edit", "init")
-        else await _common.read_config()
-    )
+    # A read-only look at the database: `templates.dir` names the directory.
+    config = await _common.read_config()
+    dirs = config.template_dirs
     if sub in ("show", "path", "edit"):
         if sub == "path" and args.name is None:
-            print(config.data_dir / "templates")
+            print(dirs.editable)
             return 0
-        path = template_path(config.data_dir, args.name)
-        source = template_source(args.name, config.data_dir)
+        path = template_path(dirs, args.name)
+        source = template_source(args.name, dirs)
         if sub == "path":
             print(path)
         elif sub == "show":
-            print(read_template(args.name, config.data_dir), end="")
+            print(read_template(args.name, dirs), end="")
         else:
             initial = source.read_text() if source.is_file() else f"# {args.name}\n\n"
             edit_file(path, initial, source=source)
@@ -114,14 +112,14 @@ async def _instructions(args: argparse.Namespace) -> int:
                 )
         return 0
     if sub == "init":
-        names = args.names or [row["name"] for row in list_templates(config.data_dir)]
+        names = args.names or [row["name"] for row in list_templates(dirs)]
         # Validate every name before writing any file.
-        targets = [(name, template_path(config.data_dir, name)) for name in names]
+        targets = [(name, template_path(dirs, name)) for name in names]
         for name, target in targets:
             if target.exists() or target.is_symlink():
                 print(f"Kept {target}")
                 continue
-            text = read_template(name, config.data_dir)
+            text = read_template(name, dirs)
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
                 with target.open("x") as stream:
@@ -133,9 +131,9 @@ async def _instructions(args: argparse.Namespace) -> int:
         print("Editable copies are preserved on upgrades. Preview before a fresh start.")
         return 0
     if sub == "list":
-        entries = list_templates(config.data_dir)
+        entries = list_templates(dirs)
         view = {
-            "directory": str(config.data_dir / "templates"),
+            "directory": str(dirs.editable),
             "injection_enabled": config.launch.inject_brief,
             "global": list(config.launch.shared_policy),
             "tags": {tag: list(names) for tag, names in config.launch.tag_policy.items()},
@@ -144,22 +142,59 @@ async def _instructions(args: argparse.Namespace) -> int:
         if args.json:
             _common.print_json(view)
             return 0
-        print(f"Editable templates: {view['directory']}")
-        for entry in entries:
-            legacy = " (legacy override)" if entry["legacy"] else ""
-            print(f"  {entry['name']}: {entry['source']}{legacy}")
-        print("\nAssignments (global first, then matching tags alphabetically):")
-        print("  global: " + (", ".join(config.launch.shared_policy) or "none"))
-        for tag, names in sorted(config.launch.tag_policy.items()):
-            print(f"  tag {tag}: {', '.join(names) or 'none'}")
-        print("\nInspect: backbone templates show NAME")
-        print("Edit: backbone templates edit NAME")
-        print("Preview: backbone templates preview AGENT")
+        where = "templates.dir" if config.templates.dir else "default; set templates.dir to move"
+        note(f"Editable templates: {view['directory']} ({where})")
+        if unread := dirs.unread_default_files():
+            note(
+                f"! {len(unread)} file(s) still under {dirs.data_dir / 'templates'} are not read; "
+                f"move them into {dirs.editable}"
+            )
+        print_table(
+            "Templates",
+            ("Template", "Source", "Override"),
+            [
+                (
+                    entry["name"],
+                    entry["source"],
+                    "legacy override" if entry["legacy"] else "current",
+                )
+                for entry in entries
+            ],
+        )
+        print_table(
+            "Assignments (global first, then matching tags alphabetically)",
+            ("Scope", "Policies"),
+            [
+                ("global", ", ".join(config.launch.shared_policy) or "none"),
+                *(
+                    (f"tag {tag}", ", ".join(names) or "none")
+                    for tag, names in sorted(config.launch.tag_policy.items())
+                ),
+            ],
+        )
+        note(
+            "Inspect: backbone templates show NAME\nEdit: backbone templates edit NAME\n"
+            "Preview: backbone templates preview AGENT"
+        )
         return 0
     if sub == "use":
+        scope = "tag " + args.tag if args.tag is not None else "global"
+        if args.policies and args.clear:
+            raise ValueError("pass policy names or --clear, not both")
+        if not args.policies and not args.clear:
+            # No names is a read: clearing an assignment takes an explicit --clear.
+            current = (
+                config.launch.tag_policy.get(args.tag, ())
+                if args.tag is not None
+                else config.launch.shared_policy
+            )
+            print(f"{scope}: {', '.join(current) or 'none'}")
+            tag_arg = f" --tag {args.tag}" if args.tag else ""
+            note(f"Clear: backbone templates use --clear{tag_arg}")
+            return 0
         args.policies = [name.removeprefix("policy:") for name in args.policies]
         validate_setting("agents.shared_policy", args.policies)
-        append_policies("", config.data_dir, tuple(args.policies))
+        append_policies("", dirs, tuple(args.policies))
         if args.tag is not None:
             validate_setting("agents.tag_policy", {args.tag: args.policies})
             value = {tag: list(names) for tag, names in config.launch.tag_policy.items()}
@@ -182,9 +217,7 @@ async def _instructions(args: argparse.Namespace) -> int:
         else:
             async with _common.Direct(config) as direct:
                 await direct.store.set_setting(key, value)
-        print(
-            f"{'tag ' + args.tag if args.tag else 'global'}: {', '.join(args.policies) or 'none'}"
-        )
+        print(f"{scope}: {', '.join(args.policies) or 'none'}")
         return 0
     specs = [config.agents.get(args.agent)] if args.agent else list(config.agents)
     if any(spec is None for spec in specs):
@@ -194,13 +227,13 @@ async def _instructions(args: argparse.Namespace) -> int:
         if not args.agent:
             try:
                 append_policies(
-                    "", config.data_dir, config.launch.policy_names(tuple(config.launch.tag_policy))
+                    "", dirs, config.launch.policy_names(tuple(config.launch.tag_policy))
                 )
             except (OSError, ValueError) as exc:
                 errors.append(str(exc))
-            for entry in list_templates(config.data_dir):
+            for entry in list_templates(dirs):
                 try:
-                    read_template(entry["name"], config.data_dir)
+                    read_template(entry["name"], dirs)
                 except (OSError, ValueError) as exc:
                     errors.append(str(exc))
         for spec in specs:
@@ -218,14 +251,23 @@ async def _instructions(args: argparse.Namespace) -> int:
     if args.json:
         _common.print_json(preview)
     else:
-        print(f"{preview['name']} / {preview['runtime']} / {preview['mode']} (next start)")
-        for source in preview["sources"]:
-            print(
-                f"  {'included' if source['applied'] else 'skipped'}: "
-                f"{source['scope']} · {source['path']}"
-            )
+        print_record(
+            f"Instructions for {preview['name']} (next start)",
+            [
+                ("CLI", preview["runtime"]),
+                ("Mode", preview["mode"]),
+            ],
+        )
+        print_table(
+            "Sources",
+            ("State", "Scope", "Path"),
+            [
+                ("included" if source["applied"] else "skipped", source["scope"], source["path"])
+                for source in preview["sources"]
+            ],
+        )
         for notice in preview["notices"]:
-            print(f"  {notice}")
+            note(notice)
         print("\n--- Effective instructions ---\n")
         print(preview["content"])
     return 0

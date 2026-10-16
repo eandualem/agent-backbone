@@ -2,8 +2,10 @@
 
 An **integration** is a channel where people meet their agents outside the
 terminal. Telegram is the one that ships today; the contract is written so
-that Slack, Discord, e-mail or a web inbox plug in the same way, and nothing
-else in the backbone learns a vendor name.
+that Slack, Discord or a web inbox plug in the same way, and nothing
+else in the backbone learns a vendor name. Events that arrive from outside
+without a person behind them — mail, and GitHub as its sibling — are
+[sources](sources.md), a separate group with its own contract.
 
 ## What every integration does
 
@@ -12,12 +14,16 @@ else in the backbone learns a vendor name.
 | **Inbound** | Text from a person becomes an ordinary delivery through `safe_deliver`, with a `[via:<integration> from:<who>]` envelope. An integration never pastes into a terminal itself | a message in an agent's topic, or `/tell` |
 | **Surface per agent** | A place that *is* one agent, so talking there is talking to it | a forum topic mapped to the agent |
 | **Reply** | An agent answers into its surface: `backbone reply "…"` / `POST /api/integrations/reply` | posted into the agent's topic |
-| **Notify** | Alerts to the humans (plan waiting, session died, copy mode stuck) — into the agent's surface when it has one, else a general destination | the topic, else `telegram.notification_chat_id` |
+| **Notify** | Alerts to the humans (plan waiting, session died) — into the agent's surface when it has one, else a general destination | the topic, else `telegram.notification_chat_id` |
 | **Sync** | Re-provision surfaces whenever the set of registered agents changes | topic routes (see [Telegram](telegram.md)) |
 | **Lifecycle** | Started with `backbone up`, reads the live configuration, reports in `GET /api/status/services` under `integrations` | long-polling bot |
 
 Every integration is inert until its credentials exist (`TELEGRAM_TOKEN` in
 `.env`); an unconfigured one shows as `disabled` and does nothing.
+Telegram cleans up a failed or cancelled startup before another attempt, so a
+polling outage does not leave background bot tasks running. If a shutdown phase
+fails, it still attempts the remaining cleanup before reporting the first failure;
+a failed startup keeps its original error.
 
 ## How the pieces connect
 
@@ -28,9 +34,8 @@ jobs   ──▶ notify_humans(config, text, agent=…) ──▶ every configur
 ```
 
 `notify_humans` is config-driven (no running instance needed) so the
-scheduler's monitor jobs can alert from a configuration snapshot. It is the
-only thing `agents` and `terminal` know about integrations, and they import
-it lazily — `integrations` sits *above* `routing` in the layering.
+scheduler's monitor jobs can alert from a configuration snapshot. Jobs call it; `agents` and `terminal` do not import integrations.
+`integrations` sits above `routing` in the layering.
 
 ## Adding one
 

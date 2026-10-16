@@ -12,12 +12,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import (
+    SOURCES,
+    SUBSCRIPTION_PRIORITIES,
     AgentsConfig,
     AgentSpec,
     BackboneConfig,
@@ -26,8 +29,10 @@ from agent_backbone.config import (
     validate_setting,
 )
 from agent_backbone.git import detect_repo
+from agent_backbone.hooks.backbone_state import CONTEXT_DIR
 from agent_backbone.services.agents._locks import lifecycle_lock, serialized_mutation
 from agent_backbone.services.agents._validation import validate_agent_spec, validate_repo
+from agent_backbone.services.terminal import session_exists
 
 if TYPE_CHECKING:
     from agent_backbone.services.database import BackboneDB
@@ -45,6 +50,12 @@ def sanitize_name(raw: str) -> str:
 
 _TRUE = frozenset({"true", "1", "yes", "on"})
 _FALSE = frozenset({"false", "0", "no", "off"})
+
+
+async def _refuse_running_inbox_only(name: str, becoming: bool) -> None:
+    """An inbox-only agent has no session: one that is running is stopped first."""
+    if becoming and await session_exists(name):
+        raise ValueError(f"'{name}' is running — stop it before making it inbox-only")
 
 
 def _flag(name: str, value: object) -> bool:
@@ -65,6 +76,38 @@ def _flag(name: str, value: object) -> bool:
         if lowered in _FALSE:
             return False
     raise ValueError(f"{name} must be true or false, got {value!r}")
+
+
+def case_twin(names, name: str | None) -> str | None:
+    """A registered name that differs from ``name`` only in letter case."""
+    if not name:
+        return None
+    return next((n for n in names if n != name and n.casefold() == name.casefold()), None)
+
+
+def refuse_case_twin(agents, name: str | None) -> None:
+    """A new name beside a registered one of different case ("alfred" beside
+    "Alfred") would be a second agent that messages to the first never reach.
+    An exact registered name is not new and passes."""
+    if name and agents.get(name) is None and (twin := case_twin(agents.names, name)):
+        raise ValueError(
+            f"'{name}' differs only in case from the registered agent '{twin}'; "
+            f"start '{twin}', or choose a distinct name"
+        )
+
+
+def check_agent_tags(tags) -> None:
+    """Refuse tags ``agent tag`` would refuse (``ValueError``)."""
+    if any(
+        not tag
+        or len(tag) > 100
+        or tag.startswith(("swarm:", "role:", "task:"))
+        or any(not c.isprintable() or c.isspace() for c in tag)
+        for tag in tags
+    ):
+        raise ValueError(
+            "tags must be printable without spaces; swarm:, role: and task: are reserved"
+        )
 
 
 class AgentStore:
@@ -132,6 +175,7 @@ class AgentStore:
         name: str | None = None,
         runtime: str | None = None,
         model: str | None = None,
+        inbox_only: bool = False,
     ) -> AgentSpec:
         """Describe an agent for a directory without saving it.
 
@@ -158,6 +202,7 @@ class AgentStore:
                 if existing is None or existing.path == path or not existing.path.is_dir():
                     break
                 counter += 1
+        inbox_only = inbox_only or bool(existing and existing.inbox_only)
         return AgentSpec(
             name=agent_name,
             dir=str(path),
@@ -169,9 +214,13 @@ class AgentStore:
             # Keep the recorded repo only for a record that lived elsewhere (a
             # moved project); rediscovering the same checkout trusts what the
             # checkout says now, so a removed origin clears ownership.
-            repo=await detect_repo(path)
+            # An inbox-only client takes no part in GitHub routing.
+            repo=""
+            if inbox_only
+            else await detect_repo(path)
             or (existing.repo if existing and existing.path != path else ""),
             watches=existing.watches if existing else (),
+            subscriptions=existing.subscriptions if existing else (),
             tags=existing.tags if existing else (),
             env=dict(existing.env) if existing else {},
             description=existing.description if existing else "",
@@ -181,6 +230,7 @@ class AgentStore:
             unattended=bool(
                 existing and existing.unattended and runtime in (None, existing.runtime)
             ),
+            inbox_only=inbox_only,
         )
 
     async def register_directory(
@@ -195,12 +245,17 @@ class AgentStore:
                     current = await self.discover(directory, **options)
                     if current.name != spec.name:
                         continue
+                    refuse_case_twin(self._agents, current.name)
                     return await self.register(current.with_watches(*watches))
 
     @serialized_mutation
     async def register(self, spec: AgentSpec) -> AgentSpec:
         """Insert or update an agent and publish the new snapshot."""
         validate_agent_spec(spec)
+        current = self._agents.get(spec.name)
+        await _refuse_running_inbox_only(
+            spec.name, spec.inbox_only and not (current and current.inbox_only)
+        )
         await self._db.agents.upsert(
             spec.name,
             dir=spec.dir,
@@ -212,6 +267,7 @@ class AgentStore:
             description=spec.description,
             always_on=spec.always_on,
             unattended=spec.unattended,
+            inbox_only=spec.inbox_only,
         )
         for repo in spec.watches:
             await self._db.agents.add_watch(spec.name, repo)
@@ -221,7 +277,7 @@ class AgentStore:
     @serialized_mutation
     async def update(self, name: str, **changes) -> AgentSpec:
         """Change fields on a known agent (dir, runtime, model, repo, tags, env,
-        description, always_on, unattended)."""
+        description, always_on, unattended, inbox_only)."""
         allowed = {
             "dir",
             "runtime",
@@ -232,11 +288,12 @@ class AgentStore:
             "description",
             "always_on",
             "unattended",
+            "inbox_only",
         }
         unknown = set(changes) - allowed
         if unknown:
             raise ValueError(f"unknown field(s): {', '.join(sorted(unknown))}")
-        for flag in ("always_on", "unattended"):
+        for flag in ("always_on", "unattended", "inbox_only"):
             if flag in changes:
                 changes[flag] = _flag(flag, changes[flag])
         await self.refresh()
@@ -247,6 +304,7 @@ class AgentStore:
             changes.setdefault("unattended", False)
             changes.setdefault("model", None)
         validate_agent_spec(replace(current, **changes))
+        await _refuse_running_inbox_only(name, changes.get("inbox_only") and not current.inbox_only)
         if not await self._db.agents.update_fields(name, changes):
             raise KeyError(name)
         await self.refresh()
@@ -257,16 +315,7 @@ class AgentStore:
 
     @serialized_mutation
     async def tag(self, name: str, tags: list[str], *, remove: bool = False) -> AgentSpec:
-        if any(
-            not tag
-            or len(tag) > 100
-            or tag.startswith(("swarm:", "role:", "task:"))
-            or any(not c.isprintable() or c.isspace() for c in tag)
-            for tag in tags
-        ):
-            raise ValueError(
-                "tags must be printable without spaces; swarm:, role: and task: are reserved"
-            )
+        check_agent_tags(tags)
         await self.refresh()
         spec = self._agents.get(name)
         if spec is None:
@@ -280,9 +329,40 @@ class AgentStore:
 
     @serialized_mutation
     async def forget(self, name: str) -> bool:
+        spec = self._agents.get(name)
         removed = await self._db.agents.delete(name)
         await self.refresh()
+        if removed:
+            # A pending hook-context offer must not reach the next agent of this name.
+            shutil.rmtree(self.config.state_dir / CONTEXT_DIR / name, ignore_errors=True)
+            if spec is not None:
+                self._release_skills(spec.name)
         return removed
+
+    def _release_skills(self, name: str) -> bool:
+        """Remove a forgotten agent's skill links that no other agent in its
+        checkout still records, and its manifest, so they keep nothing alive.
+        False when the links could not be released: the manifest is kept."""
+        import json
+
+        from agent_backbone.skills import manifest_path, materialize
+
+        manifest = manifest_path(self.config.data_dir, name)
+        if not manifest.exists():
+            return True
+        store = self.config.skills.store_path
+        try:
+            # The links live in the checkout the manifest records, which may
+            # not be the agent's directory any more (``agent set dir=``).
+            repo = json.loads(manifest.read_text(encoding="utf-8")).get("repo")
+            if store is not None and isinstance(repo, str):
+                materialize(store, Path(repo), (), [], manifest)
+        except (OSError, ValueError, AttributeError) as exc:
+            # Kept: it is what a later cleanup of those links goes by.
+            log.warning("Could not release the skill links of '%s': %s", name, exc)
+            return False
+        manifest.unlink(missing_ok=True)
+        return True
 
     async def rename(self, name: str, new_name: str) -> AgentSpec:
         """Rename a stopped non-swarm agent and retain its runtime resume record."""
@@ -311,20 +391,69 @@ class AgentStore:
                 )
             source = self.config.state_dir / f"{name}.json"
             target = self.config.state_dir / f"{new_name}.json"
-            if target.exists():
+            launch_moves = [
+                (
+                    self.config.state_dir / f"{name}.launch",
+                    self.config.state_dir / f"{new_name}.launch",
+                ),
+                (
+                    self.config.state_dir / "launches" / name,
+                    self.config.state_dir / "launches" / new_name,
+                ),
+            ]
+            if target.exists() or any(destination.exists() for _, destination in launch_moves):
                 raise ValueError(f"'{new_name}' already has saved state; choose another name")
-            copied = False
+            # Its skill manifest follows too, or the old name would keep its links
+            # alive; it moves with the rename or not at all.
+            from agent_backbone.skills import manifest_path
+
+            old_manifest = manifest_path(self.config.data_dir, name)
+            new_manifest = manifest_path(self.config.data_dir, new_name)
+            others = [n for n in self._agents.names if n != name]
+            if new_name in others or case_twin(others, new_name):
+                raise ValueError(f"'{new_name}' is already an agent")
+            # A manifest under a name no agent holds is a forgotten agent's,
+            # kept because its links could not be released then: retry now. On a
+            # case-insensitive filesystem a case-only rename names the agent's own.
+            leftover = new_manifest.exists() and not (
+                old_manifest.exists() and old_manifest.samefile(new_manifest)
+            )
+            if leftover and not self._release_skills(new_name):
+                raise ValueError(
+                    f"'{new_name}' still has a forgotten agent's skill links that could not be "
+                    "released; choose another name"
+                )
+            copied = moved = False
+            moved_launch_state: list[tuple[Path, Path]] = []
             try:
                 if source.exists():
                     atomic_write_text(target, source.read_text())
                     copied = True
+                if old_manifest.exists():
+                    old_manifest.rename(new_manifest)
+                    moved = True
+                for original, destination in launch_moves:
+                    if original.exists():
+                        original.rename(destination)
+                        moved_launch_state.append((original, destination))
                 await self._db.agents.rename(name, new_name)
             except BaseException:
+                for original, destination in reversed(moved_launch_state):
+                    destination.rename(original)
                 if copied:
                     target.unlink(missing_ok=True)
+                if moved:
+                    new_manifest.rename(old_manifest)
                 raise
             source.unlink(missing_ok=True)
             (self.config.state_dir / f"{name}.starting").unlink(missing_ok=True)
+            # Pending hook-context offers follow the queue rows just rekeyed.
+            offers = self.config.state_dir / CONTEXT_DIR / name
+            if offers.exists():
+                try:
+                    offers.rename(self.config.state_dir / CONTEXT_DIR / new_name)
+                except OSError as exc:
+                    log.warning("Could not move %s's pending context offers: %s", name, exc)
             await self.refresh()
             return self._agents.get(new_name)
 
@@ -332,8 +461,11 @@ class AgentStore:
     async def watch(self, name: str, repo: str) -> AgentSpec:
         validate_repo(repo)
         await self.refresh()
-        if name not in self._agents:
+        spec = self._agents.get(name)
+        if spec is None:
             raise KeyError(name)
+        if spec.inbox_only:
+            raise ValueError(f"'{name}' is inbox-only: it takes no part in GitHub routing")
         await self._db.agents.add_watch(name, repo)
         await self.refresh()
         return self._agents.get(name)  # type: ignore[return-value]
@@ -341,6 +473,36 @@ class AgentStore:
     @serialized_mutation
     async def unwatch(self, name: str, repo: str) -> bool:
         removed = await self._db.agents.remove_watch(name, repo)
+        await self.refresh()
+        return removed
+
+    @serialized_mutation
+    async def subscribe(self, name: str, source: str, filter_text: str, priority: str) -> AgentSpec:
+        """Subscribe ``name`` to events on ``source`` matching ``filter_text``
+        (the source's own query language) at ``priority``."""
+        if source not in SOURCES:
+            raise ValueError(f"unknown source '{source}' (expected one of {', '.join(SOURCES)})")
+        if priority not in SUBSCRIPTION_PRIORITIES:
+            raise ValueError(f"priority must be one of {', '.join(SUBSCRIPTION_PRIORITIES)}")
+        filter_text = " ".join(filter_text.split())
+        if not filter_text or len(filter_text) > 500 or not filter_text.isprintable():
+            raise ValueError("filter must be 1-500 printable characters")
+        await self.refresh()
+        spec = self._agents.get(name)
+        if spec is None:
+            raise KeyError(name)
+        if spec.inbox_only:
+            raise ValueError(f"'{name}' is inbox-only: its inbox takes direct messages only")
+        await self._db.agents.add_subscription(name, source, filter_text, priority)
+        await self.refresh()
+        return self._agents.get(name)  # type: ignore[return-value]
+
+    @serialized_mutation
+    async def unsubscribe(self, name: str, subscription_id: int) -> bool:
+        await self.refresh()
+        if name not in self._agents:
+            raise KeyError(name)
+        removed = await self._db.agents.remove_subscription(name, subscription_id)
         await self.refresh()
         return removed
 

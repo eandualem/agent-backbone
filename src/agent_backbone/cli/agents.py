@@ -7,16 +7,300 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
 from agent_backbone.cli import _common
+from agent_backbone.cli.presentation import note, print_record, print_table
 from agent_backbone.config import (
     bootstrap_config,
 )
 
 log = logging.getLogger(__name__)
+
+
+def _subscription_line(sub: dict) -> str:
+    return f"#{sub['id']} {sub['source']} {sub['priority']}: {sub['filter']}"
+
+
+def _print_inspection(data: dict) -> None:
+    note(
+        f"{data['name']}: {'online' if data['online'] else 'offline'}"
+        f"{'' if data['known'] else ' (not a known agent)'}"
+    )
+    print_record(
+        "Identity",
+        [
+            ("Purpose", data.get("description") or "not described"),
+            ("Tags", ", ".join(data.get("tags", [])) or "none"),
+            ("Directory", data.get("dir")),
+            ("Repository", data.get("repo")),
+            ("Watches", ", ".join(data.get("watches", [])) or "none"),
+            (
+                "Subscriptions",
+                "\n".join(_subscription_line(s) for s in data.get("subscriptions", [])) or "none",
+            ),
+            ("CLI", data.get("runtime")),
+            ("Configured model", data.get("model") or "default"),
+        ],
+    )
+    fields = [("State", data["state"]), ("Delivery", data["delivery"])]
+    for key, label in (
+        ("reason", "Reason"),
+        ("detail", "Detail"),
+        ("state_age_seconds", "Hook age (seconds)"),
+        ("session_id", "Session"),
+        ("last_message", "Last reply"),
+    ):
+        if data.get(key) is not None:
+            fields.append((label, data[key]))
+    if data.get("current_issue"):
+        fields.append(
+            ("Current issue", f"{data.get('current_repo') or ''}#{data['current_issue']}")
+        )
+    if data.get("restart"):
+        fields.append(("Restart", _transition_line(data["restart"])))
+    fields.append(("Evidence", "\n".join(data.get("evidence", []))))
+    print_record("Observation", fields)
+    if data.get("pane_tail"):
+        note("Terminal tail", style="bold")
+        note("\n".join(data["pane_tail"]))
+    if data.get("recent_deliveries"):
+        print_table(
+            "Recent deliveries",
+            ("Time", "Reference", "Outcome"),
+            [
+                (
+                    d["created_at"],
+                    f"{d.get('repo') or ''}#{d['issue_number']}"
+                    if d.get("issue_number")
+                    else d.get("kind"),
+                    d["outcome"],
+                )
+                for d in data["recent_deliveries"]
+            ],
+        )
+
+
+_SECRET_WORDS = {"KEY", "APIKEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD"}
+
+
+def _secret_looking(env: object) -> list[str]:
+    """Names in an ``env`` value that read as credentials (``API_KEY``, ``GITHUB_TOKEN``),
+    or whose value is a URL carrying a password (``postgresql://app:pw@db/app``)."""
+    if not isinstance(env, dict):
+        return []
+    return [
+        key
+        for key, value in env.items()
+        if _SECRET_WORDS & set(str(key).upper().split("_"))
+        or re.search(r"://[^/@\s]*:[^/@\s]*@", str(value))
+    ]
+
+
+_DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def parse_duration(text: str) -> int:
+    """``90``, ``90s``, ``20m``, ``3h20m`` or ``1d`` as seconds (``ValueError`` otherwise)."""
+    value = text.strip().lower()
+    if value.isdigit():
+        return int(value)
+    parts = re.findall(r"(\d+)([smhd])", value)
+    if not parts or "".join(n + u for n, u in parts) != value:
+        raise ValueError(f"'{text}' is not a duration such as 90s, 20m or 3h20m")
+    return sum(int(number) * _DURATION_UNITS[unit] for number, unit in parts)
+
+
+def _transition_line(row: dict) -> str:
+    """One line for a transition: what it is, where it stands, how it ended."""
+    what = "stop" if not row.get("start") else "resume" if row.get("resume") else "fresh start"
+    chosen = [value for value in (row.get("runtime"), row.get("model")) if value]
+    if chosen:
+        what += f" ({', '.join(chosen)})"
+    line = f"#{row['id']} {row['status']}: {what}"
+    if row["status"] == "pending":
+        line += (
+            f", starts at {row['start_at'][:16]}Z"
+            if row.get("start_at")
+            else f", starts {row.get('delay_seconds', 60)}s after the stop"
+            if row.get("start")
+            else ", stopping"
+        )
+    result = row.get("result") or {}
+    if result.get("reason"):
+        line += f" — {result['reason']}"
+    elif result.get("ready"):
+        line += f" — {result['ready']}"
+    if result.get("message"):
+        line += f"; message {result['message']}"
+    return line
+
+
+async def _agent_output(args: argparse.Namespace) -> int:
+    name = args.name or os.environ.get("BACKBONE_AGENT", "").strip()
+    if not name:
+        print("usage: backbone agent output [NAME] …")
+        print("(without NAME, $BACKBONE_AGENT must be set — it is inside agent sessions)")
+        return 1
+    if args.since is not None and args.before is not None:
+        print("give --since (forward) or --before (back), not both")
+        return 1
+    if args.end is not None and args.since is None:
+        print("--end needs --since (a forward range)")
+        return 1
+    boot = await _common.read_client_config()
+    if await _common.api_up(boot):
+        query = f"lines={args.lines}&screen={'true' if args.screen else 'false'}"
+        for key in ("since", "before", "end"):
+            value = getattr(args, key)
+            if value is not None:
+                query += f"&{key}={value}"
+        result = await _common.api(boot, "GET", f"/api/sessions/{name}/output?{query}")
+        if result is None:
+            print(_common.unreachable())
+            return 1
+        status, data = result
+        if status != 200:
+            print(f"error {status}: {data.get('detail') if isinstance(data, dict) else data}")
+            return 1
+    else:
+        from agent_backbone.services.agents.transcript import output_page
+
+        config = await _common.read_config()
+        spec = config.agents.get(name)
+        if spec is None:
+            print(f"unknown agent '{name}'")
+            return 1
+        if spec.inbox_only:
+            print(f"'{name}' is inbox-only: it has no terminal")
+            return 1
+        page = await output_page(
+            config,
+            name,
+            limit=args.lines,
+            since=args.since,
+            before=args.before,
+            end=args.end,
+            screen=args.screen,
+        )
+        data = {
+            "session": page.session,
+            "source": page.source,
+            "runtime": page.runtime,
+            "messages": [
+                {"time": m.time, "role": m.role, "text": m.text, "start": m.start, "end": m.end}
+                for m in page.messages
+            ],
+            "range_start": page.range_start,
+            "range_end": page.range_end,
+            "more_before": page.more_before,
+            "more_after": page.more_after,
+            "lines": page.lines,
+            "evidence": page.evidence,
+        }
+    if args.json:
+        print(json.dumps(data, indent=2))
+        return 0
+    _print_output_page(name, data)
+    return 0
+
+
+def _print_output_page(name: str, data: dict) -> None:
+    runtime = data.get("runtime") or "unknown runtime"
+    if data.get("source") != "transcript":
+        note(f"{name}: screen ({runtime})")
+        for line in data.get("lines") or []:
+            print(line)
+        if not data.get("lines"):
+            print("(nothing yet)")
+    else:
+        messages = data.get("messages") or []
+        span = f", offsets {data.get('range_start')}–{data.get('range_end')}" if messages else ""
+        note(f"{name}: transcript ({runtime}) — {len(messages)} message(s){span}")
+        for message in messages:
+            stamp = f" {message['time']}" if message.get("time") else ""
+            print(f"──{stamp} {message.get('role', 'assistant')} [{message['start']}]")
+            print(message["text"])
+            print()
+        if not messages:
+            print("(no messages in this range)")
+        if data.get("more_before") and data.get("range_start") is not None:
+            note(f"earlier: backbone agent output {name} --before {data['range_start']}")
+        elif messages:
+            note("(start of transcript)")
+        if data.get("range_end") is not None:
+            verb = "later" if data.get("more_after") else "continue"
+            note(f"{verb}: backbone agent output {name} --since {data['range_end']}")
+    for line in data.get("evidence") or []:
+        note(f"  - {line}")
+
+
+async def _agent_restart(args: argparse.Namespace) -> int:
+    name = args.name or os.environ.get("BACKBONE_AGENT", "").strip()
+    if not name:
+        print("usage: backbone agent restart [NAME] …")
+        print("(without NAME, $BACKBONE_AGENT must be set — it is inside agent sessions)")
+        return 1
+    body: dict[str, Any] = {
+        "runtime": args.runtime,
+        "model": args.model,
+        "resume": args.resume,
+        "start": not args.stop_only,
+        "start_at": args.start_at,
+        "message": args.message,
+        "from_entity": args.sender,
+    }
+    if args.delay is not None:
+        try:
+            body["delay_seconds"] = parse_duration(args.delay)
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 1
+    boot = await _common.read_client_config()
+    if not await _common.api_up(boot):
+        print(_common.unreachable())
+        print("(a restart is owned by the running backbone; there is no direct-tmux fallback)")
+        return 1
+    result = await _common.api(
+        boot, "POST", f"/api/agents/{name}/restart", json_body=body, timeout=30.0
+    )
+    if result is None:
+        print(_common.unreachable())
+        return 1
+    status, data = result
+    if status != 200:
+        print(f"error {status}: {data.get('detail') if isinstance(data, dict) else data}")
+        return 1
+    if args.json:
+        print(json.dumps(data, indent=2))
+        return 0
+    print(f"{name}: restart #{data['id']} accepted")
+    print_record(
+        "Transition",
+        [
+            ("Status", data["status"]),
+            ("Stop", "on the backbone's next tick"),
+            (
+                "Start",
+                "none (stop only)"
+                if not data["start"]
+                else f"at {data['start_at']}"
+                if data.get("start_at")
+                else f"{data['delay_seconds']}s after the stop",
+            ),
+            ("CLI", data.get("runtime") or "saved runtime"),
+            ("Model", data.get("model") or "saved model"),
+            ("Conversation", "resume" if data.get("resume") else "fresh"),
+            ("Message", "yes" if data.get("message") else "none"),
+            ("Result", f"backbone agent inspect {name}"),
+        ],
+    )
+    if name == os.environ.get("BACKBONE_AGENT", "").strip():
+        print("This session ends on that tick: finish writing your memory before it does.")
+    return 0
 
 
 def _print_start_result(data: dict) -> None:
@@ -32,6 +316,11 @@ def _print_start_result(data: dict) -> None:
         return
     ready = data.get("ready", "not_waited")
     repo = f" repo {data['repo']}" if data.get("repo") else " (no GitHub remote)"
+    if ready == "inbox_only":
+        print(f"{name}: registered inbox-only —{repo}")
+        print(f"  dir: {data.get('working_directory')}")
+        print(f"  messages: backbone inbox --agent {name}")
+        return
     label = {
         "ready": "ready",
         "waiting_for_human": "started, waiting for you",
@@ -59,6 +348,20 @@ async def _agent_start(args: argparse.Namespace) -> int:
     ):
         print("--attach requires a single agent")
         return 1
+    if getattr(args, "inbox_only", False) and (
+        len(args.names) > 1
+        or args.attach
+        or args.always_on
+        or args.resume
+        or args.runtime
+        or args.model
+        or args.watch
+    ):
+        print(
+            "--inbox-only registers one agent without launching it: "
+            "drop the launch and watch options"
+        )
+        return 1
     boot = await _common.read_client_config()
     if getattr(args, "always_on", False):
         if args.names or args.dir:
@@ -73,8 +376,8 @@ async def _agent_start(args: argparse.Namespace) -> int:
         if len(names) == 1:
             return await _agent_start(argparse.Namespace(**{**vars(args), "group": True}))
     if len(args.names) > 1:
-        if args.dir or args.watch:
-            print("--dir/--watch apply to a single agent; start a group by name only")
+        if args.dir or args.watch or getattr(args, "tag", None):
+            print("--dir/--watch/--tag apply to a single agent; start a group by name only")
             return 1
         # A group start: each name must already be a known agent.
         worst = 0
@@ -88,7 +391,14 @@ async def _agent_start(args: argparse.Namespace) -> int:
         directory = os.getcwd()
     elif directory is None and name is not None and not getattr(args, "group", False):
         # A bare unknown name registers the current directory under that name.
+        from agent_backbone.services.agents import case_twin
+
         config = await _common.read_config()
+        # An exact registered name is not new: only a new name can be a twin.
+        if config.agents.get(name) is None and (twin := case_twin(config.agents.names, name)):
+            print(f"'{name}' differs only in case from the registered agent '{twin}'")
+            print(f"  start it: backbone agent start {twin}")
+            return 1
         if config.agents.get(name) is None:
             directory = os.getcwd()
             print(f"'{name}' is new — registering it for {directory}")
@@ -99,13 +409,15 @@ async def _agent_start(args: argparse.Namespace) -> int:
         "model": args.model,
         "resume": args.resume,
         "watch": args.watch or [],
+        "tags": getattr(args, "tag", None) or [],
         "wait": not args.no_wait,
+        "inbox_only": getattr(args, "inbox_only", False),
     }
 
     if await _common.api_up(boot):
         result = await _common.api(boot, "POST", "/api/agents/start", json_body=body, timeout=120.0)
         if result is None:
-            print("backbone API unreachable")
+            print(_common.unreachable())
             return 1
         status, data = result
         if status != 200:
@@ -131,8 +443,12 @@ async def _agent_start(args: argparse.Namespace) -> int:
             model=args.model,
             resume=args.resume,
             watch=tuple(args.watch or ()),
+            tags=tuple(body["tags"]),
             wait=not args.no_wait,
+            inbox_only=body["inbox_only"],
         )
+        # The brief below shares the start's timeout with the readiness wait.
+        deadline = asyncio.get_running_loop().time() + direct.config.timing.start_timeout_seconds
         try:
             spec = await resolve_agent(direct.store, req)
             result = await start_resolved(direct.store, direct.config, spec, req, db=direct.db)
@@ -159,11 +475,50 @@ async def _agent_start(args: argparse.Namespace) -> int:
                 "evidence": list(result.evidence),
             }
         )
+        # A runtime briefed by its first message gets it now, as the service
+        # would; a dialog, a timeout or --no-wait leaves it for the service.
+        if result.ready == "ready" and not result.already_running:
+            try:
+                await _brief_offline(direct, spec.name, deadline)
+            except Exception as exc:  # the agent is up; the lines below say where the brief is
+                print(f"  - could not deliver the brief from here ({type(exc).__name__})")
+        try:
+            await _report_offline_brief(direct, spec.name)
+        except Exception as exc:  # the agent is up; only the brief's state is unknown
+            print(f"  - could not read where the brief is ({type(exc).__name__})")
         args.attach_name = spec.name
         print(
             "note: the backbone is not running — start it with `backbone up --detach` for routing"
         )
         return 0 if result.ready != "exited" else 1
+
+
+async def _report_offline_brief(direct: _common.Direct, name: str) -> None:
+    """Say what is still in the way of the brief, if anything."""
+    if await direct.db.queue.has_uncertain(name):
+        print(
+            "  - a delivery could not be confirmed, so messages to this agent are held "
+            "until it is acknowledged: check the session "
+            f"(`backbone agent attach {name}`); the agent reads and acknowledges it "
+            "with `backbone inbox`"
+        )
+    elif await direct.db.queue.has_brief_ahead(name):
+        print("  - the brief is not delivered yet: it goes first once the backbone runs")
+
+
+async def _brief_offline(direct: _common.Direct, name: str, deadline: float) -> None:
+    """Deliver a queued brief through the service's own drain: at least one
+    attempt, then more until ``deadline`` (the start's own timeout)."""
+    from agent_backbone.services.jobs import drain_agent
+
+    timing = direct.config.timing
+    while await direct.db.queue.has_brief_ahead(name):
+        await drain_agent(direct.config, direct.db, name)
+        if not await direct.db.queue.has_brief_ahead(name):
+            return
+        if asyncio.get_running_loop().time() >= deadline:
+            return
+        await asyncio.sleep(timing.grace_period_seconds)
 
 
 async def _agent(args: argparse.Namespace) -> int:
@@ -189,12 +544,20 @@ async def _agent(args: argparse.Namespace) -> int:
         if not specs:
             print("No agents known yet. Run `backbone agent start` from a project directory.")
             return 0
-        width = max(len(name) for name in config.agents.names)
-        for spec in specs:
-            model = f" ({spec.model})" if spec.model else ""
-            print(f"  {spec.name:<{width}s}  {spec.runtime}{model}  {spec.path}")
-            if spec.tags:
-                print(f"    tags: {', '.join(spec.tags)}")
+        print_table(
+            "Agents",
+            ("Agent", "Purpose", "Tags", "CLI / Model"),
+            [
+                (
+                    spec.name,
+                    spec.description or "not described",
+                    "\n".join(spec.tags) or "none",
+                    f"{spec.runtime} / {spec.model or 'default'}",
+                )
+                for spec in sorted(specs, key=lambda spec: spec.name.casefold())
+            ],
+        )
+        note("Live state: backbone status\nFull details and location: backbone agent inspect NAME")
         return 0
 
     if sub in ("tag", "untag", "rename"):
@@ -203,6 +566,7 @@ async def _agent(args: argparse.Namespace) -> int:
             if sub == "rename"
             else {"tags": args.tags, "remove": sub == "untag"}
         )
+        relinked: list[str] = []
         if api_up:
             endpoint = "rename" if sub == "rename" else "tags"
             response = await _common.api(
@@ -211,13 +575,18 @@ async def _agent(args: argparse.Namespace) -> int:
             if not response or response[0] != 200:
                 print(f"error: {response[1] if response else 'API unreachable'}")
                 return 1
+            if isinstance(response[1], dict):
+                relinked = response[1].get("relinked", [])
         else:
             async with _common.Direct(boot) as direct:
                 try:
                     if sub == "rename":
                         await direct.store.rename(args.name, args.new_name)
                     else:
-                        await direct.store.tag(args.name, args.tags, remove=sub == "untag")
+                        from agent_backbone.services.agents.operations import relink_skills
+
+                        spec = await direct.store.tag(args.name, args.tags, remove=sub == "untag")
+                        relinked = await relink_skills(direct.store.config, [spec])
                 except (KeyError, ValueError, OSError) as exc:
                     print(f"error: {exc}")
                     return 1
@@ -227,7 +596,16 @@ async def _agent(args: argparse.Namespace) -> int:
             print(f"Update external for:{args.name} labels and scripts to use {args.new_name}.")
         else:
             print(f"{args.name}: tags updated")
+            for line in relinked:
+                print(f"  {line}")
+            print("Policies follow at its next fresh launch; so do skills if it is not running.")
         return 0
+
+    if sub == "restart":
+        return await _agent_restart(args)
+
+    if sub == "output":
+        return await _agent_output(args)
 
     if sub == "stop":
         if not api_up:
@@ -258,7 +636,7 @@ async def _agent(args: argparse.Namespace) -> int:
 
     if sub in ("approve", "deny"):
         if not api_up:
-            print("backbone API unreachable; is `backbone up` running?")
+            print(_common.unreachable())
             return 1
         result = await _common.api(
             boot,
@@ -268,7 +646,7 @@ async def _agent(args: argparse.Namespace) -> int:
             timeout=30.0,
         )
         if result is None:
-            print("backbone API unreachable; is `backbone up` running?")
+            print(_common.unreachable())
             return 1
         status, data = result
         detail = data.get("detail") if isinstance(data, dict) else None
@@ -296,62 +674,22 @@ async def _agent(args: argparse.Namespace) -> int:
                 if args.json:
                     _common.print_json(data)
                     return 0
-                print(
-                    f"{data['name']}: {'online' if data['online'] else 'offline'}"
-                    f"{'' if data['known'] else ' (not a known agent)'}"
-                )
-                print(f"  dir:      {data['dir'] or '-'}")
-                print(
-                    f"  runtime:  {data['runtime'] or '-'}   "
-                    f"configured model: {data['model'] or '-'}"
-                )
-                watches = ", ".join(data["watches"]) or "-"
-                print(f"  repo:     {data['repo'] or '-'}   watches: {watches}")
-                reason = f" ({data['reason']})" if data.get("reason") else ""
-                issue = (
-                    f"   on {data.get('current_repo') or ''}#{data['current_issue']}"
-                    if data.get("current_issue")
-                    else ""
-                )
-                age = (
-                    f" (hook state {data['state_age_seconds']}s old)"
-                    if data.get("state_age_seconds") is not None
-                    else ""
-                )
-                print(f"  state:    {data['state']}{reason}{issue}{age}")
-                if data.get("detail"):
-                    print(f"  detail:   {data['detail']}")
-                print(f"  delivery: {data['delivery']}")
-                if data.get("session_id"):
-                    print(f"  session:  {data['session_id']}")
-                if data.get("last_message"):
-                    reply = " ".join(data["last_message"].split())
-                    print(f"  last reply: {reply[:200]}{'…' if len(reply) > 200 else ''}")
-                print("  evidence:")
-                for line in data["evidence"]:
-                    print(f"    - {line}")
-                if data.get("pane_tail"):
-                    print("  terminal tail:")
-                    for line in data["pane_tail"]:
-                        print(f"    | {line}")
-                if data.get("recent_deliveries"):
-                    print("  recent deliveries:")
-                    for d in data["recent_deliveries"][:5]:
-                        ref = (
-                            f"{d.get('repo') or ''}#{d['issue_number']}"
-                            if d.get("issue_number")
-                            else d.get("kind")
-                        )
-                        print(f"    {d['created_at'][:19]}  {ref:<24s} {d['outcome']}")
+                _print_inspection(data)
                 return 0
             print(f"error: {result[1] if result else 'API unreachable'}")
             return 1
         # Offline inspection: state file + tmux only.
-        from agent_backbone.services.agents import agent_state
-        from agent_backbone.services.terminal import session_exists
+        from agent_backbone.services.agents import agent_state, subscription_views
+        from agent_backbone.services.terminal import access_error, session_exists
 
+        if denied := await access_error():
+            print(f"{args.name}: state unknown from this process: {_common.unreachable()}")
+            print(f"tmux: {denied}")
+            return 1
         config = await _common.read_config()
-        online = await session_exists(args.name)
+        spec = config.agents.get(args.name)
+        # An inbox-only agent has no session: one with its name is not its own.
+        online = not (spec is not None and spec.inbox_only) and await session_exists(args.name)
         snapshot = await agent_state(config, args.name)
         if args.json:
             from dataclasses import asdict
@@ -365,19 +703,43 @@ async def _agent(args: argparse.Namespace) -> int:
                     "known": spec is not None,
                     "state": snapshot.state.value if online else "offline",
                     "dir": str(spec.path) if spec else "",
+                    "description": spec.description if spec else "",
+                    "tags": list(spec.tags) if spec else [],
                     "model": spec.model if spec else None,
                     "runtime": snapshot.runtime or (spec.runtime if spec else None),
                     "repo": spec.repo if spec else "",
                     "watches": list(spec.watches) if spec else [],
+                    "subscriptions": [asdict(sub) for sub in (spec.subscriptions if spec else ())],
                 }
             )
             return 0
-        print(f"{args.name}: {'online' if online else 'offline'} (backbone not running)")
-        print(
-            f"  state: {snapshot.state.value}{f' ({snapshot.reason})' if snapshot.reason else ''}"
+        note(f"{args.name}: {'online' if online else 'offline'} (backbone not running)")
+        print_record(
+            "Identity",
+            [
+                ("Purpose", (spec.description if spec else "") or "not described"),
+                ("Tags", (", ".join(spec.tags) if spec else "") or "none"),
+                ("Directory", str(spec.path) if spec else "-"),
+                ("Repository", spec.repo if spec else "-"),
+                (
+                    "Subscriptions",
+                    "\n".join(
+                        _subscription_line(view.model_dump()) for view in subscription_views(spec)
+                    )
+                    or "none",
+                ),
+                ("CLI", snapshot.runtime or (spec.runtime if spec else "unknown")),
+                ("Configured model", (spec.model if spec else None) or "default"),
+            ],
         )
-        for line in snapshot.evidence:
-            print(f"    - {line}")
+        print_record(
+            "Observation",
+            [
+                ("State", snapshot.state.value if online else "offline"),
+                ("Reason", snapshot.reason),
+                ("Evidence", "\n".join(snapshot.evidence)),
+            ],
+        )
         return 0
 
     if sub == "set":
@@ -387,8 +749,15 @@ async def _agent(args: argparse.Namespace) -> int:
                 print(f"expected key=value, got {item!r}")
                 return 1
             key, raw = item.split("=", 1)
-            json_keys = ("tags", "env", "always_on", "unattended")
+            json_keys = ("tags", "env", "always_on", "unattended", "inbox_only")
             changes[key] = _common.parse_value(raw) if key in json_keys else raw
+        if names := _secret_looking(changes.get("env")):
+            print(
+                f"warning: env entries that look like secrets: {', '.join(names)}. Values are "
+                "stored in plain text in the backbone's database; keep credentials in the "
+                "tool's own credential store (docs/security.md)",
+                file=sys.stderr,
+            )
         if api_up:
             result = await _common.api(boot, "PATCH", f"/api/agents/{args.name}", json_body=changes)
             if result and result[0] == 200:
@@ -439,7 +808,69 @@ async def _agent(args: argparse.Namespace) -> int:
                     except KeyError:
                         print(f"unknown agent '{name}'")
                         return 1
+                    except ValueError as exc:
+                        print(f"error: {exc}")
+                        return 1
             print(f"{name}: {'now watching' if sub == 'watch' else 'stopped watching'} {repo}")
+        return 0
+
+    if sub in ("subscribe", "unsubscribe"):
+        # Inside an agent session the name defaults to the agent itself; a
+        # name is recognised only when more arguments than the verb needs follow.
+        targets = list(args.targets)
+        needed = 2 if sub == "subscribe" else 1
+        name = targets.pop(0) if len(targets) > needed else os.environ.get("BACKBONE_AGENT", "")
+        name = name.strip()
+        if not name or len(targets) != needed:
+            usage = "[NAME] SOURCE FILTER [--priority high]" if sub == "subscribe" else "[NAME] ID"
+            print(f"usage: backbone agent {sub} {usage}")
+            print("(without NAME, $BACKBONE_AGENT must be set — it is inside agent sessions)")
+            return 1
+        if sub == "subscribe":
+            body: dict[str, Any] = {
+                "source": targets[0],
+                "filter": targets[1],
+                "priority": args.priority,
+            }
+        else:
+            try:
+                body = {"id": int(targets[0])}
+            except ValueError:
+                print("ID must be a subscription number (see backbone agent inspect NAME)")
+                return 1
+        if api_up:
+            result = await _common.api(boot, "POST", f"/api/agents/{name}/{sub}", json_body=body)
+            if not result or result[0] != 200:
+                print(f"error: {result[1] if result else 'API unreachable'}")
+                return 1
+            spec_view = result[1]
+        else:
+            async with _common.Direct(boot) as direct:
+                try:
+                    if sub == "subscribe":
+                        spec = await direct.store.subscribe(
+                            name, body["source"], body["filter"], body["priority"]
+                        )
+                    else:
+                        if not await direct.store.unsubscribe(name, body["id"]):
+                            print(f"no subscription {body['id']} on {name}")
+                            return 1
+                        spec = direct.store.agents.get(name)
+                except KeyError:
+                    print(f"unknown agent '{name}'")
+                    return 1
+                except ValueError as exc:
+                    print(f"error: {exc}")
+                    return 1
+            from agent_backbone.services.agents import subscription_views
+
+            spec_view = {"subscriptions": [v.model_dump() for v in subscription_views(spec)]}
+        if sub == "subscribe":
+            print(f"{name}: subscribed to {body['source']} ({args.priority}): {body['filter']}")
+        else:
+            print(f"{name}: subscription {body['id']} removed")
+        for s in spec_view.get("subscriptions", []):
+            print(f"  {_subscription_line(s)}")
         return 0
 
     if sub == "forget":
@@ -490,6 +921,11 @@ def cmd_agent(args: argparse.Namespace) -> int:
 async def _tell(args: argparse.Namespace) -> int:
     boot = await _common.read_client_config()
     text = " ".join(args.message)
+    if getattr(args, "steer", False):
+        if args.priority:
+            print("--steer and --priority are different things; use one")
+            return 1
+        return await _steer(boot, args.agent, text, args.sender)
     payload = {
         "target_session": args.agent,
         "from_entity": args.sender,
@@ -498,7 +934,7 @@ async def _tell(args: argparse.Namespace) -> int:
     }
     result = await _common.api(boot, "POST", "/api/messages", json_body=payload, timeout=30.0)
     if result is None:
-        print("backbone API unreachable; is `backbone up` running?")
+        print(_common.unreachable())
         return 1
     status, data = result
     if status != 200:
@@ -520,6 +956,25 @@ async def _tell(args: argparse.Namespace) -> int:
     return 2 if data.get("queued") else 1
 
 
+async def _steer(boot, agent: str, text: str, sender: str) -> int:
+    payload = {"target_session": agent, "from_entity": sender, "message": text}
+    result = await _common.api(boot, "POST", "/api/steer", json_body=payload, timeout=30.0)
+    if result is None:
+        print(_common.unreachable())
+        return 1
+    status, data = result
+    if status != 200 or not isinstance(data, dict):
+        print(f"error {status}: {data.get('detail') if isinstance(data, dict) else data}")
+        return 1
+    print(json.dumps(data))
+    if data.get("detail"):
+        print(data["detail"])
+    if data.get("ok"):
+        print(f"status: backbone agent inspect {agent} (steer, delivery {data['delivery_id']})")
+        return 0
+    return 1
+
+
 def cmd_tell(args: argparse.Namespace) -> int:
     return asyncio.run(_tell(args))
 
@@ -535,7 +990,7 @@ async def _reply(args: argparse.Namespace) -> int:
         boot, "POST", "/api/integrations/reply", json_body=payload, timeout=30.0
     )
     if result is None:
-        print("backbone API unreachable; is `backbone up` running?")
+        print(_common.unreachable())
         return 1
     status, data = result
     if status != 200:
@@ -591,6 +1046,30 @@ def cmd_hooks(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_chrome(args: argparse.Namespace) -> int:
+    """The optional extension that names agents' Claude-in-Chrome tab groups."""
+    from agent_backbone.hooks.install import (
+        install_chrome_tab_names,
+        uninstall_chrome_tab_names,
+    )
+
+    config = bootstrap_config()
+    if args.chrome_command == "uninstall":
+        removed = uninstall_chrome_tab_names(config.data_dir)
+        for path in removed:
+            print(f"removed {path}")
+        print("Remove the extension too: chrome://extensions → Agent Backbone tab group names")
+        return 0
+    extension, manifest = install_chrome_tab_names(config.data_dir, config.state_dir)
+    print(f"native host registered: {manifest}")
+    print("Load the extension once in Chrome:")
+    print("  1. open chrome://extensions and turn on Developer mode")
+    print(f"  2. Load unpacked → {extension}")
+    print("Groups Claude-in-Chrome opens for an agent are then named after it,")
+    print("unless a person already renamed them. Undo: backbone chrome uninstall")
+    return 0
+
+
 async def _inbox(args: argparse.Namespace) -> int:
     if not args.agent:
         print("Use --agent NAME or run inside an agent session ($BACKBONE_AGENT)")
@@ -604,9 +1083,10 @@ async def _inbox(args: argparse.Namespace) -> int:
             "session": args.agent,
             "acknowledge": args.ack,
         },
+        timeout=30.0,  # waits behind a delivery to the same session (up to ~12 s)
     )
     if result is None:
-        print("backbone API unreachable; is `backbone up` running?")
+        print(_common.unreachable())
         return 1
     status, data = result
     print(json.dumps(data))

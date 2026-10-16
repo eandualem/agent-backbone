@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 import pytest
 
-from agent_backbone.hooks import install
 from agent_backbone.services.runtimes import RUNTIMES
 
 
@@ -26,7 +25,8 @@ class TestClaude:
         args = RUNTIMES["claude"].hook_launch_args(tmp_path, tmp_path / "state")
         assert args[0] == "--settings"
         saved = json.loads((tmp_path / "hooks" / "claude-settings.json").read_text())
-        assert set(saved) == {"hooks"}
+        assert set(saved) == {"hooks", "tui"}
+        assert saved["tui"] == "default"  # inline panes, no fullscreen offer (#440)
         assert set(saved["hooks"]) == {e for e, _ in RUNTIMES["claude"].hook_events}
         command = saved["hooks"]["Stop"][0]["hooks"][0]["command"]
         assert f"--state-dir {tmp_path / 'state'}" in command
@@ -74,19 +74,17 @@ class TestCodex:
             assert entry["hooks"][0]["timeout"] == 10
         assert (tmp_path / "hooks" / "codex_hook.py").is_file()
 
-    def test_launch_command_carries_the_overrides_before_the_prompt(self, tmp_path):
-        brief = tmp_path / "brief.md"
-        brief.write_text("You are cx.")
+    def test_launch_command_carries_the_overrides(self, tmp_path):
         with patch("agent_backbone.services.runtimes.base.resolve_command", return_value="/c"):
             command = RUNTIMES["codex"].build_command(
-                model="gpt-5.6-sol", brief_file=brief, data_dir=tmp_path, state_dir=tmp_path / "s"
+                model="gpt-5.6-sol", data_dir=tmp_path, state_dir=tmp_path / "s"
             )
             resumed = RUNTIMES["codex"].build_command(
                 resume=True, data_dir=tmp_path, state_dir=tmp_path / "s"
             )
         assert command[0] == "/c" and command[1] == "-c"
         assert "--dangerously-bypass-hook-trust" in command
-        assert command[-3:] == ["--model", "gpt-5.6-sol", "You are cx."]
+        assert command[-2:] == ["--model", "gpt-5.6-sol"]
         assert resumed[:3] == ["/c", "resume", "--last"] and resumed[3] == "-c"
         assert resumed[-1] == "--dangerously-bypass-hook-trust"
 
@@ -125,40 +123,6 @@ class TestGemini:
 
 
 class TestOpenCode:
-    def test_existing_hook_is_not_duplicated(self, tmp_path):
-        rt = RUNTIMES["opencode"]
-        env = rt.hook_launch_env(
-            tmp_path, tmp_path / "state", env={"OPENCODE_CONFIG_CONTENT": "{}"}
-        )
-        assert rt.hook_launch_env(tmp_path, tmp_path / "state", env=env) == env
-
-    @pytest.mark.parametrize(
-        "content",
-        [
-            '{/* JSONC */ "permission": {"bash": "deny"}}',
-            '{"permission": {"bash": "deny"}, "plugin": "unexpected"}',
-            '["unexpected"]',
-            "invalid config",
-        ],
-    )
-    def test_unmergeable_config_is_left_to_opencode_without_exposing_it(
-        self, tmp_path, content, caplog
-    ):
-        env = {"OPENCODE_CONFIG_CONTENT": content}
-        assert RUNTIMES["opencode"].hook_launch_env(tmp_path, tmp_path / "s", env=env) == {}
-        assert env["OPENCODE_CONFIG_CONTENT"] == content
-        assert "Skipping OpenCode hook injection" in caplog.text
-        assert content not in caplog.text
-
-    def test_launch_env_loads_the_plugin_by_file_uri(self, tmp_path):
-        env = RUNTIMES["opencode"].hook_launch_env(
-            tmp_path, tmp_path / "state", env={"OPENCODE_CONFIG_CONTENT": "{}"}
-        )
-        content = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-        plugin = tmp_path / "hooks" / "opencode_hook.js"
-        assert content == {"plugin": [plugin.as_uri()]}
-        assert plugin.read_text() == install.hook_source("opencode_hook.js").read_text()
-
     def test_no_settings_file_to_install_into(self, tmp_path):
         assert RUNTIMES["opencode"].install_hooks(tmp_path, tmp_path / "s") is None
         assert RUNTIMES["opencode"].uninstall_hooks() is None

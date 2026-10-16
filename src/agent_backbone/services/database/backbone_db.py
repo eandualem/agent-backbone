@@ -17,12 +17,16 @@ from agent_backbone.services.database._delivery_repo import DeliveryRepo
 from agent_backbone.services.database._dependencies_repo import DependencyRepo
 from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
 from agent_backbone.services.database._events_repo import EventRepo
+from agent_backbone.services.database._fleet_repo import FleetSnapshotRepo
 from agent_backbone.services.database._outbox_repo import OutboxRepo
 from agent_backbone.services.database._queue_repo import QueueRepo
 from agent_backbone.services.database._reports_repo import ReportRepo
 from agent_backbone.services.database._settings_repo import SettingRepo
+from agent_backbone.services.database._signing_repo import SigningRepo
 from agent_backbone.services.database._state_repo import StateRepo
 from agent_backbone.services.database._swarms_repo import SwarmRepo
+from agent_backbone.services.database._transitions_repo import TransitionRepo
+from agent_backbone.services.database._usage_repo import UsageRepo
 from agent_backbone.services.database.base import Base
 from agent_backbone.services.database.engine import build_engine, redact_url
 
@@ -225,6 +229,10 @@ class BackboneDB:
         self.agents = AgentRepo(engine)
         self.swarms = SwarmRepo(engine)
         self.states = StateRepo(engine)
+        self.transitions = TransitionRepo(engine)
+        self.fleet = FleetSnapshotRepo(engine)
+        self.usage = UsageRepo(engine)
+        self.signing = SigningRepo(engine)
 
     @property
     def url(self) -> str:

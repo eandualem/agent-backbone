@@ -10,13 +10,15 @@ from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import now_iso
 
 
-def _row_to_agent(row, watches: list[str]) -> dict:
+def _row_to_agent(row, watches: list[str], subscriptions: list[dict]) -> dict:
     data = dict(row._mapping)
     data["tags"] = json.loads(data.get("tags") or "[]")
     data["env"] = json.loads(data.get("env") or "{}")
     data["watches"] = watches
+    data["subscriptions"] = subscriptions
     data["always_on"] = bool(data.get("always_on"))
     data["unattended"] = bool(data.get("unattended"))
+    data["inbox_only"] = bool(data.get("inbox_only"))
     return data
 
 
@@ -31,9 +33,30 @@ class AgentRepo(Repo):
             for row in result.fetchall():
                 watches.setdefault(row._mapping["agent_name"], []).append(row._mapping["repo"])
 
+            subscriptions: dict[str, list[dict]] = {}
+            result = await conn.execute(
+                text(
+                    "SELECT id, agent_name, source, query, priority FROM agent_subscriptions "
+                    "ORDER BY agent_name, id"
+                )
+            )
+            for row in result.mappings():
+                subscriptions.setdefault(row["agent_name"], []).append(
+                    {
+                        "id": row["id"],
+                        "source": row["source"],
+                        "filter": row["query"],
+                        "priority": row["priority"],
+                    }
+                )
+
             result = await conn.execute(text("SELECT * FROM agents ORDER BY name"))
             return [
-                _row_to_agent(row, watches.get(row._mapping["name"], []))
+                _row_to_agent(
+                    row,
+                    watches.get(row._mapping["name"], []),
+                    subscriptions.get(row._mapping["name"], []),
+                )
                 for row in result.fetchall()
             ]
 
@@ -50,6 +73,7 @@ class AgentRepo(Repo):
         description: str,
         always_on: bool = False,
         unattended: bool,
+        inbox_only: bool = False,
     ) -> None:
         """Replace an agent's fields; the caller must choose unattended explicitly."""
         async with self._tx() as conn:
@@ -58,9 +82,9 @@ class AgentRepo(Repo):
                 text(
                     """INSERT INTO agents
                        (name, dir, runtime, model, repo, tags, env, description,
-                        always_on, unattended, created_at, updated_at)
+                        always_on, unattended, inbox_only, created_at, updated_at)
                        VALUES (:name, :dir, :runtime, :model, :repo, :tags, :env,
-                               :description, :always_on, :unattended, :now, :now)
+                               :description, :always_on, :unattended, :inbox_only, :now, :now)
                        ON CONFLICT(name) DO UPDATE SET
                          dir = excluded.dir,
                          runtime = excluded.runtime,
@@ -71,6 +95,7 @@ class AgentRepo(Repo):
                          description = excluded.description,
                          always_on = excluded.always_on,
                          unattended = excluded.unattended,
+                         inbox_only = excluded.inbox_only,
                          updated_at = excluded.updated_at"""
                 ),
                 {
@@ -84,6 +109,7 @@ class AgentRepo(Repo):
                     "description": description,
                     "always_on": 1 if always_on else 0,
                     "unattended": 1 if unattended else 0,
+                    "inbox_only": 1 if inbox_only else 0,
                     "now": now,
                 },
             )
@@ -100,6 +126,7 @@ class AgentRepo(Repo):
             "description",
             "always_on",
             "unattended",
+            "inbox_only",
         }
         if changes.keys() - allowed:
             raise ValueError("unknown agent fields")
@@ -107,7 +134,7 @@ class AgentRepo(Repo):
         for key in ("tags", "env"):
             if key in values:
                 values[key] = json.dumps(values[key])
-        for key in ("always_on", "unattended"):
+        for key in ("always_on", "unattended", "inbox_only"):
             if key in values:
                 values[key] = int(values[key])
         assignments = [f"{key} = :{key}" for key in changes]
@@ -123,6 +150,14 @@ class AgentRepo(Repo):
             )
             return bool(result.rowcount)
 
+    async def started_at(self, name: str) -> str | None:
+        """When the agent's current conversation started fresh, if it ever did."""
+        async with self._tx() as conn:
+            return await conn.scalar(
+                text("SELECT conversation_started_at FROM agents WHERE name = :name"),
+                {"name": name},
+            )
+
     async def touch_started(self, name: str) -> None:
         async with self._tx() as conn:
             await conn.execute(
@@ -130,10 +165,21 @@ class AgentRepo(Repo):
                 {"now": now_iso(), "name": name},
             )
 
+    async def conversation_started(self, name: str, at: str) -> None:
+        """Record that a fresh conversation started at ``at`` (taken before the launch)."""
+        async with self._tx() as conn:
+            await conn.execute(
+                text("UPDATE agents SET conversation_started_at = :at WHERE name = :name"),
+                {"at": at, "name": name},
+            )
+
     async def delete(self, name: str) -> bool:
         async with self._tx() as conn:
             await conn.execute(
                 text("DELETE FROM agent_watches WHERE agent_name = :name"), {"name": name}
+            )
+            await conn.execute(
+                text("DELETE FROM agent_subscriptions WHERE agent_name = :name"), {"name": name}
             )
             result = await conn.execute(
                 text("DELETE FROM agents WHERE name = :name"), {"name": name}
@@ -145,13 +191,19 @@ class AgentRepo(Repo):
         references = (
             ("agents", "name"),
             ("agent_watches", "agent_name"),
+            ("agent_subscriptions", "agent_name"),
             ("agent_states", "session_name"),
+            ("usage_sessions", "agent_name"),
             ("acknowledgments", "target_entity"),
             ("deliveries", "session_name"),
             ("deliveries", "target_entity"),
             ("message_queue", "session_name"),
             ("message_queue", "target_entity"),
             ("event_outbox", "recipient"),
+            ("agent_transitions", "agent_name"),
+            # Where a confirmation went and who claimed it; the signed recipient stays.
+            ("signing_receipts", "delivered_to"),
+            ("signing_grants", "agent"),
         )
         values = {"old": name, "new": new_name}
         async with self._tx() as conn:
@@ -239,5 +291,35 @@ class AgentRepo(Repo):
             result = await conn.execute(
                 text("DELETE FROM agent_watches WHERE agent_name = :name AND repo = :repo"),
                 {"name": name, "repo": repo},
+            )
+            return (result.rowcount or 0) > 0
+
+    async def add_subscription(self, name: str, source: str, query: str, priority: str) -> int:
+        """Record a subscription; the same filter again only changes its priority."""
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(
+                    """INSERT INTO agent_subscriptions
+                       (agent_name, source, query, priority, created_at)
+                       VALUES (:name, :source, :query, :priority, :now)
+                       ON CONFLICT(agent_name, source, query)
+                       DO UPDATE SET priority = excluded.priority
+                       RETURNING id"""
+                ),
+                {
+                    "name": name,
+                    "source": source,
+                    "query": query,
+                    "priority": priority,
+                    "now": now_iso(),
+                },
+            )
+            return int(result.scalar_one())
+
+    async def remove_subscription(self, name: str, subscription_id: int) -> bool:
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text("DELETE FROM agent_subscriptions WHERE agent_name = :name AND id = :id"),
+                {"name": name, "id": subscription_id},
             )
             return (result.rowcount or 0) > 0

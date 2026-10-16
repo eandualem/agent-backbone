@@ -16,19 +16,34 @@ from tests.support import queue_row
 _EXPECTED_TABLES = {
     "acknowledgments",
     "agent_states",
+    "agent_subscriptions",
+    "agent_transitions",
     "agent_watches",
     "agents",
     "deliveries",
     "diagnostics",
     "events",
     "event_outbox",
+    "fleet_snapshots",
     "issue_dependencies",
     "message_queue",
     "poll_cursors",
     "reports",
     "review_lifecycle",
     "settings",
+    "signing_audit",
+    "signing_enrollments",
+    "signing_grants",
+    "signing_install",
+    "signing_keys",
+    "signing_nonces",
+    "signing_owner",
+    "signing_receipt_watermarks",
+    "signing_receipts",
+    "signing_transitions",
     "swarms",
+    "usage_sessions",
+    "usage_events",
 }
 
 _EXPECTED_INDEXES = {
@@ -39,6 +54,7 @@ _EXPECTED_INDEXES = {
     "idx_reports_telegram",
     "idx_reports_audio",
     "uq_events_delivery_id",
+    "idx_events_delivery_id_lower",
     "idx_events_received",
     "idx_events_repo",
     "idx_outbox_pending",
@@ -54,9 +70,19 @@ _EXPECTED_INDEXES = {
     "uq_mq_issue_dedup",
     "uq_mq_message_dedup",
     "uq_swarms_active_issue",
+    "uq_subscriptions_query",
+    "idx_transitions_agent",
+    "uq_transitions_open",
     "uq_diagnostics_observation",
     "idx_diagnostics_last_seen",
     "idx_diagnostics_agent",
+    "idx_usage_sessions_agent",
+    "idx_usage_events_at",
+    "idx_signing_transitions_sender",
+    "idx_signing_nonces_seen",
+    "idx_signing_audit_sender",
+    "uq_signing_transitions_pending",
+    "idx_signing_receipts_sender",
 }
 
 
@@ -651,3 +677,80 @@ async def test_current_stamp_repairs_drifted_queue_index(tmp_path, drift):
         assert not any(
             s.startswith(("DROP INDEX", "CREATE INDEX", "CREATE UNIQUE INDEX")) for s in statements
         )
+
+
+@pytest.mark.skipif(
+    sqlite3.sqlite_version_info < (3, 35, 0),
+    reason="constructing the old schema uses SQLite 3.35+ DROP COLUMN",
+)
+async def test_an_agent_registered_before_inbox_only_reads_as_not_inbox_only(tmp_path):
+    """An installed database from before ``agents.inbox_only`` gains the
+    column at its next start, and its agents keep behaving as before."""
+    from sqlalchemy import text
+
+    from agent_backbone.config import agents_from_rows
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'before-inbox-only.db'}"
+    async with BackboneDB.connect(url) as db:
+        common = dict(runtime="claude", model=None, repo="", tags=[], env={}, description="")
+        await db.agents.upsert("app", dir="/app", unattended=False, **common)
+        async with db.engine.begin() as conn:
+            await conn.execute(text("ALTER TABLE agents DROP COLUMN inbox_only"))
+            await conn.execute(text("UPDATE alembic_version SET version_num='2cd523ea0eb1'"))
+    async with BackboneDB.connect(url) as db:
+        assert not agents_from_rows(await db.agents.list()).get("app").inbox_only
+        await db.agents.update_fields("app", {"inbox_only": True})
+        assert agents_from_rows(await db.agents.list()).get("app").inbox_only
+
+
+@pytest.mark.skipif(
+    sqlite3.sqlite_version_info < (3, 35, 0),
+    reason="constructing the old schema uses SQLite 3.35+ DROP COLUMN",
+)
+async def test_an_installed_database_frees_an_earlier_sessions_delivery_slot(tmp_path):
+    """#410 on upgrade: the old owner index and no superseded_at, reopened normally."""
+    from sqlalchemy import text
+
+    url = f"sqlite+aiosqlite:///{tmp_path}/installed.db"
+    db = BackboneDB(url)
+    await db.start()
+    issue = {
+        "issue_number": 7,
+        "target_entity": "desk",
+        "session_name": "desk",
+        "source": "agent-monitor",
+        "repo": "example/app",
+    }
+    earlier = await db.deliveries.claim(**issue)
+    await db.deliveries.finalize(earlier, "delivered")
+    async with db.engine.begin() as conn:  # the schema an earlier release installed
+        await conn.execute(text("DROP INDEX uq_deliveries_active_owner"))
+        await conn.execute(text("ALTER TABLE deliveries DROP COLUMN superseded_at"))
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_deliveries_active_owner ON deliveries "
+                "(repo, issue_number, session_name) WHERE kind = 'issue' "
+                "AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+            )
+        )
+        await conn.execute(text("UPDATE alembic_version SET version_num = 'deadbeef0000'"))
+    await db.stop()
+
+    db = BackboneDB(url)
+    await db.start()  # normal startup repairs the schema
+    try:
+        assert await db.deliveries.claim(**issue) is None  # the same session: delivered once
+        from agent_backbone.services.database import now_iso
+
+        since = now_iso()  # a fresh session started after it
+        assert await db.deliveries.claim(**issue, since=since) is not None
+        assert await db.deliveries.claim(**issue, since=since) is None  # once per session
+        async with db.engine.begin() as conn:
+            outcome = (
+                await conn.execute(
+                    text("SELECT outcome FROM deliveries WHERE id = :id"), {"id": earlier}
+                )
+            ).scalar()
+        assert outcome == "delivered"  # the earlier delivery survives as evidence
+    finally:
+        await db.stop()

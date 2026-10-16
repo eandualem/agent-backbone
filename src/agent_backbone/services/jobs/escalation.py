@@ -6,6 +6,7 @@ escalation-target agent) decide.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -22,7 +23,7 @@ from agent_backbone.services.routing import (
     list_open_queue_for_target,
     safe_deliver,
 )
-from agent_backbone.services.runtimes import resolve_runtime
+from agent_backbone.services.runtimes import Runtime, get_runtime, resolve_runtime
 from agent_backbone.services.terminal import capture_pane, query_format_vars
 
 if TYPE_CHECKING:
@@ -128,6 +129,123 @@ async def check_permission_waiting(config: BackboneConfig, states: AgentStates) 
             log.info("Sent permission-waiting notification for %s", name)
 
 
+_denial_notified = RecentKeys(1800)
+"""(agent, category, summary) refusals the humans were told about."""
+_denial_log_offset: int | None = None
+"""How far into the action log refusals have been read; None until the first check."""
+_denial_log_inode: int | None = None
+"""The log file read; the prune job's atomic rotation replaces it with a new one."""
+_denial_watch_started = 0.0
+"""When the watch began: refusals stamped earlier are never replayed."""
+_denials_read: dict[tuple, None] = {}
+"""Identities of refusals already read, oldest first, so re-reading a rotated log adds
+nothing twice. Kept by count, not age: the log keeps its newest lines however old."""
+_DENIALS_READ_LIMIT = 5000
+"""More identities than the rotated log (2,000 lines) can hold."""
+_denials_unsent: dict[tuple, dict] = {}
+"""Notices no integration accepted, by (agent, category, summary); tried again next tick."""
+_UNSENT_LIMIT = 50
+
+
+def denial_text(name: str, record: dict, runtime: Runtime) -> str:
+    """One refusal, for a person: what, why, and what they can actually do."""
+    summary = str(record.get("summary") or record.get("tool") or "a tool call")[:120]
+    category = str(record.get("category") or "")[:80]
+    check = runtime.refusal_check or "An automatic safety check"
+    why = f"{check} refused it" + (f" ({category})" if category else "")
+    allow = f", then {runtime.refusal_allow}" if runtime.refusal_allow else ""
+    route = (
+        "No approval prompt was shown, and it cannot be approved from here. "
+        f"If you want it done, allow it in the terminal (tmux attach -t {name}{allow}) "
+        f"or do it yourself, and tell {name} to continue."
+    )
+    return (
+        f"\U0001f6ab Refused — {name}\n"
+        f"Action: {summary}\n{why}.\n{route}\n"
+        "The backbone does not retry refused actions."
+    )
+
+
+def _new_denials(config: BackboneConfig) -> list[dict]:
+    """Refusal records appended to the action log since the last check."""
+    global _denial_log_offset, _denial_log_inode, _denial_watch_started
+    path = config.action_log_path
+    if _denial_log_offset is None:
+        _denial_watch_started = time.time()  # nothing from before the watch is replayed
+    try:
+        status = path.stat()
+    except OSError:
+        _denial_log_offset, _denial_log_inode = 0, None
+        return []
+    size = status.st_size
+    if _denial_log_offset is None:
+        _denial_log_offset, _denial_log_inode = size, status.st_ino
+        return []
+    if status.st_ino != _denial_log_inode or size < _denial_log_offset:
+        # Rotated (a new file) or truncated: re-read; identities skip what was read.
+        _denial_log_offset, _denial_log_inode = 0, status.st_ino
+    with path.open("rb") as log_file:
+        log_file.seek(_denial_log_offset)
+        chunk = log_file.read(size - _denial_log_offset)
+    end = chunk.rfind(b"\n") + 1  # a line still being written waits for the next check
+    _denial_log_offset += end
+    records = []
+    for line in chunk[:end].splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict) or record.get("action") != "permission_denied":
+            continue
+        try:
+            stamp = float(record.get("ts") or 0)
+        except (TypeError, ValueError):
+            continue
+        # Byte order, not timestamps, decides what is new: concurrent hooks may
+        # append out of timestamp order.
+        identity = (record.get("session"), record.get("tool_use_id") or stamp)
+        if stamp < _denial_watch_started or identity in _denials_read:
+            continue
+        _denials_read[identity] = None
+        if len(_denials_read) > _DENIALS_READ_LIMIT:
+            del _denials_read[next(iter(_denials_read))]
+        records.append(record)
+    return records
+
+
+async def check_permission_denials(config: BackboneConfig) -> None:
+    """Tell the humans about a refusal no dialog showed (Claude's auto-mode
+    classifier, Codex's automatic reviewer): the agent looks busy, and nobody
+    would know.
+
+    One notice per agent and refused action within the dedup window, in the
+    agent's own Telegram topic, without buttons: there is nothing to approve
+    remotely. A notice no integration accepted is tried again next tick; a
+    refusal from before the watch is never replayed, and no action is retried.
+    """
+    pending = [*_denials_unsent.values(), *_new_denials(config)]
+    _denials_unsent.clear()
+    tried = set()  # one send per action and pass, even when it fails
+    for record in pending:
+        name = str(record.get("session") or "")
+        if name not in config.agents:
+            continue
+        key = (name, record.get("category"), record.get("summary"))
+        if key in tried or _denial_notified.seen(
+            key, ttl_seconds=config.timing.escalation_dedup_seconds
+        ):
+            continue
+        tried.add(key)
+        # The runtime that refused it, even if the agent's runtime changed since.
+        spec = config.agents.get(name)
+        runtime = get_runtime(str(record.get("runtime") or "") or (spec.runtime if spec else None))
+        if await notify_humans(config, denial_text(name, record, runtime), agent=name):
+            _denial_notified.mark(key)
+            log.warning("Sent permission-denied notification for %s", name)
+        elif key in _denials_unsent or len(_denials_unsent) < _UNSENT_LIMIT:
+            _denials_unsent[key] = record  # the notice is retried, never the action
+
+
 def _should_escalate(session: str, event_key: str, dedup_seconds: int) -> bool:
     return not _escalated.check_and_mark((session, event_key), ttl_seconds=dedup_seconds)
 
@@ -145,6 +263,13 @@ def _plan_notification_already_sent(session_name: str, source_ref: str) -> bool:
 
 def _record_plan_notification(session_name: str, source_ref: str) -> None:
     _plan_notified.mark((session_name, source_ref))
+
+
+def _reachable(config: BackboneConfig, session: str, live) -> bool:
+    """Whether escalation notices can reach ``session`` now: a live session,
+    or an inbox-only agent, whose notices wait in its inbox."""
+    spec = config.agents.get(session)
+    return session in live or (spec is not None and spec.inbox_only)
 
 
 def _escalation_session(config: BackboneConfig, source_session: str) -> str | None:
@@ -188,10 +313,14 @@ async def check_for_stalls(config: BackboneConfig, states: AgentStates) -> list[
 async def check_for_unexpected_offline(
     config: BackboneConfig, active_sessions: set[str], db: BackboneDB, gh: GitHubClient | None
 ) -> list[dict]:
-    """Known agents whose last recorded state was live but whose session is gone."""
+    """Known agents whose last recorded state was live but whose session is gone.
+
+    An agent with a pending transition (``backbone agent restart``) is absent
+    on purpose and is not reported."""
     offline: list[dict] = []
     try:
         known_states = await db.states.all()
+        planned = set(await db.transitions.open_agents())
     except Exception:
         log.exception("Failed to read agent states for offline check")
         return offline
@@ -201,6 +330,8 @@ async def check_for_unexpected_offline(
         if record.get("state", "unknown") == "unknown":
             continue
         if session_name in active_sessions or session_name not in config.agents:
+            continue
+        if session_name in planned:
             continue
         pending_count = 0
         try:
@@ -222,7 +353,7 @@ async def handle_stalls(config: BackboneConfig, states: AgentStates, db: Backbon
         ):
             continue
         escalation_session = _escalation_session(config, stall["session"])
-        if escalation_session and escalation_session in states:
+        if escalation_session and _reachable(config, escalation_session, states):
             msg = format_stall_notification(
                 stall["session"],
                 stall["issue_number"] or 0,
@@ -259,28 +390,47 @@ async def handle_offline(
     for agent in await check_for_unexpected_offline(config, active_sessions, db, gh):
         spec = config.agents.get(agent["session"])
         expected_up = spec is not None and spec.always_on
-        if expected_up and _should_escalate(
-            agent["session"], "offline", config.timing.escalation_dedup_seconds
+        key = (agent["session"], "offline")
+        if expected_up and not _escalated.seen(
+            key, ttl_seconds=config.timing.escalation_dedup_seconds
         ):
+            accepted = False
             escalation_session = _escalation_session(config, agent["session"])
-            if escalation_session and escalation_session in active_sessions:
+            if escalation_session and _reachable(config, escalation_session, active_sessions):
                 msg = format_unexpected_offline_notification(
                     agent["session"], agent["entity"], agent["pending_count"]
                 )
-                await safe_deliver(
-                    escalation_session,
-                    msg,
+                try:
+                    report = await safe_deliver(
+                        escalation_session,
+                        msg,
+                        config,
+                        db=db,
+                        priority=True,
+                        delivery_kind="escalation",
+                    )
+                    accepted = report.outcome == DeliveryOutcome.DELIVERED or report.queued
+                except Exception:
+                    log.exception(
+                        "Could not report offline agent %s to %s",
+                        agent["entity"],
+                        escalation_session,
+                    )
+            try:
+                notified = await notify_humans(
                     config,
-                    db=db,
-                    priority=True,
-                    delivery_kind="escalation",
+                    f"Agent {agent['entity']} went offline unexpectedly "
+                    f"({agent['pending_count']} pending). It was not restarted.",
+                    agent=agent["session"],
                 )
-            await notify_humans(
-                config,
-                f"Agent {agent['entity']} went offline unexpectedly "
-                f"({agent['pending_count']} pending). It was not restarted.",
-                agent=agent["session"],
-            )
+                accepted = accepted or notified
+            except Exception:
+                log.exception("Could not report offline agent %s to humans", agent["entity"])
+            if not accepted:
+                # Keep the transition discoverable next tick. Dedup only
+                # accepted alerts, including durable queue handoffs.
+                continue
+            _escalated.mark(key)
             log.warning("Agent offline unexpectedly: %s", agent["entity"])
         elif not expected_up:
             log.info("Agent %s is offline (not always_on; not reported)", agent["entity"])
@@ -298,9 +448,10 @@ async def report_offline_queues(
 ) -> None:
     """Tell the humans (and the escalation target) about messages waiting for
     an agent that is not running — the consequence of an absence, not the
-    absence itself. ``always_on`` agents were already reported when they died."""
+    absence itself. ``always_on`` agents were already reported when they died;
+    an inbox-only agent has no session, and its messages wait for its inbox."""
     for spec in config.agents:
-        if spec.name in active_sessions or spec.always_on:
+        if spec.name in active_sessions or spec.always_on or spec.inbox_only:
             continue
         try:
             queued = await db.queue.pending_count(spec.name)
@@ -313,7 +464,7 @@ async def report_offline_queues(
             continue
         msg = format_offline_queue_notification(spec.name, queued)
         escalation_session = _escalation_session(config, spec.name)
-        if escalation_session and escalation_session in active_sessions:
+        if escalation_session and _reachable(config, escalation_session, active_sessions):
             await safe_deliver(
                 escalation_session,
                 msg,
@@ -415,7 +566,7 @@ async def check_plan_waiting(
                 log.info("Sent plan-waiting notification for %s", name)
 
         escalation_session = _escalation_session(config, name)
-        if escalation_session and escalation_session in states:
+        if escalation_session and _reachable(config, escalation_session, states):
             orch_ref = _plan_notification_source_ref(
                 channel="tmux",
                 recipient=escalation_session,

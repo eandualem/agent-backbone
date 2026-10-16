@@ -4,15 +4,35 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import os
 import re
+import sys
+import time
 import tomllib
 from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
-from agent_backbone.services.runtimes.base import Runtime, RuntimeDiagnostic, read_brief
+from agent_backbone.services.runtimes._usage import count
+from agent_backbone.services.runtimes.base import (
+    Runtime,
+    RuntimeDiagnostic,
+    TranscriptEntry,
+    agent_home,
+    git_root,
+    has_text,
+    main_checkout,
+    transcript_clock,
+)
+from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
+# Codex's Linux sandbox (bubblewrap) mounts every writable root as a directory:
+# a file root panics it at the first command, and a missing root under the
+# protected `.git` stops it (#433, codex-cli 0.160 measured in Debian 13).
+_DIRECTORY_ROOTS_ONLY = sys.platform == "linux"
+_usage_lineage: dict[str, tuple[float, dict[str, list[tuple[str, Path]]]]] = {}
 
 
 def pre_trust_codex_directory(directory: Path | str, *, codex_config: Path | None = None) -> bool:
@@ -46,6 +66,13 @@ def pre_trust_codex_directory(directory: Path | str, *, codex_config: Path | Non
     except (OSError, ValueError, tomllib.TOMLDecodeError):
         log.warning("Could not pre-trust %s for Codex (the trust dialog will appear)", path)
         return False
+
+
+def _toml_object(path: Path) -> dict:
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
 
 
 def _toml_string(value: str) -> str:
@@ -91,10 +118,31 @@ _MODEL_CHANGED = re.compile(
 class Codex(Runtime):
     supports_exact_resume = True
     id = "codex"
+    skill_dirs = (".agents/skills",)
+    skill_read_dirs = (".agents/skills", ".codex/skills")  # 0.160.0
     fallback_prompts = ("›",)
     display_name = "Codex"
     binary = "codex"
-    brief_mode = "initial_prompt"
+    # Codex takes its first prompt only on the command line, and tmux caps a
+    # launch command at 16 KB — a brief with a few policies plus the sandbox
+    # and hook flags crosses it. So the brief is queued as the first message.
+    brief_mode = "message"
+    # A resumed session gets its current brief from its SessionStart hook, a
+    # channel a peer message cannot imitate (#294).
+    brief_refresh = "hook_context"
+    declared_capabilities = frozenset(
+        {
+            "trust",
+            "brief-after-compaction",
+            "project-instructions",
+            "deep-review",
+            "message-authority",
+            "observed-model",
+            # Escape, while working or at an approval dialog, runs its
+            # Interrupt hook (live, codex-cli 0.157.1).
+            "interrupted-turn",
+        }
+    )
     models = ("gpt-5.6-sol", "gpt-6-astra")  # as shown by codex's own status line (live capture)
     # Codex has no effort flag; the level is a config override. Levels as
     # gpt-6-astra reports them in codex 0.153 (`~/.codex/models_cache.json`).
@@ -111,6 +159,12 @@ class Codex(Runtime):
     # before `resume`.
     unattended_args = ("-a", "never", "-s", "workspace-write")
     sandboxed = True
+    sandbox_commit_block = (
+        "Codex's sandbox on Linux takes only directories, so git add and git commit "
+        "fail inside it (#437)"
+        if _DIRECTORY_ROOTS_ONLY
+        else ""
+    )
     mouse_scroll = True
     # Codex 0.153.4: on-request approvals go to its automatic reviewer,
     # with workspace-write enforced by this switch (verified with --help).
@@ -127,6 +181,12 @@ class Codex(Runtime):
         ("Interrupt", None),
     )
     hook_timeout = 10  # seconds
+    hook_context = True  # PostToolUse additionalContext
+    # Its automatic reviewer (`auto_review_args`) refuses without a dialog; the
+    # hook reads the refusal from the screen after a PermissionRequest.
+    # "/approve: approve one retry of a recent auto-review denial" (0.157).
+    refusal_check = "Codex's automatic reviewer"
+    refusal_allow = "/approve"
 
     prompt_prefixes = ("›",)
     runtime_markers = ("openai codex", "gpt-5.", "context left")
@@ -152,6 +212,9 @@ class Codex(Runtime):
         r"^(?:error:\s*)?you(?:'ve| have) hit your usage limit\b",
         r"^(?:error:\s*)?rate limit (?:reached|exceeded)\b",
         r"^(?:error:\s*)?(?:too many requests|insufficient_quota)\b",
+        # A turn whose retries ran out (0.160.0, live): "exceeded retry limit,
+        # last status: 429 Too Many Requests".
+        r"^(?:error:\s*)?exceeded retry limit, last status: \d{3}\b",
     )
     provider_error_prefixes = ("■",)
     prompt_markers = (
@@ -171,6 +234,40 @@ class Codex(Runtime):
     # preselected (live capture, 0.153): Enter changes the model, Escape
     # ("go back") keeps it.
     choice_markers = ("keep current model", "switch to gpt-")
+    # After a Plan-mode turn ends with a proposed plan: "Implement this plan?"
+    # "› 1. Yes, implement this plan", "2. Yes, clear context and implement",
+    # "3. No, stay in Plan mode", "enter select · esc back" (live, 0.157.1).
+    # "1" switches to Default mode and submits "Implement the plan."; "3"
+    # closes the dialog and stays in Plan mode, where the feedback follows as
+    # a message. A digit, not Enter or Escape: once a person has answered,
+    # it cannot choose another option or interrupt the turn that follows.
+    plan_markers = ("implement this plan?", "no, stay in plan mode")
+    plan_approve_keys = ("1",)
+    plan_reject_keys = ("3",)
+    # A turn that fails at the provider runs no hook (0.157.1): its
+    # UserPromptSubmit record still says busy while the banner is on screen.
+    hooks_miss_failed_turns = True
+
+    def provider_failure(self, pane_content: str) -> str | None:
+        # The last "›" line is the input: it, the placeholder and the status
+        # line below it (any model, effort and directory) are not output
+        # (0.157.1, live).
+        lines = pane_content.splitlines()
+        last = max(
+            (
+                i
+                for i, raw in enumerate(lines)
+                if sanitize_pane_content(raw).lstrip().startswith(self.prompt_prefixes)
+            ),
+            default=None,
+        )
+        above = pane_content if last is None else "\n".join(lines[:last])
+        return super().provider_failure(above)
+
+    def _opens_with_error_glyph(self, raw: str) -> bool:
+        # Codex draws its banners at the left edge and indents every line of a
+        # reply, so an indented glyph is output quoting one.
+        return sanitize_pane_content(raw).startswith(self.provider_error_prefixes)
 
     def diagnostics(self, pane_content: str) -> tuple[RuntimeDiagnostic, ...]:
         """Observe typed error banners, including one still visible after a model change.
@@ -253,10 +350,17 @@ class Codex(Runtime):
         """``--add-dir <path>`` per writable root, including Git bookkeeping
         files and their locks. What a project's
         tooling keeps outside the checkout — uv's cache under `~/.cache`, the
-        one wall a member hit live — is opened here, nothing else."""
+        one wall a member hit live — is opened here, nothing else.
+
+        On Linux only existing directories: Git's files are left out, so
+        commits stay blocked inside the sandbox there (#433). A relative
+        entry is Codex's to resolve in the agent's directory, as before."""
         args: list[str] = []
         for directory in dirs:
-            args.extend(["--add-dir", str(Path(directory).expanduser())])
+            path = Path(directory).expanduser()
+            if _DIRECTORY_ROOTS_ONLY and path.is_absolute() and not os.path.isdir(path):
+                continue
+            args.extend(["--add-dir", str(path)])
         return args
 
     def effort_args(self, effort: str | None) -> list[str]:
@@ -301,26 +405,258 @@ class Codex(Runtime):
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         hook = self.hook_launch_args(data_dir, state_dir)
-        # `codex resume` accepts explicit model overrides as well as a session ID.
-        # Both the TUI and `resume` take `-c` and the hook-trust flag.
-        if resume:
-            target = resume if isinstance(resume, str) else "--last"
-            return [
-                "resume",
-                target,
-                *_LOCAL_API_ACCESS,
-                "--no-alt-screen",
-                *hook,
-                *(["--model", model] if model else []),
-            ]
-        # Inline output gives tmux scrollback to display; session mouse
-        # handling keeps the wheel from becoming Up/Down in the composer.
-        args: list[str] = [*_LOCAL_API_ACCESS, "--no-alt-screen", *hook]
+        # Pin the launch tier independently of model/effort and inherited config.
+        # An operator can still explicitly change the tier inside the session.
+        # Inline output preserves tmux scrollback and mouse handling.
+        # codex-cli 0.160: with any `-c` override, an available update stops the
+        # launch on a numbered dialog; upgrading stays the operator's choice.
+        args = [
+            *_LOCAL_API_ACCESS,
+            "-c",
+            "service_tier=default",
+            "-c",
+            "check_for_update_on_startup=false",
+            "--no-alt-screen",
+            *hook,
+        ]
         if model:
             args.extend(["--model", model])
-        if brief_file is not None and (brief := read_brief(brief_file)):
-            args.append(brief)  # positional initial prompt, after every flag
+        # Both fresh and resumed sessions accept the same config overrides.
+        if resume:
+            target = resume if isinstance(resume, str) else "--last"
+            return ["resume", target, *args]
         return args
+
+    def user_instructions(self, env, project=None):
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
+        ).expanduser()
+        # The override wins over AGENTS.md; only the first file with content is read.
+        for path in (home / "AGENTS.override.md", home / "AGENTS.md"):
+            if has_text(path):
+                return [path]
+        return []
+
+    def user_skill_dirs(self, env):
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
+        ).expanduser()
+        # 0.160.0 reads both recursively, $CODEX_HOME/skills/.system included.
+        return [agent_home(env) / ".agents" / "skills", home / "skills"]
+
+    def native_memory(self, env, project=None):
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
+        ).expanduser()
+        user = _toml_object(home / "config.toml")
+        layers = [user]
+        if project is not None:
+            # 0.157.1: `.codex/config.toml` from the project root (the nearest
+            # directory with `.git`) down to the session's directory, the nearer
+            # one winning. Each counts when its directory is trusted: the nearest
+            # entry from it up to the root, then a worktree's main checkout.
+            here = Path(project).expanduser().resolve()
+            root = git_root(here) or here
+            chain = [here, *here.parents]
+            below = chain[: chain.index(root) + 1]
+            projects = user.get("projects")
+            projects = projects if isinstance(projects, dict) else {}
+
+            def trusted(directory: Path) -> bool:
+                for key in (*below[below.index(directory) :], main_checkout(root)):
+                    entry = projects.get(str(key)) if key else None
+                    if isinstance(entry, dict) and "trust_level" in entry:
+                        return entry["trust_level"] == "trusted"
+                return False
+
+            layers += [
+                _toml_object(d / ".codex/config.toml") for d in reversed(below) if trusted(d)
+            ]
+        enabled = False  # off by default (`codex features list`)
+        for layer in layers:
+            features = layer.get("features")
+            if isinstance(features, dict) and isinstance(features.get("memories"), bool):
+                enabled = features["memories"]
+        if not enabled:
+            return None
+        return "memories are on (off: `memories = false` under `[features]` in config.toml)"
+
+    usage_supported = True
+    transcript_supported = True
+
+    def transcript_entries(self, records: list[dict]) -> list[TranscriptEntry]:
+        """Assistant ``message`` items of a Codex rollout — commentary during
+        the turn and the final answer — complete. Reasoning, tool calls and
+        outputs, user items and event records are not messages."""
+        entries: list[TranscriptEntry] = []
+        for record in records:
+            if record.get("type") != "response_item":
+                continue
+            payload = record.get("payload")
+            if not isinstance(payload, dict) or payload.get("type") != "message":
+                continue
+            if payload.get("role") != "assistant":
+                continue
+            content = payload.get("content")
+            if isinstance(content, list):
+                content = "\n\n".join(
+                    part["text"]
+                    for part in content
+                    if isinstance(part, dict)
+                    and isinstance(part.get("text"), str)
+                    and part["text"].strip()
+                )
+            if isinstance(content, str) and content.strip():
+                entries.append(
+                    TranscriptEntry(
+                        transcript_clock(record.get("timestamp")),
+                        "assistant",
+                        content,
+                        record.get("_start", 0),
+                        record.get("_end", 0),
+                    )
+                )
+        return entries
+
+    def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session_id):
+            return []
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
+        ).expanduser()
+        return sorted(
+            [
+                *home.glob(f"sessions/**/rollout-*{session_id}.jsonl"),
+                *home.glob(f"archived_sessions/rollout-*{session_id}.jsonl"),
+            ]
+        )
+
+    def usage_children(
+        self, path: Path, session_id: str, env: dict[str, str]
+    ) -> list[tuple[str, Path]]:
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
+        ).expanduser()
+        cached = _usage_lineage.get(str(home))
+        if cached and time.monotonic() - cached[0] < 30:
+            return cached[1].get(session_id, [])
+        children: dict[str, list[tuple[str, Path]]] = {}
+        for candidate in [
+            *home.glob("sessions/**/*.jsonl"),
+            *home.glob("archived_sessions/*.jsonl"),
+        ]:
+            try:
+                with candidate.open("rb") as stream:
+                    record = json.loads(stream.readline(256 * 1024))
+                meta = record.get("payload") or {}
+                source = meta.get("source") or {}
+                if not isinstance(source, dict):
+                    continue
+                subagent = source.get("subagent") or {}
+                spawn = subagent.get("thread_spawn") or subagent.get("spawn") or {}
+                parent = spawn.get("parent_thread_id")
+                child = meta.get("id")
+                if isinstance(parent, str) and isinstance(child, str) and child != parent:
+                    children.setdefault(parent, []).append((child, candidate))
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+        _usage_lineage[str(home)] = (time.monotonic(), children)
+        return children.get(session_id, [])
+
+    def parse_usage(self, record: dict, state: dict):
+        p = record.get("payload") or {}
+        kind = record.get("type")
+        if kind == "session_meta":
+            state["has_start"] = True
+            if "born" not in state and p.get("timestamp"):
+                state["born"] = timestamp(p["timestamp"])
+                state["provider"] = p.get("model_provider") or "unknown"
+        if kind == "turn_context":
+            state["model"] = p.get("model") or "unknown"
+            state["turn_id"] = p.get("turn_id")
+            state["service_tier"] = p.get("service_tier") or "unknown"
+        if (
+            state.get("born")
+            and record.get("timestamp")
+            and timestamp(record["timestamp"]) < state["born"]
+        ):
+            return None
+        if kind != "event_msg" or p.get("type") != "token_count":
+            return None
+        if isinstance(p.get("rate_limits"), dict):
+            limits = p["rate_limits"]
+            # Store only quota metadata, never account credentials or raw payloads.
+            state["limits"] = {
+                "observed_at": timestamp(record["timestamp"]),
+                "bucket": str(limits.get("limit_id") or "unknown")[:200],
+                "windows": [
+                    {
+                        "name": key,
+                        **{
+                            k: value[k]
+                            for k in ("used_percent", "window_minutes", "resets_at")
+                            if isinstance(value.get(k), (int, float))
+                            and not isinstance(value[k], bool)
+                            and math.isfinite(value[k])
+                            and value[k] >= 0
+                        },
+                    }
+                    for key in ("primary", "secondary")
+                    if isinstance(value := limits.get(key), dict)
+                ],
+            }
+        info = p.get("info") or {}
+        total = info.get("total_token_usage")
+        if not isinstance(total, dict):
+            return None
+        fields = (
+            "input_tokens",
+            "cached_input_tokens",
+            "cache_write_input_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+        )
+        current = {k: count(total, k) for k in fields}
+        previous = state.get("total")
+        if current == previous:
+            return None
+        delta = {k: current[k] - (previous or {}).get(k, 0) for k in fields}
+        state["total"] = current
+        last = info.get("last_token_usage") or {}
+        partial = bool(state.get("partial"))
+        if previous is not None and delta != {k: count(last, k) for k in fields}:
+            # Counters may bridge unrecorded requests. Preserve the token delta,
+            # but one last-request context/model cannot price that whole gap.
+            state["partial"] = partial = True
+        if any(n < 0 for n in delta.values()):
+            # A reset cannot prove what happened in between. Retain the observed
+            # last request only, with explicitly incomplete accounting.
+            delta = {k: count(last, k) for k in fields}
+            state["partial"] = partial = True
+        if previous is None and current != {k: count(last, k) for k in fields}:
+            delta = {k: count(last, k) for k in fields}
+            state["partial"] = partial = True  # exclude unattributed inherited totals
+        cached = delta["cached_input_tokens"]
+        written = delta["cache_write_input_tokens"]
+        uncached = delta["input_tokens"] - cached - written
+        if uncached < 0:
+            raise ValueError("overlapping input counters")
+        at = timestamp(record["timestamp"])
+        return UsageEvent(
+            key=at + ":" + ":".join(str(current[k]) for k in fields),
+            at=at,
+            model=state.get("model", "unknown"),
+            provider=state.get("provider", "unknown"),
+            turn_id=state.get("turn_id"),
+            input_tokens=uncached,
+            cache_read_tokens=cached,
+            cache_write_tokens=written,
+            output_tokens=delta["output_tokens"],
+            reasoning_tokens=delta["reasoning_output_tokens"],
+            context_tokens=count(last, "input_tokens") if last else None,
+            service_tier=state.get("service_tier", "unknown"),
+            coverage="partial" if partial else "measured",
+        )
 
 
 RUNTIME = Codex()

@@ -1,4 +1,4 @@
-"""Report only failing job operations and the next observed successful completion."""
+"""Report failing job operations, the next observed successful completion, and slow runs."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from agent_backbone.services.database import BackboneDB
 
 _incidents: WeakKeyDictionary = WeakKeyDictionary()
+_slow_runs: WeakKeyDictionary = WeakKeyDictionary()
 _runtime_observations: WeakKeyDictionary = WeakKeyDictionary()
 
 
@@ -22,6 +23,7 @@ async def observe_job(
     stage: str,
     error_type: str | None = None,
     agent_name: str = "",
+    runtime: str = "",
     repo: str = "",
     issue_number: int | None = None,
     duration_ms: int | None = None,
@@ -33,7 +35,7 @@ async def observe_job(
     A process restart begins a new observation episode, never a guessed recovery.
     """
     incidents = _incidents.setdefault(db, {})
-    scope = (source, stage, agent_name, repo, issue_number)
+    scope = (source, stage, agent_name, runtime, repo, issue_number)
     operation_id = incidents.get(scope)
     if error_type is None and operation_id is None:
         return
@@ -52,12 +54,37 @@ async def observe_job(
         severity="error" if error_type else "info",
         source=source,
         agent_name=agent_name,
+        runtime=runtime,
         repo=repo,
         issue_number=issue_number,
         details=details,
     )
     if error_type is None and recorded is not None:
         incidents.pop(scope, None)
+
+
+async def observe_duration(
+    db: BackboneDB, *, source: str, duration_ms: int, threshold_ms: int
+) -> None:
+    """Record a job run that took ``threshold_ms`` or longer (0 disables).
+
+    Consecutive slow runs of a job are one episode, recorded once with its
+    count and its longest run; the next ordinary run ends it."""
+    episodes = _slow_runs.setdefault(db, {})
+    if threshold_ms <= 0 or duration_ms < threshold_ms:
+        episodes.pop(source, None)
+        return
+    operation_id, longest = episodes.get(source, (uuid.uuid4().hex, 0))
+    longest = max(longest, duration_ms)
+    episodes[source] = (operation_id, longest)
+    await db.diagnostics.record(
+        operation_id=operation_id,
+        category="job",
+        code="run_slow",
+        severity="warning",
+        source=source,
+        details={"stage": "run", "job": source, "duration_ms": longest},
+    )
 
 
 async def observe_runtime(

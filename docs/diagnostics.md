@@ -42,10 +42,15 @@ The local data directory contains several different kinds of evidence:
   acknowledgment. It is not an audit of every agent tool call.
 - **Service health and ordinary logs:** `/health` and
   `/api/status/services` report component and scheduler information. On
-  macOS the installed service writes `<data_dir>/backbone.log`; on Linux
-  use `journalctl --user -u agent-backbone`. Scheduler counters describe the
-  current process, and a running job loop does not establish that every
-  operation inside it succeeded.
+  macOS the installed service writes `<data_dir>/backbone.log`, every entry
+  starting with a UTC timestamp (a traceback's lines follow their entry), rotated at `backbone.log_max_mb` with
+  `backbone.log_backups` older files kept (`backbone.log.1`, …); output from
+  outside logging, such as a crash during startup, goes to
+  `<data_dir>/backbone.out.log`. A service installed before this release
+  keeps its single unrotated file until you run `backbone service install`
+  again. On Linux use `journalctl --user -u agent-backbone`. Scheduler
+  counters describe the current process, and a running job loop does not
+  establish that every operation inside it succeeded.
 
 `backbone agent inspect NAME` combines live state, evidence, terminal tail,
 last reply and recent delivery previews. Use it deliberately when that
@@ -56,6 +61,12 @@ fields and counts from the database.
 deliveries. It includes normal blocking conditions and excludes other
 message kinds and GitHub outbox work. Its count is not a system-wide count
 of bugs or lost messages.
+
+An outbox recipient that fails before it reaches delivery, for example
+because the issue or queue lookup could not reach GitHub, is recorded as
+`outbox_recipient_failed` (category `delivery`). The record carries the
+recipient's operation, the event and the exception type. The recipient
+stays `failed`, and `delivery-retry` tries it again.
 
 ## Reading the diagnostic digest
 
@@ -73,7 +84,8 @@ preserving its first observation and increasing its count. Runtime
 observations also retain their typed metadata identity: a change to an
 observed model, effort or error metadata leaves a separate record within
 the operation, so the earlier observation remains inspectable. Normal
-`agent_working`, `settling`, `human_typing` and `waiting_for_human` delivery
+`agent_working`, `settling`, `human_typing`, `human_reading`, `unattended_copy_mode` and
+`waiting_for_human` delivery
 outcomes appear in delivery-history counts instead of creating a problem
 group for each wait. Startup requests and successful outcomes remain
 available through the records endpoint and operation drilldown.
@@ -115,12 +127,42 @@ text. It returns up to 100 records, with `count`, `truncated` and
 and `before_id` if more records exist. A missing ID means that reference was not established; it is not
 evidence that the message was successfully handled.
 
+## Slow jobs and memory pressure
+
+When the machine slows down, the digest shows what the backbone saw:
+
+- **Slow jobs:** a scheduled job run that takes `diagnostics.slow_job_seconds`
+  (30) or longer is recorded as `run_slow`. Consecutive slow runs of one job
+  are one record with its count and longest run; the next ordinary run ends
+  it. The digest lists each with its job name.
+- **Memory pressure:** every `diagnostics.resource_sample_seconds` (300) the
+  backbone reads available memory and swap (`sysctl` on macOS,
+  `/proc/meminfo` on Linux). Only while swap use reaches
+  `diagnostics.pressure_swap_percent` (50) or available memory falls to
+  `diagnostics.pressure_free_percent` (10) does it record a sample, so a
+  healthy machine stores nothing. A sample is one `memory_pressure` record
+  (swap, available memory, and the resident memory of the backbone, of all
+  agents and of every other process) and an `agent_memory` record for each
+  of the ten agents whose session process trees use the most.
+
+`backbone diagnostics --since 1h` then shows the slow jobs and the latest
+sample, with its largest agents, next to the problem groups. With `--agent`,
+the sample's machine figures stay and only that agent is listed; slow jobs,
+which belong to no agent, are left out. When tmux or `ps` does not answer,
+those shares are shown as unknown rather than as zero. Resident memory
+leaves out what the system compressed or swapped, so a process can hold more
+than it shows; a large share under "other processes" points outside the
+backbone and its agents.
+
 ## Runtime errors and model observations
 
 The monitor classifies a bounded terminal capture even when a fresh hook
 says the agent is busy. Those observations do not override the hook's
 state or change the delivery rules. Startup classifies terminal output
-already read while waiting for the agent's prompt.
+already read while waiting for the agent's prompt. OpenCode's screen shows
+neither an error's status nor a model switch, so its plugin takes both from
+OpenCode's own record of each completed reply and writes them with its hook
+state, where the monitor reads them.
 
 The supported codes include:
 
@@ -129,16 +171,27 @@ The supported codes include:
   `reason: unsupported_model_for_account`, the HTTP status, the error type
   and the model identifier observed in the error. The raw provider error
   body is not retained.
-- `request_error`: a recognized runtime JSON error reports an HTTP 4xx or
-  5xx failure. The status and safe error-type identifier are retained;
-  arbitrary error messages are not.
+- `request_error`: a recognized runtime error banner reports an HTTP 4xx or
+  5xx failure. The status and, when the runtime shows one, the safe
+  error-type identifier are retained; arbitrary error messages are not.
+  Claude Code shows the status only. When it reports that the selected model
+  may not exist or be available, the record has `reason: model_unavailable`
+  and the model identifier from the banner instead. For OpenCode the error
+  type is the error's name (for example `APIError`), with the status when
+  OpenCode has one; a reply the user stopped is not a request error.
 - `model_changed`: an informational observation of the runtime's model
   change announcement, with the observed model and effort when present.
+  Claude Code announces its display name (for example "Sonnet 5"), not the
+  model identifier. For OpenCode it is the `provider/model` a reply used
+  when that differs from the model of the session's previous successful
+  reply.
 - `provider_failure`: a provider capacity, quota or rate-limit failure
   recognized by the runtime's existing classifier.
 - `<code>_no_longer_visible`: a later usable terminal observation no longer
   contains a previously observed error. The error may have scrolled away;
-  this does not establish recovery or a successful model request.
+  this does not establish recovery or a successful model request. For
+  OpenCode it means the plugin no longer records that error: a later reply
+  completed without one, or failed differently.
 
 For example, one capture may show `model_account_incompatible` followed by
 `model_changed`. That records a rejected selection and a later announcement.
@@ -161,13 +214,18 @@ observations by the monitor or startup wait, not distinct provider requests.
    remains unverified. A useful local report identifies the trigger and
    the missing evidence needed to confirm the cause.
 
-Agent APIs and most diagnostic records use `model` for configuration or
-the model requested at launch (`model_source: configured`). Runtime
-observations retain the displayed identifier separately as `observed_model`.
+Agent configuration APIs and most diagnostic records use `model` for configuration
+or the model requested at launch (`model_source: configured`). Session views can
+label a model `observed` when the hook reads it from a complete assistant record's
+model metadata; nested tool arguments and response content do not supply that evidence. Runtime
+observations retain the displayed identifier separately as `observed_model`,
+which may be a display name of up to 160 characters with spaces and
+parentheses, such as Claude Code's "Opus 5.5 (1M context)".
 During startup, a runtime record also uses that observed identifier as its
-`model` and labels it `model_source: terminal`; `requested_model` retains
-the launch selection. None of these fields proves which model generated a
-response. The backbone does not infer provider identity from conversation
+`model` (a display name stays only in `observed_model`) and labels it
+`model_source: terminal`; `requested_model` retains
+the launch selection. Configured selections and terminal observations do not prove
+which model generated a response. The backbone does not infer provider identity from conversation
 text. Capturing a runtime error does not select another model or change a
 running agent's settings.
 
@@ -200,6 +258,13 @@ observer, create GitHub issues, or upload information. Automatic reporting
 from other installations is outside this workflow.
 
 ## Retention and limits
+
+Startup readiness is a point-in-time observation, not evidence that the process
+remained alive or completed its assigned work. If a replacement later disappears
+from tmux, the retained startup result and hook history may not identify its exit
+status, terminating signal, final stderr or the actor that stopped it. Rejecting
+a previous launch's hook fixes state attribution; it does not establish why an
+unobserved replacement exited.
 
 Operational diagnostics use `timing.delivery_retention_days`, the existing
 delivery/event retention setting (30 days by default). Repeated diagnostic
@@ -241,3 +306,16 @@ metadata. A current stamp alone does not prove queue conflict indexes are correc
 Matching schemas avoid rebuilds; operator-added indexes are left in place. This
 additional DDL comparison is SQLite-specific; PostgreSQL continues to use the
 existing revision and required-table/column repair path.
+
+Usage collection records `usage_registration_failed` separately from
+`usage_source_failed`, scoped to the agent and runtime. Registration conflicts
+retain the existing session owner; they do not reassign historical usage. A
+successful source read cannot recover a registration failure, and another
+runtime’s success cannot recover it either. `usage_collection_failed` remains the
+aggregate signal. Source paths, session IDs and raw exception messages are
+excluded from these diagnostic records. The usage response also exposes these
+checks as typed metadata alongside its existing error list.
+
+CLI service log entries include the calendar date and numeric timezone offset
+so incidents can be correlated across midnight and service restarts. Uvicorn
+access logs retain their own format.

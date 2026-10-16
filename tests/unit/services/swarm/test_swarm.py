@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.config import AgentsConfig, AgentSpec
+from agent_backbone.config import AgentsConfig, AgentSpec, LaunchConfig
 from agent_backbone.models import DeliveryOutcome
-from agent_backbone.services.agents import AgentState, AgentStore, StartResult, StateSnapshot
+from agent_backbone.services.agents import (
+    AgentState,
+    AgentStore,
+    StartResult,
+    StateSnapshot,
+    instruction_preview,
+)
 from agent_backbone.services.routing import DeliveryReport
+from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.swarm import (
     SwarmError,
     create_swarm,
@@ -25,6 +33,8 @@ from agent_backbone.services.swarm import (
     teardown_swarm,
 )
 from agent_backbone.services.swarm._roster import MemberSpec, member_names
+from agent_backbone.skills import read_store, select_skills
+from agent_backbone.templates import TemplateDirs
 from tests.conftest import make_config
 
 _IFACE = "agent_backbone.services.swarm.interface"
@@ -158,12 +168,49 @@ class TestBriefs:
             "base_branch": "v2",
             "worktree": "/x/.backbone/swarms/research",
             "members": "research-coordinator, research-scout-1",
+            "repo_shell": "acme/app",
+            "coordinator_shell": "research-coordinator",
         }
         brief = render_brief("scout", facts)
         assert "You are the agent **research-scout-1**" in brief
         assert "swarm/research" in brief
         assert "Your role: scout" in brief
         assert "{" not in brief.replace("{worktree}", "")  # placeholders all filled
+
+    def test_the_coordinators_rebase_command_quotes_the_base_branch(self):
+        """A branch name may hold `$(...)`: the command an agent runs must not run it."""
+        from agent_backbone.services.swarm.interface import _facts
+
+        facts = _facts(
+            swarm="research",
+            agent_name="research-coordinator",
+            role="coordinator",
+            coordinator="research-coordinator",
+            initiator="app",
+            repo="acme/app",
+            issue_number=7,
+            branch="swarm/research",
+            worktree=Path("/x/.backbone/swarms/research"),
+            members=["research-coordinator"],
+            base_branch="topic/$(id)",
+        )
+        brief = render_brief("coordinator", facts)
+        assert "git fetch origin refs/heads/'topic/$(id)' &&" in brief
+        assert "--onto FETCH_HEAD FETCH_HEAD..swarm/research`" in brief
+
+    def test_template_commands_take_only_shell_quoted_values(self):
+        """A branch, repository or agent name in a command must not run as code (#424).
+
+        `{issue_number}` is always an integer."""
+        templates = Path(__file__).resolve().parents[4] / "templates"
+        raw = [
+            f"{path.relative_to(templates)}: {{{name}}}"
+            for path in sorted(templates.rglob("*.md"))
+            for command in re.findall(r"`((?:gh|git|backbone) [^`]*)`", path.read_text())
+            for name in re.findall(r"\{([a-z_]+)\}", command)
+            if not name.endswith("_shell") and name != "issue_number"
+        ]
+        assert raw == []
 
     def test_unknown_role_falls_back_to_worker(self):
         brief = render_brief("cartographer", {"role": "cartographer"})
@@ -178,7 +225,7 @@ class TestBriefs:
         override = tmp_path / "swarm-templates"
         override.mkdir()
         (override / "scout.md").write_text("custom scout for {swarm_name}")
-        brief = render_brief("scout", {"swarm_name": "x"}, data_dir=tmp_path)
+        brief = render_brief("scout", {"swarm_name": "x"}, dirs=TemplateDirs.default(tmp_path))
         assert "custom scout for x" in brief
         assert "Your role: scout" not in brief
 
@@ -281,7 +328,6 @@ class TestCreateSwarm:
             # Exercise the launch selection and runtime brief path, not just
             # the keyword: the new issue's brief must reach the new command.
             from agent_backbone.services.agents import write_state_file
-            from agent_backbone.services.agents.launch import resolve_resume
             from agent_backbone.services.runtimes import RUNTIMES
 
             agent = args[0]
@@ -294,7 +340,7 @@ class TestCreateSwarm:
                     "session_id": "old-swarm",
                 },
             )
-            resume = resolve_resume(config, agent.name, agent.runtime, kwargs.get("resume"))
+            resume = kwargs["resume"]
             with patch(
                 "agent_backbone.services.runtimes.base.resolve_command", return_value="/cli"
             ):
@@ -430,6 +476,65 @@ class TestCreateSwarm:
         assert (await db.swarms.get("research"))["status"] == (
             "active" if occupied else "disbanded"
         )
+
+    @patch(
+        f"{_IFACE}.safe_deliver",
+        new_callable=AsyncMock,
+        return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
+    )
+    @patch(f"{_IFACE}.start_agent", new_callable=AsyncMock, return_value=_STARTED)
+    @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
+    @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
+    @patch(f"{_IFACE}.current_branch", new_callable=AsyncMock, return_value="main")
+    @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
+    async def test_members_inherit_a_coder_initiators_policies(
+        self, _git, _branch, mock_wt, _exists, _start, _deliver, db, tmp_path
+    ):
+        repo_dir = tmp_path / "checkout"
+        repo_dir.mkdir()
+        own = ("role:lead", "agent:x", "swarm:old", "task:acme/app#1")
+        initiator = AgentSpec(
+            name="alice", dir=str(repo_dir), repo="acme/app", tags=("coder", *own)
+        )
+        config = make_config(
+            tmp_path,
+            agents=AgentsConfig(specs={"alice": initiator}),
+            launch=LaunchConfig(tag_policy={"coder": ("minimal-change",)}),
+        )
+        (config.data_dir / "policies").mkdir()
+        (config.data_dir / "policies" / "minimal-change.md").write_text("Rule: smallest change")
+        skill = tmp_path / "skills" / "review"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: review\ndescription: d\nmetadata:\n  backbone-tags: coder\n---\n# x\n"
+        )
+        mock_wt.return_value = (repo_dir / ".backbone" / "swarms" / "research", "swarm/research")
+        store = _FakeStore(config)
+        gh = AsyncMock()
+        gh.get_issue = AsyncMock(return_value=AsyncMock(state="open", title="t"))
+
+        # Where Codex cannot commit in its sandbox (Linux), the guard's own test covers it.
+        with patch.object(RUNTIMES["codex"], "sandbox_commit_block", ""):
+            await create_swarm(
+                config,
+                db,
+                store,
+                gh,
+                name="research",
+                issue_ref="acme/app#7",
+                member_specs=["coder@codex", "scout@opencode"],
+                initiator="alice",
+            )
+
+        assert len(store.registered) == 3
+        for member in store.registered:
+            role = member.name.removeprefix("research-")
+            identity = {"swarm:research", f"role:{role}", "task:acme/app#7"}
+            assert set(member.tags) == identity | {"coder"}
+            assert "Rule: smallest change" in instruction_preview(member, config)["content"]
+            # The selection launch links into the worktree.
+            selected = select_skills(read_store(tmp_path / "skills"), member.tags, member.name)
+            assert [s.name for s in selected] == ["review"]
 
     @patch(
         f"{_IFACE}.safe_deliver",
@@ -667,11 +772,12 @@ class TestTeardown:
         assert store.forgotten == ["research-coordinator"]
         assert (await db.swarms.get("research"))["status"] == "done"
 
+    @pytest.mark.parametrize("failure", ["stop", "forget"])
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
-    @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock, return_value=False)
+    @patch(f"{_IFACE}.stop_session", new_callable=AsyncMock)
     @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=True)
-    async def test_failed_member_stop_preserves_worktree_and_registration(
-        self, _exists, _stop, remove_worktree, db, tmp_path
+    async def test_incomplete_teardown_remains_active(
+        self, _exists, _stop, remove_worktree, db, tmp_path, failure
     ):
         config, repo_dir = _swarm_config(tmp_path)
         worktree = repo_dir / ".backbone" / "swarms" / "research"
@@ -693,10 +799,14 @@ class TestTeardown:
             )
         ]
 
-        with pytest.raises(SwarmError, match="could not stop swarm member"):
+        _stop.return_value = failure != "stop"
+        if failure == "forget":
+            store.forget = AsyncMock(side_effect=OSError("database unavailable"))
+
+        with pytest.raises(SwarmError if failure == "stop" else OSError):
             await teardown_for_issue(config, db, store, "acme/app", 7)
 
-        remove_worktree.assert_not_awaited()
+        assert remove_worktree.await_count == (failure == "forget")
         assert store.forgotten == []
         assert (await db.swarms.get("research"))["status"] == "active"
 
@@ -749,4 +859,43 @@ async def test_missing_kickoff_fails_before_creating_worktree(db, tmp_path):
                 initiator="simon",
             )
     create.assert_not_called()
+    assert await db.swarms.get("research") is None
+
+
+@pytest.mark.parametrize("unattended", [True, False])
+async def test_a_member_that_cannot_commit_unattended_is_refused_first(db, tmp_path, unattended):
+    # Codex on Linux: git add and commit fail inside its sandbox (#437).
+    from agent_backbone.config import SwarmConfig
+
+    repo_dir = tmp_path / "checkout"
+    repo_dir.mkdir()
+    initiator = AgentSpec(name="alice", dir=str(repo_dir), repo="acme/app")
+    config = make_config(
+        tmp_path,
+        agents=AgentsConfig(specs={"alice": initiator}),
+        swarm=SwarmConfig(unattended_members=unattended),
+    )
+    gh = AsyncMock()
+    gh.get_issue.return_value = AsyncMock(state="open", title="Research")
+    reached = SwarmError("reached the worktree")
+    with (
+        patch.object(RUNTIMES["codex"], "sandbox_commit_block", "no commits here"),
+        patch(f"{_IFACE}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_IFACE}.is_git_repo", AsyncMock(return_value=True)),
+        patch(f"{_IFACE}.current_branch", AsyncMock(return_value="main")),
+        patch(f"{_IFACE}.create_worktree", AsyncMock(side_effect=reached)) as create,
+    ):
+        expected = "'research-scout' would run unattended on codex: no commits here"
+        with pytest.raises(SwarmError, match=expected if unattended else "reached"):
+            await create_swarm(
+                config,
+                db,
+                _FakeStore(config),
+                gh,
+                name="research",
+                issue_ref="acme/app#7",
+                member_specs=["scout@codex"],
+                initiator="alice",
+            )
+    assert create.called is not unattended
     assert await db.swarms.get("research") is None

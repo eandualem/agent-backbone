@@ -26,7 +26,10 @@ def api_url(config: BackboneConfig, path: str) -> str:
     (``backbone.host`` help text).
     """
     scheme = "http" if config.backbone.host in _LOOPBACK else "https"
-    return f"{scheme}://{config.backbone.host}:{config.backbone.port}{path}"
+    host = config.backbone.host
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"{scheme}://{host}:{config.backbone.port}{path}"
 
 
 def headers(config: BackboneConfig) -> dict[str, str]:
@@ -49,13 +52,66 @@ async def api(
             resp = await client.request(
                 method, api_url(config, path), headers=headers(config), json=json_body
             )
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
+        global _last_failure
+        _last_failure = _failures[path] = _failure(exc, api_url(config, path), timeout)
         return None
     try:
         data = resp.json()
     except ValueError:
         data = {"detail": resp.text}
     return resp.status_code, data
+
+
+_last_failure = "no request was made"
+_failures: dict[str, str] = {}
+
+
+def _failure(exc: Exception, url: str, timeout: float) -> str:
+    """Why a request got no response, in terms the caller can act on."""
+    import httpx
+
+    # The socket's own error sits under wrappers ("All connection attempts failed").
+    chain: list[BaseException] = []
+    pending: list[BaseException] = [exc]
+    while pending:
+        cause = pending.pop()
+        if cause in chain:
+            continue
+        chain.append(cause)
+        # Several addresses (IPv4/IPv6 localhost) fail as an ExceptionGroup.
+        pending.extend(getattr(cause, "exceptions", ()))
+        if nxt := cause.__cause__ or cause.__context__:
+            pending.append(nxt)
+    if denied := next((c for c in chain if isinstance(c, PermissionError)), None):
+        return (
+            f"this process may not connect to {url} ({denied.strerror}); a sandbox or "
+            "permission boundary is blocking it, and the service may still be running. "
+            "Run the command where local network and the tmux socket are allowed"
+        )
+    if any(isinstance(c, ConnectionRefusedError) for c in chain):
+        return f"nothing is listening at {url}; is `backbone up` running?"
+    if isinstance(exc, httpx.ConnectTimeout | httpx.PoolTimeout):
+        return f"{url} did not accept a connection within {timeout:g}s; nothing was sent"
+    if isinstance(exc, httpx.ReadTimeout):
+        return (
+            f"{url} accepted the request but did not answer within {timeout:g}s; "
+            "its outcome is unknown, so check before repeating it"
+        )
+    if isinstance(exc, httpx.TimeoutException | httpx.ReadError | httpx.RemoteProtocolError):
+        return (
+            f"{url}: the request may have been sent, but no answer arrived "
+            f"({type(exc).__name__}); its outcome is unknown, so check before repeating it"
+        )
+    return f"{url}: {type(exc).__name__}: {exc}"
+
+
+def unreachable(path: str | None = None) -> str:
+    """The message for a call that got no response, with the reason it failed.
+
+    Concurrent callers name their ``path``: the last failure may be another request's.
+    """
+    return f"backbone API unreachable: {_failures.get(path or '', _last_failure)}"
 
 
 async def api_up(config: BackboneConfig) -> bool:
@@ -166,6 +222,12 @@ async def _read_config() -> BackboneConfig:
         "SELECT * FROM agents ORDER BY name",
         "SELECT agent_name, repo FROM agent_watches ORDER BY agent_name, repo",
     )
+    # A database from before subscriptions existed has no such table; it is
+    # still inspectable (the running backbone creates the table on its start).
+    optional = (
+        "SELECT id, agent_name, source, query, priority FROM agent_subscriptions "
+        "ORDER BY agent_name, id"
+    )
     if url.get_backend_name() == "sqlite":
         if not url.database or url.database == ":memory:":
             return boot
@@ -178,7 +240,12 @@ async def _read_config() -> BackboneConfig:
             conn.row_factory = sqlite3.Row
             try:
                 conn.execute("BEGIN")
-                return [[dict(row) for row in conn.execute(query)] for query in queries]
+                found = [[dict(row) for row in conn.execute(query)] for query in queries]
+                try:
+                    found.append([dict(row) for row in conn.execute(optional)])
+                except sqlite3.OperationalError:
+                    found.append([])
+                return found
             finally:
                 conn.close()
 
@@ -188,6 +255,10 @@ async def _read_config() -> BackboneConfig:
         try:
             async with engine.connect() as conn:
                 rows = [(await conn.execute(text(query))).mappings().all() for query in queries]
+                try:
+                    rows.append((await conn.execute(text(optional))).mappings().all())
+                except Exception:
+                    rows.append([])
         finally:
             await engine.dispose()
     settings = {row["key"]: json.loads(row["value"]) for row in rows[0]}
@@ -198,6 +269,16 @@ async def _read_config() -> BackboneConfig:
         agent["env"] = json.loads(agent.get("env") or "{}")
         agent["watches"] = [
             watch["repo"] for watch in rows[2] if watch["agent_name"] == agent["name"]
+        ]
+        agent["subscriptions"] = [
+            {
+                "id": sub["id"],
+                "source": sub["source"],
+                "filter": sub["query"],
+                "priority": sub["priority"],
+            }
+            for sub in rows[3]
+            if sub["agent_name"] == agent["name"]
         ]
         agents.append(agent)
     return build_config(boot.data_dir, settings=settings, agents=agents_from_rows(agents))

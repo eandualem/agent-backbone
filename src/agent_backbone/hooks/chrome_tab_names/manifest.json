@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Agent Backbone tab group names",
+  "version": "1.0.0",
+  "description": "Names the Chrome tab groups Claude-in-Chrome opens for Backbone agents after the agent that owns them.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnbj9pgSjaUgcVNtTJ15UNK4k1DeE4FpPfmudTK7icvCVNkW022lKqPN2H9fnX56BPQJ+uw06x1jQajLO2Hq0RuRXPLR2Nu4DK4ZUafGYijUf/hPy4re+Ki2zeEGnHGUcoB8O/Z7kLO/7LFn9oZdiBY0G0YUGMAbYfiigM7TIQk+mBQ5AGZMgdoX3XRWOJ2FWsboNJC2n2GsjCzTKjxjbrxpGpIALl4Ve6SN02h+Jm5qaploSxdayZBgAH8WbsTpJFV3vnDK0Gg0gEa5sZM6+f0hiO9fHMJzZZIDJfQ3vXeGOFE7XUS/5zrAQzq15hyBGSZJ4o7k/Y5Nzc6TUeKlEpwIDAQAB",
+  "permissions": [
+    "tabGroups",
+    "tabs",
+    "nativeMessaging",
+    "alarms"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
+}

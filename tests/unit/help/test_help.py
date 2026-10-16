@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import agent_backbone.help as help_module
 from agent_backbone.help import get_doc, get_topic, list_docs, list_topics
-from agent_backbone.templates import render_agent_brief
+from agent_backbone.templates import TemplateDirs, render_agent_brief
 
 
 class TestTopics:
@@ -18,6 +18,14 @@ class TestTopics:
         content = get_topic("setup")
         for step in ("uv tool install", "backbone init", "agent start", "backbone tell"):
             assert step in content
+
+    def test_agents_topic_names_every_runtime_whose_transcript_is_read(self):
+        from agent_backbone.services.runtimes import RUNTIMES
+
+        section = get_topic("agents").split("## Reading what an agent has said")[1]
+        section = " ".join(section.split("\n## ")[0].split())
+        readable = [rt.display_name for rt in RUNTIMES.values() if rt.transcript_supported]
+        assert readable and all(name in section for name in readable)
 
 
 class TestDocs:
@@ -75,7 +83,7 @@ class TestAgentBrief:
 
     def test_data_dir_override(self, tmp_path):
         (tmp_path / "agent-brief.md").write_text("hello {agent_name}")
-        assert render_agent_brief({"agent_name": "x"}, tmp_path) == "hello x"
+        assert render_agent_brief({"agent_name": "x"}, TemplateDirs.default(tmp_path)) == "hello x"
 
 
 def test_instructions_alias_preserves_explicit_help_overrides(tmp_path):

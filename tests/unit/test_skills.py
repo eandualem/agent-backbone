@@ -1,0 +1,807 @@
+"""The shared skills store: parsing, selection by tag, tagging, adding and materialising."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from agent_backbone import skills
+from agent_backbone.services.runtimes import RUNTIMES, project_skill_dirs
+from agent_backbone.services.runtimes.capabilities import REQUIRED
+from agent_backbone.skills import (
+    EXCLUDE_BEGIN,
+    EXCLUDE_END,
+    add_skill,
+    manifest_path,
+    materialize,
+    parse_skill,
+    read_store,
+    select_skills,
+    write_tags,
+)
+
+
+def make_skill(root: Path, name: str, *, tags: str | None = None, body: str = "# Body\n") -> Path:
+    path = root / name
+    path.mkdir(parents=True)
+    meta = f"metadata:\n  backbone-tags: {tags}\n" if tags is not None else ""
+    (path / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: Marker skill {name}. Use when asked.\n{meta}---\n{body}"
+    )
+    return path
+
+
+class TestParse:
+    def test_reads_name_description_and_tags(self, tmp_path):
+        make_skill(tmp_path, "backend-module-pattern", tags="coder python")
+        skill = parse_skill(tmp_path / "backend-module-pattern")
+        assert skill.valid
+        assert skill.tags == ("coder", "python")
+        assert skill.description.startswith("Marker skill")
+
+    def test_block_scalar_description_and_quoted_tags(self, tmp_path):
+        path = tmp_path / "research-methodology"
+        path.mkdir()
+        (path / "SKILL.md").write_text(
+            "---\nname: research-methodology\ndescription: |\n  Line one.\n  Line two.\n"
+            'metadata:\n  author: leo\n  backbone-tags: "all"\n---\n# x\n'
+        )
+        skill = parse_skill(path)
+        assert skill.valid and skill.tags == ("all",)
+        assert skill.description == "Line one.\nLine two."
+
+    @pytest.mark.parametrize(
+        ("dirname", "text", "error"),
+        [
+            ("ok", "", "no SKILL.md"),
+            ("ok", "# no frontmatter\n", "has no frontmatter"),
+            ("ok", "---\nname: other\ndescription: d\n---\n", "does not match"),
+            ("ok", "---\nname: ok\n---\n", "description is missing"),
+            ("Bad--Name", "---\nname: Bad--Name\ndescription: d\n---\n", "not a valid skill name"),
+            (
+                "ok",
+                "---\nname: ok\ndescription: d\nmetadata:\n  backbone-tags: 'a b/c'\n---\n",
+                "invalid tag",
+            ),
+        ],
+    )
+    def test_invalid_entries_are_reported_not_raised(self, tmp_path, dirname, text, error):
+        path = tmp_path / dirname
+        path.mkdir()
+        if text:
+            (path / "SKILL.md").write_text(text)
+        skill = parse_skill(path)
+        assert not skill.valid and error in skill.error
+
+    def test_read_store_skips_hidden_and_tolerates_missing(self, tmp_path):
+        assert read_store(tmp_path / "missing") == []
+        make_skill(tmp_path, "a")
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "README.md").write_text("x")
+        assert [s.name for s in read_store(tmp_path)] == ["a"]
+
+
+class TestSelect:
+    def test_union_over_the_agents_tags_plus_all_and_own_name(self, tmp_path):
+        for name, tags in (
+            ("everyone", "all"),
+            ("coders", "coder"),
+            ("python-only", "python"),
+            ("frontend", "typescript"),
+            ("mine", "agent:leo"),
+            ("orphan", None),
+        ):
+            make_skill(tmp_path, name, tags=tags)
+        chosen = select_skills(read_store(tmp_path), ("coder", "python"), "leo")
+        assert [s.name for s in chosen] == ["coders", "everyone", "mine", "python-only"]
+        assert [s.name for s in select_skills(read_store(tmp_path), (), "ike")] == ["everyone"]
+
+    def test_an_agent_tag_matches_a_mixed_case_agent_name(self, tmp_path):
+        path = make_skill(tmp_path, "notes")
+        write_tags(path, ("agent:Builder",))
+        assert parse_skill(path).tags == ("agent:builder",)
+        assert [s.name for s in select_skills(read_store(tmp_path), (), "Builder")] == ["notes"]
+
+    def test_invalid_skills_are_never_selected(self, tmp_path):
+        path = make_skill(tmp_path, "broken", tags="all")
+        (path / "SKILL.md").write_text("no frontmatter")
+        assert select_skills(read_store(tmp_path), (), "x") == []
+
+
+class TestWriteTags:
+    def test_sets_replaces_and_clears_without_touching_other_lines(self, tmp_path):
+        path = tmp_path / "s"
+        path.mkdir()
+        original = "---\nname: s\ndescription: d\nmetadata:\n  author: me\n---\n# Body\n\nkeep\n"
+        (path / "SKILL.md").write_text(original)
+        write_tags(path, ("coder", "python"))
+        text = (path / "SKILL.md").read_text()
+        assert '  backbone-tags: "coder python"\n' in text and "  author: me\n" in text
+        assert text.endswith("---\n# Body\n\nkeep\n")
+        assert parse_skill(path).tags == ("coder", "python")
+        write_tags(path, ("all",))
+        assert parse_skill(path).tags == ("all",)
+        assert (path / "SKILL.md").read_text().count("backbone-tags") == 1
+        write_tags(path, ())
+        assert parse_skill(path).tags == () and "author: me" in (path / "SKILL.md").read_text()
+
+    def test_adds_a_metadata_block_when_there_is_none(self, tmp_path):
+        path = make_skill(tmp_path, "s")
+        write_tags(path, ("all",))
+        assert (
+            (path / "SKILL.md")
+            .read_text()
+            .startswith(
+                "---\nname: s\ndescription: Marker skill s. Use when asked.\n"
+                'metadata:\n  backbone-tags: "all"\n---\n'
+            )
+        )
+
+    def test_inline_metadata_mapping_is_refused_not_destroyed(self, tmp_path):
+        path = tmp_path / "s"
+        path.mkdir()
+        original = "---\nname: s\ndescription: d\nmetadata: {author: me}\n---\n# x\n"
+        (path / "SKILL.md").write_text(original)
+        with pytest.raises(ValueError, match="inline mapping"):
+            write_tags(path, ("all",))
+        assert (path / "SKILL.md").read_text() == original
+
+    def test_clearing_removes_an_emptied_metadata_block(self, tmp_path):
+        path = make_skill(tmp_path, "s", tags="all")
+        write_tags(path, ())
+        assert "metadata" not in (path / "SKILL.md").read_text()
+
+
+class TestAdd:
+    def test_moves_renames_tags_and_leaves_no_copy(self, tmp_path):
+        source = make_skill(tmp_path / "repo" / ".claude" / "skills", "draft")
+        store = tmp_path / "store"
+        added = add_skill(store, source, name="final-name", tags=("coder",))
+        assert added.valid and added.name == "final-name" and added.tags == ("coder",)
+        assert not source.exists()
+        assert (store / "final-name" / "SKILL.md").read_text().startswith("---\nname: final-name\n")
+
+    def test_refuses_duplicates_bad_names_and_store_entries(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "taken")
+        source = make_skill(tmp_path / "src", "taken")
+        with pytest.raises(ValueError, match="already exists"):
+            add_skill(store, source)
+        with pytest.raises(ValueError, match="invalid skill name"):
+            add_skill(store, source, name="Bad Name")
+        with pytest.raises(ValueError, match="already in the store"):
+            add_skill(store, store / "taken")
+        with pytest.raises(ValueError, match="not a skill directory"):
+            add_skill(store, tmp_path / "nowhere")
+        add_skill(store, source, replace=True, tags=("all",))
+        assert parse_skill(store / "taken").tags == ("all",)
+        assert not list(store.glob(".replaced-*"))
+        recovery = make_skill(store, ".replaced-taken", body="# recover me\n")
+        before = (recovery / "SKILL.md").read_bytes()
+        retry = make_skill(tmp_path / "retry", "taken")
+        with pytest.raises(ValueError, match="recover it first"):
+            add_skill(store, retry, replace=True)
+        assert retry.is_dir() and (recovery / "SKILL.md").read_bytes() == before
+
+    def test_replace_without_tags_keeps_the_existing_ones(self, tmp_path):
+        """The sandboxed update path: copy, edit, add --replace — tags survive."""
+        store = tmp_path / "store"
+        make_skill(store, "shared", tags="coder python", body="# v1\n")
+        draft = make_skill(tmp_path / "repo" / "draft", "shared", body="# v2\n")
+        updated = add_skill(store, draft, name="shared", replace=True)
+        assert updated.tags == ("coder", "python")
+        assert (store / "shared" / "SKILL.md").read_text().endswith("# v2\n")
+
+    def test_a_rejected_skill_is_left_where_it_was(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "keep", tags="coder")
+        source = tmp_path / "src" / "keep"
+        source.mkdir(parents=True)
+        (source / "SKILL.md").write_text("# no frontmatter\n")
+        with pytest.raises(ValueError, match="no frontmatter"):
+            add_skill(store, source, replace=True)
+        assert (source / "SKILL.md").is_file()
+        assert parse_skill(store / "keep").tags == ("coder",)
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            OSError("disk full"),
+            KeyboardInterrupt(),
+            UnicodeEncodeError("ascii", "é", 0, 1, "ascii"),
+        ],
+    )
+    def test_a_failure_after_the_move_restores_both_sides(self, tmp_path, failure):
+        store = tmp_path / "store"
+        make_skill(store, "keep", tags="coder", body="# old\n")
+        source = make_skill(tmp_path / "src", "renamed", body="# new\n")
+        skill_file = source / "SKILL.md"
+        skill_file.write_bytes(skill_file.read_bytes().replace(b"\n", b"\r\n"))
+        before_source = (source / "SKILL.md").read_bytes()
+        before_target = (store / "keep" / "SKILL.md").read_bytes()
+        with (
+            patch("agent_backbone.skills.atomic_write_text", side_effect=failure),
+            pytest.raises(type(failure)) as error,
+        ):
+            add_skill(store, source, name="keep", replace=True, tags=("all",))
+        assert error.value is failure
+        assert (source / "SKILL.md").read_bytes() == before_source
+        assert (store / "keep" / "SKILL.md").read_bytes() == before_target
+        assert not list(store.glob(".replaced-*"))
+        assert not list(store.glob(".incoming-*"))
+
+    def test_interrupted_write_preserves_cancellation_when_restoration_fails(self, tmp_path):
+        store = tmp_path / "store"
+        previous = make_skill(store, "keep", body="# previous\n")
+        source = make_skill(tmp_path / "src", "incoming", body="# incoming\n").resolve()
+        before_source = (source / "SKILL.md").read_bytes()
+        before_target = (previous / "SKILL.md").read_bytes()
+        move = skills.shutil.move
+        cancellation = KeyboardInterrupt()
+
+        def fail_restore(src, dst):
+            if Path(dst) == source:
+                raise OSError("source restoration failed")
+            return move(src, dst)
+
+        with (
+            patch("agent_backbone.skills.atomic_write_text", side_effect=cancellation),
+            patch("agent_backbone.skills.shutil.move", side_effect=fail_restore),
+            pytest.raises(KeyboardInterrupt) as error,
+        ):
+            add_skill(store, source, name="keep", replace=True)
+        (staged,) = store.glob(".incoming-*/keep")
+        assert error.value is cancellation
+        assert "source restoration failed" in " ".join(error.value.__notes__)
+        assert str(staged) in " ".join(error.value.__notes__)
+        assert (staged / "SKILL.md").read_bytes() == before_source
+        assert (previous / "SKILL.md").read_bytes() == before_target
+
+    def test_cleanup_failure_keeps_the_installed_skill_and_reports_backup(self, tmp_path, caplog):
+        store = tmp_path / "store"
+        previous = make_skill(store, "keep", body="# previous\n")
+        source = make_skill(tmp_path / "src", "incoming", body="# incoming\n")
+        before_target = (previous / "SKILL.md").read_bytes()
+        with patch("agent_backbone.skills._remove", side_effect=OSError("backup cleanup failed")):
+            installed = add_skill(store, source, name="keep", replace=True)
+        backup = store / ".replaced-keep"
+        assert installed.valid and installed.path == previous
+        assert (previous / "SKILL.md").read_text().endswith("# incoming\n")
+        assert (backup / "SKILL.md").read_bytes() == before_target
+        assert not source.exists() and not list(store.glob(".incoming-*"))
+        assert str(previous) in caplog.text and str(backup) in caplog.text
+        assert "backup cleanup failed" in caplog.text
+
+    @pytest.mark.parametrize("failure", ["copy", "source_cleanup"])
+    def test_cross_device_failure_retains_complete_source_and_old_store(self, tmp_path, failure):
+        import errno
+
+        store = tmp_path / "store"
+        previous = make_skill(store, "keep", body="# previous\n")
+        source = make_skill(tmp_path / "source", "incoming", body="# incoming\n").resolve()
+        (source / "support.txt").write_bytes(b"support data")
+        originals = {p.name: p.read_bytes() for p in source.iterdir()}
+        before_target = (previous / "SKILL.md").read_bytes()
+        rename, move = os.rename, skills.shutil.move
+        copy, remove = skills.shutil.copy2, skills.shutil.rmtree
+
+        def cross_device(src, dst, *args, **kwargs):
+            if Path(src) == source:
+                raise OSError(errno.EXDEV, "cross-device move")
+            return rename(src, dst, *args, **kwargs)
+
+        def copy_file(src, dst):
+            if failure == "copy" and Path(src).name == "support.txt":
+                raise OSError("copy failed")
+            return copy(src, dst)
+
+        def remove_source(path, *args, **kwargs):
+            if failure == "source_cleanup" and Path(path) == source:
+                (source / "SKILL.md").unlink()
+                raise OSError("source cleanup failed")
+            return remove(path, *args, **kwargs)
+
+        with (
+            patch("os.rename", side_effect=cross_device),
+            patch("agent_backbone.skills.shutil.rmtree", side_effect=remove_source),
+            patch(
+                "agent_backbone.skills.shutil.move",
+                side_effect=lambda src, dst: move(src, dst, copy_function=copy_file),
+            ),
+            pytest.raises(OSError) as error,
+        ):
+            add_skill(store, source, name="keep", replace=True)
+        (staged,) = store.glob(".incoming-*/keep")
+        complete_source = source if failure == "copy" else staged
+        assert {p.name: p.read_bytes() for p in complete_source.iterdir()} == originals
+        assert (previous / "SKILL.md").read_bytes() == before_target
+        assert str(staged) in str(error.value)
+        assert [skill.name for skill in skills.read_store(store)] == ["keep"]
+        assert not list(store.glob(".replaced-*"))
+
+    def test_renaming_preserves_nested_names_and_literal_description(self, tmp_path):
+        source = make_skill(tmp_path / "source", "old")
+        before = (
+            "---\nname: old\ndescription: |\n  An example:\n  name: keep this text\n"
+            "metadata:\n  name: keep this metadata\n  author: somebody\n---\n# body\n"
+        )
+        (source / "SKILL.md").write_text(before)
+        result = add_skill(tmp_path / "store", source, name="new")
+        assert result.valid
+        assert (result.path / "SKILL.md").read_text() == before.replace(
+            "name: old\n", "name: new\n", 1
+        )
+
+    def test_unsupported_metadata_rejects_before_moving_or_rewriting(self, tmp_path):
+        source = make_skill(tmp_path / "source", "old")
+        before = b"---\nname: old\ndescription: d\nmetadata: {author: me}\n---\n# body\n"
+        (source / "SKILL.md").write_bytes(before)
+        store = tmp_path / "store"
+        previous = make_skill(store, "new", tags="all")
+        before_target = (previous / "SKILL.md").read_bytes()
+        with pytest.raises(ValueError, match="inline mapping"):
+            add_skill(store, source, name="new", replace=True)
+        assert (source / "SKILL.md").read_bytes() == before
+        assert (previous / "SKILL.md").read_bytes() == before_target
+
+
+def _git_repo(path: Path) -> Path:
+    (path / ".git" / "info").mkdir(parents=True)
+    return path
+
+
+class TestMaterialize:
+    def test_links_selected_and_records_them(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        make_skill(store, "b", tags="coder")
+        repo = _git_repo(tmp_path / "repo")
+        manifest = manifest_path(tmp_path / "data", "leo")
+        selected = select_skills(read_store(store), ("coder",), "leo")
+        result = materialize(store, repo, (".claude/skills",), selected, manifest)
+        assert result.ok
+        assert result.linked == [".claude/skills/a", ".claude/skills/b"]
+        link = repo / ".claude" / "skills" / "a"
+        assert link.is_symlink() and os.readlink(link) == str(store / "a")
+        assert (link / "SKILL.md").is_file()
+        exclude = (repo / ".git" / "info" / "exclude").read_text()
+        assert exclude.splitlines() == [
+            EXCLUDE_BEGIN,
+            "/.claude/skills/a",
+            "/.claude/skills/b",
+            EXCLUDE_END,
+        ]
+        assert manifest.is_file()
+
+    @pytest.mark.parametrize("runtime", ["gemini", "opencode"])
+    def test_links_into_the_runtimes_own_directory(self, tmp_path, runtime):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        manifest = manifest_path(tmp_path / "data", "app")
+        selected = select_skills(read_store(store), (), "app")
+        result = materialize(store, repo, RUNTIMES[runtime].skill_dirs, selected, manifest)
+        assert result.ok and result.linked == [".agents/skills/a"]
+        assert (repo / ".agents" / "skills" / "a" / "SKILL.md").is_file()
+
+    def test_a_changed_directory_releases_links_in_the_recorded_checkout(self, tmp_path):
+        """`agent set NAME dir=…`: the checkout the agent left keeps only others' links."""
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        make_skill(store, "b", tags="all")
+        old = _git_repo(tmp_path / "old")
+        new = _git_repo(tmp_path / "new")
+        manifests = tmp_path / "data" / "skills" / "materialized"
+        skills_dir = (".claude/skills",)
+        both = read_store(store)
+        only_b = [skill for skill in both if skill.name == "b"]
+        materialize(store, old, skills_dir, both, manifests / "app.json")
+        materialize(store, old, skills_dir, only_b, manifests / "ike.json")
+        materialize(store, new, skills_dir, both, manifests / "app.json")
+        assert not (old / ".claude" / "skills" / "a").is_symlink()
+        assert (old / ".claude" / "skills" / "b").is_symlink()  # ike's
+        exclude = (old / ".git" / "info" / "exclude").read_text().splitlines()
+        assert "/.claude/skills/a" not in exclude and "/.claude/skills/b" in exclude
+        assert (new / ".claude" / "skills" / "a").is_symlink()
+        assert (new / ".claude" / "skills" / "b").is_symlink()
+
+    def test_a_moved_store_relinks_the_links_the_backbone_recorded(self, tmp_path):
+        """`skills.store` moved: links into the recorded store are still the backbone's."""
+        old_store = tmp_path / "old-store"
+        make_skill(old_store, "a", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        skills_dir = repo / ".claude" / "skills"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "b").symlink_to(tmp_path / "elsewhere" / "b")  # the repository's own
+        manifest = manifest_path(tmp_path / "data", "app")
+        materialize(old_store, repo, (".claude/skills",), read_store(old_store), manifest)
+        new_store = tmp_path / "new-store"
+        old_store.rename(new_store)
+        make_skill(new_store, "b", tags="all")
+        result = materialize(new_store, repo, (".claude/skills",), read_store(new_store), manifest)
+        assert os.readlink(skills_dir / "a") == str(new_store / "a")
+        assert result.linked == [".claude/skills/a"]
+        assert result.conflicts == [".claude/skills/b is a link the repository owns"]
+        assert os.readlink(skills_dir / "b") == str(tmp_path / "elsewhere" / "b")
+        assert "/.claude/skills/a" in (repo / ".git" / "info" / "exclude").read_text()
+        later = materialize(new_store, repo, (".claude/skills",), [], manifest)
+        assert later.removed == [".claude/skills/a"]
+
+    def test_removes_only_its_own_stale_links_and_keeps_repo_skills(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        make_skill(store, "b", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        (repo / ".git" / "info" / "exclude").write_text("*.log\n")
+        own = make_skill(repo / ".claude" / "skills", "own")
+        foreign_link = repo / ".claude" / "skills" / "foreign"
+        foreign_link.symlink_to(tmp_path / "elsewhere")
+        manifest = manifest_path(tmp_path / "data", "leo")
+        materialize(store, repo, (".claude/skills",), read_store(store), manifest)
+        # b is untagged from now on
+        write_tags(store / "b", ())
+        result = materialize(
+            store, repo, (".claude/skills",), select_skills(read_store(store), (), "leo"), manifest
+        )
+        assert result.removed == [".claude/skills/b"]
+        assert not (repo / ".claude" / "skills" / "b").exists()
+        assert own.is_dir() and foreign_link.is_symlink()
+        exclude = (repo / ".git" / "info" / "exclude").read_text()
+        assert exclude == f"*.log\n\n{EXCLUDE_BEGIN}\n/.claude/skills/a\n{EXCLUDE_END}\n"
+
+    def test_a_dangling_link_the_repository_made_is_not_ours_to_delete(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        manifest = manifest_path(tmp_path / "data", "leo")
+        materialize(store, repo, (".claude/skills",), read_store(store), manifest)
+        link = repo / ".claude" / "skills" / "a"
+        link.unlink()
+        link.symlink_to(tmp_path / "gone")  # the repository put its own dangling link there
+        result = materialize(store, repo, (".claude/skills",), [], manifest)
+        assert result.removed == [] and link.is_symlink()
+
+    def test_exclude_block_is_the_union_over_agents_sharing_the_git_dir(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="agent:leo")
+        make_skill(store, "b", tags="agent:ike")
+        repo = _git_repo(tmp_path / "repo")
+        manifests = tmp_path / "data" / "skills" / "materialized"
+        entries = read_store(store)
+        materialize(
+            store,
+            repo,
+            (".claude/skills",),
+            select_skills(entries, (), "leo"),
+            manifests / "leo.json",
+        )
+        materialize(
+            store,
+            repo,
+            (".agents/skills",),
+            select_skills(entries, (), "ike"),
+            manifests / "ike.json",
+        )
+        exclude = (repo / ".git" / "info" / "exclude").read_text()
+        assert "/.claude/skills/a" in exclude and "/.agents/skills/b" in exclude
+        # leo leaves: only leo's line goes
+        materialize(store, repo, (".claude/skills",), [], manifests / "leo.json")
+        exclude = (repo / ".git" / "info" / "exclude").read_text()
+        assert "/.claude/skills/a" not in exclude and "/.agents/skills/b" in exclude
+
+    def test_a_link_another_agent_in_the_checkout_still_gets_is_kept(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        manifests = tmp_path / "data" / "skills" / "materialized"
+        for agent in ("app", "worker"):
+            materialize(
+                store, repo, (".claude/skills",), read_store(store), manifests / f"{agent}.json"
+            )
+        # app moves to a runtime that reads another directory; worker still reads this one
+        result = materialize(
+            store, repo, (".agents/skills",), read_store(store), manifests / "app.json"
+        )
+        assert result.removed == [] and (repo / ".claude" / "skills" / "a").is_symlink()
+
+    def test_repository_owned_name_wins_as_a_conflict(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        make_skill(repo / ".agents" / "skills", "a", body="# repo version\n")
+        result = materialize(
+            store, repo, (".agents/skills",), read_store(store), manifest_path(tmp_path, "x")
+        )
+        assert result.conflicts == [".agents/skills/a is the repository's own skill"]
+        assert not result.ok and result.linked == []
+        own = repo / ".agents" / "skills" / "a" / "SKILL.md"
+        assert own.read_text().endswith("# repo version\n")
+
+    def test_a_store_skill_without_skill_md_is_broken(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        selected = read_store(store)
+        (store / "a" / "SKILL.md").unlink()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        manifest = manifest_path(tmp_path, "x")
+        result = materialize(store, repo, (".claude/skills",), selected, manifest)
+        assert result.broken and "has no SKILL.md" in result.broken[0]
+
+    def test_no_git_directory_means_no_exclude_and_still_links(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        manifest = manifest_path(tmp_path, "x")
+        result = materialize(store, repo, (".claude/skills",), read_store(store), manifest)
+        assert result.ok and (repo / ".claude" / "skills" / "a").is_symlink()
+        assert not (repo / ".git").exists()
+
+    def test_worktree_git_file_resolves_to_the_common_dir(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "a", tags="all")
+        main = tmp_path / "main"
+        (main / ".git" / "worktrees" / "wt").mkdir(parents=True)
+        (main / ".git" / "info").mkdir()
+        (main / ".git" / "worktrees" / "wt" / "commondir").write_text("../..\n")
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        (wt / ".git").write_text(f"gitdir: {main / '.git' / 'worktrees' / 'wt'}\n")
+        materialize(store, wt, (".claude/skills",), read_store(store), manifest_path(tmp_path, "x"))
+        assert "/.claude/skills/a" in (main / ".git" / "info" / "exclude").read_text()
+
+
+_HOLD_THE_STORE = """
+import asyncio, sys, time
+from pathlib import Path
+from agent_backbone import skills
+
+async def main():
+    async with skills.store_lock(Path(sys.argv[1]), Path(sys.argv[2])):
+        print("held", flush=True)
+        time.sleep(0.5)
+
+asyncio.run(main())
+"""
+
+
+async def test_the_store_lock_holds_across_processes(tmp_path):
+    # `skills add --local` runs in its own process beside the backbone's API.
+    store, data = tmp_path / "store", tmp_path / "data"
+    store.mkdir()
+    with subprocess.Popen(
+        [sys.executable, "-c", _HOLD_THE_STORE, str(data), str(store)], stdout=subprocess.PIPE
+    ) as holder:
+        assert holder.stdout.readline().strip() == b"held"
+        started = time.monotonic()
+        async with skills.store_lock(data, store):
+            waited = time.monotonic() - started
+    assert waited >= 0.3
+
+
+async def test_a_store_lock_waiter_occupies_no_worker_thread(tmp_path):
+    # Waiting must not hold a thread other work (agent output, usage reads) needs.
+    store, data = tmp_path / "store", tmp_path / "data"
+    store.mkdir()
+    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
+    with subprocess.Popen(
+        [sys.executable, "-c", _HOLD_THE_STORE, str(data), str(store)], stdout=subprocess.PIPE
+    ) as holder:
+        assert holder.stdout.readline().strip() == b"held"
+        waiter = asyncio.create_task(_hold(data, store))
+        await asyncio.sleep(0.05)
+        assert await asyncio.wait_for(asyncio.to_thread(lambda: "free"), 0.2) == "free"
+        await waiter
+
+
+async def _hold(data, store):
+    async with skills.store_lock(data, store):
+        pass
+
+
+async def test_commit_store_initialises_history_on_first_use(tmp_path):
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_git(repo_dir, *args, timeout=30.0):
+        calls.append(args)
+        if args == ("init", "-q"):
+            (Path(repo_dir) / ".git").mkdir()
+        if args[:2] == ("diff", "--cached"):
+            return 1, "", ""  # something is staged
+        return 0, "", ""
+
+    with patch("agent_backbone.git.run_git", fake_git):
+        assert await skills.commit_store(tmp_path / "missing", "m") is not None
+        assert await skills.commit_store(tmp_path, "add x by leo") is None
+        assert await skills.commit_store(tmp_path, "again") is None
+    assert calls[0] == ("init", "-q")
+    assert calls[1] == ("add", "-A") and calls[3] == ("commit", "-q", "-m", "add x by leo")
+    assert ("init", "-q") not in calls[4:]
+
+    async def no_identity(repo_dir, *args, timeout=30.0):
+        if args[0] == "commit":
+            return 128, "", "Author identity unknown\n\nfatal: unable to auto-detect email address"
+        return (1 if args[0] == "diff" else 0), "", ""
+
+    with patch("agent_backbone.git.run_git", no_identity):
+        why = await skills.commit_store(tmp_path, "add y by leo")
+    assert why == "git commit failed: fatal: unable to auto-detect email address"
+
+
+def _link_for(rt, store, repo, manifest, selected=()):
+    """What a launch of runtime ``rt`` does in ``repo``."""
+    return materialize(
+        store,
+        repo,
+        rt.skill_dirs,
+        list(selected),
+        manifest,
+        read=rt.skill_read_dirs,
+        sources=project_skill_dirs(),
+    )
+
+
+class TestRepositorySkills:
+    """A repository's own skill reaches whichever of the CLIs runs the agent."""
+
+    @pytest.mark.parametrize("runtime", REQUIRED)
+    @pytest.mark.parametrize("home", [".claude/skills", ".agents/skills"])
+    def test_a_repository_skill_reaches_the_cli_that_runs_the_agent(self, tmp_path, runtime, home):
+        rt = RUNTIMES[runtime]
+        store = tmp_path / "store"
+        store.mkdir()
+        repo = _git_repo(tmp_path / "repo")
+        make_skill(repo / home, "own")
+        result = _link_for(rt, store, repo, manifest_path(tmp_path / "data", "app"))
+        assert result.ok
+        read = {*rt.skill_dirs, *rt.skill_read_dirs}
+        assert any((repo / directory / "own" / "SKILL.md").is_file() for directory in read)
+        if home in read:
+            assert result.mirrored == {}
+        else:
+            rel = f"{rt.skill_dirs[0]}/own"
+            assert result.mirrored == {rel: f"{home}/own"}
+            assert os.readlink(repo / rel) == os.path.join("..", "..", home, "own")
+            assert f"/{rel}" in (repo / ".git" / "info" / "exclude").read_text()
+
+    def test_the_link_follows_the_skill_and_the_runtime(self, tmp_path):
+        store = tmp_path / "store"
+        store.mkdir()
+        repo = _git_repo(tmp_path / "repo")
+        own = make_skill(repo / ".claude" / "skills", "own")
+        manifest = manifest_path(tmp_path / "data", "app")
+        codex, claude = RUNTIMES["codex"], RUNTIMES["claude"]
+        _link_for(codex, store, repo, manifest)
+        link = repo / ".agents" / "skills" / "own"
+        assert link.is_symlink()
+        # Switched to Claude Code, which reads .claude/skills: the link goes.
+        assert _link_for(claude, store, repo, manifest).removed == [".agents/skills/own"]
+        assert not link.exists() and (own / "SKILL.md").is_file()
+        _link_for(codex, store, repo, manifest)
+        assert link.is_symlink()
+        # The repository deletes its skill: the link goes with it.
+        skills._remove(own)
+        assert _link_for(codex, store, repo, manifest).removed == [".agents/skills/own"]
+        assert not link.is_symlink()
+
+    def test_the_repository_skill_wins_over_a_store_skill_of_the_same_name(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "own", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        make_skill(repo / ".claude" / "skills", "own")
+        selected = select_skills(read_store(store), (), "app")
+        manifest = manifest_path(tmp_path / "data", "app")
+        result = _link_for(RUNTIMES["codex"], store, repo, manifest, selected)
+        assert result.conflicts == [
+            ".agents/skills/own: the repository's own .claude/skills/own wins"
+        ]
+        assert os.readlink(repo / ".agents" / "skills" / "own") == "../../.claude/skills/own"
+
+    def test_a_store_link_gives_way_when_the_repository_adds_the_skill(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "own", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        selected = select_skills(read_store(store), (), "app")
+        manifest = manifest_path(tmp_path / "data", "app")
+        codex = RUNTIMES["codex"]
+        _link_for(codex, store, repo, manifest, selected)
+        link = repo / ".agents" / "skills" / "own"
+        assert os.readlink(link) == str(store / "own")
+        make_skill(repo / ".claude" / "skills", "own")
+        _link_for(codex, store, repo, manifest, selected)
+        assert os.readlink(link) == "../../.claude/skills/own"
+
+    def test_a_recorded_link_replaced_by_the_repository_is_its_own(self, tmp_path):
+        store = tmp_path / "store"
+        make_skill(store, "own", tags="all")
+        repo = _git_repo(tmp_path / "repo")
+        selected = select_skills(read_store(store), (), "app")
+        manifest = manifest_path(tmp_path / "data", "app")
+        _link_for(RUNTIMES["claude"], store, repo, manifest, selected)
+        link = repo / ".claude" / "skills" / "own"
+        assert os.readlink(link) == str(store / "own")
+        # The repository replaces the store link with a skill of its own.
+        link.unlink()
+        make_skill(repo / ".claude" / "skills", "own")
+        # Switched to Codex: the repository's skill wins at once.
+        result = _link_for(RUNTIMES["codex"], store, repo, manifest, selected)
+        assert result.conflicts == [
+            ".agents/skills/own: the repository's own .claude/skills/own wins"
+        ]
+        assert os.readlink(repo / ".agents" / "skills" / "own") == "../../.claude/skills/own"
+        assert (link / "SKILL.md").is_file() and not link.is_symlink()
+
+    def test_agents_sharing_a_checkout_share_the_link(self, tmp_path):
+        store = tmp_path / "store"
+        store.mkdir()
+        repo = _git_repo(tmp_path / "repo")
+        make_skill(repo / ".claude" / "skills", "own")
+        first = manifest_path(tmp_path / "data", "first")
+        second = manifest_path(tmp_path / "data", "second")
+        codex, claude = RUNTIMES["codex"], RUNTIMES["claude"]
+        _link_for(codex, store, repo, first)
+        assert _link_for(codex, store, repo, second).ok  # the first agent's link is shared
+        link = repo / ".agents" / "skills" / "own"
+        _link_for(claude, store, repo, first)  # the first agent moves to Claude Code
+        assert link.is_symlink()  # the second still gets it
+        _link_for(claude, store, repo, second)
+        assert not link.is_symlink()
+
+    def test_a_link_the_repository_made_between_its_directories_is_left_alone(self, tmp_path):
+        store = tmp_path / "store"
+        store.mkdir()
+        repo = _git_repo(tmp_path / "repo")
+        make_skill(repo / ".claude" / "skills", "own")
+        theirs = repo / ".agents" / "skills" / "own"
+        theirs.parent.mkdir(parents=True)
+        theirs.symlink_to("../../.claude/skills/own")
+        manifest = manifest_path(tmp_path / "data", "app")
+        result = _link_for(RUNTIMES["codex"], store, repo, manifest)
+        assert result.mirrored == {} and result.linked == []
+        _link_for(RUNTIMES["claude"], store, repo, manifest)
+        assert theirs.is_symlink() and not manifest.exists()
+
+
+def test_a_sibling_manifest_without_a_links_list_is_ignored(tmp_path):
+    """A malformed manifest of another agent must not stop this agent's launch."""
+    from agent_backbone.skills import materialize
+
+    store = tmp_path / "store"
+    make_skill(store, "tidy")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    (manifests / "other.json").write_text(f'{{"repo": "{repo}", "links": null}}')
+    result = materialize(
+        store, repo, (".claude/skills",), read_store(store), manifests / "mine.json"
+    )
+    assert result.linked == [".claude/skills/tidy"]
+
+
+def test_an_agents_own_manifest_is_not_counted_as_anothers_under_another_spelling(tmp_path):
+    """A case-insensitive filesystem (here: a link) names one file two ways."""
+    from agent_backbone.skills import materialize
+
+    store = tmp_path / "store"
+    make_skill(store, "tidy")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    own = manifests / "desk.json"
+    materialize(store, repo, (".claude/skills",), read_store(store), own)
+    alias = manifests / "desk-alias.json"
+    alias.symlink_to(own)
+    result = materialize(store, repo, (), [], alias)
+    assert result.removed == [".claude/skills/tidy"]
+    assert not (repo / ".claude/skills/tidy").is_symlink()

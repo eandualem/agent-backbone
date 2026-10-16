@@ -380,7 +380,7 @@ class TestGetAgentState:
         with patch(f"{_INF}.capture_pane", mock_capture):
             result = await get_agent_state(tmp_path, "ike", stale_threshold=300)
         assert result.state == AgentState.IDLE
-        assert result.source == "push"
+        assert result.source == "stale"
         mock_capture.assert_awaited_once()
 
     async def test_stale_busy_verified_via_tmux(self, tmp_path):
@@ -444,7 +444,7 @@ class TestGetAgentState:
             result = await get_agent_state(tmp_path, "feynman", stale_threshold=300)
         assert result.state == AgentState.WAITING_FOR_HUMAN
         assert result.reason == "plan"
-        assert result.source == "push"
+        assert result.source == "stale"
 
     async def test_stale_permission_waiting_does_not_resurrect(self, tmp_path):
         """Permission prompts are transient and must never be revived from stale push data."""
@@ -848,3 +848,14 @@ async def test_expired_untrusted_state_keeps_metadata_without_reviving_state(
     assert result.session_id == "saved"
     assert result.last_message == "Done."
     assert result.runtime == "codex"
+
+
+async def test_observed_model_travels_with_the_hook_record(tmp_path):
+    from agent_backbone.services.agents import read_state_file, write_state_file
+
+    write_state_file(tmp_path, "leo", {"state": "idle", "ts": 1.0, "model": "claude-opus-5"})
+    assert read_state_file(tmp_path, "leo").model == "claude-opus-5"
+    write_state_file(tmp_path, "ike", {"state": "idle", "ts": 1.0})
+    assert read_state_file(tmp_path, "ike").model is None
+    write_state_file(tmp_path, "odd", {"state": "idle", "ts": 1.0, "model": {"not": "a string"}})
+    assert read_state_file(tmp_path, "odd").model is None

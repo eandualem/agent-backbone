@@ -7,7 +7,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import BackboneConfig
@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 
 SESSIONS_NAMESPACE = "/sessions"
 SESSIONS_UPDATE_EVENT = "sessions:update"
+INBOX_PENDING_EVENT = "inbox:pending"
 SNAPSHOT_TTL_SECONDS = 5.0
 
 
@@ -45,6 +46,9 @@ class SessionFeed:
         self._lock = asyncio.Lock()
         self._emit_lock = asyncio.Lock()
         self._last_signature: str | None = None
+        self._hint_lock = asyncio.Lock()
+        self._hinted: dict[str, frozenset] = {}
+        """The inbox rows each session was last hinted about."""
 
     @property
     def sio(self) -> socketio.AsyncServer | None:
@@ -94,6 +98,40 @@ class SessionFeed:
             await self._sio.emit(SESSIONS_UPDATE_EVENT, payload, namespace=SESSIONS_NAMESPACE)
             self._last_signature = signature
             return True
+
+    async def hint_inbox(
+        self, read: Callable[[], Awaitable[Mapping[str, frozenset]]], *, complete: bool = False
+    ) -> None:
+        """Tell ``/sessions`` subscribers whose inbox holds a row they were not
+        told about: ``inbox:pending {session, pending}``, with no message
+        text. ``read`` returns ``QueueRepo.inbox_rows``, read under the lock
+        so an older read never replaces a newer one; ``complete`` says it
+        covers every session. A hint can be missed (a disconnect, a restart):
+        readers also read their inbox on connect and on a slow poll."""
+        async with self._hint_lock:
+            await self._hint(await read(), complete=complete)
+
+    async def _hint(self, readable: Mapping[str, frozenset], *, complete: bool) -> None:
+        fresh = {
+            name: rows
+            for name, rows in readable.items()
+            if rows - self._hinted.get(name, frozenset())
+        }
+        known = {name: rows for name, rows in readable.items() if name not in fresh}
+        if complete:
+            self._hinted = known
+        else:
+            self._hinted.update(known)
+        if self._sio is None:
+            return
+        for name, rows in fresh.items():
+            await self._sio.emit(
+                INBOX_PENDING_EVENT,
+                {"session": name, "pending": len(rows)},
+                namespace=SESSIONS_NAMESPACE,
+            )
+            # Only a hint that went out is remembered: a failed one is retried.
+            self._hinted[name] = rows
 
     async def refresh_and_emit(self) -> None:
         """After a change made through the API: drop the cache and broadcast."""

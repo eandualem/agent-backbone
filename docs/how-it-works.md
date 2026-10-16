@@ -1,11 +1,14 @@
 # How it works
 
 
-Starting an existing agent reuses its saved CLI and model, and resumes its saved
-conversation when a matching runtime session ID is available. With no saved ID,
-it starts fresh; `--resume` explicitly allows the runtime's own last-conversation
-fallback. Use `backbone agent start NAME --fresh` for a new conversation with the
-same settings (API: `resume: false`; omitted or `null` means automatic).
+Starting an existing agent reuses its saved CLI and model and begins a **new
+conversation**. Continuing the previous one is your call: `backbone agent resume
+NAME` (or `start --resume`; API `resume: true`) reopens the conversation the
+agent's last launch held (the session id its hook reported, or the one it was
+resumed on), or the runtime's own last conversation when there is none. An id
+left by an earlier launch is not reused. A fresh start says when a previous conversation is available. Starts are
+fresh by default because a resumed agent trusts its own context over whatever
+happened in the checkout since — another CLI, a swarm, the shared memory.
 Changing runtime without specifying a model clears the previous runtime's model.
 Starting from a directory reuses its registered name, even after a rename;
 if several agents share that directory, specify a name.
@@ -15,7 +18,7 @@ This page follows real requests through the system. Read
 
 ## 1. Starting an agent
 
-`backbone agent start [--dir D] [--name N] [--runtime R] [--watch REPO]`
+`backbone agent start [NAME] [--dir D] [--runtime R] [--watch REPO]`
 (or `POST /api/agents/start`, or `/start name` on Telegram):
 
 1. **Discover.** Resolve the directory (default: cwd), derive the name from
@@ -28,14 +31,34 @@ This page follows real requests through the system. Read
 2. **Record.** Upsert the agent (and any `--watch` repositories) in the
    database. The running backbone publishes a new configuration snapshot;
    every job uses it from the next tick.
-3. **Launch.** `tmux new-session -d -s <name> -c <dir>` running the runtime
+3. **Skills.** For a runtime with a measured skills directory, link every
+   store skill tagged for the agent into it (`.claude/skills`, `.agents/skills`),
+   drop links no longer selected, hide the link names in `.git/info/exclude`,
+   and fail the start if a selected skill does not resolve. Repository-owned
+   skills are never touched ([skills](skills.md)).
+4. **Launch.** `tmux new-session -d -s <name> -c <dir>` running the runtime
    command (`claude --model …`), with `BACKBONE_RUNTIME`, `BACKBONE_AGENT`,
-   `BACKBONE_STATE_DIR` and the agent's `env` exported into the session.
+   `BACKBONE_LAUNCH_ID` (new for every launch), `BACKBONE_STATE_DIR` and the
+   agent's `env` exported into the session.
    For Claude Code the command also carries
    `--settings <data_dir>/hooks/claude-settings.json` — a backbone-owned
    settings file, replaced atomically at every start, that wires the state hooks
-   without touching the repository or `~/.claude/settings.json`.
-4. **Wait until ready** (up to `timing.start_timeout_seconds`, 60 s): a
+   without touching the repository or `~/.claude/settings.json`. An unattended
+   launch gets `claude-settings-unattended.json` instead: the same hooks plus
+   Claude Code's one-time bypass consent. Both files set `tui` to `default`, so
+   Backbone-launched agents always use Claude Code's inline renderer, the one
+   Backbone reads their screens from, and its one-time fullscreen-renderer offer
+   never stops them at startup. If you chose the fullscreen renderer for your
+   own sessions, this is why agents look different; your own sessions keep it.
+   Codex starts and resumes with `-c service_tier=default`, independently of
+   the selected model and reasoning effort. This selects standard processing
+   even when inherited settings prefer Fast mode. It sets the launch default;
+   an operator can still change the tier explicitly inside the session. Running
+   sessions are unaffected until their next explicit start or resume.
+   Codex also starts with `-c check_for_update_on_startup=false`, so an
+   available Codex update never stops a launch on its update dialog; upgrade
+   Codex yourself when you choose to.
+5. **Wait until ready** (up to `timing.start_timeout_seconds`, 60 s): a
    fresh hook-written `idle` state, or a visible empty prompt for runtimes
    without hooks. A fresh busy or blocked hook keeps startup waiting even if
    the terminal shows an empty prompt. If the runtime is asking a question (Claude's folder-trust
@@ -46,13 +69,23 @@ This page follows real requests through the system. Read
    selection cursor are recognized generically; Claude also recognizes its
    unnumbered option block with the Enter/Esc footer. Startup always ends as
    `ready`, `waiting_for_human`, `exited` or `timeout`.
-   An explicitly unattended Claude launch pre-records bypass consent in
-   `~/.claude.json`; ordinary launches never do. The runtime's bypass flag still
-   controls its mode. Folder trust remains controlled by `agents.pre_trust`.
-5. Broadcast a fresh snapshot on Socket.IO `/sessions`.
+   Only an explicitly unattended Claude launch carries the bypass consent, in
+   its own settings file (step 4). The runtime's bypass flag still controls its
+   mode. Folder trust remains controlled by `agents.pre_trust`.
+6. Broadcast a fresh snapshot on Socket.IO `/sessions`.
 
 Startup readiness uses the same state reconciliation as inspection and delivery,
-with a launch timestamp fence to exclude old hooks and submission markers.
+with a persistent launch timestamp and identity to exclude old hooks and
+submission markers. This boundary survives readiness: ordinary inspection,
+delivery and prompt acknowledgements cannot reuse the previous launch's hook.
+Untagged state posted by older integrations is accepted only when its timestamp
+is at or after this launch. Managed hooks also carry the launch identity, so a
+late write from an older process is excluded. Managed hooks keep a separate
+state file for each launch; a delayed writer cannot erase the replacement's
+busy record, even when its input box remains visible. A newer eligible untagged
+API update still takes precedence, and renaming a stopped agent moves its launch
+marker and state records together. The saved conversation remains
+available for explicit resume and usage history.
 Current provider-capacity evidence therefore prevents a false ready result.
 
 Starts with a database handle retain operational diagnostics under one operation
@@ -64,11 +97,12 @@ identifiers and error types, without command arguments, directories, environment
 values, brief text, terminal output or exception messages. See
 [Learning from local usage](diagnostics.md) for the digest and investigation flow.
 
-The model returned by agent APIs is the saved selection, labelled
-`model_source: configured`. It does not confirm which model accepted a request
-or produced a response. Startup can observe a provider error independently of
-its readiness result: an input prompt and a rejected model request can both be
-visible. The observation history keeps that distinction.
+Session views label runtime-reported model metadata `model_source: observed`.
+Without that evidence they show the saved selection as `configured`, or
+`runtime_default` when no model is saved. A configured selection does not confirm
+which model accepted a request. Startup can observe a provider error independently
+of readiness: an input prompt and a rejected model request can both be visible.
+The observation history keeps that distinction.
 
 The running backbone serializes registration, edits, watches, start, stop and
 forget for each agent. Edits update only the supplied database fields, so two
@@ -87,11 +121,35 @@ Register an agent with that session name before sending it messages through
 the backbone; unregistered sessions cannot receive API messages or be streamed.
 
 Stopping (`agent stop`) is `tmux kill-session`. The backbone refuses to
-stop its own session. A session that dies on its own is **reported** (to
-the escalation target and Telegram, once) — never restarted.
+stop its own session. A session that dies on its own is never restarted.
+For an agent marked `always_on` it is **reported** at once, to the
+escalation target and Telegram; any other absent agent is reported only
+when messages are queued for it ([`always_on`](configuration.md#agents)).
+
+Restarting (`agent restart`, `POST /api/agents/{name}/restart`) is the one
+restart the backbone performs, because it was asked for. The request is
+validated (registered agent, installed runtime, model and effort, same-CLI
+resume) and stored as a `pending` transition; nothing is stopped inside the
+request. The `agent-transitions` job then stops the session on its next tick
+(5 s), records the stop, and — when the wait is over (default one minute after
+the stop, or the explicit delay or time) — starts the replacement through the
+same operation as `agent start`: the record update, the brief, the hooks and
+the readiness wait. A continuation message is handed to the replacement once
+it is at its prompt (queued if it is not; that queue row never expires). No
+process inside the session takes part after acceptance, so an agent can ask
+for its own session and lose nothing; the row is in the database, so a
+backbone restart in between changes nothing. The transition ends `completed`
+with the launch's readiness, or `failed` with the reason — including a
+session someone started by hand during the wait, which is never claimed as
+this transition's work. An agent with a pending transition is not reported
+as unexpectedly offline.
 
 When the backbone is down, the CLI does the same thing directly against the
-database and tmux, and says so.
+database and tmux, and says so. A brief sent as the first message (Codex,
+Aider) is delivered there too, through the same queue drain; if the agent
+is not ready for it in time, the CLI says the brief goes first once the
+backbone runs, and if its paste could not be confirmed, that the agent's
+messages are held until it is acknowledged.
 
 ## 2. State: how the backbone knows what an agent is doing
 
@@ -105,7 +163,7 @@ flowchart TD
     D -->|permission prompt| WFH[waiting_for_human permission]
     D -->|empty prompt| IDLE[idle]
     D -->|inconclusive| E{stale hook state usable?}
-    E -->|idle / busy / plan with file| F[stale hook state]
+    E -->|idle / busy / plan with file| F[stale hook state, source stale]
     E -->|no| UNK[unknown]
 ```
 
@@ -124,11 +182,14 @@ SessionEnd record expires; stale permission requests are not revived:
 | `SessionStart` | `idle` (Claude is at its prompt) |
 | `UserPromptSubmit` | `busy` (captures `owner/name#N` or `#N` from the prompt as the current issue) |
 | `Stop` | `idle`, with `last_assistant_message` |
+| `StopFailure` (a turn that failed at the API) | `blocked` / `provider` for `rate_limit`, `server_error`, `billing_error` and `authentication_failed` (`detail` keeps the error banner); `idle` for any other error |
 | `Notification` "needs your permission…" | `waiting_for_human` / `permission` |
 | `Notification` `quota_auto_resume_*` | `blocked` / `quota` while Claude Code waits for its usage limit to reset (`detail` keeps its message); `busy` once it resumes |
 | `PreToolUse ExitPlanMode` | `waiting_for_human` / `plan`, plan text saved to `<data_dir>/state/plans/<agent>.md` |
 | `PreToolUse AskUserQuestion` | `waiting_for_human` / `question` |
 | `PostToolUse` of either | `busy` |
+| `PermissionDenied` | no state change; a `permission_denied` record in the action log (see the refusal alert in [Telegram](telegram.md)) |
+| none on an interrupted turn (Escape, or a refused dialog) | read from the terminal instead (below) |
 | `SessionEnd` | `unknown` |
 
 | Codex event | State written |
@@ -138,7 +199,18 @@ SessionEnd record expires; stale permission requests are not revived:
 | `PermissionRequest` | `waiting_for_human` / `permission` |
 | `PreToolUse` | `busy` (the dialog is behind us) |
 | `Stop`, `Interrupt` | `idle`, with `last_assistant_message` |
+| none on a turn that failed at the provider | read from the terminal instead (below) |
 | `SessionEnd` | `unknown` |
+
+Codex's automatic reviewer (`agents.auto_review`) refuses an action without a
+dialog, and Codex sends no hook event for it. So the hook reads its own pane
+(all that tmux keeps of it): once at the session's start, then at each hook
+event of a turn that sent a `PermissionRequest`, including the turn's end. A
+new `✗ Request denied …` or `✗ Review timed out before …` entry from Codex
+becomes a `permission_denied` record in the action log, as a Claude Code
+`PermissionDenied` does (see the refusal alert in [Telegram](telegram.md)).
+A person's own "You did not approve" is not one. A refusal followed, before
+the next hook event, by more output than tmux's history holds is not seen.
 
 | Gemini CLI event | State written |
 |---|---|
@@ -154,6 +226,13 @@ SessionEnd record expires; stale permission requests are not revived:
 | `session.status` `busy` / `idle`, `session.idle` | `busy` / `idle` (the root session only; subagent sessions are ignored) |
 | `permission.asked` / `permission.replied` | `waiting_for_human` / `permission`, then `busy` |
 | `session.error` | `idle` |
+
+After each tool call of the root session during its turn, the plugin also
+hands over what the backbone offered the working agent (a steer, a
+high-priority batch) as a user message in the running turn, with the turn's
+agent and model; when the turn ends (`idle`) it marks a steer still offered as
+missed. A turn's first `busy` stamps `prompted_at`, as `UserPromptSubmit` does
+for Claude Code and Codex.
 
 The hooks parse actual `gh issue comment`, `gh pr comment` and `gh pr create`
 commands into `<data_dir>/state/actions.jsonl`, with repository and branch
@@ -173,7 +252,7 @@ is distinct from its failure hook; Codex's
 [completion hook](https://learn.chatgpt.com/docs/hooks#posttooluse) also fires
 for nonzero exits, so its result is checked explicitly.
 How hooks reach a session is the runtime's business
-([Getting started §3](getting-started.md#3-state-hooks--nothing-to-install)).
+([Getting started §3](getting-started.md#state-hooks--nothing-to-install)).
 
 A fresh hook state is **authoritative**: these CLIs keep their input box
 on screen while working, so the terminal alone would say "idle" while
@@ -183,12 +262,29 @@ Code fires `SessionStart` with its resume picker still on screen, so a
 fresh `idle` is checked against the terminal and a dialog there wins
 (`waiting_for_human` / `question`, with the evidence saying so).
 
+Claude Code runs no hook when a person interrupts its turn: Escape while it
+works, or Escape or "No" at a permission dialog, which is the key `agent deny`
+sends (measured on 2.1.284). Its `busy` or `waiting_for_human` record would
+stand until it goes stale. So once that record is a few seconds old, a Claude
+Code terminal whose latest output is `⎿  Interrupted · What should Claude do
+instead?`, with nothing working and no dialog on screen, reads `idle`, and the
+evidence says the interrupt on screen beats the hook's record. Codex (its
+`Interrupt` hook) and OpenCode (`session.idle`) report an interrupted turn
+themselves.
+
 Runtime-specific capacity, quota and rate-limit banners produce `blocked`
 with `reason: provider`, preserving the error and retry/reset detail. This
 requires an error banner glyph or red error foreground, so ordinary response
-text repeating the provider's words does not block delivery. This
-overrides an idle hook or stale terminal fallback; fresh busy hooks remain
-authoritative. Later response/tool output clears terminal-only failure evidence.
+text repeating the provider's words does not block delivery. Deep Code reports
+a failed request on its own status line instead (`status: failed · … · fail:
+HTTP 429: …`), which counts for HTTP 402, 429 and 503. OpenCode 1.18 draws
+the failure as a block whose bar is red and whose text is grey. This
+overrides an idle hook or stale terminal fallback; a fresh busy hook stays
+authoritative, except on Codex, which runs no hook for a turn that failed at
+the provider (measured on 0.157.1). Once its `busy` record is a few seconds
+old, a Codex terminal whose latest output above the input line is such a
+banner reads `blocked`, unless the record changed while the terminal was read.
+Later response/tool output clears terminal-only failure evidence.
 Messages stay queued, including priority messages. The monitor alerts humans,
 the escalation target and active swarm coordinator/initiator, deduplicating
 each recipient and retrying failed notification delivery.
@@ -231,10 +327,10 @@ sequenceDiagram
     C->>B: message for "app"
     B->>B: delivery condition (state + terminal)
     alt ready / unknown
-        B->>T: clear copy mode if needed; paste-buffer; Enter
+        B->>T: paste-buffer; Enter
         B->>T: re-read pane: submitted? still in the box?
         B-->>C: delivered
-    else offline / waiting_for_human / agent_working / human_typing / settling
+    else offline / waiting_for_human / agent_working / human_reading / unattended_copy_mode / human_typing / settling
         B->>Q: enqueue (direct messages, comments, notices)
         B-->>C: agent_working (etc.)
         Note over Q: delivered by agent-monitor (60 s) or delivery-retry (5 min)
@@ -246,18 +342,51 @@ sequenceDiagram
   check, paste, verification and delivery record. Other sessions remain
   independent.
 - **Envelope.** The API adds `[via:backbone from:<from_entity>] `; Telegram
-  `[via:telegram from:<name>]`; GitHub events `[via:github issue:N]`.
+  `[via:telegram from:<name>]`; GitHub events `[via:github issue:N]`. A line
+  of an API message, steer or restart continuation that starts like an
+  envelope is shown as `[quoted] [via:…`, so no text can pass for one. An
+  [enrolled signed sender](owner-confirmed-messages.md) gets
+  `owner-confirmed:<id>` in the envelope for a message the owner confirmed, or
+  `(signed relay, not owner-confirmed)` after it otherwise.
 - **Paste, don't type.** Text goes in through tmux's paste buffer as one
   chunk, then Enter; the pane is re-read to confirm the text left the input
   box, including an envelope still buffered in the prompt. If the runtime queued it for its next turn (Claude does), that
-  counts as delivered.
+  counts as delivered. When the pane can't confirm it, delivery waits up to
+  10 s for the runtime's prompt hook (Claude Code and Codex): a
+  `UserPromptSubmit` for exactly this message, taken after the paste, confirms
+  it. Otherwise the delivery stays uncertain (`submission_unconfirmed`).
 - **Busy is never bypassed.** `priority: true` (and issues labelled
-  `blocking`) only get through `human_typing` and `settling`.
+  `blocking`) only get through `human_typing` and `settling`. What reaches a
+  *working* agent is a high-priority [subscription](sources.md) batch or a
+  [steer](cli.md#backbone-tell-agent-message-from-name-priority--steer), and
+  both do so as hook context, never as a paste. A steer is written for the
+  live session only (`<state_dir>/context/<agent>/<launch_id>/`), is never
+  queued for a later prompt, and is recorded as `handed_off`, `not_taken`
+  (the turn ended first, or nothing took it within 300 s, checked every 15 s) or `cancelled` (the session was replaced).
+  An offer names the turn it was offered to (its prompt and conversation, as
+  the hook recorded them) and is handed over only within that turn, also when
+  the turn ends with no hook event (Escape on Claude Code, a provider failure
+  on Codex): a newer prompt, a new conversation (`/clear`) or a `blocked` /
+  `provider` state leaves it `not_taken`. An offer that names no turn (the
+  hook had recorded no prompt yet, or an earlier version wrote it) cannot be
+  compared: as before, the next tool call takes it unless the turn's end was
+  seen first.
 - **Comments**, including those on the current issue, wait while the agent is
   starting, busy, blocked, or waiting for a human. They are queued and delivered
   when the agent is ready; priority does not bypass these conditions.
+- **Human selection.** Copy mode is preserved during monitoring and readiness
+  checks. Messages wait with `human_reading` until the human exits copy mode;
+  priority does not bypass it. With no client viewing the pane, they wait with
+  `unattended_copy_mode` until someone attaches and presses `q`.
 - **Queue hygiene.** Ordinary pending messages expire after `timing.queue_expiry_minutes`
-  (30). Active swarm coordination and inbox holds are retained. Leased by a crashed drain: released after 5 min. A blocked drain
+  (30). Active swarm coordination, inbox holds and startup briefs are retained, and a session
+  held by an unconfirmed (`uncertain`) delivery keeps its queue until the hold is
+  acknowledged. Each expiry sweep sends one notice to every registered recipient and every
+  registered sender it dropped messages between; the notices never expire. A queue
+  whose agent has no tmux session still expires and retires obsolete work, but
+  the drain makes no delivery attempt for it until the session exists again,
+  so a stopped agent does not collect an `offline` receipt every pass.
+  Leased by a crashed drain: released after 5 min. A blocked drain
   keeps the original row, including when displaying its age; completed rows
   are pruned after `timing.delivery_retention_days` from completion.
 - **Everything is recorded**, direct messages included:
@@ -269,8 +398,8 @@ sequenceDiagram
 
 | Intake | When | How |
 |---|---|---|
-| `poll` | `GITHUB_TOKEN` (or App credentials) and no webhook secret | every `github.poll_interval_seconds`, list issues and comments from the durable replay cursor for each tracked repository |
-| `webhook` | `GITHUB_WEBHOOK_SECRET` is set | GitHub posts to `/webhooks/github`; signature verified; **one backfill poll at startup** catches what happened while the backbone was down |
+| `poll` | `GITHUB_TOKEN` (or App credentials) and no webhook secret | every `github.poll_interval_seconds`, list issues, pull requests and comments from the durable replay cursor for each tracked repository; a pull request opened since the last poll gets the same notice the webhook sends, never twice |
+| `webhook` | `GITHUB_WEBHOOK_SECRET` is set | GitHub posts to `/webhooks/github`; signature verified; startup backfill catches downtime and retries unfinished repositories through the delivery-retry job |
 | `off` | no credentials, or `github.intake = off` | — |
 
 Tracked repositories = every repository any agent owns or watches. Both
@@ -301,8 +430,8 @@ Routing for an issue in repository R:
 1. `for:<agent>` labels → those agents' queues (explicit always wins).
 2. Otherwise, if R has one owner → its queue. Several owners → all of them
    get an "unassigned issue — comment to claim it" notice, nobody is queued.
-3. Watchers of R get an informational notice (kind `watch`, never queued as
-   work, expires like any queued message).
+3. Watchers of R get an informational notice when the issue is opened (kind
+   `watch`, never queued as work, expires like any queued message).
 4. The sender (`from:`) never gets its own issue.
 
 An **edit** of an existing issue (`labeled` events without a new `for:`
@@ -310,7 +439,10 @@ label) routes nobody.
 
 The **issue queue gate** keeps issue delivery orderly: an agent gets one
 issue at a time. A newer issue is held (`awaiting_ack`) while the last
-delivered issue in the agent's open queue has not been acknowledged.
+issue delivered to the agent's current conversation, in its open queue, has
+not been acknowledged; a fresh conversation (not a resumed one) is offered that
+issue again, and so is a saved conversation resumed by id other than the last
+launch's (a fleet resume).
 **Acknowledgement** = the agent commented on the issue (or opened a pull
 request that closes it): detected from the hook action log, a
 `[from:<agent>]` comment prefix, or GitHub comments on
@@ -353,6 +485,20 @@ anchored to the reviewed commit. See [review lifecycle](github.md#review-lifecyc
 
 Opened in R: owners and watchers of R are told (informational).
 
+### Subscribed sources (Gmail)
+
+An agent's subscriptions name a [source](sources.md), a filter in that
+source's own query language and a priority. Every
+`sources.poll_interval_seconds` the `sources-poll` job runs each distinct
+filter as one Gmail search bounded to the poll window, fetches the headers of
+what matched, stores each message in `events` (dedup) and delivers one
+`subscription` batch per agent and priority through `safe_deliver`: a
+reference per message — id, sender, subject, time, link — never the body.
+Normal batches grow in the queue while the agent is busy and never expire;
+a high batch for a working Claude Code, Codex or OpenCode agent is offered
+through the runtime's hook (PostToolUse; OpenCode's plugin) and arrives on the
+agent's next tool call, or on Codex when a long-running command exits.
+
 ## 5. Background monitoring
 
 Every `timing.monitor_interval_seconds` (60 s), `agent-monitor`:
@@ -363,18 +509,20 @@ Every `timing.monitor_interval_seconds` (60 s), `agent-monitor`:
 3. **Stalls**: `busy` on one issue for > `timing.stall_threshold_seconds`
    (90 min) → one message to `escalation.target`, deduplicated for
    `timing.escalation_dedup_seconds` (30 min).
-4. **Dead sessions**: an agent that had a live state and has no session now
-   → reported to `escalation.target` and Telegram, once; state reset.
-   Never restarted.
+4. **Dead sessions**: an `always_on` agent that had a live state and has no
+   session now → reported to `escalation.target` and Telegram, once; state
+   reset. Any other absent agent is reported only when messages are queued
+   for it. Never restarted. If no notification route accepts the alert, the transition
+   stays pending for the next monitor tick.
 5. **Plan waiting**: Telegram notification (`/viewplan`, `/approve`) and a
    message to `escalation.target`, once per plan after delivery or successful
    queue storage. A failed queue write is retried on the next monitor tick.
-6. **Copy mode**: cancelled in every managed session; Telegram alert if it
-   will not clear.
-7. Socket.IO `/sessions` snapshot if anything changed.
-8. Drains the queue for sessions that are now idle.
-9. **Pending issues**: every idle agent with an empty in-flight slot gets
+6. Socket.IO `/sessions` snapshot if anything changed.
+7. Drains the queue for sessions that are now idle.
+8. **Pending issues**: every idle agent with an empty in-flight slot gets
    the highest-priority unacknowledged open issue from its queue.
+   A failed queue lookup or delivery for one agent leaves the others running;
+   diagnostics record that agent's failure and later recovery.
 
 Every `timing.retry_interval_seconds` (5 min), `delivery-retry` resumes pending
 GitHub outbox recipients, re-attempts older issue delivery records that ended
@@ -409,7 +557,8 @@ emission consume those projections, as does offline CLI status.
   `/api/messages`, `/api/issues`, `/api/deliveries`, `/api/events`,
   `/api/plans`, `/api/status`, `/api/config`).
 - Socket.IO `/sessions`: a full snapshot of all agents (`sessions:update`)
-  whenever anything changes, and at least every minute.
+  after API changes and when monitoring finds a changed snapshot, and an
+  `inbox:pending` hint when an agent's inbox has more to read.
 - Socket.IO `/terminal`: a **read-only** live stream of any session's
   terminal output. Nothing typed in a browser reaches an agent.
 
@@ -417,8 +566,9 @@ See [API](api.md).
 
 ## 8. When the backbone is down
 
-Agents keep running — they are tmux sessions. API calls fail. Messages
-sent by other agents are lost (they should retry). GitHub events are
+Agents keep running — they are tmux sessions. New sends fail while the API is
+unreachable; retry those failed sends after it returns. Messages already accepted
+into the durable queue remain stored. GitHub events are
 caught up on restart: poll intake resumes from its durable per-repository cursor;
 webhook intake runs its startup backfill. The `agent-monitor` job runs
 its first tick immediately, so hook state for every running session is

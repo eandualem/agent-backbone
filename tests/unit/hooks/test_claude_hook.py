@@ -107,6 +107,38 @@ class TestDerive:
         assert record["last_message"] == "Shipped."
         assert record["event"] == "Stop" and record["session_id"] == "abc"
 
+    @pytest.mark.parametrize(
+        ("error", "state", "reason"),
+        [
+            ("server_error", "blocked", "provider"),
+            ("rate_limit", "blocked", "provider"),
+            ("billing_error", "blocked", "provider"),
+            ("authentication_failed", "blocked", "provider"),
+            ("invalid_request", "idle", None),
+            ("max_output_tokens", "idle", None),
+            ("unknown", "idle", None),
+        ],
+    )
+    def test_a_turn_that_failed_at_the_api(self, error, state, reason):
+        """#360: 2.1.284 runs StopFailure, not Stop, naming the error (live payload)."""
+        banner = "API Error: Repeated 529 Overloaded errors. The API is at capacity"
+        record, _ = hook.derive(
+            _payload("StopFailure", error=error, last_assistant_message=banner), None
+        )
+        assert (record["state"], record["reason"]) == (state, reason)
+        assert banner in (record["detail"] if reason else record["last_message"])
+
+    def test_a_provider_failure_outlasts_the_idle_notification(self):
+        """Claude Code says it waits for input a minute after a failed turn too."""
+        failed, _ = hook.derive(
+            _payload("StopFailure", error="server_error", last_assistant_message="API Error: 500"),
+            None,
+        )
+        waiting = _payload("Notification", message="Claude is waiting for your input")
+        assert hook.derive(waiting, failed) == (None, None)
+        record, _ = hook.derive(_payload("UserPromptSubmit", prompt="again"), failed)
+        assert record["state"] == "busy"
+
     def test_started_at_is_stable(self):
         first, _ = hook.derive(_payload("SessionStart"), None)
         later, _ = hook.derive(_payload("Stop"), first)
@@ -300,3 +332,180 @@ class TestActionsAreLoggedBeforeAndAfter:
         )
         _, actions = hook.derive(payload, None)
         assert actions and actions[0]["issue"] == 5
+
+
+class TestObservedModel:
+    def test_model_comes_from_assistant_metadata_not_nested_tool_data(self, tmp_path):
+        transcript = tmp_path / "t.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "model": "claude-opus-5",
+                        "content": [{"type": "tool_use", "input": {"model": "gpt-6-astra"}}],
+                    },
+                }
+            )
+            + '\n{"type":"user","message":{"model":"untrusted"}}\n'
+            '{"type":"assistant","message":{"model":"<synthetic>"}}\n'
+            '{"type":"assistant","message":{"model":"unfinished'
+        )
+        record, _ = hook.derive(_payload("Stop", transcript_path=str(transcript)), None)
+        assert record["model"] == "claude-opus-5"
+
+    def test_truncated_tail_record_does_not_supply_an_observed_model(self, tmp_path):
+        transcript = tmp_path / "t.jsonl"
+        transcript.write_text(
+            '{"type":"assistant","message":{"model":"outside-tail"},"content":"'
+            + "x" * hook.bb.TRANSCRIPT_TAIL_BYTES
+            + '"}\n{"type":"assistant","message":{"model":"claude-opus-5"}}\n'
+        )
+        record, _ = hook.derive(_payload("Stop", transcript_path=str(transcript)), None)
+        assert record["model"] == "claude-opus-5"
+
+    def test_stop_reads_the_model_from_the_transcript_tail(self, tmp_path):
+        transcript = tmp_path / "t.jsonl"
+        transcript.write_text(
+            '{"type":"assistant","message":{"model":"claude-sonnet-5"}}\n'
+            '{"type":"assistant","message":{"model":"<synthetic>"}}\n'
+            '{"type":"assistant","message":{"model":"claude-opus-5"}}\n'
+        )
+        record, _ = hook.derive(
+            _payload("Stop", last_assistant_message="ok", transcript_path=str(transcript)), None
+        )
+        assert record["model"] == "claude-opus-5"
+
+    def test_other_events_carry_the_last_observation_forward(self, tmp_path):
+        record, _ = hook.derive(
+            _payload("PreToolUse", tool_name="Read", tool_input={}), {"model": "claude-opus-5"}
+        )
+        assert record is None  # PreToolUse writes no state record
+        record, _ = hook.derive(
+            _payload("UserPromptSubmit", prompt="hi"), {"model": "claude-opus-5"}
+        )
+        assert record["model"] == "claude-opus-5"
+
+    def test_a_payload_model_wins_and_a_missing_transcript_is_quiet(self, tmp_path):
+        record, _ = hook.derive(
+            _payload("Stop", model="gpt-6-astra", transcript_path=str(tmp_path / "nope")), None
+        )
+        assert record["model"] == "gpt-6-astra"
+        record, _ = hook.derive(_payload("Stop", transcript_path=str(tmp_path / "nope")), None)
+        assert "model" not in record
+
+
+def test_a_prompt_time_survives_the_turns_later_records():
+    """Delivery's receipt for a paste: set by the prompt, kept through Stop."""
+    wrapped = '\n<pasted_content id="8687">\ngo\n now\n</pasted_content id="8687">\n'
+    prompted, _ = hook.derive(_payload("UserPromptSubmit", prompt=wrapped), {})
+    assert prompted["prompted_at"] == prompted["ts"]
+    assert prompted["prompt_digest"] == hook.bb.prompt_digest("go now")  # wrapper ignored
+    quoting = 'see <pasted_content id="1">x</pasted_content id="1">'
+    for prompt in (quoting, f'\n<pasted_content id="9">\n{quoting}\n</pasted_content id="9">\n'):
+        record, _ = hook.derive(_payload("UserPromptSubmit", prompt=prompt), {})
+        assert record["prompt_digest"] == hook.bb.prompt_digest(quoting)  # quoted tags kept
+    stopped, _ = hook.derive(_payload("Stop"), prompted)
+    assert stopped["prompted_at"] == prompted["prompted_at"]
+    assert stopped["prompt_digest"] == prompted["prompt_digest"]
+    started, _ = hook.derive(_payload("SessionStart"), {})
+    assert "prompted_at" not in started
+
+
+class TestPermissionDenied:
+    """A refusal without a dialog is recorded for the humans; nothing else changes."""
+
+    def _run(self, tmp_path, payload: dict) -> int:
+        with patch.object(hook.sys, "stdin", io.StringIO(json.dumps(payload))):
+            return hook.main(["--state-dir", str(tmp_path), "--agent", "grace"])
+
+    def test_a_classifier_refusal_is_logged_without_its_arguments(self, tmp_path):
+        payload = _payload(
+            "PermissionDenied",
+            tool_name="Bash",
+            tool_input={"command": "cd ~/ws/x && gh issue edit 40 --body-file /tmp/private.md"},
+            tool_use_id="toolu_1",
+            reason="Permission for this action was denied by the Claude Code auto mode "
+            "classifier. Reason: [External System Writes]. If you have other tasks…",
+        )
+        assert self._run(tmp_path, payload) == 0
+        [line] = (tmp_path / "actions.jsonl").read_text().splitlines()
+        record = json.loads(line)
+        assert record["action"] == "permission_denied" and record["session"] == "grace"
+        assert record["kind"] == "classifier" and record["category"] == "External System Writes"
+        assert record["summary"] == "cd; gh issue edit"
+        logged = json.dumps({key: value for key, value in record.items() if key != "ts"})
+        assert "private" not in logged and "40" not in logged  # the timestamp may hold "40"
+        assert not (tmp_path / "grace.json").exists()  # the agent's state is untouched
+
+    def test_a_browser_refusal_names_actions_not_page_content(self, tmp_path):
+        payload = _payload(
+            "PermissionDenied",
+            tool_name="mcp__claude-in-chrome__browser_batch",
+            tool_input={
+                "actions": [
+                    {"name": "computer", "input": {"action": "left_click", "ref": "ref_9"}},
+                    {"name": "find", "input": {"query": "private search text"}},
+                ]
+            },
+            reason="denied by the auto mode classifier. Reason: [External System Writes].",
+        )
+        self._run(tmp_path, payload)
+        record = json.loads((tmp_path / "actions.jsonl").read_text())
+        assert record["summary"] == "claude-in-chrome: browser_batch (computer:left_click, find)"
+        assert "private" not in json.dumps(record)
+
+
+@pytest.mark.parametrize(
+    ("reason", "category"),
+    [
+        ("External System Writes", "External System Writes"),  # the hook's short reason
+        ("x " * 60 + "posting the private body of issue 40", ""),  # prose is never copied
+    ],
+)
+def test_only_a_short_category_is_kept_from_the_reason(reason, category):
+    record = hook.denial_record({"tool_name": "Bash", "reason": reason}, 1.0)
+    assert record["category"] == category and record["kind"] == "classifier"
+
+
+def test_the_claude_runtime_listens_for_refusals():
+    from agent_backbone.services.runtimes import RUNTIMES
+
+    assert ("PermissionDenied", "") in RUNTIMES["claude"].hook_events
+
+
+def test_the_claude_runtime_listens_for_failed_turns():
+    from agent_backbone.services.runtimes import RUNTIMES
+
+    assert ("StopFailure", None) in RUNTIMES["claude"].hook_events
+
+
+@pytest.mark.parametrize(
+    ("command", "summary"),
+    [
+        ("rm confidential-backup", "rm"),
+        ("cd private-project && git push", "cd; git push"),
+        ('gh issue edit 40 --body "a && b"', "gh issue edit"),
+        ("./secret-deploy.sh --x", "a local command"),
+        ('FOO=1 git commit -m "private; text"', "git commit"),
+        ("gh api confidential", "gh api"),
+        ("gh issue edit 40", "gh issue edit"),
+        ("claude confidential prompt", "claude"),
+        ("git secretbranch", "git"),
+        ("cd /repo\ngh issue edit 40", "cd; gh issue edit"),
+        ("cd /repo &&\ngh issue edit 40", "cd; gh issue edit"),
+        ("git commit -m 'line one\nline two'", "git commit"),
+    ],
+)
+def test_a_refusal_summary_keeps_program_names_only(command, summary):
+    record = hook.denial_record(
+        {"tool_name": "Bash", "tool_input": {"command": command}, "reason": ""}, 1.0
+    )
+    assert record["summary"] == summary
+
+
+def test_other_mcp_tools_show_only_server_and_tool():
+    record = hook.denial_record(
+        {"tool_name": "mcp__github__create_repository", "tool_input": {"name": "secret"}}, 1.0
+    )
+    assert record["summary"] == "github: create_repository"

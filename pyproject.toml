@@ -1,6 +1,6 @@
 [project]
 name = "agent-backbone"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local control plane for terminal AI agents: run them, message them, coordinate them through GitHub Issues, reach them from Telegram."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,11 +31,11 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0",
     "alembic>=1.13",
     "rich>=14.1",
+    "cryptography>=44.0",
 ]
 
 [project.optional-dependencies]
 postgres = ["asyncpg>=0.29"]
-github-app = ["cryptography>=44.0"]
 
 [project.scripts]
 backbone = "agent_backbone.cli:main"
@@ -55,7 +55,6 @@ dev = [
     "respx>=0.22",
     "ruff>=0.9",
     "asyncpg>=0.29",
-    "cryptography>=44.0",
 ]
 
 [build-system]

@@ -1,0 +1,183 @@
+"""The Gmail source: the search it runs and what it makes of the reply."""
+
+from __future__ import annotations
+
+import imaplib
+from datetime import UTC, datetime
+from unittest.mock import patch
+
+import pytest
+
+from agent_backbone.services.sources import build_sources
+from agent_backbone.services.sources.gmail import (
+    GmailSource,
+    clean_text,
+    parse_fetch,
+    search_query,
+)
+from tests.conftest import make_config
+
+_FETCH = [
+    (
+        b'1 (X-GM-MSGID 1990000000000000001 INTERNALDATE "17-Sep-2026 14:02:33 +0000" '
+        b"BODY[HEADER.FIELDS (FROM SUBJECT DATE)] {120}",
+        b"From: Alerts <alerts@example.com>\r\n"
+        b"Subject: =?UTF-8?Q?Outage:_build_queue_stalled?=\r\nDate: x\r\n\r\n",
+    ),
+    b")",
+    (
+        b'2 (X-GM-MSGID 1990000000000000002 INTERNALDATE "17-Sep-2026 09:00:00 +0000" '
+        b"BODY[HEADER.FIELDS (FROM SUBJECT DATE)] {40}",
+        b"From: a@b.c\r\nSubject: old\r\n\r\n",
+    ),
+    b")",
+]
+
+
+def test_search_query_is_gmail_syntax_bounded_to_the_window():
+    since = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
+    assert search_query("from:alerts@example.com subject:outage", since) == (
+        f"(from:alerts@example.com subject:outage) after:{int(since.timestamp())}"
+    )
+
+
+def test_clean_text_is_one_clipped_line_without_control_characters():
+    assert clean_text(" a\r\nb\t c ") == "a b c"
+    assert clean_text("x\x1b[31mred\u200b\u202e") == "x[31mred"
+    assert clean_text("x" * 200).endswith("…")
+
+
+def test_parse_fetch_decodes_headers_and_ids():
+    items = parse_fetch(_FETCH)
+    assert [item[0] for item in items] == [
+        format(1990000000000000001, "x"),
+        format(1990000000000000002, "x"),
+    ]
+    assert items[0][1] == datetime(2026, 9, 17, 14, 2, 33, tzinfo=UTC)
+    assert items[0][2] == "Alerts <alerts@example.com>"
+    assert items[0][3] == "Outage: build queue stalled"
+
+
+class _FakeImap:
+    instances: list[_FakeImap] = []
+
+    def __init__(self, host, timeout=None):
+        self.host = host
+        self.timeout = timeout
+        self.calls: list[tuple] = []
+        self.literal = None
+        _FakeImap.instances.append(self)
+
+    def login(self, user, password):
+        self.calls.append(("login", user))
+
+    def list(self):
+        return "OK", [
+            b'(\\HasNoChildren) "/" "INBOX"',
+            b'(\\All \\HasNoChildren) "/" "[Gmail]/Tous les messages"',
+        ]
+
+    def select(self, mailbox, readonly=False):
+        self.calls.append(("select", mailbox, readonly))
+        return "OK", [b"3"]
+
+    def uid(self, command, *args):
+        self.calls.append(("uid", command, *args))
+        if command == "SEARCH":
+            if "broken" in args[-1]:
+                return "BAD", [b"Could not parse command"]
+            return "OK", [b"1 2" if "alerts" in args[-1] else b""]
+        return "OK", _FETCH
+
+    def logout(self):
+        self.calls.append(("logout",))
+
+
+async def test_poll_runs_one_search_per_filter_and_keeps_the_window(tmp_path):
+    _FakeImap.instances.clear()
+    config = make_config(tmp_path, gmail_address="me@gmail.com", gmail_app_password="pw")
+    source = GmailSource(config)
+    assert source.enabled
+    since = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
+    with patch("agent_backbone.services.sources.gmail.imaplib.IMAP4_SSL", _FakeImap):
+        events = await source.poll(
+            ["from:alerts@example.com", "subject:(broken", "from:nobody"], since
+        )
+    client = _FakeImap.instances[0]
+    assert client.timeout == 30
+    assert ("login", "me@gmail.com") in client.calls
+    assert ("select", '"[Gmail]/Tous les messages"', True) in client.calls
+    searches = [c for c in client.calls if len(c) > 1 and c[1] == "SEARCH"]
+    assert len(searches) == 3  # the rejected filter is skipped, not fatal
+    assert searches[0][2:] == (
+        "X-GM-RAW",
+        f'"(from:alerts@example.com) after:{int(since.timestamp())}"',
+    )
+    assert client.calls[-1] == ("logout",)
+    # The older message is inside the reply but outside the window.
+    assert [event.id for event in events] == [format(1990000000000000001, "x")]
+    event = events[0]
+    assert event.source == "gmail"
+    assert event.filters == frozenset({"from:alerts@example.com"})
+    assert event.link.endswith(event.id)
+    assert event.subject == "Outage: build queue stalled"
+
+
+async def test_every_search_failing_is_an_error(tmp_path):
+    config = make_config(tmp_path, gmail_address="me@gmail.com", gmail_app_password="pw")
+    with (
+        patch("agent_backbone.services.sources.gmail.imaplib.IMAP4_SSL", _FakeImap),
+        pytest.raises(RuntimeError, match="every Gmail search failed"),
+    ):
+        await GmailSource(config).poll(["subject:(broken"], datetime.now(UTC))
+
+
+@pytest.mark.parametrize("failure", ["timeout", "abort", "fetch", "oversized", "state"])
+async def test_transient_failure_after_a_good_filter_fails_the_whole_poll(tmp_path, failure):
+    class FailingImap(_FakeImap):
+        def uid(self, command, *args):
+            if command == "SEARCH" and "second" in args[-1]:
+                if failure == "timeout":
+                    raise TimeoutError("socket stalled")
+                if failure == "abort":
+                    raise imaplib.IMAP4.abort("connection closed")
+                if failure == "oversized":
+                    raise imaplib.IMAP4.error("command: UID => got more than 1000000 bytes")
+                if failure == "state":
+                    raise imaplib.IMAP4.error("command SEARCH illegal in state AUTH")
+                return "OK", [b"99"]
+            if command == "FETCH" and args[0] == "99":
+                return "NO", [b"transient fetch failure"]
+            return super().uid(command, *args)
+
+    config = make_config(tmp_path, gmail_address="me@gmail.com", gmail_app_password="pw")
+    with (
+        patch("agent_backbone.services.sources.gmail.imaplib.IMAP4_SSL", FailingImap),
+        pytest.raises((TimeoutError, imaplib.IMAP4.error, RuntimeError)),
+    ):
+        await GmailSource(config).poll(
+            ["from:alerts@example.com", "second"], datetime(2026, 9, 17, 12, tzinfo=UTC)
+        )
+
+
+async def test_imaplib_bad_search_response_only_rejects_that_filter(tmp_path):
+    class RejectingImap(_FakeImap):
+        def uid(self, command, *args):
+            if command == "SEARCH" and "broken" in args[-1]:
+                raise imaplib.IMAP4.error("UID command error: BAD invalid search")
+            return super().uid(command, *args)
+
+    config = make_config(tmp_path, gmail_address="me@gmail.com", gmail_app_password="pw")
+    with patch("agent_backbone.services.sources.gmail.imaplib.IMAP4_SSL", RejectingImap):
+        events = await GmailSource(config).poll(
+            ["subject:(broken", "from:alerts@example.com"], datetime(2026, 9, 17, 12, tzinfo=UTC)
+        )
+    assert len(events) == 1
+
+
+async def test_unconfigured_source_is_disabled_and_polls_nothing(tmp_path):
+    config = make_config(tmp_path)
+    sources = build_sources(lambda: config)
+    assert sources.health() == {"gmail": "disabled"}
+    assert sources.enabled == []
+    assert await sources.get("gmail").poll(["from:x"], datetime.now(UTC)) == []

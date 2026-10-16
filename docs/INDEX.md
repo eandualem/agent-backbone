@@ -1,8 +1,10 @@
 # Documentation index
 
-Start with [Quick usage](../USAGE.md) for everyday commands. Each page is also
+New here? Start with [Getting started](getting-started.md) to install and send
+a first task. [Quick usage](../USAGE.md) covers everyday commands. Each page is also
 available as `backbone docs PAGE` after installation (for example,
-`backbone docs getting-started`). Filenames stay stable so saved links keep working.
+`backbone docs getting-started`). Installed help describes your installed version; GitHub pages describe the
+branch or tag you are viewing. Relative links keep you on that same revision.
 
 ## 1. Get started
 
@@ -12,9 +14,11 @@ available as `backbone docs PAGE` after installation (for example,
 
 ## 2. Run your team
 
+- [Token usage](token-usage.md) — per-agent CLI sessions, model tokens and optional API estimates.
 - [Report audio](report-audio.md) — optional local read-aloud in Telegram.
 - [Progress reports](reports.md) — goals, progress, blockers and next steps.
 - [Instruction templates](templates.md) — edit base, role and tag instructions.
+- [Skills](skills.md) — one shared store of skills, given to agents by tag.
 - [Deep reviews](deep-reviews.md) — run reviews in the background and retrieve findings.
 - [Swarms](swarms.md) — coordinate several agents on one task.
 - [Configuration](configuration.md) — settings, secrets and data locations.
@@ -25,6 +29,7 @@ available as `backbone docs PAGE` after installation (for example,
 - [GitHub](github.md) — issue routing and review notifications.
 - [GitHub App setup](github-app-setup.md) — configure webhook intake.
 - [Telegram](telegram.md) — talk to agents and read updates from your phone.
+- [Sources and subscriptions](sources.md) — agents subscribe to inbound events (Gmail) with filters and priority.
 - [API reference](api.md) — build scripts and dashboards.
 - [Integrations](integrations.md) — add another communication channel.
 
@@ -32,6 +37,9 @@ available as `backbone docs PAGE` after installation (for example,
 
 - [How it works](how-it-works.md) — follow requests through the system.
 - [Security](security.md) — trust boundaries and defaults.
+- [Signed senders and owner-confirmed messages](owner-confirmed-messages.md) —
+  how an app signs its requests and enrolls its key.
+- [Runtime capabilities](runtime-capabilities.md) — which capabilities work on which agent CLI.
 - [Status and roadmap](status-and-roadmap.md) — verified capabilities and remaining work.
 - [Contributing](../CONTRIBUTING.md) — development and checks.
 

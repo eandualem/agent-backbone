@@ -22,6 +22,7 @@ backbone picks it up on its next refresh.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from collections.abc import Mapping
@@ -32,6 +33,8 @@ from typing import Any
 from dotenv import dotenv_values
 
 from agent_backbone.models import ISSUE_TYPE_WEIGHTS
+from agent_backbone.templates import TemplateDirs
+from agent_backbone.usage import DEFAULT_PRICES, Price
 
 DEFAULT_DATA_DIR = "~/.local/share/agent-backbone"
 DEFAULT_PORT = 7120
@@ -49,6 +52,10 @@ RUNTIME_METADATA = tuple(
 )
 RUNTIMES: tuple[str, ...] = tuple(entry["id"] for entry in RUNTIME_METADATA)
 
+SOURCES: tuple[str, ...] = ("gmail",)
+"""Inbound event sources agents can subscribe to (``services/sources``)."""
+SUBSCRIPTION_PRIORITIES: tuple[str, ...] = ("normal", "high")
+
 
 SECRET_ENV_KEYS: tuple[str, ...] = (
     "BACKBONE_API_KEY",
@@ -57,6 +64,8 @@ SECRET_ENV_KEYS: tuple[str, ...] = (
     "GITHUB_APP_ID",
     "GITHUB_APP_PRIVATE_KEY_PATH",
     "TELEGRAM_TOKEN",
+    "GMAIL_ADDRESS",
+    "GMAIL_APP_PASSWORD",
     "BACKBONE_DATABASE_URL",  # a PostgreSQL URL carries the database password
 )
 """Secrets the backbone reads. Listed in `backbone secrets list`, and stripped
@@ -67,17 +76,27 @@ from every agent session's environment (see ``session_secret_keys``)."""
 # Settings schema: key -> (default, type)
 # ---------------------------------------------------------------------------
 
+
 SETTINGS_DEFAULTS: dict[str, Any] = {
+    "usage.enabled": True,
+    "usage.prices": DEFAULT_PRICES,
+    "usage.context_note_tokens": 200_000,
+    "usage.context_note_step_tokens": 100_000,
     "backbone.host": "127.0.0.1",
     "backbone.port": DEFAULT_PORT,
     "backbone.session_name": "backbone",
     "backbone.cors_origins": [],
     "backbone.restart_on_upgrade": True,
+    "backbone.log_max_mb": 20,
+    "backbone.log_backups": 3,
     "agents.default_runtime": "claude",
     "agents.pre_trust": True,
     "agents.inject_brief": True,
     "agents.shared_policy": [],
     "agents.tag_policy": {},
+    "skills.store": "~/skills",
+    "templates.dir": "",
+    "templates.maintainer": "",
     "agents.writable_dirs": [],
     "agents.auto_review": False,
     "github.reviewers": [],
@@ -86,6 +105,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "github.poll_interval_seconds": 60,
     "github.backfill_on_start": True,
     "github.backfill_lookback_hours": 24,
+    "sources.poll_interval_seconds": 60,
     "routing.ignore_targets": [],
     "routing.notification_dedup_seconds": 10,
     "timing.stale_threshold_seconds": 300,
@@ -97,6 +117,10 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "timing.retry_interval_seconds": 300,
     "timing.start_timeout_seconds": 60,
     "timing.delivery_retention_days": 30,
+    "diagnostics.slow_job_seconds": 30,
+    "diagnostics.resource_sample_seconds": 300,
+    "diagnostics.pressure_swap_percent": 50,
+    "diagnostics.pressure_free_percent": 10,
     "telegram.allowed_chat_ids": [],
     "telegram.notification_chat_id": None,
     "telegram.group_chat_id": None,
@@ -118,11 +142,36 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
 }
 
 SETTINGS_HELP: dict[str, str] = {
+    "usage.enabled": "Collect numeric usage from identified runtime sessions; no prompt content",
+    "usage.prices": "Dated USD-per-million-token API price catalog; unknown models remain unpriced",
+    "usage.context_note_tokens": (
+        "Tell an agent its conversation size once it reaches this many tokens of context, "
+        "recommending a fresh session after its current task (0 disables)"
+    ),
+    "usage.context_note_step_tokens": (
+        "After the first note, note again at each further step of this many tokens (0: only once)"
+    ),
     "backbone.host": (
         "Bind address for the API (keep 127.0.0.1 unless you add TLS+auth in front; "
         "the CLI reaches a non-loopback host over https)"
     ),
     "backbone.port": "API port",
+    "backbone.log_max_mb": (
+        "Rotate the service log (`backbone up --log-file`) at this size in MB (0: never)"
+    ),
+    "backbone.log_backups": "Rotated service logs kept beside the current one (at least 1)",
+    "diagnostics.slow_job_seconds": (
+        "Record a scheduled job run slower than this in diagnostics (0 disables)"
+    ),
+    "diagnostics.resource_sample_seconds": (
+        "How often to check memory pressure; applies at the next start (0 disables)"
+    ),
+    "diagnostics.pressure_swap_percent": (
+        "Record a memory sample while swap use is at or above this percent of swap"
+    ),
+    "diagnostics.pressure_free_percent": (
+        "Record a memory sample while available memory is at or below this percent"
+    ),
     "backbone.session_name": "tmux session used by `backbone up --detach`",
     "backbone.cors_origins": "Browser origins allowed to call the API (JSON list)",
     "backbone.restart_on_upgrade": (
@@ -141,9 +190,21 @@ SETTINGS_HELP: dict[str, str] = {
         "Give each agent the backbone's brief at launch (system prompt or initial prompt)"
     ),
     "agents.shared_policy": (
-        "Ordered policy names from <data_dir>/templates/policies/<name>.md (JSON list)"
+        "Ordered policy names from <templates.dir>/policies/<name>.md (JSON list)"
     ),
     "agents.tag_policy": "Policy names by agent tag (JSON object of ordered lists)",
+    "skills.store": (
+        "Directory holding the shared skills; each agent gets the ones tagged for it as "
+        "links at launch (`backbone skills`). Empty disables"
+    ),
+    "templates.dir": (
+        "Directory holding your edited templates and policies (base.md, swarm/, policies/); "
+        "make it a git repository of its own. Empty: <data_dir>/templates"
+    ),
+    "templates.maintainer": (
+        "Who maintains the shared policies (an agent or a person); the base brief tells "
+        "agents to propose policy changes there. Empty: the owner of this backbone"
+    ),
     "agents.writable_dirs": (
         "Directories outside an agent's own that a sandboxed runtime (Codex) may also "
         "write to, e.g. a package cache such as ~/.cache/uv (JSON list)"
@@ -156,6 +217,9 @@ SETTINGS_HELP: dict[str, str] = {
     "github.poll_interval_seconds": "Poll frequency when intake resolves to poll",
     "github.backfill_on_start": "Fetch events missed while the backbone was down",
     "github.backfill_lookback_hours": "Lookback when a repository has no durable poll cursor",
+    "sources.poll_interval_seconds": (
+        "How often subscribed sources (Gmail) are asked for new events matching subscriptions"
+    ),
     "routing.ignore_targets": "for:/from: values that are people, not agents (JSON list)",
     "routing.notification_dedup_seconds": (
         "Do not announce the same issue to the same agent twice within this window"
@@ -163,7 +227,8 @@ SETTINGS_HELP: dict[str, str] = {
     "timing.stale_threshold_seconds": "Hook state older than this is verified against the terminal",
     "timing.grace_period_seconds": "Settle time after a hook reports idle before delivering",
     "timing.queue_expiry_minutes": (
-        "Queued messages expire after this age, except active swarm coordination and inbox holds"
+        "Queued messages expire after this age, except active swarm coordination, inbox holds"
+        " and queues held by an unconfirmed delivery; recipients and senders are notified"
     ),
     "timing.stall_threshold_seconds": "Busy on one issue longer than this is a stall",
     "timing.escalation_dedup_seconds": "Do not repeat the same escalation within this window",
@@ -215,10 +280,25 @@ _POSITIVE_SETTINGS = frozenset(
     {
         "github.poll_interval_seconds",
         "github.review_poll_interval_seconds",
+        "sources.poll_interval_seconds",
         "timing.monitor_interval_seconds",
         "timing.retry_interval_seconds",
+        "backbone.log_backups",  # RotatingFileHandler never rotates without one
     }
 )
+_PERCENT_SETTINGS = frozenset(
+    {"diagnostics.pressure_swap_percent", "diagnostics.pressure_free_percent"}
+)
+_NON_NEGATIVE_SETTINGS = frozenset({"backbone.log_max_mb"})  # 0: never rotate
+
+
+def _is_absolute(path: str) -> bool:
+    """Whether ``path`` is absolute once ``~`` is expanded; an unknown home
+    (``~nobody/x``, a RuntimeError from ``expanduser``) is simply not."""
+    try:
+        return Path(path).expanduser().is_absolute()
+    except RuntimeError:
+        return False
 
 
 def validate_setting(key: str, value: Any) -> Any:
@@ -226,6 +306,14 @@ def validate_setting(key: str, value: Any) -> Any:
     if key not in SETTINGS_DEFAULTS:
         raise KeyError(f"unknown setting {key!r}")
     default = SETTINGS_DEFAULTS[key]
+    if key == "usage.prices":
+        if not isinstance(value, dict) or len(value) > 1000:
+            raise ValueError("usage.prices: expected at most 1000 model entries")
+        for model, price in value.items():
+            if not isinstance(model, str) or not model or len(model) > 200:
+                raise ValueError("usage.prices: invalid model ID")
+            Price.model_validate(price)
+        return value
     if key == "agents.tag_policy":
         if not isinstance(value, dict) or not all(
             isinstance(tag, str)
@@ -262,6 +350,24 @@ def validate_setting(key: str, value: Any) -> Any:
     if key == "telegram.tts_voice":
         if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", value):
             raise ValueError("telegram.tts_voice must be a local voice name")
+        return value
+    if key == "skills.store":
+        if not isinstance(value, str) or (value and not value.strip()):
+            raise ValueError(f"{key}: expected a directory path, or an empty string to disable")
+        value = value.strip()
+        if value and not _is_absolute(value):
+            raise ValueError(f"{key}: expected an absolute path (CLI and service run elsewhere)")
+        return value
+    if key == "templates.dir":
+        if not isinstance(value, str) or (value and not value.strip()):
+            raise ValueError(f"{key}: expected a directory path, or an empty string for default")
+        value = value.strip()
+        if value and not _is_absolute(value):
+            raise ValueError(f"{key}: expected an absolute path (CLI and service run elsewhere)")
+        return value
+    if key == "templates.maintainer":
+        if not isinstance(value, str) or len(value) > 100 or value.strip() != value:
+            raise ValueError(f"{key}: expected a name of at most 100 characters")
         return value
     if key == "agents.shared_policy":
         if (
@@ -301,6 +407,10 @@ def validate_setting(key: str, value: Any) -> Any:
             raise ValueError(f"{key}: expected an integer") from exc
         if key in _POSITIVE_SETTINGS and coerced <= 0:
             raise ValueError(f"{key}: expected a positive integer")
+        if key in _NON_NEGATIVE_SETTINGS and coerced < 0:
+            raise ValueError(f"{key}: expected zero or a positive integer")
+        if key in _PERCENT_SETTINGS and not 0 <= coerced <= 100:
+            raise ValueError(f"{key}: expected a percentage from 0 to 100")
         return coerced
     if isinstance(default, float):
         try:
@@ -348,6 +458,27 @@ def validate_setting(key: str, value: Any) -> Any:
 
 
 @dataclass(frozen=True)
+class Subscription:
+    """One thing an agent wants to hear about from an inbound source.
+
+    ``filter`` is written in the source's own query language (Gmail search
+    syntax for ``gmail``) and evaluated by the source, never by the backbone.
+    ``priority`` is ``normal`` (delivered when the agent is ready, batched
+    with anything else that arrived meanwhile) or ``high`` (offered to a
+    working agent at once through its runtime's hook, or first when ready).
+    """
+
+    id: int
+    source: str
+    filter: str
+    priority: str = "normal"
+
+    @property
+    def high(self) -> bool:
+        return self.priority == "high"
+
+
+@dataclass(frozen=True)
 class AgentSpec:
     """A known agent.
 
@@ -363,6 +494,8 @@ class AgentSpec:
     model: str | None = None
     repo: str = ""
     watches: tuple[str, ...] = ()
+    subscriptions: tuple[Subscription, ...] = ()
+    """Inbound events the agent asked for (``backbone agent subscribe``)."""
     tags: tuple[str, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
     description: str = ""
@@ -378,6 +511,10 @@ class AgentSpec:
     ``--dangerously-skip-permissions``, Gemini ``--approval-mode yolo``) it
     is trust on the machine. Off by default; sandboxed swarm members get it
     from ``swarm.unattended_members``."""
+    inbox_only: bool = False
+    """A client without a terminal (a service reading the API): never launched
+    and never typed into. Its messages wait for ``backbone inbox`` without
+    expiring, and it raises no offline alerts. Off by default."""
 
     @property
     def path(self) -> Path:
@@ -514,6 +651,28 @@ class LaunchConfig:
 
 
 @dataclass(frozen=True)
+class SkillsConfig:
+    """The ``skills.*`` settings."""
+
+    store: str = "~/skills"
+    """Where the shared skills live; empty turns materialisation off."""
+
+    @property
+    def store_path(self) -> Path | None:
+        return Path(self.store).expanduser() if self.store else None
+
+
+@dataclass(frozen=True)
+class TemplatesConfig:
+    """The ``templates.*`` settings."""
+
+    dir: str = ""
+    """The user's configuration directory; empty means ``<data_dir>/templates``."""
+    maintainer: str = ""
+    """Who agents propose shared-policy changes to; empty names the backbone's owner."""
+
+
+@dataclass(frozen=True)
 class GitHubConfig:
     """``github.*`` — intake settings (non-secret). Credentials come from the environment."""
 
@@ -528,6 +687,13 @@ class GitHubConfig:
         return login.casefold().removesuffix("[bot]") in {
             name.casefold().removesuffix("[bot]") for name in self.reviewers
         }
+
+
+@dataclass(frozen=True)
+class SourcesConfig:
+    """``sources.*`` — inbound event sources agents subscribe to (non-secret)."""
+
+    poll_interval_seconds: int = 60
 
 
 @dataclass(frozen=True)
@@ -620,12 +786,17 @@ class BackboneConfig:
     github_app_id: int | None = None
     github_app_private_key_path: str = ""
     telegram_token: str = ""
+    gmail_address: str = ""
+    gmail_app_password: str = ""
 
     backbone: BackboneSection = field(default_factory=BackboneSection)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     """The known agents (the ``agents`` table); ``launch`` holds the ``agents.*`` settings."""
     launch: LaunchConfig = field(default_factory=LaunchConfig)
+    skills: SkillsConfig = field(default_factory=SkillsConfig)
+    templates: TemplatesConfig = field(default_factory=TemplatesConfig)
     github: GitHubConfig = field(default_factory=GitHubConfig)
+    sources: SourcesConfig = field(default_factory=SourcesConfig)
     routing: RoutingConfig = field(default_factory=RoutingConfig)
     timing: TimingConfig = field(default_factory=TimingConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
@@ -647,6 +818,13 @@ class BackboneConfig:
     @property
     def state_dir(self) -> Path:
         return self.data_dir / "state"
+
+    @property
+    def template_dirs(self) -> TemplateDirs:
+        """The configuration directory (``templates.dir``) plus legacy overrides."""
+        if self.templates.dir:
+            return TemplateDirs(Path(self.templates.dir).expanduser(), self.data_dir)
+        return TemplateDirs.default(self.data_dir)
 
     @property
     def action_log_path(self) -> Path:
@@ -691,6 +869,11 @@ class BackboneConfig:
     @property
     def telegram_ready(self) -> bool:
         return bool(self.telegram_token)
+
+    @property
+    def gmail_ready(self) -> bool:
+        """Whether the Gmail source has its read-only credential."""
+        return bool(self.gmail_address and self.gmail_app_password)
 
 
 # ---------------------------------------------------------------------------
@@ -747,15 +930,32 @@ def bootstrap_config(data_dir: str | Path | None = None) -> BackboneConfig:
     return build_config(resolve_data_dir(data_dir), settings={}, agents=AgentsConfig())
 
 
-def effective_settings(stored: dict[str, Any]) -> dict[str, Any]:
-    """Defaults overlaid with stored values (unknown keys are ignored)."""
-    merged = dict(SETTINGS_DEFAULTS)
+def invalid_settings(stored: dict[str, Any]) -> dict[str, str]:
+    """Stored values the current rules reject, with the reason: an older
+    release may have accepted them (``skills.store`` once allowed a relative
+    path). ``effective_settings`` falls back to the default for each."""
+    problems: dict[str, str] = {}
     for key, value in stored.items():
         if key in SETTINGS_DEFAULTS:
             try:
-                merged[key] = validate_setting(key, value)
-            except (ValueError, TypeError):
-                continue
+                validate_setting(key, value)
+            except (ValueError, TypeError) as exc:
+                problems[key] = str(exc)
+    return problems
+
+
+def effective_settings(stored: dict[str, Any]) -> dict[str, Any]:
+    """Defaults overlaid with stored values (unknown keys are ignored).
+
+    A stored value that is no longer valid falls back to the default, with
+    a warning; ``doctor`` reports it too, so it never goes quietly."""
+    merged = dict(SETTINGS_DEFAULTS)
+    problems = invalid_settings(stored)
+    for key, value in stored.items():
+        if key in SETTINGS_DEFAULTS and key not in problems:
+            merged[key] = validate_setting(key, value)
+    for key, reason in problems.items():
+        logging.getLogger(__name__).warning("Setting %s is ignored (default used): %s", key, reason)
     return merged
 
 
@@ -789,6 +989,8 @@ def build_config(
         github_app_id=_opt_int(env.get("GITHUB_APP_ID", "")),
         github_app_private_key_path=env.get("GITHUB_APP_PRIVATE_KEY_PATH", ""),
         telegram_token=env.get("TELEGRAM_TOKEN", ""),
+        gmail_address=env.get("GMAIL_ADDRESS", ""),
+        gmail_app_password=env.get("GMAIL_APP_PASSWORD", ""),
         backbone=BackboneSection(
             data_dir=str(data_dir),
             host=s["backbone.host"],
@@ -807,6 +1009,10 @@ def build_config(
             writable_dirs=tuple(str(d) for d in s["agents.writable_dirs"]),
             auto_review=s["agents.auto_review"],
         ),
+        skills=SkillsConfig(store=str(s["skills.store"])),
+        templates=TemplatesConfig(
+            dir=str(s["templates.dir"]), maintainer=str(s["templates.maintainer"])
+        ),
         github=GitHubConfig(
             reviewers=tuple(s["github.reviewers"]),
             review_poll_interval_seconds=s["github.review_poll_interval_seconds"],
@@ -815,6 +1021,7 @@ def build_config(
             backfill_on_start=s["github.backfill_on_start"],
             backfill_lookback_hours=s["github.backfill_lookback_hours"],
         ),
+        sources=SourcesConfig(poll_interval_seconds=s["sources.poll_interval_seconds"]),
         routing=RoutingConfig(
             ignore_targets=frozenset(s["routing.ignore_targets"]),
             notification_dedup_seconds=s["routing.notification_dedup_seconds"],
@@ -873,10 +1080,20 @@ def agents_from_rows(rows: list[dict]) -> AgentsConfig:
             model=row.get("model") or None,
             repo=row.get("repo") or "",
             watches=tuple(row.get("watches") or ()),
+            subscriptions=tuple(
+                Subscription(
+                    id=int(sub["id"]),
+                    source=str(sub["source"]),
+                    filter=str(sub["filter"]),
+                    priority=str(sub.get("priority") or "normal"),
+                )
+                for sub in row.get("subscriptions") or ()
+            ),
             tags=tuple(row.get("tags") or ()),
             env=dict(row.get("env") or {}),
             description=row.get("description") or "",
             always_on=bool(row.get("always_on")),
             unattended=bool(row.get("unattended")),
+            inbox_only=bool(row.get("inbox_only")),
         )
     return AgentsConfig(specs=specs)

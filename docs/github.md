@@ -2,8 +2,9 @@
 
 GitHub Issues is the task ledger: durable, visible to humans, editable from
 any client. The backbone turns issue activity into messages for agents and
-keeps each agent working one issue at a time — **per repository, with
-nothing to configure per repository**.
+offers each agent one unacknowledged issue at a time. Acknowledgement and
+closure drive issue notifications; agents remain responsible for their work.
+Routing is per repository, with no required repository configuration.
 
 ## Setup — once
 
@@ -27,9 +28,9 @@ gh auth token | backbone secrets set GITHUB_TOKEN   # → ~/.local/share/agent-b
 (Piped, so the token never appears in a process argument list. `.env`
 holds plain values — the token itself, or a PAT with `repo` scope.)
 
-Restart the backbone. `backbone status` now shows `github intake: poll` and
-the tracked repositories: every repository an agent owns (its directory's
-`origin`) or watches. Nothing is exposed and there is no URL to maintain —
+Restart the backbone. `backbone doctor` reports GitHub credentials and poll
+intake. Every repository an agent owns (its directory’s `origin`) or watches
+is tracked. Nothing is exposed and there is no URL to maintain —
 this is the right starting point when you do not have a domain.
 
 ### Recommended: GitHub App + webhook — [full walkthrough](github-app-setup.md)
@@ -47,7 +48,7 @@ GITHUB_WEBHOOK_SECRET=<the app's webhook secret>
 # remove GITHUB_TOKEN — a token takes precedence over the App
 ```
 
-`backbone status` then shows `github intake: webhook`. The walkthrough has
+`backbone doctor` then reports webhook intake. The walkthrough has
 a checkpoint after every step and the troubleshooting table (530 = wrong
 hostname/path, 403 = secret mismatch, …).
 
@@ -67,8 +68,10 @@ repository.
 
 Setting `GITHUB_WEBHOOK_SECRET` switches intake from poll to webhook
 (`github.intake` is `auto`). In webhook intake the backbone still runs
-**one poll at startup** (`github.backfill_on_start`) to catch what happened
-while it was down, and the monitor independently notices new open issues in
+**startup catch-up** (`github.backfill_on_start`) to catch what happened
+while it was down. An incomplete catch-up is reported as failed and the existing
+delivery-retry job retries only unfinished repositories; successful repositories
+stop polling. The monitor independently notices new open issues in
 agents' queues. Polling persists a replay cursor per repository before its
 first fetch. With no cursor, it starts at `github.backfill_lookback_hours`
 (including the first start after upgrading to cursor storage). A complete batch
@@ -140,9 +143,10 @@ The `from:` sender never receives its own issue. Editing an existing issue
 
 For each agent, issue delivery is gated:
 
-1. An issue already delivered to this agent is not delivered again.
-2. A new issue is held (`awaiting_ack`) while a previously delivered issue
-   in the agent's current open queue has not been acknowledged.
+1. An issue already delivered to this agent's current conversation is not
+   delivered again.
+2. A new issue is held (`awaiting_ack`) while an issue delivered to the
+   current conversation, in the agent's open queue, has not been acknowledged.
 3. Delivery is claimed atomically per `(repository, number, session)`, so
    the webhook path, the poller and the monitor cannot double-deliver.
 
@@ -152,8 +156,13 @@ For each agent, issue delivery is gated:
 - a comment whose body starts with `[from:app]`,
 - comments fetched from GitHub by the monitor.
 
-An issue is delivered **once**. If the agent never acknowledges it, the
-queue stays blocked on it (`awaiting_ack`) until a comment appears. Watch
+An issue is delivered **once** per session. If the agent never
+acknowledges it, the queue stays blocked on it (`awaiting_ack`) until a
+comment appears or the agent starts a fresh session: a fresh conversation
+never saw what an earlier one received, so it is offered that issue again. A
+resumed conversation keeps what it was sent; one resumed by id that is not the
+last launch's (a fleet resume) counts as fresh, since it never saw what the
+newer one received. Watch
 `backbone agent inspect`, `/api/deliveries` or `/queue` on Telegram.
 
 ### The agent's queue and its order
@@ -284,3 +293,18 @@ deleted resources retire obsolete notices. Explicit closure notices remain valid
 for that closure; transient GitHub failures leave the work pending. Direct and
 swarm messages do not require a GitHub lookup. Review-start notices also retain
 the existing serialized lifecycle guard when drained from the queue.
+
+### Repository redirects
+
+Repository-level GitHub reads follow bounded HTTP redirects within the GitHub API origin,
+including installation lookup and subsequent pages. Notifications keep their original repository key
+so existing queue and delivery receipts remain correlated after a rename. HTTP
+authentication is retained on that origin; off-origin redirects and pagination
+links are refused. Write requests still report a redirect as an error rather
+than changing the method or replaying a write.
+
+Reads for a particular issue or pull request, including its comments and other
+subresources, still report redirects as errors. A same-origin redirect can move
+an issue to another repository or number; it does not prove a repository rename.
+Backbone does not silently change those identities or combine a new issue number
+with the original repository key.

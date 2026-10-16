@@ -17,7 +17,7 @@ saved can cause a duplicate bearing the same report ID. Report retention still a
 
 Read reports with `backbone updates`, `backbone updates --agent NAME --history`,
 or `backbone updates show ID`; in Telegram use `/updates`, `/updates NAME`,
-`/updates history NAME`, or `/updates show ID`. `backbone usage` is the quick guide.
+`/updates history NAME`, or `/updates show ID`. `backbone help usage` is the quick guide.
 
 Publish a short account of your work without waiting for the owner to ask.
 `backbone report` stores it; `backbone updates` reads the shared feed without

@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
+from collections import Counter, defaultdict
 from collections.abc import Collection
 from datetime import UTC, datetime
+from functools import partial
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import (
     BLOCKED_OUTCOMES,
+    BRIEF_SOURCE,
     RETIREMENT_REASONS,
     DeliveryOutcome,
     EventType,
@@ -39,6 +43,9 @@ log = logging.getLogger(__name__)
 _BUSY_OUTCOMES = BLOCKED_OUTCOMES - {DeliveryOutcome.OFFLINE}
 _QUEUE_DONE = frozenset({DeliveryOutcome.DELIVERED, DeliveryOutcome.ALREADY_DELIVERED})
 SOURCE = "delivery-retry"
+EXPIRY_SOURCE = "queue-expiry"
+"""Notices about expired messages; they never expire themselves (``expire_pending``)."""
+_EXPIRY_LINES = 10
 _draining: set[str] = set()
 """Sessions currently draining; removed on completion or cancellation."""
 
@@ -53,6 +60,108 @@ def _waited_seconds(record: dict) -> float:
     if enqueued.tzinfo is None:
         enqueued = enqueued.replace(tzinfo=UTC)
     return max(0.0, (datetime.now(UTC) - enqueued).total_seconds())
+
+
+def _expired_line(row: dict, *, to_recipient: bool) -> str:
+    who = (
+        f"from {row.get('sender') or row.get('source') or 'unknown'}"
+        if to_recipient
+        else f"to {row.get('session_name')}"
+    )
+    queued = str(row.get("enqueued_at") or "")[11:16]
+    # A sender can tell whether a resend would meet the same condition.
+    blocked = row.get("blocked_by") if not to_recipient else None
+    held = f", blocked by {blocked}" if blocked else ""
+    preview = " ".join(str(row.get("message") or "").split())[:100]
+    return f"- {who}, queued {queued}Z{held}: {preview}"
+
+
+_MORE = re.compile(r"^- … and \d+ more, (?:from|to) (.+?): ")
+
+
+def _origin(row: dict, *, to_recipient: bool) -> str:
+    """Who a summarised row came from or went to, without the characters the
+    summary uses as delimiters (a sender name is free text)."""
+    name = row.get("sender") or row.get("source") if to_recipient else row.get("session_name")
+    return re.sub(r"[,:×\s]+", " ", str(name or "")).strip() or "unknown"
+
+
+def _merged_notice(
+    previous: str | None, rows: list[dict], *, to_recipient: bool, agent: str, minutes: int
+) -> str:
+    """The notice with these rows added to what it already listed: up to ten
+    lines, then the rest counted by where they came from or went."""
+    earlier = (previous or "").split("\n")[1:]
+    detail = [line for line in earlier if line.startswith("- ") and not _MORE.match(line)]
+    omitted: Counter[str] = Counter()
+    for line in earlier:
+        if match := _MORE.match(line):
+            for part in match.group(1).split(", "):
+                name, _, count = part.rpartition(" ×")
+                omitted[name] += int(count) if count.isdigit() else 1
+    for row in rows:
+        if len(detail) < _EXPIRY_LINES:
+            detail.append(_expired_line(row, to_recipient=to_recipient))
+        else:
+            omitted[_origin(row, to_recipient=to_recipient)] += 1
+    total = len(detail) + sum(omitted.values())
+    lines = list(detail)
+    if omitted:
+        parties = ", ".join(f"{name} ×{count}" for name, count in omitted.most_common())
+        where = (
+            f"backbone diagnostics --agent {agent} lists them (repository and issue, not text)"
+            if to_recipient
+            else "you have their text if one still matters"
+        )
+        direction = "from" if to_recipient else "to"
+        lines.append(f"- … and {sum(omitted.values())} more, {direction} {parties}: {where}")
+    heading = (
+        f"{total} message(s) to you expired after {minutes} min in the queue "
+        "without being delivered. Ask the sender if one still matters:"
+        if to_recipient
+        else f"{total} message(s) you sent expired after {minutes} min in the queue "
+        "without being delivered. Send again if one still matters:"
+    )
+    return "\n".join([f"[via:backbone] {heading}", *lines])
+
+
+def expiry_notices(config: BackboneConfig, expired: list[dict]) -> list[tuple]:
+    """The notices an expiry owes: one per registered recipient and one per
+    registered sender, each merged into that party's waiting notice. A
+    sender without an inbox (GitHub, an external caller) keeps the
+    diagnostics row."""
+    minutes = config.timing.queue_expiry_minutes
+    parties: dict[tuple[str, bool], list[dict]] = defaultdict(list)
+    for row in expired:
+        recipient, sender = row.get("session_name") or "", row.get("sender") or ""
+        if recipient in config.agents:
+            parties[(recipient, True)].append(row)
+        if sender in config.agents and sender != recipient:
+            parties[(sender, False)].append(row)
+    return [
+        (
+            name,
+            EXPIRY_SOURCE,
+            "expired-to-you" if to_recipient else "expired-from-you",
+            partial(
+                _merged_notice, rows=rows, to_recipient=to_recipient, agent=name, minutes=minutes
+            ),
+        )
+        for (name, to_recipient), rows in parties.items()
+    ]
+
+
+async def _expire(config, db) -> list:
+    """Expire queued messages past ``timing.queue_expiry_minutes`` (swarm and
+    inbox rules apply); each leaves a delivery row and a notice."""
+    active_swarms = {row["name"] for row in await db.swarms.list(active_only=True)}
+    protected = tuple(spec.name for spec in config.agents if spec.swarm in active_swarms)
+    return await db.queue.expire_pending(
+        max_age_minutes=config.timing.queue_expiry_minutes,
+        protected_sessions=protected,
+        inbox_sessions=tuple(spec.name for spec in config.agents if spec.inbox_only),
+        notices=partial(expiry_notices, config),
+    )
 
 
 async def drain_message_queue(
@@ -76,12 +185,7 @@ async def drain_message_queue(
         await observe_job(db, source=SOURCE, stage="lease_recovery")
 
     try:
-        active_swarms = {row["name"] for row in await db.swarms.list(active_only=True)}
-        protected = tuple(spec.name for spec in config.agents if spec.swarm in active_swarms)
-        expired = await db.queue.expire_pending(
-            max_age_minutes=config.timing.queue_expiry_minutes,
-            protected_sessions=protected,
-        )
+        expired = await _expire(config, db)
         if expired:
             log.info(
                 "Expired %d queued messages (> %d min)",
@@ -105,9 +209,14 @@ async def drain_message_queue(
     for session_name in sorted(set(active_sessions) | queued_sessions):
         if session_name in _draining:
             continue
+        spec = config.agents.get(session_name)
+        if spec is not None and spec.inbox_only:
+            continue  # never typed into: its messages wait for backbone inbox
         _draining.add(session_name)
         try:
-            completed = await _drain_session(config, db, gh, session_name, summary)
+            completed = await _drain_session(
+                config, db, gh, session_name, summary, active_sessions=active_sessions
+            )
         except Exception as exc:
             log.exception("Queue drain failed for %s (other sessions continue)", session_name)
             await observe_job(
@@ -125,8 +234,48 @@ async def drain_message_queue(
     return summary
 
 
-async def _drain_session(config, db, gh, session_name, summary) -> bool:
-    queued = await db.queue.dequeue(session_name, limit=5)
+async def deliver_now(config, db, gh, session_name: str) -> None:
+    """Try one session's queue at once (a confirmed message was just queued),
+    under the retry job's own guard: a session is never drained twice at once,
+    and an inbox-only agent is never typed into."""
+    spec = config.agents.get(session_name)
+    if session_name in _draining or (spec is not None and spec.inbox_only):
+        return
+    _draining.add(session_name)
+    try:
+        await _expire(config, db)  # nothing overdue rides along on this drain
+        await _drain_session(config, db, gh, session_name, {})
+    except Exception:
+        log.exception("Immediate drain failed for %s; the retry job tries again", session_name)
+    finally:
+        _draining.discard(session_name)
+
+
+async def drain_agent(config, db, session_name: str) -> None:
+    """Deliver one agent's queued startup brief from outside the running
+    service (an ``agent start`` while it is down), through the same delivery.
+    Only the brief: everything else waits for the service's own drain, which
+    expires what is too old first."""
+    await _drain_session(config, db, None, session_name, {}, limit=1, brief_only=True)
+
+
+async def _drain_session(
+    config,
+    db,
+    gh,
+    session_name,
+    summary,
+    *,
+    limit: int = 5,
+    brief_only: bool = False,
+    active_sessions: Collection[str] | None = None,
+) -> bool:
+    queued = await db.queue.dequeue(session_name, limit=limit)
+    if brief_only:
+        for record in queued:
+            if record.get("source") != BRIEF_SOURCE:
+                await db.queue.release(record["id"])
+        queued = [record for record in queued if record.get("source") == BRIEF_SOURCE]
     completed = True
     try:
         for record in queued:
@@ -207,6 +356,20 @@ async def _drain_session(config, db, gh, session_name, summary) -> bool:
                         repo=record.get("repo") or "",
                         issue_number=record.get("issue_number"),
                     )
+            if not await db.queue.still_leased(record["id"]):
+                # Revoked or completed meanwhile: never deliver the stale copy.
+                summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
+                continue
+            if (
+                active_sessions is not None
+                and session_name not in active_sessions
+                and session_name not in await list_sessions()
+            ):
+                # Offline queues still expire and retire obsolete work above.
+                # Retained notices wait without another futile terminal attempt;
+                # re-read sessions because the monitor's snapshot may be old.
+                completed = False
+                break
             outcome = (
                 await safe_deliver(
                     session_name,
@@ -219,6 +382,7 @@ async def _drain_session(config, db, gh, session_name, summary) -> bool:
                     source=f"{SOURCE}-queue",
                     enforce_issue_queue=True,
                     queue_scope=scope,
+                    priority=bool(record.get("priority")),
                     delivery_kind=record.get("delivery_kind", "issue"),
                     sender=record.get("sender") or "",
                     source_key=(

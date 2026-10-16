@@ -5,12 +5,13 @@ in order; each ends with a check. The only things you need a human for are
 their accounts and secrets — every step says when.
 
 Requirements: macOS or Linux, Python 3.11+, `tmux`, and at least one agent
-CLI on the PATH (`claude`, `codex`, `opencode`, `deepcode`, `gemini`, …).
+CLI on the PATH (`claude`, `codex`, `opencode`, `deepcode`, `gemini`, …),
+already signed in. Use the runtime’s own setup if authentication is missing.
 
 ## 1. Install
 
 ```bash
-uv tool install "agent-backbone[github-app]"     # or: pipx install "agent-backbone[github-app]"
+uv tool install agent-backbone     # or: pipx install agent-backbone
 backbone --help
 ```
 
@@ -26,22 +27,34 @@ backbone service install      # runs now and at every login (launchd / systemd -
 backbone doctor               # tmux, runtimes, credentials, API reachable
 ```
 
-Check: `backbone status` shows `backbone API : up`. Without a login service,
+Check: `backbone doctor` reports `API: up`. Without a login service,
 `backbone up --detach` runs it inside a tmux session named `backbone`.
 
-To restart after changing secrets: `backbone service install` again (it
-replaces and restarts the service), or `backbone down && backbone up --detach`
+To restart after changing secrets: `backbone service restart`, or `backbone down && backbone up --detach`
 when you run it by hand.
 
 ## 3. Start the first agent from its repository
 
+If you are yourself running in the repository the human is working in, do
+not start an agent there: it would be a second conversation, and a later
+`--resume` would bring that one back instead of this one. Skip this step,
+finish the others, then tell the human how to move this session in: exit it,
+then in this folder run `backbone agent start --resume --runtime <this CLI>
+--no-wait` and `backbone agent attach <name>` (the name `start` prints). That
+continues the folder's most recent conversation, this one (Claude Code lists
+its conversations first; pick the top one). If Backbone already has an agent
+for this folder from an earlier attempt, `--resume` opens that agent's saved
+conversation instead: after attaching, switch to this one with the CLI's own
+command (`/resume` in Claude Code and Codex). Later starts and restarts
+continue it only with `--resume`.
+
 ```bash
 cd <repository> && backbone agent start            # default runtime: claude
-cd <repository> && backbone agent start --runtime codex --model gpt-5.2
+cd <repository> && backbone agent start --runtime codex
 ```
 
 The agent is named after the directory and owns the repository in
-`git remote origin`. `start` returns when the agent is at its prompt.
+`git remote origin`. `start` waits for readiness, or reports a prompt or timeout needing attention.
 `backbone runtimes` lists runtimes, whether each is installed, and example
 model ids — pick from there; never ask the human for a model id.
 
@@ -58,17 +71,34 @@ an allowlist once to `~/.claude/settings.json` so agents can run the
 lifecycle commands unattended — give them this snippet:
 
 ```json
-"permissions": {
-  "allow": [
-    "Bash(backbone help)", "Bash(backbone help *)", "Bash(backbone docs *)",
-    "Bash(backbone status)", "Bash(backbone agent list)",
-    "Bash(backbone agent start)", "Bash(backbone agent start *)",
-    "Bash(backbone agent stop *)", "Bash(backbone agent inspect *)",
-    "Bash(backbone agent approve *)", "Bash(backbone agent watch *)",
-    "Bash(backbone agent unwatch *)", "Bash(backbone tell *)", "Bash(backbone reply *)"
-  ]
+{
+  "permissions": {
+    "allow": [
+      "Bash(backbone help)",
+      "Bash(backbone help *)",
+      "Bash(backbone docs *)",
+      "Bash(backbone status)",
+      "Bash(backbone agent list)",
+      "Bash(backbone agent start)",
+      "Bash(backbone agent start *)",
+      "Bash(backbone agent stop *)",
+      "Bash(backbone agent inspect *)",
+      "Bash(backbone agent approve *)",
+      "Bash(backbone agent watch *)",
+      "Bash(backbone agent unwatch *)",
+      "Bash(backbone agent subscribe *)",
+      "Bash(backbone agent unsubscribe *)",
+      "Bash(backbone tell *)",
+      "Bash(backbone reply *)"
+    ]
+  }
 }
 ```
+
+Agents use their own GitHub CLI credentials to push and merge pull requests.
+The backbone's credentials support issue intake and its issue API; they do not
+sign an agent into `gh`. Check that separately before assigning GitHub work.
+Merge and permission rules come from the repository and the operator.
 
 ## 4. Connect GitHub (issues become the agents' task list)
 
@@ -79,7 +109,7 @@ gh auth token | backbone secrets set GITHUB_TOKEN    # piped: never a token in a
 If `gh` is not logged in, ask the human for a token with `repo` scope and
 run `backbone secrets set GITHUB_TOKEN` without a value — it prompts, so
 the token stays out of shell history and out of this conversation. Restart
-(step 2). Check: `backbone status` shows `github intake: poll`.
+(step 2). Check: `backbone doctor` reports GitHub credentials and poll intake.
 
 That is poll intake, every 60 s, for every repository an agent owns or
 watches. Webhooks (instant, plus every repository the human ever creates)
