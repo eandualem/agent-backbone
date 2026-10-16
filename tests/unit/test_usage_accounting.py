@@ -3,6 +3,7 @@
 import json
 from dataclasses import replace
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -14,6 +15,7 @@ from agent_backbone.services.runtimes import RUNTIMES, read_usage_jsonl
 from agent_backbone.usage import DEFAULT_PRICES, UsageEvent, estimate, timestamp
 from tests.conftest import make_config
 
+_USAGE = "agent_backbone.services.agents.usage"
 T = "2026-09-12T10:00:00Z"
 T2 = "2026-09-12T10:01:00Z"
 
@@ -825,10 +827,12 @@ async def test_gone_source_is_searched_for_once_and_keeps_its_usage(
         return [path] if path.exists() else []
 
     monkeypatch.setattr(RUNTIMES[runtime], "usage_paths", usage_paths)
+    saved = SimpleNamespace(runtime=runtime, session_id="s1", timestamp=1789207200)
+    monkeypatch.setattr(f"{_USAGE}.read_state_file", lambda state_dir, name: saved)
     register(config, runtime)
     await collect_usage(config, db)
     path.unlink()
-    for _ in range(3):
+    for _ in range(3):  # the saved hook state names it on every pass: not a launch
         result = await collect_usage(config, db)
     assert len(searches) == 2  # found, then searched for once after it went
     assert result["errors"] == []

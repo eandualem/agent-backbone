@@ -92,10 +92,10 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                     at=timestamp(row["observed_at"]),
                     launch_id=row.get("launch_id"),
                 )
-                registered.add(identity)
                 # The database has committed this immutable launch identity.
                 # Consume the registration; no age-based deletion or new job needed.
                 if registration := row.get("_registration_path"):
+                    registered.add(identity)  # a launch, not the saved hook state
                     with suppress(OSError):
                         registration.unlink(missing_ok=True)
             except (ValueError, KeyError, TypeError) as exc:
