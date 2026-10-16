@@ -565,6 +565,44 @@ states.push(fs.readdirSync(offers).sort());
     ]
 
 
+def test_a_subagent_found_during_a_reload_leaves_the_reload_to_end(tmp_path):
+    # The subagent's parent lookup answers only while the instance is disposed:
+    # correcting the session it named must not keep the agent busy afterwards.
+    _run_plugin(
+        tmp_path,
+        """
+import fs from "node:fs";
+const { AgentBackbone } = await import(process.argv[1]);
+const lookups = {};
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+const client = {
+  session: {get: ({path}) => new Promise((resolve) => { lookups[path.id] = resolve; })},
+  instance: {dispose: async () => {
+    lookups.sub({data: {id: "sub", parentID: "root"}});
+    await settle();
+  }},
+};
+const hook = await AgentBackbone({client});
+const event = (type, properties) => hook.event({event: {type, properties}});
+const status = (sessionID, type) => event("session.status", {sessionID, status: {type}});
+await event("session.created", {info: {id: "root"}});
+await status("root", "busy");
+await status("sub", "busy");
+for (const id of ["root", "sub"]) {
+  await status(id, "idle");
+  await event("session.idle", {sessionID: id});
+}
+const marker = `${process.env.BACKBONE_STATE_DIR}/app.skills-reload`;
+fs.writeFileSync(marker, "");
+const later = new Date(Date.now() + 1000);
+fs.utimesSync(marker, later, later);
+await globalThis[Symbol.for("agent-backbone.skills-reload")].check();
+""",
+    )
+    state = json.loads((tmp_path / "app.json").read_text())
+    assert (state["state"], state["session_id"]) == ("idle", "root")
+
+
 def test_a_failed_lookup_keeps_the_session_counted(tmp_path):
     states = _sessions(
         tmp_path,

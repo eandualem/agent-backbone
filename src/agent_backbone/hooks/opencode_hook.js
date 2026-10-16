@@ -296,7 +296,9 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
             const current = readCurrent(t);
             const own = [...working].find((id) => roots.has(id)) ?? root;
             if (own && current.session_id === sessionID) {
-              record(t, "session.subagent", current.state ?? STATE_BUSY, current.reason, { session_id: own });
+              // Only the session changes: a reload's record stays the reload's to end.
+              const reload = current.event === "skills.reload" ? { event: current.event, ts: current.ts } : {};
+              record(t, "session.subagent", current.state ?? STATE_BUSY, current.reason, { session_id: own, ...reload });
             }
           } else if (info?.id) roots.add(sessionID);
         } catch { /* unknown stays unknown */ }
