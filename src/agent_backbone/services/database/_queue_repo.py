@@ -103,6 +103,17 @@ class QueueRepo(Repo):
             )
             return result.rowcount
 
+    async def active_ids(self) -> set[int]:
+        """Rows still waiting or being delivered: whose hook receipts still matter."""
+        async with self._tx() as conn:
+            result = await conn.execute(
+                text(
+                    "SELECT id FROM message_queue"
+                    " WHERE status IN ('pending','in_progress','checkpoint','uncertain')"
+                )
+            )
+            return {row[0] for row in result}
+
     async def enqueue(
         self,
         *,

@@ -139,3 +139,19 @@ async def test_a_released_hold_gives_the_waiting_queue_a_full_window(db):
     async with db.engine.begin() as conn:  # the fresh window has passed
         await conn.execute(text("UPDATE deliveries SET created_at='2020-01-01T00:00:00.000000Z'"))
     assert [row["id"] for row in await db.queue.expire_pending(max_age_minutes=30)] == [held.id]
+
+
+async def test_active_ids_are_the_rows_still_waiting_or_being_delivered(db):
+    ids = {}
+    for status in ("pending", "in_progress", "checkpoint", "uncertain", "delivered", "expired"):
+        row = await db.queue.enqueue(
+            session_name="app", message=status, delivery_kind="direct_message"
+        )
+        async with db.engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE message_queue SET status=:status WHERE id=:id"),
+                {"id": row.id, "status": status},
+            )
+        ids[status] = row.id
+    expected = {ids[s] for s in ("pending", "in_progress", "checkpoint", "uncertain")}
+    assert await db.queue.active_ids() == expected

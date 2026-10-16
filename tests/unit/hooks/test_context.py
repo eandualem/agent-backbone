@@ -530,3 +530,19 @@ def test_a_session_takes_its_offers_at_session_start(tmp_path, monkeypatch, hook
     assert data["hookSpecificOutput"]["hookEventName"] == "SessionStart"
     assert data["hookSpecificOutput"]["additionalContext"] == "the current brief"
     assert _run(hook, tmp_path, {"hook_event_name": "SessionStart", "session_id": "s"}) == ""
+
+
+def test_a_settled_batch_receipt_does_not_outlive_its_row(tmp_path):
+    # Queue ids can come back after old rows are pruned: a receipt left for a
+    # settled row would otherwise settle a new batch with that id unseen.
+    for key in ("7", "8", "steer-1"):
+        assert bb.offer_context(tmp_path, "app", key, f"text {key}")
+        bb.take_context(tmp_path, "app")  # the hook takes every offer
+    receipts = bb.batch_receipts(tmp_path)
+    assert bb.offer_context(tmp_path, "app", "9", "a batch taken after the listing")
+    bb.take_context(tmp_path, "app")
+    removed = bb.prune_context_receipts(receipts, keep={"8"})
+    left = sorted(path.name for path in (tmp_path / bb.CONTEXT_DIR / "app").iterdir())
+    assert removed == 1
+    assert left == ["8.taken", "9.taken", "steer-1.taken"]
+    assert bb.offer_context(tmp_path, "app", "7", "a new batch with the old id")
