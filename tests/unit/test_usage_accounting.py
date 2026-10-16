@@ -811,7 +811,10 @@ async def test_usage_source_failure_is_separate_from_registration(tmp_path, db, 
 async def test_gone_source_is_searched_for_once_and_keeps_its_usage(
     tmp_path, db, monkeypatch, runtime
 ):
-    first, later = {"claude": (claude(), claude("m2")), "codex": (codex(), codex(at=T2))}[runtime]
+    first, later = {
+        "claude": (claude(), claude("m2")),
+        "codex": (codex(), codex(total=200, at=T2)),
+    }[runtime]
     config = config_for(tmp_path, runtime)
     path = tmp_path / "source.jsonl"
     append(path, first)
@@ -832,6 +835,21 @@ async def test_gone_source_is_searched_for_once_and_keeps_its_usage(
     (session,) = await db.usage.sessions()
     assert (session["coverage"], session["detail"]) == ("partial", "source file is gone")
     assert len(await db.usage.events()) == 1
-    append(path, later)  # back at the recorded path: read again
+    append(path, first, later)  # back at the recorded path, grown: read again
     await collect_usage(config, db)
     assert len(await db.usage.events()) == 2
+
+
+async def test_a_missing_source_with_several_matches_is_not_marked_gone(tmp_path, db, monkeypatch):
+    config = config_for(tmp_path)
+    path = tmp_path / "source.jsonl"
+    append(path, claude())
+    found = [path]
+    monkeypatch.setattr(RUNTIMES["claude"], "usage_paths", lambda sid, env: found)
+    register(config)
+    await collect_usage(config, db)
+    path.unlink()
+    found = [tmp_path / "a.jsonl", tmp_path / "b.jsonl"]
+    await collect_usage(config, db)
+    (session,) = await db.usage.sessions()
+    assert session["detail"] != "source file is gone"

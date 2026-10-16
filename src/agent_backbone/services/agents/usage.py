@@ -126,7 +126,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                     paths = await asyncio.to_thread(rt.usage_paths, session["session_id"], env)
                     if len(paths) == 1:
                         path = paths[0]
-                    elif path:
+                    elif path and not paths:
                         # The transcript it was read from is gone: note that once and
                         # keep the usage already collected, instead of searching every pass.
                         await db.usage.ingest(
