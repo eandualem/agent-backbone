@@ -23,7 +23,9 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
     app.state.db = SimpleNamespace(
         deliveries=SimpleNamespace(prune=AsyncMock(return_value=2)),
         events=SimpleNamespace(prune=AsyncMock(return_value=3)),
-        queue=SimpleNamespace(prune=AsyncMock(return_value=4)),
+        queue=SimpleNamespace(
+            prune=AsyncMock(return_value=4), active_ids=AsyncMock(return_value=set())
+        ),
         diagnostics=SimpleNamespace(prune=AsyncMock(return_value=6)),
         reports=SimpleNamespace(prune=AsyncMock(return_value=7)),
         signing=SimpleNamespace(
@@ -49,6 +51,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
             "deliveries": 2,
             "events": 3,
             "queue": 4,
+            "context_receipts": 0,
             "diagnostics": 6,
             "reports": 7,
             "signing_audit": 8,

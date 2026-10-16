@@ -874,6 +874,31 @@ def clear_context(state_dir: Path, agent: str, key: str) -> None:
         (directory / f"{key}.{suffix}").unlink(missing_ok=True)
 
 
+def batch_receipts(state_dir: Path) -> list[Path]:
+    """Backbone side: every queued batch's ``<id>.taken`` receipt. Only numeric
+    keys are batches; steers and notes settle their own."""
+    try:
+        agents = [path for path in (state_dir / CONTEXT_DIR).iterdir() if path.is_dir()]
+    except OSError:
+        return []
+    return [
+        path for directory in agents for path in directory.glob("*.taken") if path.stem.isdigit()
+    ]
+
+
+def prune_context_receipts(receipts: list[Path], keep: set[str]) -> int:
+    """Backbone side: remove the batch receipts whose row is settled. Queue ids
+    can be used again after old rows are pruned, and a receipt left by a
+    restart would then settle a new batch unseen. List the receipts before
+    reading which rows are active: one taken since is never removed."""
+    removed = 0
+    for path in receipts:
+        if path.stem not in keep:
+            path.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
 def clear_agent_context(state_dir: Path, agent: str) -> None:
     """Backbone side, before a new session: drop every offer left for the
     previous one. An offer is meant for the session it was written for; the

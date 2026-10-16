@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 from agent_backbone import __version__
 from agent_backbone.base import LifecycleManager
 from agent_backbone.config import BackboneConfig, bootstrap_config
+from agent_backbone.hooks.backbone_state import batch_receipts, prune_context_receipts
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +92,13 @@ def _register_jobs(app: FastAPI):
             await scheduler.retry_failed_once("github-backfill")
         return result
 
+    async def _prune_receipts() -> int:
+        receipts = await asyncio.to_thread(batch_receipts, state.config.state_dir)
+        if not receipts:
+            return 0
+        active = {str(id_) for id_ in await state.db.queue.active_ids()}
+        return await asyncio.to_thread(prune_context_receipts, receipts, active)
+
     async def _prune():
         days = state.config.timing.delivery_retention_days
         # Receipts first: they take their delivery times from the records pruned next.
@@ -99,6 +107,10 @@ def _register_jobs(app: FastAPI):
             "deliveries": await state.db.deliveries.prune(days),
             "events": await state.db.events.prune(days),
             "queue": await state.db.queue.prune(days),
+            # A settled batch's hook receipt must not outlive its row: queue ids
+            # can be used again once old rows are gone. Receipts are listed
+            # before the active rows are read, so one taken since stays.
+            "context_receipts": await _prune_receipts(),
             "diagnostics": await state.db.diagnostics.prune(days),
             "reports": await state.db.reports.prune(days),
             "signing_audit": await state.db.signing.prune(days),
