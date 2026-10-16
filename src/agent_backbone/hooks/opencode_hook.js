@@ -311,7 +311,11 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
             held.delete(sessionID);
             withdraw(sessionID);
             // The conversation it works for, as OpenCode names it: never another one.
-            reclaim(topOf(children, sessionID));
+            // An ancestor not known yet is looked up in turn; when it proves to be
+            // a subagent too, its lookup carries the record further up.
+            const top = topOf(children, sessionID);
+            reclaim(top);
+            if (!roots.has(top)) learn(top);
           } else if (info?.id) {
             roots.add(sessionID);
           }

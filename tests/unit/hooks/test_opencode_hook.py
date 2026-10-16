@@ -680,6 +680,22 @@ await answer("sub", "b"); seen();
     assert states == [["idle", "sub"], ["idle", "b"]]
 
 
+def test_a_nested_resume_whose_parent_is_silent_names_the_agents_conversation(tmp_path):
+    # Only the innermost subagent works in this process: its parent sends no
+    # events, so the plugin looks that parent up itself and follows it up.
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "root"}});
+await status("root", "busy");
+await status("grand", "busy");
+await answer("grand", "child"); seen();
+await answer("child", "root"); seen();
+""",
+    )
+    assert states == [["busy", "child"], ["busy", "root"]]
+
+
 def test_a_subagent_found_during_a_reload_leaves_the_reload_to_end(tmp_path):
     # The subagent's parent lookup answers only while the instance is disposed:
     # correcting the session it named must not keep the agent busy afterwards.
