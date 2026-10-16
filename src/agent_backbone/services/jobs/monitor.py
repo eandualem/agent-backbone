@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
@@ -39,6 +40,33 @@ log = logging.getLogger(__name__)
 
 # Concurrency guard — prevents overlapping monitor runs
 _monitor_lock = asyncio.Lock()
+
+_last_steps: dict[str, int] = {}
+"""Milliseconds each step of the latest pass took, for its slow-run record."""
+
+
+def take_pass_steps() -> dict[str, int]:
+    """Each step of the latest monitor pass, in order, with its milliseconds.
+
+    Taking them clears them, so a run that never reached a pass (a failed
+    refresh) does not pick up the previous pass's steps."""
+    steps = dict(_last_steps)
+    _last_steps.clear()
+    return steps
+
+
+def _step_clock() -> Callable[[str], None]:
+    """Note in ``_last_steps`` the milliseconds since the previous step ended."""
+    mark = time.monotonic()
+
+    def lap(step: str) -> None:
+        nonlocal mark
+        now = time.monotonic()
+        _last_steps[step] = int((now - mark) * 1000)
+        mark = now
+
+    return lap
+
 
 AgentStates = dict[str, StateSnapshot]
 """State of every configured agent with a live session, read once per tick."""
@@ -93,6 +121,8 @@ async def monitor_agents(
         return {"_skipped": "concurrent_run"}
 
     async with _monitor_lock:
+        _last_steps.clear()
+        lap = _step_clock()
         if gh is not None:
             gh = QueueSnapshot(gh)
         active_sessions = set(await list_sessions())
@@ -102,6 +132,7 @@ async def monitor_agents(
         states = await read_states(config, active_sessions)
         await observe_runtime(db, config, states)
         await sync_states(db, states)
+        lap("state_read")
         if gh is not None:
             try:
                 await sync_dependencies(config, db, gh)
@@ -115,6 +146,7 @@ async def monitor_agents(
                 )
             else:
                 await observe_job(db, source="agent-monitor", stage="dependency_sync")
+            lap("dependency_sync")
 
         try:
             await handle_stalls(config, states, db)
@@ -128,6 +160,7 @@ async def monitor_agents(
             )
         else:
             await observe_job(db, source="agent-monitor", stage="stall_detection")
+        lap("stall_detection")
 
         try:
             await handle_offline(config, active_sessions, db, gh)
@@ -141,6 +174,7 @@ async def monitor_agents(
             )
         else:
             await observe_job(db, source="agent-monitor", stage="offline_detection")
+        lap("offline_detection")
 
         try:
             await check_plan_waiting(config, states, db=db)
@@ -154,6 +188,7 @@ async def monitor_agents(
             )
         else:
             await observe_job(db, source="agent-monitor", stage="plan_notification")
+        lap("plan_notification")
 
         try:
             await check_blocked(config, states, db=db)
@@ -167,6 +202,7 @@ async def monitor_agents(
             )
         else:
             await observe_job(db, source="agent-monitor", stage="blocked_notification")
+        lap("blocked_notification")
 
         try:
             await check_permission_denials(config)
@@ -180,6 +216,7 @@ async def monitor_agents(
             )
         else:
             await observe_job(db, source="agent-monitor", stage="denial_notification")
+        lap("denial_notification")
 
         try:
             await check_permission_waiting(config, states)
@@ -193,6 +230,7 @@ async def monitor_agents(
             )
         else:
             await observe_job(db, source="agent-monitor", stage="permission_notification")
+        lap("permission_notification")
 
         if on_change is not None:
             try:
@@ -207,6 +245,7 @@ async def monitor_agents(
                 )
             else:
                 await observe_job(db, source="agent-monitor", stage="snapshot_broadcast")
+            lap("snapshot_broadcast")
 
         # Drain deferred comments/messages for sessions that are now idle.
         try:
@@ -228,6 +267,7 @@ async def monitor_agents(
             )
         else:
             await observe_job(db, source="agent-monitor", stage="queue_drain")
+        lap("queue_drain")
 
         # Usage is read after the drain: it can take a second, and queued work
         # waits on nothing it measures. The context note reads what it records.
@@ -247,6 +287,7 @@ async def monitor_agents(
                 stage="usage_collection",
                 error_type="usage_collection_errors" if usage_result.get("errors") else None,
             )
+        lap("usage_collection")
 
         try:
             await note_context_size(config, db, states)
@@ -257,7 +298,10 @@ async def monitor_agents(
             )
         else:
             await observe_job(db, source="agent-monitor", stage="context_note")
+        lap("context_note")
 
         if gh is None:
             return {}
-        return await deliver_pending_issues(config, states, db, gh)
+        result = await deliver_pending_issues(config, states, db, gh)
+        lap("pending_issues")
+        return result

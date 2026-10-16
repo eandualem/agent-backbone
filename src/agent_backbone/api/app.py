@@ -55,6 +55,7 @@ def _register_jobs(app: FastAPI):
         observe_job,
         run_transitions,
         sample_resources,
+        take_pass_steps,
     )
     from agent_backbone.services.jobs.transitions import INTERVAL_SECONDS as _TRANSITION_TICK
     from agent_backbone.services.routing import routing_in_flight, settle_steers
@@ -68,7 +69,11 @@ def _register_jobs(app: FastAPI):
         )
         slow = state.config.settings.get("diagnostics.slow_job_seconds", 30)
         await observe_duration(
-            state.db, source=name, duration_ms=duration_ms, threshold_ms=int(slow * 1000)
+            state.db,
+            source=name,
+            duration_ms=duration_ms,
+            threshold_ms=int(slow * 1000),
+            steps=take_pass_steps() if name == "agent-monitor" else None,
         )
 
     scheduler = PeriodicScheduler(on_result=_job_result)

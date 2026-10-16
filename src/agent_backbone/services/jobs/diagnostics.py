@@ -64,26 +64,36 @@ async def observe_job(
 
 
 async def observe_duration(
-    db: BackboneDB, *, source: str, duration_ms: int, threshold_ms: int
+    db: BackboneDB,
+    *,
+    source: str,
+    duration_ms: int,
+    threshold_ms: int,
+    steps: dict[str, int] | None = None,
 ) -> None:
     """Record a job run that took ``threshold_ms`` or longer (0 disables).
 
     Consecutive slow runs of a job are one episode, recorded once with its
-    count and its longest run; the next ordinary run ends it."""
+    count and its longest run, and ``steps`` (milliseconds per step) of that
+    run when the job reports them; the next ordinary run ends it."""
     episodes = _slow_runs.setdefault(db, {})
     if threshold_ms <= 0 or duration_ms < threshold_ms:
         episodes.pop(source, None)
         return
-    operation_id, longest = episodes.get(source, (uuid.uuid4().hex, 0))
-    longest = max(longest, duration_ms)
-    episodes[source] = (operation_id, longest)
+    operation_id, longest, slowest = episodes.get(source, (uuid.uuid4().hex, 0, None))
+    if duration_ms >= longest:
+        longest, slowest = duration_ms, steps
+    episodes[source] = (operation_id, longest, slowest)
+    details = {"stage": "run", "job": source, "duration_ms": longest}
+    if slowest:
+        details["steps"] = slowest
     await db.diagnostics.record(
         operation_id=operation_id,
         category="job",
         code="run_slow",
         severity="warning",
         source=source,
-        details={"stage": "run", "job": source, "duration_ms": longest},
+        details=details,
     )
 
 

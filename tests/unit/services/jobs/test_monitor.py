@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -12,7 +13,12 @@ from agent_backbone.config import AgentsConfig, EscalationConfig, TelegramConfig
 from agent_backbone.models import DeliveryOutcome, IssueData, ParsedLabels
 from agent_backbone.services.agents import AgentState, StateSnapshot
 from agent_backbone.services.jobs import escalation as esc
-from agent_backbone.services.jobs.monitor import monitor_agents, read_states, sync_states
+from agent_backbone.services.jobs.monitor import (
+    monitor_agents,
+    read_states,
+    sync_states,
+    take_pass_steps,
+)
 from agent_backbone.services.jobs.pending import deliver_pending_issues
 from agent_backbone.services.routing import DeliveryReport
 
@@ -695,7 +701,14 @@ class TestMonitorAgents:
 
     async def test_runs_all_steps(self, config, db):
         gh = AsyncMock()
+        clock = [100.0]
+
+        async def drain(**kwargs):
+            clock[0] += 2.5  # the one step that takes time
+            return {}
+
         with (
+            patch(f"{_MON}.time", SimpleNamespace(monotonic=lambda: clock[0])),
             patch(f"{_MON}.list_sessions", new_callable=AsyncMock, return_value=["ike"]),
             patch(
                 f"{_MON}.agent_state",
@@ -706,7 +719,7 @@ class TestMonitorAgents:
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock) as stalls,
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock) as offline,
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock) as plans,
-            patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock, return_value={}) as drain,
+            patch(f"{_MON}.drain_message_queue", side_effect=drain) as drained,
             patch(
                 f"{_MON}.deliver_pending_issues",
                 new_callable=AsyncMock,
@@ -717,8 +730,26 @@ class TestMonitorAgents:
             result = await monitor_agents(config, db, gh, on_change=on_change)
 
         assert result == {"ike": "no_pending"}
-        for mock in (sync, stalls, offline, plans, on_change, drain, pend):
+        for mock in (sync, stalls, offline, plans, on_change, drained, pend):
             mock.assert_awaited_once()
+        steps = take_pass_steps()
+        assert {step: ms for step, ms in steps.items() if ms} == {"queue_drain": 2_500}
+        assert list(steps) == [
+            "state_read",
+            "dependency_sync",
+            "stall_detection",
+            "offline_detection",
+            "plan_notification",
+            "blocked_notification",
+            "denial_notification",
+            "permission_notification",
+            "snapshot_broadcast",
+            "queue_drain",
+            "usage_collection",
+            "context_note",
+            "pending_issues",
+        ]
+        assert take_pass_steps() == {}  # a later run that never reaches a pass gets none
 
     async def test_step_failure_is_isolated(self, config, db):
         with (
