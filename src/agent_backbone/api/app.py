@@ -106,11 +106,12 @@ def _register_jobs(app: FastAPI):
         return {
             "deliveries": await state.db.deliveries.prune(days),
             "events": await state.db.events.prune(days),
-            "queue": await state.db.queue.prune(days),
             # A settled batch's hook receipt must not outlive its row: queue ids
-            # can be used again once old rows are gone. Receipts are listed
-            # before the active rows are read, so one taken since stays.
+            # can be used again once old rows are gone, so receipts go before
+            # the rows that free them. Receipts are listed before the active
+            # rows are read, so one taken since stays.
             "context_receipts": await _prune_receipts(),
+            "queue": await state.db.queue.prune(days),
             "diagnostics": await state.db.diagnostics.prune(days),
             "reports": await state.db.reports.prune(days),
             "signing_audit": await state.db.signing.prune(days),
