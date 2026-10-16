@@ -263,6 +263,46 @@ class TestHighPriorityReachesAWorkingAgent:
         ]
         assert not list((config.state_dir / "context" / "desk").iterdir())
 
+    async def test_hook_receipt_outlives_a_drain_that_could_not_settle_the_row(self, tmp_path, db):
+        config = _config(tmp_path)
+        with patch(
+            f"{_DELIVERY}.get_session_intelligence",
+            return_value=_profile(SessionIntelligence.AGENT_WORKING),
+        ):
+            report = await safe_deliver(
+                "desk",
+                "[via:gmail] mail\n- a1",
+                config,
+                db=db,
+                priority=True,
+                delivery_kind=SUBSCRIPTION_KIND,
+                sender="gmail",
+            )
+        assert len(take_context(config.state_dir, "desk")) == 1  # the hook delivered it
+
+        settle = db.queue.mark_delivered
+        failures = iter([RuntimeError("database is locked")])
+
+        async def flaky(*args, **kwargs):
+            if (error := next(failures, None)) is not None:
+                raise error
+            return await settle(*args, **kwargs)
+
+        with (
+            patch(
+                f"{_DELIVERY}.get_session_intelligence",
+                return_value=_profile(SessionIntelligence.READY),
+            ),
+            patch(f"{_DELIVERY}.send_message", return_value=True) as send,
+            patch.object(db.queue, "mark_delivered", side_effect=flaky),
+        ):
+            await drain_message_queue(config, db, None, active_sessions={"desk"})
+            assert (await queue_row(db, report.queue_id))["status"] == "pending"
+            await drain_message_queue(config, db, None, active_sessions={"desk"})
+        send.assert_not_awaited()  # the receipt survived: never pasted as well
+        assert (await queue_row(db, report.queue_id))["status"] == "delivered"
+        assert not list((config.state_dir / "context" / "desk").iterdir())
+
     async def test_offer_is_withdrawn_when_the_prompt_takes_it_first(self, tmp_path, db):
         config = _config(tmp_path)
         with (

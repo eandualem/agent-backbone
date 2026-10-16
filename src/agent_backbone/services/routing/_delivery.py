@@ -675,7 +675,6 @@ async def safe_deliver(
             claim_context, config.state_dir, session_name, str(queue_id)
         )
         if claim == "taken":
-            await asyncio.to_thread(clear_context, config.state_dir, session_name, str(queue_id))
             delivery_id = await _record(
                 db,
                 claim_id=None,
@@ -704,6 +703,10 @@ async def safe_deliver(
                 event_id=event_id,
                 details={"delivery_kind": kind, "priority": priority, "requeue": requeue},
             )
+            # The receipt is the only proof the hook delivered it: settle the
+            # row first, so a failure or restart in between never pastes it.
+            await db.queue.mark_delivered(queue_id)
+            await asyncio.to_thread(clear_context, config.state_dir, session_name, str(queue_id))
             return DeliveryReport(
                 DeliveryOutcome.DELIVERED,
                 operation_id=operation_id,

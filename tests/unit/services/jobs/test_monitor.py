@@ -801,3 +801,24 @@ async def test_monitor_records_usage_stage_without_blocking_delivery(config, db)
     assert {row["code"] for row in rows} == {"usage_registration_failed", "usage_collection_failed"}
     (failure,) = [row for row in rows if row["code"] == "usage_registration_failed"]
     assert (failure["agent_name"], failure["runtime"]) == ("worker", "codex")
+
+
+async def test_queue_drain_does_not_wait_for_usage_collection(config, db):
+    order = []
+
+    async def drain(*args, **kwargs):
+        order.append("drain")
+        return {}
+
+    async def usage(*args, **kwargs):
+        order.append("usage")
+        return {}
+
+    with (
+        patch(f"{_MON}.list_sessions", return_value=[]),
+        patch(f"{_MON}.handle_offline"),
+        patch(f"{_MON}.collect_usage", side_effect=usage),
+        patch(f"{_MON}.drain_message_queue", side_effect=drain),
+    ):
+        await monitor_agents(config, db, None)
+    assert order == ["drain", "usage"]

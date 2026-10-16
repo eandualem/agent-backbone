@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -225,6 +227,43 @@ async def test_a_launch_interrupted_by_a_backbone_restart_is_recovered_from_diag
     assert done["status"] == "completed" and done["result"]["ready"] == "ready"
     assert "earlier backbone process" in done["result"]["evidence"][0]
     deliver.assert_awaited_once()
+
+
+async def test_a_continuation_pasted_before_a_backbone_restart_is_not_pasted_again(
+    db, config, store, seams
+):
+    """The earlier process launched the replacement, pasted the continuation
+    and exited before closing the row: the next one finds the paste recorded."""
+    _, start, deliver = seams
+
+    async def paste_then_exit(*args, **kwargs):
+        # What safe_deliver records for a paste, under the identity it is given
+        # (or a fresh one), before the service stops ahead of ``finish``.
+        await db.diagnostics.record(
+            category="delivery",
+            code="submitted",
+            operation_id=kwargs.get("operation_id") or uuid.uuid4().hex,
+            agent_name="ike",
+        )
+        if deliver.await_count == 1:
+            raise asyncio.CancelledError
+        return DeliveryReport(outcome=DeliveryOutcome.DELIVERED)
+
+    deliver.side_effect = paste_then_exit
+    row = await db.transitions.create(agent_name="ike", delay_seconds=0, message="hi")
+    with pytest.raises(asyncio.CancelledError):
+        await _run(config, store, db)
+    launch_op = (await db.transitions.get(row["id"]))["launch_operation_id"]
+    await db.diagnostics.record(
+        category="startup", operation_id=launch_op, code="ready", agent_name="ike"
+    )
+
+    start.return_value = StartResult(ok=True, already_running=True)
+    with patch(f"{_JOB}.query_environment_var", new_callable=AsyncMock, return_value=launch_op):
+        assert await _run(config, store, db) == {"ike": "started"}
+    assert deliver.await_count == 1  # never pasted a second time
+    done = await db.transitions.get(row["id"])
+    assert done["status"] == "completed" and done["result"]["message"] == "delivered"
 
 
 async def test_the_retrys_own_already_running_record_does_not_hide_the_launch(
