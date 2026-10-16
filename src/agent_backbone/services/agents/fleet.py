@@ -149,12 +149,13 @@ async def save_fleet(
                 busy = AgentState.parse(entry["state_at_save"]) in _BUSY or (
                     (await agent_state(config, entry["name"])).state in _BUSY
                 )
+                if read_launch_marker(config.state_dir, entry["name"]) != launches[entry["name"]]:
+                    # Relaunched since the save, busy or not: the session is not
+                    # the saved conversation's, and that is what the snapshot says.
+                    entry["stop"] = "skipped_replaced"
+                    continue
                 if busy and not force:
                     entry["stop"] = "skipped_busy"
-                    continue
-                if read_launch_marker(config.state_dir, entry["name"]) != launches[entry["name"]]:
-                    # Relaunched since the save: the session is not the saved conversation's.
-                    entry["stop"] = "skipped_replaced"
                     continue
                 try:
                     stopped = await stop_agent_session(config, entry["name"])

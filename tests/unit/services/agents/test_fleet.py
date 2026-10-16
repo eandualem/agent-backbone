@@ -140,9 +140,13 @@ class TestSave:
         assert snapshot["agents"][0]["stop"] == "skipped_busy"
         stop.assert_not_awaited()
 
-    async def test_an_agent_relaunched_before_its_stop_is_left_running(self, db, tmp_path):
+    @pytest.mark.parametrize("replacement", [AgentState.IDLE, AgentState.STARTING])
+    async def test_an_agent_relaunched_before_its_stop_is_left_running(
+        self, db, tmp_path, replacement
+    ):
         """A restart replaced the saved session while the others were handled:
-        stopping by name would end the replacement, not the saved conversation."""
+        stopping by name would end the replacement, not the saved conversation.
+        A replacement still starting is reported as replaced, not as busy."""
         store = await _store(db, tmp_path, ("app", "claude"))
         _report(store, "app", "sess-1", "claude", launch_id="L1")
         calls = []
@@ -151,6 +155,7 @@ class TestSave:
             calls.append(name)
             if len(calls) == 2:  # right before the stop: the replacement launched
                 write_starting_marker(store.config.state_dir, name, 5.0, launch_id="L2")
+                return StateSnapshot(state=replacement)
             return StateSnapshot(state=AgentState.IDLE)
 
         with (
