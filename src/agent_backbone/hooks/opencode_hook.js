@@ -78,7 +78,7 @@ function offers(dir, prefix = "") {
   }
 }
 
-function takeContext(t) {
+function takeContext(t, children) {
   // Batches for the agent first (queue ids, oldest first), then this session's steers.
   const key = (name) => {
     const stem = name.slice(0, -3);
@@ -95,7 +95,7 @@ function takeContext(t) {
     for (const name of offers(dir).sort(order)) {
       const offer = path.join(dir, name);
       try {
-        if (forEarlierTurn(offer, current)) {
+        if (forEarlierTurn(offer, current, children)) {
           fs.renameSync(offer, `${offer.slice(0, -3)}.missed`);
           continue;
         }
@@ -109,12 +109,30 @@ function takeContext(t) {
   return texts;
 }
 
-function forEarlierTurn(offer, current) {
+// The session a subagent ultimately works for: its parent, or the parent's own
+// parent for a nested one, up to the first session that is not a subagent.
+function topOf(children, sessionID) {
+  const seen = new Set();
+  let id = sessionID;
+  while (children.has(id) && !seen.has(id)) {
+    seen.add(id);
+    id = children.get(id);
+  }
+  return id;
+}
+
+function forEarlierTurn(offer, current, children) {
   // Match backbone_state.py: compare only identity fields present on both
   // sides, and keep legacy offers without readable turn metadata usable.
   try {
     const turn = JSON.parse(fs.readFileSync(`${offer.slice(0, -3)}.turn`, "utf8"));
     if (!turn || typeof turn !== "object" || Array.isArray(turn)) return false;
+    // Offered to this prompt while the state named a subagent not known yet:
+    // its parent's turn, which the state names again since.
+    if (turn.prompted_at != null && turn.prompted_at === current.prompted_at
+        && children.has(turn.session_id) && topOf(children, turn.session_id) === current.session_id) {
+      return false;
+    }
     return ["prompted_at", "session_id"].some((key) =>
       turn[key] != null && current[key] != null && turn[key] !== current[key]);
   } catch {
@@ -266,7 +284,7 @@ const reloader = (globalThis[Symbol.for("agent-backbone.skills-reload")] ??= {
 export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
   const t = target();
   if (!t) return {};
-  const children = new Set(); // subagent sessions, never the agent's own state
+  const children = new Map(); // subagent session → its parent; never the agent's own state
   const pending = new Map(); // permission and plan requests waiting for an answer -> who asked
   const held = new Map(); // session whose turn ended while a request waited -> what worked then
   const planCalls = new Set(); // plan_exit calls whose question is still to come
@@ -288,16 +306,32 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
         try {
           const info = (await client?.session?.get?.({ path: { id: sessionID } }))?.data;
           if (info?.parentID) {
-            children.add(sessionID);
+            children.set(sessionID, info.parentID);
             working.delete(sessionID); // its idle is ignored from now on
             held.delete(sessionID);
             withdraw(sessionID);
-          } else if (info?.id) roots.add(sessionID);
+            // The conversation it works for, as OpenCode names it: never another one.
+            // An ancestor not known yet is looked up in turn; when it proves to be
+            // a subagent too, its lookup carries the record further up.
+            const top = topOf(children, sessionID);
+            reclaim(top);
+            if (!roots.has(top)) learn(top);
+          } else if (info?.id) {
+            roots.add(sessionID);
+          }
         } catch { /* unknown stays unknown */ }
         lookups.delete(sessionID);
       })());
     }
     return lookups.get(sessionID);
+  };
+  // A subagent's busy named it while it was unknown: name the agent's own session.
+  const reclaim = (own) => {
+    const current = readCurrent(t);
+    if (!own || !children.has(current.session_id)) return;
+    // Only the session changes: a reload's record stays the reload's to end.
+    const reload = current.event === "skills.reload" ? { event: current.event, ts: current.ts } : {};
+    record(t, "session.subagent", current.state ?? STATE_BUSY, current.reason, { session_id: own, ...reload });
   };
 
   const handOver = async (sessionID, output) => {
@@ -308,7 +342,7 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
     // Only the agent's own session, and only while its turn runs: a call that
     // ends after the turn did (an interrupt) leaves the offers to that end.
     if (!roots.has(sessionID) || !working.has(sessionID)) return;
-    const texts = takeContext(t);
+    const texts = takeContext(t, children);
     if (texts.length === 0) return;
     const text = texts.join("\n\n");
     // A message without what drives the turn (its agent and model) would switch it.
@@ -390,15 +424,20 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
     }
     if (changedAt < reloader.loadedAt) return; // this process started after: it read them
     reloading = true;
+    let mine; // when this reload's busy record was written
     try {
       // Busy while it reloads, so the backbone delivers nothing into it.
       record(t, "skills.reload", STATE_BUSY, null);
+      mine = readCurrent(t).ts;
       await client?.instance?.dispose?.();
     } catch {
       /* the skills stay as they were until the next change or start */
     } finally {
       try {
-        record(t, "skills.reload", STATE_IDLE, null);
+        // The plugin OpenCode builds again while disposing may have recorded a
+        // turn since (in the same millisecond, too): only our own record ends.
+        const now = readCurrent(t);
+        if (now.event === "skills.reload" && now.ts === mine) record(t, "skills.reload", STATE_IDLE, null);
       } catch { /* hook failures must not stop the agent */ }
       reloading = false;
     }
@@ -427,7 +466,7 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
       switch (event.type) {
         case "session.created": {
           const info = p.info ?? {};
-          if (info.parentID) children.add(info.id);
+          if (info.parentID) children.set(info.id, info.parentID);
           else {
             roots.add(info.id);
             if (!root) root = info.id;
