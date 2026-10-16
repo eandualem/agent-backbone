@@ -116,8 +116,9 @@ function forEarlierTurn(offer, current, children) {
     const turn = JSON.parse(fs.readFileSync(`${offer.slice(0, -3)}.turn`, "utf8"));
     if (!turn || typeof turn !== "object" || Array.isArray(turn)) return false;
     // Offered to this prompt while the state named a subagent not known yet:
-    // the agent's own turn, which the state names again since.
-    if (turn.prompted_at != null && turn.prompted_at === current.prompted_at && children.has(turn.session_id)) {
+    // its parent's turn, which the state names again since.
+    if (turn.prompted_at != null && turn.prompted_at === current.prompted_at
+        && children.get(turn.session_id) === current.session_id) {
       return false;
     }
     return ["prompted_at", "session_id"].some((key) =>
@@ -271,7 +272,7 @@ const reloader = (globalThis[Symbol.for("agent-backbone.skills-reload")] ??= {
 export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
   const t = target();
   if (!t) return {};
-  const children = new Set(); // subagent sessions, never the agent's own state
+  const children = new Map(); // subagent session → its parent; never the agent's own state
   const pending = new Map(); // permission and plan requests waiting for an answer -> who asked
   const held = new Map(); // session whose turn ended while a request waited -> what worked then
   const planCalls = new Set(); // plan_exit calls whose question is still to come
@@ -293,13 +294,15 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
         try {
           const info = (await client?.session?.get?.({ path: { id: sessionID } }))?.data;
           if (info?.parentID) {
-            children.add(sessionID);
+            children.set(sessionID, info.parentID);
             working.delete(sessionID); // its idle is ignored from now on
             held.delete(sessionID);
             withdraw(sessionID);
-            // A working session not yet known may be the agent's own, resumed: its
-            // lookup reclaims the record then, rather than an earlier conversation now.
-            if (![...working].some((id) => !roots.has(id))) {
+            // Its own parent when that is working. Otherwise a working session not
+            // yet known may be the agent's own, resumed: its lookup reclaims the
+            // record then, rather than an earlier conversation now.
+            if (working.has(info.parentID)) reclaim(info.parentID);
+            else if (![...working].some((id) => !roots.has(id))) {
               reclaim([...working].find((id) => roots.has(id)) ?? root);
             }
           } else if (info?.id) {
@@ -453,7 +456,7 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
       switch (event.type) {
         case "session.created": {
           const info = p.info ?? {};
-          if (info.parentID) children.add(info.id);
+          if (info.parentID) children.set(info.id, info.parentID);
           else {
             roots.add(info.id);
             if (!root) root = info.id;

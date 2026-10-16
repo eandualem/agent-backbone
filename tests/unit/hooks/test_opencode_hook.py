@@ -593,7 +593,7 @@ states.push(fs.readdirSync(context).sort());
     )
     assert states == [
         ["busy", "sub"],
-        ["busy", "sub"],  # whose subagent it is is not known yet
+        ["busy", "root"],  # its parent, named as soon as the subagent is known
         ["busy", "root"],
         ["steer-1.taken", "steer-1.turn"],
     ]
@@ -620,6 +620,26 @@ states.push(fs.readdirSync(context).sort());
         ["busy", "root"],
         ["steer-0.missed", "steer-0.turn", "steer-1.taken", "steer-1.turn"],
     ]
+
+
+def test_a_steer_for_one_conversations_subagent_never_reaches_another(tmp_path):
+    # Conversation b starts while a works: a steer offered while a's subagent
+    # was named belongs to a, and b's turn does not take it.
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "a"}});
+await event("session.created", {info: {id: "b"}});
+await status("a", "busy");
+await status("sub", "busy");
+offer("steer-1");
+await status("b", "busy");
+await answer("sub", "a"); seen();
+await toolCall("b");
+states.push(fs.readdirSync(context).sort());
+""",
+    )
+    assert states == [["busy", "b"], ["steer-1.missed", "steer-1.turn"]]
 
 
 def test_a_subagent_found_during_a_reload_leaves_the_reload_to_end(tmp_path):
@@ -662,7 +682,7 @@ await globalThis[Symbol.for("agent-backbone.skills-reload")].check();
 
 def test_a_subagent_found_first_never_names_an_earlier_conversation(tmp_path):
     # Session a ran earlier in this process; b is resumed and its subagent's
-    # lookup answers before b's: the record waits for b instead of naming a.
+    # lookup answers before b's: the record names b, the subagent's parent, never a.
     states = _sessions(
         tmp_path,
         """
@@ -675,7 +695,7 @@ await answer("sub", "b"); seen();
 await answer("b"); seen();
 """,
     )
-    assert states == [["busy", "sub"], ["busy", "b"]]
+    assert states == [["busy", "b"], ["busy", "b"]]
 
 
 def test_a_failed_lookup_keeps_the_session_counted(tmp_path):
