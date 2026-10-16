@@ -17,10 +17,8 @@ a public endpoint. Terminal delivery still waits for agent readiness.)
 
 ## 0. Prerequisites
 
-- The CLI installed **with the `github-app` extra** (App auth needs it):
-  `uv tool install "agent-backbone[github-app]"`.
-  Missing it fails at startup with a message naming the extra; `backbone
-  doctor` checks it too.
+- The CLI installed (GitHub App authentication is included):
+  `uv tool install agent-backbone`; `backbone doctor` checks its dependencies.
 - The backbone initialised and running: `backbone init && backbone up --detach`.
 - `backbone doctor` reports the API up on `127.0.0.1:7120`.
 - The tunnel commands below use Homebrew on macOS. On Linux, install the

@@ -10,7 +10,7 @@ to follow `backbone help setup`. For prerequisites and a first task, use
 ## Install and start Backbone
 
 ```bash
-uv tool install "agent-backbone[github-app]"
+uv tool install agent-backbone
 backbone init
 backbone service install          # start now and at login
 backbone status
