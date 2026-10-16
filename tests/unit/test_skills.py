@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -584,6 +586,26 @@ async def test_the_store_lock_holds_across_processes(tmp_path):
         async with skills.store_lock(data, store):
             waited = time.monotonic() - started
     assert waited >= 0.3
+
+
+async def test_a_store_lock_waiter_occupies_no_worker_thread(tmp_path):
+    # Waiting must not hold a thread other work (agent output, usage reads) needs.
+    store, data = tmp_path / "store", tmp_path / "data"
+    store.mkdir()
+    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
+    with subprocess.Popen(
+        [sys.executable, "-c", _HOLD_THE_STORE, str(data), str(store)], stdout=subprocess.PIPE
+    ) as holder:
+        assert holder.stdout.readline().strip() == b"held"
+        waiter = asyncio.create_task(_hold(data, store))
+        await asyncio.sleep(0.05)
+        assert await asyncio.wait_for(asyncio.to_thread(lambda: "free"), 0.2) == "free"
+        await waiter
+
+
+async def _hold(data, store):
+    async with skills.store_lock(data, store):
+        pass
 
 
 async def test_commit_store_initialises_history_on_first_use(tmp_path):

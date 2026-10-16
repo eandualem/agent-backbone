@@ -797,10 +797,16 @@ async def commit_store(store: Path, message: str) -> str | None:
 async def store_lock(data_dir: Path, store: Path):
     """One change to a store and its commit at a time, across processes: the
     backbone's API and ``skills add --local`` (or ``tag`` with the API down)
-    share one git index. Closing the file releases the lock."""
+    share one git index. Closing the file releases the lock. A waiter polls
+    rather than blocking a worker thread, so waiting holds up nothing else."""
     key = hashlib.sha256(str(Path(store).expanduser().resolve()).encode()).hexdigest()[:16]
     path = Path(data_dir) / "skills" / f"store-{key}.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as handle:
-        await asyncio.to_thread(fcntl.flock, handle, fcntl.LOCK_EX)
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                await asyncio.sleep(0.05)
         yield
