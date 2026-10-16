@@ -174,11 +174,15 @@ class DeliveryRepo(Repo):
         *,
         repo: str | None = None,
         kind: str | None = None,
+        operation_id: str | None = None,
     ) -> list[dict]:
         """Query delivery records with optional filters."""
         async with self._tx() as conn:
             conditions: list[str] = []
             params: dict[str, object] = {}
+            if operation_id is not None:
+                conditions.append("operation_id = :operation_id")
+                params["operation_id"] = operation_id
             if issue_number is not None:
                 conditions.append("issue_number = :issue_number")
                 params["issue_number"] = issue_number

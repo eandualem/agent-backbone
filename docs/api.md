@@ -173,7 +173,9 @@ delivered to the replacement once it is at its prompt, as
 
 `status` ends `completed` — `result` carries the launch's `ready` and
 `evidence`, the effective runtime and model and, with a message, its
-delivery outcome as `result.message` (`delivered`, or the [delivery
+delivery outcome as `result.message` (`delivered`; `already_delivered` when a
+backbone restart interrupted the transition after the message reached the
+agent's current conversation; or the [delivery
 condition](concepts.md#delivery-condition) that queued it, such as `settling`)
 with `result.message_queue` (`stored` or `already_queued`) when it waits in
 the queue — or `failed` with `result.reason`: the runtime could not launch,
