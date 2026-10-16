@@ -11,6 +11,8 @@ _ROOT = Path(__file__).resolve().parents[2]
 
 def test_package_description_has_no_relative_links():
     pyproject = tomllib.loads((_ROOT / "pyproject.toml").read_text())
+    # A static `readme` builds without error but skips the hook below.
+    assert "readme" in pyproject["project"]["dynamic"] and "readme" not in pyproject["project"]
     hook = pyproject["tool"]["hatch"]["metadata"]["hooks"]["fancy-pypi-readme"]
     text = (_ROOT / "README.md").read_text()
     for sub in hook["substitutions"]:
