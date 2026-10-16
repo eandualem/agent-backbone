@@ -27,9 +27,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-github-app = [
-    { name = "cryptography" },
-]
 postgres = [
     { name = "asyncpg" },
 ]
@@ -37,7 +34,6 @@ postgres = [
 [package.dev-dependencies]
 dev = [
     { name = "asyncpg" },
-    { name = "cryptography" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -51,7 +47,6 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29" },
     { name = "cryptography", specifier = ">=44.0" },
-    { name = "cryptography", marker = "extra == 'github-app'", specifier = ">=44.0" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -62,12 +57,11 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
-provides-extras = ["postgres", "github-app"]
+provides-extras = ["postgres"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "asyncpg", specifier = ">=0.29" },
-    { name = "cryptography", specifier = ">=44.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "pytest-cov", specifier = ">=5.0" },
