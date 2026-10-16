@@ -441,7 +441,8 @@ The **issue queue gate** keeps issue delivery orderly: an agent gets one
 issue at a time. A newer issue is held (`awaiting_ack`) while the last
 issue delivered to the agent's current conversation, in its open queue, has
 not been acknowledged; a fresh conversation (not a resumed one) is offered that
-issue again.
+issue again, and so is a saved conversation resumed by id other than the last
+launch's (a fleet resume).
 **Acknowledgement** = the agent commented on the issue (or opened a pull
 request that closes it): detected from the hook action log, a
 `[from:<agent>]` comment prefix, or GitHub comments on

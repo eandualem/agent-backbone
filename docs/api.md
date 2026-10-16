@@ -382,9 +382,10 @@ and what a resumed conversation keeps.
 ```
 
 Saves every registered agent whose session is running, then, with `stop`,
-stops them. Agents that are busy or `waiting_for_human` are left running
-unless `force` is set. The caller (`from_entity`) is stopped last. All fields
-are optional; a plain save stops nothing. `201`:
+stops them. Agents that are `starting`, `busy`, `blocked` or
+`waiting_for_human` are left running unless `force` is set; an agent
+relaunched since the save is always left running. The caller (`from_entity`)
+is stopped last. All fields are optional; a plain save stops nothing. `201`:
 
 ```json
 {"id": 12, "created_at": "2026-10-05T21:00:00.000000Z", "created_by": "orch",
@@ -393,16 +394,16 @@ are optional; a plain save stops nothing. `201`:
              "session_id": "a1b2c3d4-…", "session_reported_at": "2026-10-05T20:58:11.000000Z",
              "resumable": true, "not_resumable_reason": null, "state_at_save": "idle",
              "stop": "stopped", "stop_error": null}],
- "counts": {"saved": 1, "resumable": 1, "stopped": 1, "skipped_busy": 0, "stop_failed": 0},
+ "counts": {"saved": 1, "resumable": 1, "stopped": 1, "skipped_busy": 0, "skipped_replaced": 0, "stop_failed": 0},
  "resumes": []}
 ```
 
 `session_id` is the current session's: the id its hook reported or, before that,
 the one it was resumed on by id (`session_reported_at` is then `null`).
 `not_resumable_reason` is `no_session_reported` or `exact_resume_unsupported`.
-`stop` is `stopped`, `skipped_busy`, `stop_failed` (with `stop_error`) or
-`not_requested`. Every entry is kept, whatever its stop did. With no agent
-running, `409` and nothing is saved.
+`stop` is `stopped`, `skipped_busy`, `skipped_replaced` (relaunched since the
+save), `stop_failed` (with `stop_error`) or `not_requested`. Every entry is
+kept, whatever its stop did. With no agent running, `409` and nothing is saved.
 
 ### `GET /api/fleet/snapshots?limit=20`
 
