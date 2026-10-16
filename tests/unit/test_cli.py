@@ -45,7 +45,9 @@ class TestInit:
         assert "BACKBONE_API_KEY=" in env.read_text()
         assert len(env.read_text().split("BACKBONE_API_KEY=")[1].splitlines()[0]) >= 32
         assert oct(env.stat().st_mode)[-3:] == "600"
-        assert "backbone agent start" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "backbone agent start" in out
+        assert out.index("backbone service install") < out.index("backbone doctor")
 
     def test_keeps_env_without_force(self, _isolated_data_dir):
         data = _isolated_data_dir
