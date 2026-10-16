@@ -57,7 +57,10 @@ Coverage describes retained source evidence, not an independent provider audit:
 - `partial`: malformed, reset, replaced or otherwise incomplete source evidence.
 - `unavailable`: no identified readable source; this does not mean zero usage.
 
-Missing/deleted records cannot be recovered. Tokens may be incomplete for
+Missing/deleted records cannot be recovered. When a conversation's source file
+is gone, Backbone searches for it once, then records it as `source file is gone`
+and stops searching; the usage already collected stays, and the file is read
+again if it returns to the same path. Tokens may be incomplete for
 interrupted requests, unrecorded descendants, or runtime versions that omit
 usage. `unpriced` is separate: token counts remain available without a price.
 

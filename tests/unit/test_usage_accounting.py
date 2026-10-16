@@ -805,3 +805,33 @@ async def test_usage_source_failure_is_separate_from_registration(tmp_path, db, 
         "usage_source": "OSError",
     }
     assert "private path" not in str(result)
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex"])
+async def test_gone_source_is_searched_for_once_and_keeps_its_usage(
+    tmp_path, db, monkeypatch, runtime
+):
+    first, later = {"claude": (claude(), claude("m2")), "codex": (codex(), codex(at=T2))}[runtime]
+    config = config_for(tmp_path, runtime)
+    path = tmp_path / "source.jsonl"
+    append(path, first)
+    searches = []
+
+    def usage_paths(sid, env):
+        searches.append(sid)
+        return [path] if path.exists() else []
+
+    monkeypatch.setattr(RUNTIMES[runtime], "usage_paths", usage_paths)
+    register(config, runtime)
+    await collect_usage(config, db)
+    path.unlink()
+    for _ in range(3):
+        result = await collect_usage(config, db)
+    assert len(searches) == 2  # found, then searched for once after it went
+    assert result["errors"] == []
+    (session,) = await db.usage.sessions()
+    assert (session["coverage"], session["detail"]) == ("partial", "source file is gone")
+    assert len(await db.usage.events()) == 1
+    append(path, later)  # back at the recorded path: read again
+    await collect_usage(config, db)
+    assert len(await db.usage.events()) == 2

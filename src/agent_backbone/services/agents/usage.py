@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 _locks: WeakKeyDictionary = WeakKeyDictionary()
+SOURCE_GONE = "source file is gone"
 
 
 def _registrations(config: BackboneConfig) -> list[dict]:
@@ -120,9 +121,26 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                 source_path = session.get("_discovered_path", session["source_path"])
                 path = Path(source_path) if source_path else None
                 if not path or not path.is_file():
+                    if path and session["detail"] == SOURCE_GONE:
+                        continue  # searched for once already; it is read again if it reappears
                     paths = await asyncio.to_thread(rt.usage_paths, session["session_id"], env)
                     if len(paths) == 1:
                         path = paths[0]
+                    elif path:
+                        # The transcript it was read from is gone: note that once and
+                        # keep the usage already collected, instead of searching every pass.
+                        await db.usage.ingest(
+                            session,
+                            path=str(path),
+                            offset=session["offset"],
+                            cursor=session["cursor"],
+                            events=[],
+                            coverage="partial" if session["offset"] else "unavailable",
+                            detail=SOURCE_GONE,
+                            prices=prices,
+                            observed_at=now,
+                        )
+                        continue
                 if path is None:
                     continue
                 processed.add(session["id"])
