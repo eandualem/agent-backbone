@@ -28,13 +28,16 @@ Standard library only: this module is a leaf like ``templates``.
 
 from __future__ import annotations
 
+import asyncio
+import fcntl
+import hashlib
 import json
 import logging
 import os
 import re
 import shutil
 import tempfile
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -788,3 +791,16 @@ async def commit_store(store: Path, message: str) -> str | None:
         return None
     rc, _, err = await run_git(store, "commit", "-q", "-m", message)
     return _git_failure("commit", rc, err) if rc != 0 else None
+
+
+@asynccontextmanager
+async def store_lock(data_dir: Path, store: Path):
+    """One change to a store and its commit at a time, across processes: the
+    backbone's API and ``skills add --local`` (or ``tag`` with the API down)
+    share one git index. Closing the file releases the lock."""
+    key = hashlib.sha256(str(Path(store).expanduser().resolve()).encode()).hexdigest()[:16]
+    path = Path(data_dir) / "skills" / f"store-{key}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as handle:
+        await asyncio.to_thread(fcntl.flock, handle, fcntl.LOCK_EX)
+        yield

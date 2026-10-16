@@ -8,7 +8,6 @@ commits the store's history.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -28,13 +27,11 @@ from agent_backbone.skills import (
     is_git_repository,
     parse_skill,
     read_store,
+    store_lock,
     write_tags,
 )
 
 router = APIRouter(prefix="/api", tags=["skills"])
-
-_locks: dict[str, asyncio.Lock] = {}
-"""Per store: a change and its commit are one step, so each commit holds one change."""
 
 
 def _store_or_400(config):
@@ -108,7 +105,7 @@ async def add_to_store(body: SkillAddRequest, config=Depends(get_config)):
             detail="the skill must live inside a registered agent's directory; "
             "run `backbone skills add --local` from the terminal for other paths",
         )
-    async with _locks.setdefault(str(store), asyncio.Lock()):
+    async with store_lock(config.data_dir, store):
         try:
             skill = add_skill(
                 store, body.path, name=body.name, tags=tuple(body.tags), replace=body.replace
@@ -128,7 +125,7 @@ async def set_tags(name: str, body: SkillTagsRequest, config=Depends(get_config)
     current = parse_skill(store / name)
     if current.error == "not a directory":
         raise HTTPException(status_code=404, detail=f"unknown skill '{name}'")
-    async with _locks.setdefault(str(store), asyncio.Lock()):
+    async with store_lock(config.data_dir, store):
         try:
             write_tags(store / name, tuple(body.tags))
         except (OSError, ValueError) as exc:

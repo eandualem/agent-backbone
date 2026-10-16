@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -553,6 +556,34 @@ class TestMaterialize:
         (wt / ".git").write_text(f"gitdir: {main / '.git' / 'worktrees' / 'wt'}\n")
         materialize(store, wt, (".claude/skills",), read_store(store), manifest_path(tmp_path, "x"))
         assert "/.claude/skills/a" in (main / ".git" / "info" / "exclude").read_text()
+
+
+_HOLD_THE_STORE = """
+import asyncio, sys, time
+from pathlib import Path
+from agent_backbone import skills
+
+async def main():
+    async with skills.store_lock(Path(sys.argv[1]), Path(sys.argv[2])):
+        print("held", flush=True)
+        time.sleep(0.5)
+
+asyncio.run(main())
+"""
+
+
+async def test_the_store_lock_holds_across_processes(tmp_path):
+    # `skills add --local` runs in its own process beside the backbone's API.
+    store, data = tmp_path / "store", tmp_path / "data"
+    store.mkdir()
+    with subprocess.Popen(
+        [sys.executable, "-c", _HOLD_THE_STORE, str(data), str(store)], stdout=subprocess.PIPE
+    ) as holder:
+        assert holder.stdout.readline().strip() == b"held"
+        started = time.monotonic()
+        async with skills.store_lock(data, store):
+            waited = time.monotonic() - started
+    assert waited >= 0.3
 
 
 async def test_commit_store_initialises_history_on_first_use(tmp_path):

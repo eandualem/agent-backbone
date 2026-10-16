@@ -20,6 +20,7 @@ from agent_backbone.skills import (
     is_git_repository,
     parse_skill,
     read_store,
+    store_lock,
     write_tags,
 )
 
@@ -242,12 +243,13 @@ async def _skills(args: argparse.Namespace) -> int:
             name, tags, relinked = skill["name"], skill["tags"], skill.get("relinked", [])
             warnings = skill.get("warnings", [])
         else:
-            added = add_skill(
-                store, body["path"], name=args.name, tags=tuple(args.tag), replace=args.replace
-            )
-            failure = await commit_store(
-                store, f"add {added.name} [{' '.join(added.tags)}] by {_actor()}"
-            )
+            async with store_lock(config.data_dir, store):  # the API may change it too
+                added = add_skill(
+                    store, body["path"], name=args.name, tags=tuple(args.tag), replace=args.replace
+                )
+                failure = await commit_store(
+                    store, f"add {added.name} [{' '.join(added.tags)}] by {_actor()}"
+                )
             warnings = [f"store history not recorded: {failure}"] if failure else []
             name, tags = added.name, list(added.tags)
             relinked = await relink_skills(config, list(config.agents), skill=name)
@@ -278,10 +280,11 @@ async def _skills(args: argparse.Namespace) -> int:
             current = parse_skill(store / args.name)
             if current.error in ("not a directory", "no SKILL.md"):
                 raise ValueError(f"unknown skill '{args.name}' ({current.error})")
-            write_tags(store / args.name, tuple(args.tags))
-            failure = await commit_store(
-                store, f"tag {args.name} [{' '.join(args.tags)}] by {_actor()}"
-            )
+            async with store_lock(config.data_dir, store):
+                write_tags(store / args.name, tuple(args.tags))
+                failure = await commit_store(
+                    store, f"tag {args.name} [{' '.join(args.tags)}] by {_actor()}"
+                )
             warnings = [f"store history not recorded: {failure}"] if failure else []
             tags = list(parse_skill(store / args.name).tags)
             relinked = await relink_skills(config, list(config.agents), skill=args.name)
