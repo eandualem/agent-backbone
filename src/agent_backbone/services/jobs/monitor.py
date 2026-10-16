@@ -102,33 +102,6 @@ async def monitor_agents(
         states = await read_states(config, active_sessions)
         await observe_runtime(db, config, states)
         await sync_states(db, states)
-        try:
-            usage_result = await collect_usage(config, db)
-        except Exception as exc:
-            log.exception("Usage collection failed (non-fatal)")
-            await observe_job(
-                db, source="agent-monitor", stage="usage_collection", error_type=type(exc).__name__
-            )
-        else:
-            for check in usage_result.get("checks", []):
-                await observe_job(db, source="agent-monitor", **check)
-            await observe_job(
-                db,
-                source="agent-monitor",
-                stage="usage_collection",
-                error_type="usage_collection_errors" if usage_result.get("errors") else None,
-            )
-
-        try:
-            await note_context_size(config, db, states)
-        except Exception as exc:
-            log.exception("Context-size note failed (non-fatal)")
-            await observe_job(
-                db, source="agent-monitor", stage="context_note", error_type=type(exc).__name__
-            )
-        else:
-            await observe_job(db, source="agent-monitor", stage="context_note")
-
         if gh is not None:
             try:
                 await sync_dependencies(config, db, gh)
@@ -255,6 +228,35 @@ async def monitor_agents(
             )
         else:
             await observe_job(db, source="agent-monitor", stage="queue_drain")
+
+        # Usage is read after the drain: it can take a second, and queued work
+        # waits on nothing it measures. The context note reads what it records.
+        try:
+            usage_result = await collect_usage(config, db)
+        except Exception as exc:
+            log.exception("Usage collection failed (non-fatal)")
+            await observe_job(
+                db, source="agent-monitor", stage="usage_collection", error_type=type(exc).__name__
+            )
+        else:
+            for check in usage_result.get("checks", []):
+                await observe_job(db, source="agent-monitor", **check)
+            await observe_job(
+                db,
+                source="agent-monitor",
+                stage="usage_collection",
+                error_type="usage_collection_errors" if usage_result.get("errors") else None,
+            )
+
+        try:
+            await note_context_size(config, db, states)
+        except Exception as exc:
+            log.exception("Context-size note failed (non-fatal)")
+            await observe_job(
+                db, source="agent-monitor", stage="context_note", error_type=type(exc).__name__
+            )
+        else:
+            await observe_job(db, source="agent-monitor", stage="context_note")
 
         if gh is None:
             return {}

@@ -154,6 +154,10 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
             delivery_kind="direct_message",
             source=SOURCE,
             sender=sender,
+            # One identity per transition: what an earlier process delivered
+            # to this conversation before exiting is not delivered again.
+            operation_id=uuid.uuid5(uuid.NAMESPACE_URL, f"backbone:transition:{row['id']}").hex,
+            once=True,
         )
         outcome["message"] = report.outcome.value
         if report.queue is not None:
