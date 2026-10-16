@@ -509,7 +509,7 @@ a backbone restart, and every resume of it is recorded with it.
 
 ```bash
 backbone fleet save --stop            # save every running agent, then stop the idle ones
-backbone fleet save --stop --force    # also stop agents that are busy or waiting for you
+backbone fleet save --stop --force    # also stop starting, busy, blocked or waiting agents
 backbone fleet list                   # snapshots, newest first
 backbone fleet show [ID|latest]       # one snapshot: who was saved, stopped, resumable
 backbone fleet resume [ID|latest]     # start each saved agent on its saved conversation
@@ -519,15 +519,19 @@ backbone fleet resume [ID|latest]     # start each saved agent on its saved conv
 the session id of its **current** session: the one its hook reported or, before
 the first report, the one it was resumed on by id. An id left by an earlier
 session is never saved. A plain `save` stops nothing.
-`--stop` stops each saved agent afterwards. Agents that are busy or waiting for
-you are saved but left running unless you add `--force`. When an agent runs
+`--stop` stops each saved agent afterwards. Agents that are starting, busy,
+blocked (a turn paused at a usage limit resumes by itself) or waiting for you
+are saved but left running unless you add `--force`. An agent relaunched while
+the save runs, by a restart for example, is left running even with `--force`:
+its session no longer holds the saved conversation. When an agent runs
 the command itself, its own session is stopped last. With no agent running,
 nothing is saved, so a second save in one night never replaces the real
 snapshot as `latest`. `--note TEXT` is kept with the snapshot.
 
 The table shows each agent's state at the save, its stop (`stopped`,
-`skipped_busy`, `stop_failed` or `not_requested`) and whether it can be
-resumed. `no_session_reported` means its session had not reported an id yet.
+`skipped_busy`, `skipped_replaced`, `stop_failed` or `not_requested`) and
+whether it can be resumed. `no_session_reported` means its session had not
+reported an id yet.
 `exact_resume_unsupported` means its runtime cannot open a session by id
 (Deep Code, Aider).
 

@@ -1662,6 +1662,32 @@ async def test_a_fresh_start_is_recorded_before_the_readiness_wait(
     assert (seen["at"] != "2026-10-13T19:59:43.000000Z") is moves
 
 
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+@pytest.mark.parametrize(("session_id", "moves"), [("older", True), ("current", False)])
+async def test_a_resume_of_another_conversation_by_id_starts_over(
+    tmp_path, db, runtime, session_id, moves
+):
+    """A fleet resume restores a conversation older than the last launch's: an
+    issue the newer one received never reached it, so it must not hold the queue."""
+    from agent_backbone.services.agents import write_starting_marker
+
+    common = {"runtime": runtime, "model": None, "repo": "", "tags": [], "env": {}}
+    await db.agents.upsert("ike", dir=str(tmp_path), description="", unattended=False, **common)
+    await db.agents.conversation_started("ike", "2026-10-13T19:59:43.000000Z")
+    config = bootstrap_config(tmp_path / "data")
+    write_starting_marker(config.state_dir, "ike", 1.0, launch_id="L1")
+    report = {"state": "idle", "ts": 2.0, "session_id": "current", "runtime": runtime}
+    write_state_file(config.state_dir, "ike", {**report, "launch_id": "L1"})
+    spec = AgentSpec(name="ike", dir=str(tmp_path), runtime=runtime)
+    with (
+        patch(f"{_MOD}.session_exists", AsyncMock(return_value=False)),
+        patch(f"{_MOD}.start_session", AsyncMock(return_value=True)),
+        patch(f"{_BASE}.resolve_command", return_value=f"/bin/{runtime}"),
+    ):
+        assert (await start_agent(spec, config, session_id=session_id, db=db, wait=False)).ok
+    assert (await db.agents.started_at("ike") != "2026-10-13T19:59:43.000000Z") is moves
+
+
 async def test_a_failed_start_record_never_fails_a_running_session(tmp_path):
     db = AsyncMock()
     db.agents.conversation_started.side_effect = RuntimeError("database is locked")

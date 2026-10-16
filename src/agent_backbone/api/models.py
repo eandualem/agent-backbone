@@ -691,7 +691,7 @@ class FleetSaveRequest(BaseModel):
 
     stop: bool = False
     force: bool = False
-    """Also stop agents that are busy or waiting for a person."""
+    """Also stop agents that are starting, busy, blocked or waiting for a person."""
     note: str | None = None
     from_entity: str = ""
 
@@ -708,7 +708,8 @@ class FleetSnapshotAgent(BaseModel):
     """``no_session_reported`` | ``exact_resume_unsupported``."""
     state_at_save: str
     stop: str
-    """``stopped`` | ``skipped_busy`` | ``stop_failed`` | ``not_requested``."""
+    """``stopped`` | ``skipped_busy`` | ``skipped_replaced`` | ``stop_failed`` |
+    ``not_requested``."""
     stop_error: str | None = None
 
 

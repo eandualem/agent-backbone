@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.agents import AgentStore, StartResult
+from agent_backbone.services.database import now_iso
+from agent_backbone.services.jobs.retry import drain_message_queue
 from agent_backbone.services.jobs.transitions import run_transitions
-from agent_backbone.services.routing import DeliveryReport
+from agent_backbone.services.routing import DeliveryReport, safe_deliver
+from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 
 _JOB = "agent_backbone.services.jobs.transitions"
+_DELIVERY = "agent_backbone.services.routing._delivery"
 PAST = "2020-01-01T00:00:00.000000Z"
 FUTURE = "2099-01-01T00:00:00.000000Z"
 
@@ -225,6 +230,153 @@ async def test_a_launch_interrupted_by_a_backbone_restart_is_recovered_from_diag
     assert done["status"] == "completed" and done["result"]["ready"] == "ready"
     assert "earlier backbone process" in done["result"]["evidence"][0]
     deliver.assert_awaited_once()
+
+
+@pytest.fixture
+def terminal():
+    """The real delivery behind the ``safe_deliver`` seam, into an agent at its
+    prompt; the paste itself is counted."""
+    with (
+        patch(
+            f"{_DELIVERY}.get_session_intelligence",
+            new_callable=AsyncMock,
+            return_value=_profile(SessionIntelligence.READY),
+        ) as readiness,
+        patch(f"{_DELIVERY}.send_message", new_callable=AsyncMock, return_value=True) as paste,
+    ):
+        yield readiness, paste
+
+
+def _profile(condition):
+    return SessionProfile(session_name="ike", intelligence=condition, runtime="shell")
+
+
+def _stops_after_first(deliver):
+    """The real delivery; the service stops right after the first one, before
+    the transition is closed."""
+
+    async def deliver_then_stop(*args, **kwargs):
+        report = await safe_deliver(*args, **kwargs)
+        if deliver.await_count == 1:
+            raise asyncio.CancelledError
+        return report
+
+    return deliver_then_stop
+
+
+async def _recover(config, store, db, start, row_id):
+    """The next process finds the replacement this transition launched running."""
+    launch_op = (await db.transitions.get(row_id))["launch_operation_id"]
+    await db.diagnostics.record(
+        category="startup", operation_id=launch_op, code="ready", agent_name="ike"
+    )
+    start.side_effect = None
+    start.return_value = StartResult(ok=True, already_running=True)
+    with patch(f"{_JOB}.query_environment_var", new_callable=AsyncMock, return_value=launch_op):
+        return await _run(config, store, db)
+
+
+async def test_a_continuation_pasted_before_a_backbone_restart_is_not_pasted_again(
+    db, config, store, seams, terminal
+):
+    """The earlier process launched the replacement, pasted the continuation
+    and exited before closing the row: the next one finds the paste recorded."""
+    _, start, deliver = seams
+    _, paste = terminal
+    deliver.side_effect = _stops_after_first(deliver)
+    row = await db.transitions.create(agent_name="ike", delay_seconds=0, message="hi")
+    with pytest.raises(asyncio.CancelledError):
+        await _run(config, store, db)
+
+    assert await _recover(config, store, db, start, row["id"]) == {"ike": "started"}
+    paste.assert_awaited_once()  # never pasted a second time
+    done = await db.transitions.get(row["id"])
+    assert done["status"] == "completed" and done["result"]["message"] == "already_delivered"
+
+
+async def test_a_paste_whose_submitted_record_was_lost_is_not_pasted_again(
+    db, config, store, seams, terminal
+):
+    """The service stopped between the delivery receipt and its diagnostic:
+    the saved receipt is enough for the next process."""
+    _, start, deliver = seams
+    _, paste = terminal
+    deliver.side_effect = safe_deliver
+    record = db.diagnostics.record
+
+    async def stop_at_submitted(**kwargs):
+        if kwargs["code"] == "submitted":
+            raise asyncio.CancelledError
+        return await record(**kwargs)
+
+    row = await db.transitions.create(agent_name="ike", delay_seconds=0, message="hi")
+    with (
+        patch.object(db.diagnostics, "record", side_effect=stop_at_submitted),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _run(config, store, db)
+
+    assert await _recover(config, store, db, start, row["id"]) == {"ike": "started"}
+    paste.assert_awaited_once()
+
+
+async def test_a_queued_copy_the_drain_pastes_during_recovery_is_not_pasted_again(
+    db, config, store, seams, terminal
+):
+    """The earlier process queued the continuation for a busy agent and exited.
+    On recovery the queue drain pastes that copy after the transition looked
+    and before its delivery takes the session: the delivery still finds it."""
+    _, start, deliver = seams
+    readiness, paste = terminal
+    readiness.return_value = _profile(SessionIntelligence.AGENT_WORKING)
+    deliver.side_effect = _stops_after_first(deliver)
+    row = await db.transitions.create(agent_name="ike", delay_seconds=0, message="hi")
+    with pytest.raises(asyncio.CancelledError):
+        await _run(config, store, db)
+    paste.assert_not_awaited()
+
+    readiness.return_value = _profile(SessionIntelligence.READY)
+
+    async def drain_first(*args, **kwargs):
+        await drain_message_queue(config, db, AsyncMock(), active_sessions={"ike"})
+        return await safe_deliver(*args, **kwargs)
+
+    deliver.side_effect = drain_first
+    assert await _recover(config, store, db, start, row["id"]) == {"ike": "started"}
+    paste.assert_awaited_once()
+
+
+async def test_a_later_replacement_gets_the_continuation_an_earlier_one_received(
+    db, config, store, seams, terminal
+):
+    """The first replacement got the continuation; the backbone stopped before
+    closing the row and that session exited. A later process launched a fresh
+    one and stopped before sending: that conversation never saw the message."""
+    _, start, deliver = seams
+    _, paste = terminal
+
+    async def fresh_launch(*args, **kwargs):
+        await db.agents.conversation_started("ike", now_iso())
+        return StartResult(ok=True, ready="ready")
+
+    async def first_only_then_stop(*args, **kwargs):
+        if deliver.await_count == 1:
+            await safe_deliver(*args, **kwargs)
+        raise asyncio.CancelledError
+
+    start.side_effect = fresh_launch
+    deliver.side_effect = first_only_then_stop
+    row = await db.transitions.create(agent_name="ike", delay_seconds=0, message="hi")
+    for _ in range(2):
+        with pytest.raises(asyncio.CancelledError):
+            await _run(config, store, db)
+    paste.assert_awaited_once()
+
+    deliver.side_effect = safe_deliver
+    assert await _recover(config, store, db, start, row["id"]) == {"ike": "started"}
+    assert paste.await_count == 2
+    done = await db.transitions.get(row["id"])
+    assert done["status"] == "completed" and done["result"]["message"] == "delivered"
 
 
 async def test_the_retrys_own_already_running_record_does_not_hide_the_launch(
