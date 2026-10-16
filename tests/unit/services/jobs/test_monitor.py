@@ -12,7 +12,12 @@ from agent_backbone.config import AgentsConfig, EscalationConfig, TelegramConfig
 from agent_backbone.models import DeliveryOutcome, IssueData, ParsedLabels
 from agent_backbone.services.agents import AgentState, StateSnapshot
 from agent_backbone.services.jobs import escalation as esc
-from agent_backbone.services.jobs.monitor import monitor_agents, read_states, sync_states
+from agent_backbone.services.jobs.monitor import (
+    last_pass_steps,
+    monitor_agents,
+    read_states,
+    sync_states,
+)
 from agent_backbone.services.jobs.pending import deliver_pending_issues
 from agent_backbone.services.routing import DeliveryReport
 
@@ -719,6 +724,21 @@ class TestMonitorAgents:
         assert result == {"ike": "no_pending"}
         for mock in (sync, stalls, offline, plans, on_change, drain, pend):
             mock.assert_awaited_once()
+        assert list(last_pass_steps()) == [
+            "state_read",
+            "dependency_sync",
+            "stall_detection",
+            "offline_detection",
+            "plan_notification",
+            "blocked_notification",
+            "denial_notification",
+            "permission_notification",
+            "snapshot_broadcast",
+            "queue_drain",
+            "usage_collection",
+            "context_note",
+            "pending_issues",
+        ]
 
     async def test_step_failure_is_isolated(self, config, db):
         with (

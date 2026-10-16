@@ -50,6 +50,7 @@ def _register_jobs(app: FastAPI):
         SourcesPoller,
         UpgradeWatch,
         delivery_retry,
+        last_pass_steps,
         monitor_agents,
         observe_duration,
         observe_job,
@@ -68,7 +69,11 @@ def _register_jobs(app: FastAPI):
         )
         slow = state.config.settings.get("diagnostics.slow_job_seconds", 30)
         await observe_duration(
-            state.db, source=name, duration_ms=duration_ms, threshold_ms=int(slow * 1000)
+            state.db,
+            source=name,
+            duration_ms=duration_ms,
+            threshold_ms=int(slow * 1000),
+            steps=last_pass_steps() if name == "agent-monitor" else None,
         )
 
     scheduler = PeriodicScheduler(on_result=_job_result)
