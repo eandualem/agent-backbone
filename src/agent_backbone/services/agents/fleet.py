@@ -16,10 +16,14 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from agent_backbone.services.agents._file_reader import read_launch_session, read_state_file
+from agent_backbone.services.agents._file_reader import (
+    read_launch_marker,
+    read_launch_session,
+    read_state_file,
+)
 from agent_backbone.services.agents._inference import agent_state
 from agent_backbone.services.agents._locks import lifecycle_lock
-from agent_backbone.services.agents.models import AgentState
+from agent_backbone.services.agents.models import WORKING_STATES, AgentState
 from agent_backbone.services.agents.operations import (
     StartRequest,
     resolve_agent,
@@ -36,7 +40,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_BUSY = frozenset({AgentState.BUSY, AgentState.WAITING_FOR_HUMAN})
+_BUSY = WORKING_STATES | {AgentState.WAITING_FOR_HUMAN}
 _PARALLEL_STARTS = 4
 """Resumes launched at once: a fleet does not wait for one readiness check per agent in turn."""
 
@@ -63,8 +67,12 @@ def save_counts(agents: list[dict]) -> dict[str, int]:
     }
 
 
-async def _entry(config: BackboneConfig, spec, *, stop: bool) -> dict:
+async def _entry(
+    config: BackboneConfig, spec, *, stop: bool
+) -> tuple[dict, tuple[float, str] | None]:
     snapshot = await agent_state(config, spec.name)
+    # The launch the saved id belongs to: a stop later checks it is still the one running.
+    launch = read_launch_marker(config.state_dir, spec.name)
     # Only the running session's own report: an id an earlier session left in
     # the state file would resume the wrong conversation.
     hook = read_state_file(config.state_dir, spec.name, current_launch=True)
@@ -81,7 +89,7 @@ async def _entry(config: BackboneConfig, spec, *, stop: bool) -> dict:
         reason = "exact_resume_unsupported"
     elif not session_id:
         reason = "no_session_reported"
-    return {
+    entry = {
         "name": spec.name,
         "runtime": spec.runtime,
         "model": spec.model,
@@ -94,6 +102,7 @@ async def _entry(config: BackboneConfig, spec, *, stop: bool) -> dict:
         "stop": "pending" if stop else "not_requested",
         "stop_error": None,
     }
+    return entry, launch
 
 
 async def save_fleet(
@@ -110,8 +119,9 @@ async def save_fleet(
 
     Returns the snapshot, or None when no agent is running (nothing is saved,
     so an empty set never becomes the latest). With ``stop``, an agent that is
-    busy or waiting for a person is saved but left running unless ``force``;
-    the caller's own session is stopped last."""
+    starting, busy, blocked or waiting for a person is saved but left running
+    unless ``force``; one relaunched since the save is left running; the
+    caller's own session is stopped last."""
     running = [
         spec
         for spec in store.agents
@@ -122,25 +132,33 @@ async def save_fleet(
     ]
     if not running:
         return None
-    agents = [await _entry(config, spec, stop=stop) for spec in running]
+    saved = [await _entry(config, spec, stop=stop) for spec in running]
+    agents = [entry for entry, _ in saved]
+    launches = {entry["name"]: launch for entry, launch in saved}
     snapshot = await db.fleet.create(
         created_by=from_entity, note=note, stop=stop, force=force, agents=agents
     )
     if stop:
         # The caller last: an agent saving its own fleet keeps running until the rest is done.
         for entry in sorted(agents, key=lambda entry: entry["name"] == from_entity):
-            # Checked again right before the stop: an agent may have started
-            # working while the others were saved.
-            busy = AgentState.parse(entry["state_at_save"]) in _BUSY or (
-                (await agent_state(config, entry["name"])).state in _BUSY
-            )
-            if busy and not force:
-                entry["stop"] = "skipped_busy"
-                continue
-            try:
-                stopped = await stop_agent_session(config, entry["name"])
-            except ValueError as exc:
-                stopped, entry["stop_error"] = False, str(exc)
+            # Held from the checks to the stop, so a restart cannot launch in between.
+            async with lifecycle_lock(entry["name"]):
+                # Checked again right before the stop: an agent may have started
+                # working while the others were saved.
+                busy = AgentState.parse(entry["state_at_save"]) in _BUSY or (
+                    (await agent_state(config, entry["name"])).state in _BUSY
+                )
+                if busy and not force:
+                    entry["stop"] = "skipped_busy"
+                    continue
+                if read_launch_marker(config.state_dir, entry["name"]) != launches[entry["name"]]:
+                    # Relaunched since the save: the session is not the saved conversation's.
+                    entry["stop"] = "skipped_replaced"
+                    continue
+                try:
+                    stopped = await stop_agent_session(config, entry["name"])
+                except ValueError as exc:
+                    stopped, entry["stop_error"] = False, str(exc)
             entry["stop"] = "stopped" if stopped else "stop_failed"
             if not stopped and entry["stop_error"] is None:
                 entry["stop_error"] = "the session could not be stopped"

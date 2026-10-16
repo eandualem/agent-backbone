@@ -465,12 +465,18 @@ async def _start_agent(
         details["reason"] = "session_failed"
         clear_starting_marker(config.state_dir, spec.name)
         return StartResult(ok=False, evidence=("tmux could not create the session",))
-    if db is not None and (not resume_target or command is None):
-        # A fresh conversation (a plain shell has none to resume): what earlier
-        # ones received no longer counts for it. Recorded before the readiness
-        # wait, which a backbone restart can cut short. The session is already
-        # up, so a failed write must not fail the start (a swarm would roll
-        # back a member that keeps running).
+    if db is not None and (
+        not resume_target
+        or command is None
+        or (isinstance(resume_target, str) and resume_target != last_launch)
+    ):
+        # A fresh conversation (a plain shell has none to resume), or a saved one
+        # other than the last launch's: what was delivered before no longer
+        # counts for it (a restored one may be offered an issue again, rather
+        # than miss one the newer conversation received). Recorded before the
+        # readiness wait, which a backbone restart can cut short. The session
+        # is already up, so a failed write must not fail the start (a swarm
+        # would roll back a member that keeps running).
         try:
             await db.agents.conversation_started(spec.name, session_started)
         except Exception:

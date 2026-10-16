@@ -29,7 +29,9 @@ def add_fleet_parser(sub) -> None:
     save = fsub.add_parser("save", help="save every running agent and its conversation")
     save.add_argument("--stop", action="store_true", help="then stop the saved agents")
     save.add_argument(
-        "--force", action="store_true", help="with --stop, also stop busy or waiting agents"
+        "--force",
+        action="store_true",
+        help="with --stop, also stop starting, busy, blocked or waiting agents",
     )
     save.add_argument("--note", default=None, help="a note kept with the snapshot")
     fsub.add_parser("list", help="saved snapshots, newest first")
@@ -71,7 +73,7 @@ def _print_snapshot(data: dict) -> None:
     )
     if counts.get("skipped_busy"):
         note(
-            f"{counts['skipped_busy']} busy or waiting agent(s) left running: "
+            f"{counts['skipped_busy']} starting, busy, blocked or waiting agent(s) left running: "
             "backbone fleet save --stop --force stops them too"
         )
 

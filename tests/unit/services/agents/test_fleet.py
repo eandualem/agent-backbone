@@ -105,18 +105,24 @@ class TestSave:
         assert snapshot["agents"][0]["not_resumable_reason"] == "exact_resume_unsupported"
 
     async def test_busy_agents_are_saved_but_not_stopped_unless_forced(self, db, tmp_path):
-        store = await _store(db, tmp_path, ("app", "claude"), ("web", "codex"), ("orch", "claude"))
-        running = ("app", "web", "orch")
-        states = {"web": "busy", "orch": "waiting_for_human"}
-        snapshot, stopped = await _save(store, db, running=running, states=states, stop=True)
+        """Starting and blocked count too: a turn paused at a usage limit resumes by itself."""
+        names = ("app", "web", "orch", "new", "paused")
+        store = await _store(db, tmp_path, *((name, "claude") for name in names))
+        states = {
+            "web": "busy",
+            "orch": "waiting_for_human",
+            "new": "starting",
+            "paused": "blocked",
+        }
+        snapshot, stopped = await _save(store, db, running=names, states=states, stop=True)
         assert stopped == ["app"]
         stops = {entry["name"]: entry["stop"] for entry in snapshot["agents"]}
-        assert stops == {"app": "stopped", "web": "skipped_busy", "orch": "skipped_busy"}
+        assert stops == {"app": "stopped", **dict.fromkeys(states, "skipped_busy")}
         saved = (await db.fleet.get(snapshot["id"]))["agents"]
         assert {entry["name"]: entry["stop"] for entry in saved} == stops
 
-        _, stopped = await _save(store, db, running=running, states=states, stop=True, force=True)
-        assert sorted(stopped) == ["app", "orch", "web"]
+        _, stopped = await _save(store, db, running=names, states=states, stop=True, force=True)
+        assert sorted(stopped) == sorted(names)
 
     async def test_an_agent_that_turns_busy_before_its_stop_is_left_running(self, db, tmp_path):
         store = await _store(db, tmp_path, ("app", "claude"))
@@ -133,6 +139,30 @@ class TestSave:
             snapshot = await save_fleet(store, store.config, db, stop=True)
         assert snapshot["agents"][0]["stop"] == "skipped_busy"
         stop.assert_not_awaited()
+
+    async def test_an_agent_relaunched_before_its_stop_is_left_running(self, db, tmp_path):
+        """A restart replaced the saved session while the others were handled:
+        stopping by name would end the replacement, not the saved conversation."""
+        store = await _store(db, tmp_path, ("app", "claude"))
+        _report(store, "app", "sess-1", "claude", launch_id="L1")
+        calls = []
+
+        async def state(config, name, **kwargs):
+            calls.append(name)
+            if len(calls) == 2:  # right before the stop: the replacement launched
+                write_starting_marker(store.config.state_dir, name, 5.0, launch_id="L2")
+            return StateSnapshot(state=AgentState.IDLE)
+
+        with (
+            patch(f"{_FLEET}.session_exists", AsyncMock(return_value=True)),
+            patch(f"{_FLEET}.agent_state", state),
+            patch(f"{_FLEET}.stop_agent_session", AsyncMock(return_value=True)) as stop,
+        ):
+            snapshot = await save_fleet(store, store.config, db, stop=True)
+        stop.assert_not_awaited()
+        (entry,) = snapshot["agents"]
+        assert entry["session_id"] == "sess-1" and entry["stop"] == "skipped_replaced"
+        assert (await db.fleet.get(snapshot["id"]))["agents"][0]["stop"] == "skipped_replaced"
 
     async def test_the_caller_is_stopped_last(self, db, tmp_path):
         store = await _store(db, tmp_path, ("app", "claude"), ("web", "codex"), ("zed", "claude"))

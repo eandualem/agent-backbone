@@ -160,7 +160,9 @@ An issue is delivered **once** per session. If the agent never
 acknowledges it, the queue stays blocked on it (`awaiting_ack`) until a
 comment appears or the agent starts a fresh session: a fresh conversation
 never saw what an earlier one received, so it is offered that issue again. A
-resumed conversation keeps what it was sent. Watch
+resumed conversation keeps what it was sent; one resumed by id that is not the
+last launch's (a fleet resume) counts as fresh, since it never saw what the
+newer one received. Watch
 `backbone agent inspect`, `/api/deliveries` or `/queue` on Telegram.
 
 ### The agent's queue and its order
