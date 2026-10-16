@@ -25,7 +25,7 @@ MAX_AGE_SECONDS = 7 * 24 * 3600
 
 
 def title_for(agent: str) -> str:
-    """``contract-desk`` → ``Contract Desk``."""
+    """``docs-writer`` → ``Docs Writer``."""
     words = agent.replace("_", " ").replace("-", " ").split()
     return " ".join(word[:1].upper() + word[1:] for word in words) or agent
 
