@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 _locks: WeakKeyDictionary = WeakKeyDictionary()
+SOURCE_GONE = "source file is gone"
 
 
 def _registrations(config: BackboneConfig) -> list[dict]:
@@ -76,6 +77,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
             checks[key] = checks.get(key) or error_type
 
         registrations = await asyncio.to_thread(_registrations, config)
+        registered = set()
         for row in registrations:
             if row.get("agent") not in config.agents.names or row.get("runtime") not in RUNTIMES:
                 continue
@@ -83,7 +85,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
             if not isinstance(sid, str) or not sid or len(sid) > 300:
                 continue
             try:
-                await db.usage.remember(
+                identity = await db.usage.remember(
                     row["agent"],
                     row["runtime"],
                     sid,
@@ -93,6 +95,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                 # The database has committed this immutable launch identity.
                 # Consume the registration; no age-based deletion or new job needed.
                 if registration := row.get("_registration_path"):
+                    registered.add(identity)  # a launch, not the saved hook state
                     with suppress(OSError):
                         registration.unlink(missing_ok=True)
             except (ValueError, KeyError, TypeError) as exc:
@@ -120,9 +123,30 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                 source_path = session.get("_discovered_path", session["source_path"])
                 path = Path(source_path) if source_path else None
                 if not path or not path.is_file():
+                    if (
+                        path
+                        and session["detail"] == SOURCE_GONE
+                        and session["id"] not in registered
+                    ):
+                        continue  # searched once; a new launch (a resume) searches again
                     paths = await asyncio.to_thread(rt.usage_paths, session["session_id"], env)
                     if len(paths) == 1:
                         path = paths[0]
+                    elif path and not paths:
+                        # The transcript it was read from is gone: note that once and
+                        # keep the usage already collected, instead of searching every pass.
+                        await db.usage.ingest(
+                            session,
+                            path=str(path),
+                            offset=session["offset"],
+                            cursor=session["cursor"],
+                            events=[],
+                            coverage="partial" if session["offset"] else "unavailable",
+                            detail=SOURCE_GONE,
+                            prices=prices,
+                            observed_at=now,
+                        )
+                        continue
                 if path is None:
                     continue
                 processed.add(session["id"])
