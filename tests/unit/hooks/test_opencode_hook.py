@@ -660,6 +660,24 @@ await globalThis[Symbol.for("agent-backbone.skills-reload")].check();
     assert (state["state"], state["session_id"]) == ("idle", "root")
 
 
+def test_a_subagent_found_first_never_names_an_earlier_conversation(tmp_path):
+    # Session a ran earlier in this process; b is resumed and its subagent's
+    # lookup answers before b's: the record waits for b instead of naming a.
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "a"}});
+await status("a", "busy");
+await idle("a");
+await status("b", "busy");
+await status("sub", "busy");
+await answer("sub", "b"); seen();
+await answer("b"); seen();
+""",
+    )
+    assert states == [["busy", "sub"], ["busy", "b"]]
+
+
 def test_a_failed_lookup_keeps_the_session_counted(tmp_path):
     states = _sessions(
         tmp_path,

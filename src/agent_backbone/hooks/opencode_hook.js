@@ -297,7 +297,11 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
             working.delete(sessionID); // its idle is ignored from now on
             held.delete(sessionID);
             withdraw(sessionID);
-            reclaim([...working].find((id) => roots.has(id)) ?? root);
+            // A working session not yet known may be the agent's own, resumed: its
+            // lookup reclaims the record then, rather than an earlier conversation now.
+            if (![...working].some((id) => !roots.has(id))) {
+              reclaim([...working].find((id) => roots.has(id)) ?? root);
+            }
           } else if (info?.id) {
             roots.add(sessionID);
             if (working.has(sessionID)) reclaim(sessionID); // its subagent may have been found first
