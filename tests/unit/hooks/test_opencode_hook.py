@@ -425,6 +425,16 @@ const seen = () => {
   const record = JSON.parse(fs.readFileSync(`${process.env.BACKBONE_STATE_DIR}/app.json`, "utf8"));
   states.push([record.state, record.session_id]);
 };
+// A steer offered as the backbone offers it: to the turn the state names now.
+const context = `${process.env.BACKBONE_STATE_DIR}/context/app`;
+const offer = (key, turn) => {
+  const { prompted_at, session_id } = JSON.parse(
+    fs.readFileSync(`${process.env.BACKBONE_STATE_DIR}/app.json`, "utf8"));
+  fs.mkdirSync(context, {recursive: true});
+  fs.writeFileSync(`${context}/${key}.turn`, JSON.stringify(turn ?? {prompted_at, session_id}));
+  fs.writeFileSync(`${context}/${key}.md`, key);
+};
+const toolCall = (sessionID) => hook["tool.execute.after"]({sessionID, tool: "read"}, {output: ""});
 """
 
 
@@ -562,6 +572,53 @@ states.push(fs.readdirSync(offers).sort());
         ["busy", "sub"],  # unknown yet: it may be the agent's own
         ["busy", "root"],
         ["steer-1.taken", "steer-1.turn"],
+    ]
+
+
+def test_a_resumed_session_found_after_its_subagent_gives_the_state_back(tmp_path):
+    # The agent's own session was resumed too (no session.created), and its
+    # subagent's lookup answers first: once the agent's session is known, the
+    # state names it again, and a steer offered for its turn is handed over.
+    states = _sessions(
+        tmp_path,
+        """
+await status("root", "busy");
+offer("steer-1");
+await status("sub", "busy"); seen();
+await answer("sub", "root"); seen();
+await answer("root"); seen();
+await toolCall("root");
+states.push(fs.readdirSync(context).sort());
+""",
+    )
+    assert states == [
+        ["busy", "sub"],
+        ["busy", "sub"],  # whose subagent it is is not known yet
+        ["busy", "root"],
+        ["steer-1.taken", "steer-1.turn"],
+    ]
+
+
+def test_a_steer_offered_while_a_subagent_was_named_stays_the_turns(tmp_path):
+    # Offered while the state named a resumed subagent not known yet: still the
+    # agent's turn once the state names its own session again. A steer for an
+    # earlier turn that named the same subagent is not.
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "root"}});
+await status("root", "busy");
+await status("sub", "busy");
+offer("steer-1");
+offer("steer-0", {prompted_at: 1, session_id: "sub"});
+await answer("sub", "root"); seen();
+await toolCall("root");
+states.push(fs.readdirSync(context).sort());
+""",
+    )
+    assert states == [
+        ["busy", "root"],
+        ["steer-0.missed", "steer-0.turn", "steer-1.taken", "steer-1.turn"],
     ]
 
 

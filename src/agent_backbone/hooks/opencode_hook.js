@@ -78,7 +78,7 @@ function offers(dir, prefix = "") {
   }
 }
 
-function takeContext(t) {
+function takeContext(t, children) {
   // Batches for the agent first (queue ids, oldest first), then this session's steers.
   const key = (name) => {
     const stem = name.slice(0, -3);
@@ -95,7 +95,7 @@ function takeContext(t) {
     for (const name of offers(dir).sort(order)) {
       const offer = path.join(dir, name);
       try {
-        if (forEarlierTurn(offer, current)) {
+        if (forEarlierTurn(offer, current, children)) {
           fs.renameSync(offer, `${offer.slice(0, -3)}.missed`);
           continue;
         }
@@ -109,12 +109,17 @@ function takeContext(t) {
   return texts;
 }
 
-function forEarlierTurn(offer, current) {
+function forEarlierTurn(offer, current, children) {
   // Match backbone_state.py: compare only identity fields present on both
   // sides, and keep legacy offers without readable turn metadata usable.
   try {
     const turn = JSON.parse(fs.readFileSync(`${offer.slice(0, -3)}.turn`, "utf8"));
     if (!turn || typeof turn !== "object" || Array.isArray(turn)) return false;
+    // Offered to this prompt while the state named a subagent not known yet:
+    // the agent's own turn, which the state names again since.
+    if (turn.prompted_at != null && turn.prompted_at === current.prompted_at && children.has(turn.session_id)) {
+      return false;
+    }
     return ["prompted_at", "session_id"].some((key) =>
       turn[key] != null && current[key] != null && turn[key] !== current[key]);
   } catch {
@@ -292,20 +297,24 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
             working.delete(sessionID); // its idle is ignored from now on
             held.delete(sessionID);
             withdraw(sessionID);
-            // Its busy named it while it was unknown: name the agent's own session.
-            const current = readCurrent(t);
-            const own = [...working].find((id) => roots.has(id)) ?? root;
-            if (own && current.session_id === sessionID) {
-              // Only the session changes: a reload's record stays the reload's to end.
-              const reload = current.event === "skills.reload" ? { event: current.event, ts: current.ts } : {};
-              record(t, "session.subagent", current.state ?? STATE_BUSY, current.reason, { session_id: own, ...reload });
-            }
-          } else if (info?.id) roots.add(sessionID);
+            reclaim([...working].find((id) => roots.has(id)) ?? root);
+          } else if (info?.id) {
+            roots.add(sessionID);
+            if (working.has(sessionID)) reclaim(sessionID); // its subagent may have been found first
+          }
         } catch { /* unknown stays unknown */ }
         lookups.delete(sessionID);
       })());
     }
     return lookups.get(sessionID);
+  };
+  // A subagent's busy named it while it was unknown: name the agent's own session.
+  const reclaim = (own) => {
+    const current = readCurrent(t);
+    if (!own || !children.has(current.session_id)) return;
+    // Only the session changes: a reload's record stays the reload's to end.
+    const reload = current.event === "skills.reload" ? { event: current.event, ts: current.ts } : {};
+    record(t, "session.subagent", current.state ?? STATE_BUSY, current.reason, { session_id: own, ...reload });
   };
 
   const handOver = async (sessionID, output) => {
@@ -316,7 +325,7 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
     // Only the agent's own session, and only while its turn runs: a call that
     // ends after the turn did (an interrupt) leaves the offers to that end.
     if (!roots.has(sessionID) || !working.has(sessionID)) return;
-    const texts = takeContext(t);
+    const texts = takeContext(t, children);
     if (texts.length === 0) return;
     const text = texts.join("\n\n");
     // A message without what drives the turn (its agent and model) would switch it.
