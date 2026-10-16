@@ -28,13 +28,16 @@ Standard library only: this module is a leaf like ``templates``.
 
 from __future__ import annotations
 
+import asyncio
+import fcntl
+import hashlib
 import json
 import logging
 import os
 import re
 import shutil
 import tempfile
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -560,7 +563,8 @@ def repository_skills(
             continue
         for entry in sorted(folder.iterdir()):
             rel = f"{source}/{entry.name}"
-            if entry.name.startswith(".") or rel in recorded:
+            # A recorded path the repository replaced with its own directory is its own.
+            if entry.name.startswith(".") or (rel in recorded and entry.is_symlink()):
                 continue
             if store is not None and _points_into(entry, store):
                 continue
@@ -754,28 +758,55 @@ def is_git_repository(store: Path) -> bool:
     return (Path(store) / ".git").exists()
 
 
-async def commit_store(store: Path, message: str) -> bool:
+def _git_failure(step: str, rc: int, stderr: str) -> str:
+    """Why a git step failed: the last line of its error output, which names the cause."""
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    return f"git {step} failed: {lines[-1] if lines else f'exit status {rc}'}"
+
+
+async def commit_store(store: Path, message: str) -> str | None:
     """Commit every change in the store, initialising it as a git repository first.
 
     The store's history is the audit trail for a skill other agents will
     load: who changed what, and when — so history starts with the first
     tool operation, not when someone remembers to ``git init``. Returns
-    whether a commit was made.
+    why the change could not be recorded (no git author identity, git
+    missing, a failing hook), or None when it was committed or there was
+    nothing to commit.
     """
     from agent_backbone.git import run_git
 
     store = Path(store)
     if not store.is_dir():
-        return False
+        return f"{store} is not a directory"
     if not is_git_repository(store):
-        rc, _, _ = await run_git(store, "init", "-q")
+        rc, _, err = await run_git(store, "init", "-q")
         if rc != 0:
-            return False
-    rc, _, _ = await run_git(store, "add", "-A")
+            return _git_failure("init", rc, err)
+    rc, _, err = await run_git(store, "add", "-A")
     if rc != 0:
-        return False
+        return _git_failure("add", rc, err)
     rc, _, _ = await run_git(store, "diff", "--cached", "--quiet")
     if rc == 0:
-        return False
-    rc, _, _ = await run_git(store, "commit", "-q", "-m", message)
-    return rc == 0
+        return None
+    rc, _, err = await run_git(store, "commit", "-q", "-m", message)
+    return _git_failure("commit", rc, err) if rc != 0 else None
+
+
+@asynccontextmanager
+async def store_lock(data_dir: Path, store: Path):
+    """One change to a store and its commit at a time, across processes: the
+    backbone's API and ``skills add --local`` (or ``tag`` with the API down)
+    share one git index. Closing the file releases the lock. A waiter polls
+    rather than blocking a worker thread, so waiting holds up nothing else."""
+    key = hashlib.sha256(str(Path(store).expanduser().resolve()).encode()).hexdigest()[:16]
+    path = Path(data_dir) / "skills" / f"store-{key}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as handle:
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                await asyncio.sleep(0.05)
+        yield

@@ -666,6 +666,8 @@ class SkillChangeView(SkillView):
 
     relinked: list[str] = Field(default_factory=list)
     """Evidence, one line per running agent whose links were brought in line now."""
+    warnings: list[str] = Field(default_factory=list)
+    """What did not happen although the change did, e.g. the store's history not recorded."""
 
 
 class SkillAddRequest(BaseModel):

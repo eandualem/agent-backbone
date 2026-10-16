@@ -49,7 +49,7 @@ def config(tmp_path, monkeypatch):
     with (
         patch.object(_common, "read_config", AsyncMock(return_value=config)),
         patch.object(_common, "api_up", AsyncMock(return_value=False)),
-        patch("agent_backbone.cli.skills.commit_store", AsyncMock(return_value=True)),
+        patch("agent_backbone.cli.skills.commit_store", AsyncMock(return_value=None)),
     ):
         yield config
 
@@ -88,6 +88,23 @@ def test_add_moves_and_tag_rewrites(config, capsys, tmp_path, monkeypatch):
     assert run(["skills", "tag", "my-skill"]) == 0
     assert "reaches nobody" in capsys.readouterr().out
     assert run(["skills", "tag", "nope", "x"]) == 1
+
+
+def test_a_change_whose_history_fails_warns(config, capsys, monkeypatch):
+    monkeypatch.setattr(
+        "agent_backbone.services.agents.operations.session_exists", AsyncMock(return_value=False)
+    )
+    failure = "git commit failed: fatal: unable to auto-detect email address"
+    with patch("agent_backbone.cli.skills.commit_store", AsyncMock(return_value=failure)):
+        assert run(["skills", "tag", "backend", "python"]) == 0
+    assert f"warning: store history not recorded: {failure}" in capsys.readouterr().err
+    reply = {"name": "backend", "tags": ["python"], "warnings": ["store history not recorded: x"]}
+    with (
+        patch.object(_common, "api_up", AsyncMock(return_value=True)),
+        patch.object(_common, "api", AsyncMock(return_value=(200, reply))),
+    ):
+        assert run(["skills", "tag", "backend", "python"]) == 0
+    assert "warning: store history not recorded: x" in capsys.readouterr().err
 
 
 def test_a_retag_without_an_answer_has_an_unknown_outcome(config, capsys):

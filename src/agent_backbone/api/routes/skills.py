@@ -27,6 +27,7 @@ from agent_backbone.skills import (
     is_git_repository,
     parse_skill,
     read_store,
+    store_lock,
     write_tags,
 )
 
@@ -85,30 +86,38 @@ def _inside_a_registered_directory(config, path: str) -> bool:
     return False
 
 
-async def _changed(skill, config) -> SkillChangeView:
+async def _changed(skill, config, failure: str | None) -> SkillChangeView:
     """The skill, after relinking running agents so the change reaches them now."""
     relinked = await relink_skills(config, list(config.agents), skill=skill.name)
-    return SkillChangeView(**SkillView.from_skill(skill).model_dump(), relinked=relinked)
+    warnings = [f"store history not recorded: {failure}"] if failure else []
+    return SkillChangeView(
+        **SkillView.from_skill(skill).model_dump(), relinked=relinked, warnings=warnings
+    )
 
 
 @router.post("/skills", response_model=SkillChangeView)
 async def add_to_store(body: SkillAddRequest, config=Depends(get_config)):
     """Move a skill directory into the store and tag it (a move, never a copy)."""
     store = _store_or_400(config)
-    if not _inside_a_registered_directory(config, body.path):
-        raise HTTPException(
-            status_code=422,
-            detail="the skill must live inside a registered agent's directory; "
-            "run `backbone skills add --local` from the terminal for other paths",
+    async with store_lock(config.data_dir, store):
+        # Checked once the lock is held, right before the move: the path may
+        # have changed while this request waited.
+        if not _inside_a_registered_directory(config, body.path):
+            raise HTTPException(
+                status_code=422,
+                detail="the skill must live inside a registered agent's directory; "
+                "run `backbone skills add --local` from the terminal for other paths",
+            )
+        try:
+            skill = add_skill(
+                store, body.path, name=body.name, tags=tuple(body.tags), replace=body.replace
+            )
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        failure = await commit_store(
+            store, f"add {skill.name} [{' '.join(skill.tags)}] by {body.actor}"
         )
-    try:
-        skill = add_skill(
-            store, body.path, name=body.name, tags=tuple(body.tags), replace=body.replace
-        )
-    except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    await commit_store(store, f"add {skill.name} [{' '.join(skill.tags)}] by {body.actor}")
-    return await _changed(skill, config)
+    return await _changed(skill, config, failure)
 
 
 @router.put("/skills/{name}/tags", response_model=SkillChangeView)
@@ -118,13 +127,14 @@ async def set_tags(name: str, body: SkillTagsRequest, config=Depends(get_config)
     current = parse_skill(store / name)
     if current.error == "not a directory":
         raise HTTPException(status_code=404, detail=f"unknown skill '{name}'")
-    try:
-        write_tags(store / name, tuple(body.tags))
-    except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    skill = parse_skill(store / name)
-    await commit_store(store, f"tag {name} [{' '.join(body.tags)}] by {body.actor}")
-    return await _changed(skill, config)
+    async with store_lock(config.data_dir, store):
+        try:
+            write_tags(store / name, tuple(body.tags))
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        skill = parse_skill(store / name)
+        failure = await commit_store(store, f"tag {name} [{' '.join(body.tags)}] by {body.actor}")
+    return await _changed(skill, config, failure)
 
 
 @router.get("/skills/preview/{agent}")

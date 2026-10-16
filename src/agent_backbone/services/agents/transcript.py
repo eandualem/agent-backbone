@@ -3,7 +3,8 @@ its runtime's own conversation record (``backbone agent output``), or the
 screen when the runtime keeps none.
 
 The transcript is located from the session id the runtime's hook recorded
-(only when that record's runtime is the live one) through the runtime's
+(for a running agent, its current launch's; only when that record's runtime
+is the live one) through the runtime's
 ``usage_paths``; the runtime parses its own format and returns only the
 messages the agent addressed to the person, never shortened. Navigation is
 by byte offset into the append-only file (by the record's own position when
@@ -20,7 +21,7 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from agent_backbone.services.agents._file_reader import read_state_file
+from agent_backbone.services.agents._file_reader import read_launch_session, read_state_file
 from agent_backbone.services.runtimes import get_runtime, sanitize_pane_content
 from agent_backbone.services.terminal import capture_pane, query_environment_var, session_exists
 
@@ -62,26 +63,35 @@ class OutputPage:
 
 
 def locate_transcript(
-    config: BackboneConfig, name: str, runtime_id: str | None
+    config: BackboneConfig, name: str, runtime_id: str | None, *, online: bool = False
 ) -> tuple[Path | None, Runtime, str, list[str]]:
     """The transcript file for the agent's live session, its runtime, the
-    session id and why not."""
+    session id and why not.
+
+    A running agent's is its current launch's conversation only: what the
+    hook reported since the launch or, before that (Codex reports at its
+    first turn), the conversation the launch resumed. A stopped agent's is
+    the last one recorded."""
     spec = config.agents.get(name)
-    last = read_state_file(config.state_dir, name)
+    last = read_state_file(config.state_dir, name, current_launch=online)
     runtime_id = runtime_id or (last.runtime if last is not None else None)
     if not runtime_id and spec is not None:
         runtime_id = spec.runtime
     rt = get_runtime(runtime_id)
     if not rt.transcript_supported:
         return None, rt, "", [f"{rt.id} keeps no transcript the backbone can read"]
-    if last is None or not last.session_id:
+    session_id = last.session_id if last is not None else None
+    recorded_runtime = last.runtime if last is not None else None
+    if not session_id and online:
+        session_id, recorded_runtime = read_launch_session(config.state_dir, name, rt.id), rt.id
+    if not session_id:
         return None, rt, "", ["no session id recorded by the hook yet"]
-    if last.runtime and last.runtime != rt.id:
-        why = f"the recorded session id belongs to {last.runtime}, not {rt.id}"
+    if recorded_runtime and recorded_runtime != rt.id:
+        why = f"the recorded session id belongs to {recorded_runtime}, not {rt.id}"
         return None, rt, "", [why]
     env = dict(spec.env) if spec is not None else {}
     try:
-        candidates = rt.usage_paths(last.session_id, env)
+        candidates = rt.usage_paths(session_id, env)
     except Exception as exc:  # a runtime's store may be locked or corrupt
         return None, rt, "", [f"transcript unreadable: {type(exc).__name__}"]
     stamped = []
@@ -92,9 +102,9 @@ def locate_transcript(
         except OSError:  # archived or removed while we looked
             continue
     if not stamped:
-        return None, rt, "", [f"no transcript file found for session {last.session_id}"]
+        return None, rt, "", [f"no transcript file found for session {session_id}"]
     newest = max(stamped, key=lambda item: item[0])[1]
-    return newest, rt, last.session_id, [f"transcript {newest}"]
+    return newest, rt, session_id, [f"transcript {newest}"]
 
 
 def _records(raw: bytes, base: int) -> list[dict]:
@@ -223,7 +233,7 @@ async def output_page(
     evidence: list[str] = []
     if not screen:
         path, rt, session_id, why = await asyncio.to_thread(
-            locate_transcript, config, name, live_runtime
+            locate_transcript, config, name, live_runtime, online=online
         )
         evidence.extend(why)
         if path is not None:

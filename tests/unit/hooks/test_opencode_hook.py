@@ -375,6 +375,28 @@ console.log(JSON.stringify([disposed.length, fs.existsSync(marker)]));
     assert json.loads(out) == [1, False]
 
 
+def test_a_reload_never_reports_a_turn_begun_meanwhile_idle(tmp_path):
+    _run_plugin(
+        tmp_path,
+        _RELOAD
+        + """
+// OpenCode builds the plugin again while it disposes the instance, and that
+// instance can start the agent's next turn before dispose() returns.
+const client = {instance: {dispose: async () => {
+  const rebuilt = await AgentBackbone({client});
+  await rebuilt.event({event: {type: "session.status", properties: {
+      sessionID: "root", status: {type: "busy"}}}});
+}}};
+await AgentBackbone({client});
+const reload = globalThis[Symbol.for("agent-backbone.skills-reload")].check;
+change();
+await reload();
+""",
+    )
+    state = json.loads((tmp_path / "app.json").read_text())
+    assert (state["state"], state["event"]) == ("busy", "session.status")
+
+
 _SESSIONS = """
 import fs from "node:fs";
 const { AgentBackbone } = await import(process.argv[1]);
@@ -403,6 +425,16 @@ const seen = () => {
   const record = JSON.parse(fs.readFileSync(`${process.env.BACKBONE_STATE_DIR}/app.json`, "utf8"));
   states.push([record.state, record.session_id]);
 };
+// A steer offered as the backbone offers it: to the turn the state names now.
+const context = `${process.env.BACKBONE_STATE_DIR}/context/app`;
+const offer = (key, turn) => {
+  const { prompted_at, session_id } = JSON.parse(
+    fs.readFileSync(`${process.env.BACKBONE_STATE_DIR}/app.json`, "utf8"));
+  fs.mkdirSync(context, {recursive: true});
+  fs.writeFileSync(`${context}/${key}.turn`, JSON.stringify(turn ?? {prompted_at, session_id}));
+  fs.writeFileSync(`${context}/${key}.md`, key);
+};
+const toolCall = (sessionID) => hook["tool.execute.after"]({sessionID, tool: "read"}, {output: ""});
 """
 
 
@@ -511,6 +543,209 @@ def test_a_second_session_after_a_subagent_was_created_still_counts(tmp_path):
 await event("session.created", {info: {id: "a"}});
 await event("session.created", {info: {id: "sub", parentID: "a"}});
 await status("b", "busy"); seen();
+await answer("b"); seen();
+""",
+    )
+    assert states == [["busy", "b"], ["busy", "b"]]
+
+
+def test_a_resumed_subagent_found_during_the_turn_gives_the_state_back(tmp_path):
+    # A subagent resumed from an earlier run (no session.created) works before
+    # its parent lookup answers; once it is known, the state names the agent's
+    # own session again, and a steer offered for its turn is still handed over.
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "root"}});
+await status("root", "busy");
+await status("sub", "busy"); seen();
+await answer("sub", "root"); seen();
+const offers = `${process.env.BACKBONE_STATE_DIR}/context/app`;
+fs.mkdirSync(offers, {recursive: true});
+fs.writeFileSync(`${offers}/steer-1.turn`, JSON.stringify({session_id: "root"}));
+fs.writeFileSync(`${offers}/steer-1.md`, "go");
+await hook["tool.execute.after"]({sessionID: "root", tool: "read"}, {output: "done"});
+states.push(fs.readdirSync(offers).sort());
+""",
+    )
+    assert states == [
+        ["busy", "sub"],  # unknown yet: it may be the agent's own
+        ["busy", "root"],
+        ["steer-1.taken", "steer-1.turn"],
+    ]
+
+
+def test_a_resumed_session_found_after_its_subagent_gives_the_state_back(tmp_path):
+    # The agent's own session was resumed too (no session.created), and its
+    # subagent's lookup answers first: once the agent's session is known, the
+    # state names it again, and a steer offered for its turn is handed over.
+    states = _sessions(
+        tmp_path,
+        """
+await status("root", "busy");
+offer("steer-1");
+await status("sub", "busy"); seen();
+await answer("sub", "root"); seen();
+await answer("root"); seen();
+await toolCall("root");
+states.push(fs.readdirSync(context).sort());
+""",
+    )
+    assert states == [
+        ["busy", "sub"],
+        ["busy", "root"],  # its parent, named as soon as the subagent is known
+        ["busy", "root"],
+        ["steer-1.taken", "steer-1.turn"],
+    ]
+
+
+def test_a_steer_offered_while_a_subagent_was_named_stays_the_turns(tmp_path):
+    # Offered while the state named a resumed subagent not known yet: still the
+    # agent's turn once the state names its own session again. A steer for an
+    # earlier turn that named the same subagent is not.
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "root"}});
+await status("root", "busy");
+await status("sub", "busy");
+offer("steer-1");
+offer("steer-0", {prompted_at: 1, session_id: "sub"});
+await answer("sub", "root"); seen();
+await toolCall("root");
+states.push(fs.readdirSync(context).sort());
+""",
+    )
+    assert states == [
+        ["busy", "root"],
+        ["steer-0.missed", "steer-0.turn", "steer-1.taken", "steer-1.turn"],
+    ]
+
+
+def test_a_steer_for_one_conversations_subagent_never_reaches_another(tmp_path):
+    # Conversation b starts while a works: a steer offered while a's subagent
+    # was named belongs to a, and b's turn does not take it.
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "a"}});
+await event("session.created", {info: {id: "b"}});
+await status("a", "busy");
+await status("sub", "busy");
+offer("steer-1");
+await status("b", "busy");
+await answer("sub", "a"); seen();
+await toolCall("b");
+states.push(fs.readdirSync(context).sort());
+""",
+    )
+    assert states == [["busy", "b"], ["steer-1.missed", "steer-1.turn"]]
+
+
+def test_a_steer_offered_while_a_nested_subagent_was_named_stays_the_turns(tmp_path):
+    # A subagent's own subagent worked while neither was known yet: once both
+    # lookups answer, the steer offered then is still the agent's turn's.
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "root"}});
+await status("root", "busy");
+await status("child", "busy");
+await status("grand", "busy");
+offer("steer-1");
+await answer("grand", "child");
+await answer("child", "root"); seen();
+await toolCall("root");
+states.push(fs.readdirSync(context).sort());
+""",
+    )
+    assert states == [["busy", "root"], ["steer-1.taken", "steer-1.turn"]]
+
+
+def test_a_subagent_found_after_its_turn_names_its_own_conversation(tmp_path):
+    # Conversation a was created first; b is resumed and its subagent's lookup
+    # answers only after both went idle: the record names b, what a fleet save
+    # would resume, never a.
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "a"}});
+await status("b", "busy");
+await status("sub", "busy");
+await idle("b");
+await idle("sub"); seen();
+await answer("sub", "b"); seen();
+""",
+    )
+    assert states == [["idle", "sub"], ["idle", "b"]]
+
+
+def test_a_nested_resume_whose_parent_is_silent_names_the_agents_conversation(tmp_path):
+    # Only the innermost subagent works in this process: its parent sends no
+    # events, so the plugin looks that parent up itself and follows it up.
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "root"}});
+await status("root", "busy");
+await status("grand", "busy");
+await answer("grand", "child"); seen();
+await answer("child", "root"); seen();
+""",
+    )
+    assert states == [["busy", "child"], ["busy", "root"]]
+
+
+def test_a_subagent_found_during_a_reload_leaves_the_reload_to_end(tmp_path):
+    # The subagent's parent lookup answers only while the instance is disposed:
+    # correcting the session it named must not keep the agent busy afterwards.
+    _run_plugin(
+        tmp_path,
+        """
+import fs from "node:fs";
+const { AgentBackbone } = await import(process.argv[1]);
+const lookups = {};
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+const client = {
+  session: {get: ({path}) => new Promise((resolve) => { lookups[path.id] = resolve; })},
+  instance: {dispose: async () => {
+    lookups.sub({data: {id: "sub", parentID: "root"}});
+    await settle();
+  }},
+};
+const hook = await AgentBackbone({client});
+const event = (type, properties) => hook.event({event: {type, properties}});
+const status = (sessionID, type) => event("session.status", {sessionID, status: {type}});
+await event("session.created", {info: {id: "root"}});
+await status("root", "busy");
+await status("sub", "busy");
+for (const id of ["root", "sub"]) {
+  await status(id, "idle");
+  await event("session.idle", {sessionID: id});
+}
+const marker = `${process.env.BACKBONE_STATE_DIR}/app.skills-reload`;
+fs.writeFileSync(marker, "");
+const later = new Date(Date.now() + 1000);
+fs.utimesSync(marker, later, later);
+await globalThis[Symbol.for("agent-backbone.skills-reload")].check();
+""",
+    )
+    state = json.loads((tmp_path / "app.json").read_text())
+    assert (state["state"], state["session_id"]) == ("idle", "root")
+
+
+def test_a_subagent_found_first_never_names_an_earlier_conversation(tmp_path):
+    # Session a ran earlier in this process; b is resumed and its subagent's
+    # lookup answers before b's: the record names b, the subagent's parent, never a.
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "a"}});
+await status("a", "busy");
+await idle("a");
+await status("b", "busy");
+await status("sub", "busy");
+await answer("sub", "b"); seen();
 await answer("b"); seen();
 """,
     )
