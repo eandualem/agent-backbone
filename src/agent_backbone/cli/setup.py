@@ -69,8 +69,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     print(f"database ready: {redact_url(config.database_url)}")
 
     print("\nNext steps:")
-    print("  1. backbone doctor")
-    print("  2. backbone up --detach")
+    print("  1. backbone service install    # start now and at login")
+    print("     (no login service, as in a container: backbone up --detach)")
+    print("  2. backbone doctor")
     print("  3. cd ~/code/my-app && backbone agent start")
     print(f"\nTokens (GitHub, Telegram) go in {env_path} — `backbone secrets set TELEGRAM_TOKEN`.")
     if args.data_dir and os.environ.get("BACKBONE_DATA_DIR") != str(data_dir):

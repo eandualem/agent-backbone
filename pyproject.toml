@@ -2,7 +2,7 @@
 name = "agent-backbone"
 version = "0.3.0"
 description = "Local control plane for terminal AI agents: run them, message them, coordinate them through GitHub Issues, reach them from Telegram."
-readme = "README.md"
+dynamic = ["readme"]
 requires-python = ">=3.11"
 license = { text = "MIT" }
 keywords = ["agents", "claude-code", "codex", "tmux", "orchestration", "telegram", "github"]
@@ -58,8 +58,24 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-fancy-pypi-readme>=25.1"]
 build-backend = "hatchling.build"
+
+# PyPI shows the README as the project description but cannot resolve its
+# relative paths: point them at the released branch on GitHub instead.
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = 'src="(?![a-z]+:)([^"]+)"'
+replacement = 'src="https://raw.githubusercontent.com/eandualem/agent-backbone/main/\1"'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(\]\(|href=")(?![a-z]+:|#)'
+replacement = '\1https://github.com/eandualem/agent-backbone/blob/main/'
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_backbone"]
