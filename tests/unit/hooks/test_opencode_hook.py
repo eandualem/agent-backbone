@@ -642,6 +642,26 @@ states.push(fs.readdirSync(context).sort());
     assert states == [["busy", "b"], ["steer-1.missed", "steer-1.turn"]]
 
 
+def test_a_steer_offered_while_a_nested_subagent_was_named_stays_the_turns(tmp_path):
+    # A subagent's own subagent worked while neither was known yet: once both
+    # lookups answer, the steer offered then is still the agent's turn's.
+    states = _sessions(
+        tmp_path,
+        """
+await event("session.created", {info: {id: "root"}});
+await status("root", "busy");
+await status("child", "busy");
+await status("grand", "busy");
+offer("steer-1");
+await answer("grand", "child");
+await answer("child", "root"); seen();
+await toolCall("root");
+states.push(fs.readdirSync(context).sort());
+""",
+    )
+    assert states == [["busy", "root"], ["steer-1.taken", "steer-1.turn"]]
+
+
 def test_a_subagent_found_during_a_reload_leaves_the_reload_to_end(tmp_path):
     # The subagent's parent lookup answers only while the instance is disposed:
     # correcting the session it named must not keep the agent busy afterwards.

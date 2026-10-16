@@ -109,6 +109,18 @@ function takeContext(t, children) {
   return texts;
 }
 
+// The session a subagent ultimately works for: its parent, or the parent's own
+// parent for a nested one, up to the first session that is not a subagent.
+function topOf(children, sessionID) {
+  const seen = new Set();
+  let id = sessionID;
+  while (children.has(id) && !seen.has(id)) {
+    seen.add(id);
+    id = children.get(id);
+  }
+  return id;
+}
+
 function forEarlierTurn(offer, current, children) {
   // Match backbone_state.py: compare only identity fields present on both
   // sides, and keep legacy offers without readable turn metadata usable.
@@ -118,7 +130,7 @@ function forEarlierTurn(offer, current, children) {
     // Offered to this prompt while the state named a subagent not known yet:
     // its parent's turn, which the state names again since.
     if (turn.prompted_at != null && turn.prompted_at === current.prompted_at
-        && children.get(turn.session_id) === current.session_id) {
+        && children.has(turn.session_id) && topOf(children, turn.session_id) === current.session_id) {
       return false;
     }
     return ["prompted_at", "session_id"].some((key) =>
