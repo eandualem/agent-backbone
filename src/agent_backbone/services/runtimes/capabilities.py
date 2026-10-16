@@ -164,7 +164,18 @@ _FRESH = "live: #290 post-fix probe (stale brief retired, current brief first)"
 _RESUME = "live: #273 post-fix probe (resume and compaction)"
 _GEMINI_STUB = "live: #302 (Gemini CLI 0.46 against a local API stub)"
 _LAUNCH = "tests/unit/services/runtimes/test_launch_commands.py"
+_FLEET = "tests/unit/services/agents/test_fleet.py"
 _NO_MODEL = "a plain shell runs no model"
+_CONTEXT_NOTE = "tests/unit/services/jobs/test_context_note.py"
+_LIVE_AFTER_DEPLOY = (
+    "the hook-context path is live-checked with steers on this version; "
+    "the note's own live check follows deployment"
+)
+_NO_FEEDBACK = "the CLI drafts no feedback reports to its vendor"
+_SKILLS = "tests/unit/test_skills.py"
+_SKILLS_API = "tests/unit/api/routes/test_api_skills.py"
+_RELATIVE = "live-checked: follows a relative link between skill folders"
+_UNMEASURED_SKILLS = "which skill folders it reads beyond `.agents/skills` is not measured"
 _USER_FILES = "tests/unit/services/runtimes/test_user_instructions.py"
 _MEMORY = "tests/unit/services/runtimes/test_native_memory.py"
 _VERSION = "tests/unit/services/runtimes/test_installed_version.py"
@@ -408,7 +419,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Watch the session (`agent attach`) for dialogs.",
         implemented=lambda rt: bool(rt.prompt_markers),
         cli_dependent=True,
-        claude=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="2.1.284"),
+        claude=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="2.1.296"),
         codex=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.157.1"),
         gemini=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.46.0"),
         opencode=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="1.18.32"),
@@ -513,6 +524,23 @@ CAPABILITIES: tuple[Capability, ...] = (
         shell=_na("a plain shell has no conversation to resume"),
     ),
     _row(
+        "fleet-resume",
+        "Fleet snapshot resumes the saved session exactly",
+        "src/agent_backbone/services/agents/fleet.py",
+        fallback=(
+            "The agent is reported as not resumed; start it fresh and its handoff carries "
+            "the context."
+        ),
+        implemented=lambda rt: rt.supports_exact_resume,
+        claude=_ok(_FLEET),
+        codex=_ok(_FLEET),
+        gemini=_ok(_FLEET),
+        opencode=_ok(_FLEET),
+        deepcode=_gap(note="reported as exact_resume_unsupported"),
+        aider=_gap(note="reported as exact_resume_unsupported"),
+        shell=_na("a plain shell has no conversation to resume"),
+    ),
+    _row(
         "reasoning-effort",
         "Reasoning effort chosen with the model (`model:effort`)",
         "src/agent_backbone/services/runtimes/base.py",
@@ -549,7 +577,11 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Run unattended agents only on a sandboxed runtime (Codex).",
         implemented=lambda rt: rt.sandboxed,
         claude=_gap(285),
-        codex=_ok(_LAUNCH, "OS sandbox"),
+        codex=_ok(
+            _LAUNCH,
+            "OS sandbox; on Linux, git add and commit fail inside it, "
+            "so swarms refuse unattended Codex members there (#437)",
+        ),
         gemini=_gap(),
         opencode=_gap(285),
         deepcode=_gap(),
@@ -585,6 +617,59 @@ CAPABILITIES: tuple[Capability, ...] = (
         shell=_na(_NO_MODEL),
     ),
     _row(
+        "skills-repository",
+        "Repository skills reach the agent's CLI",
+        "src/agent_backbone/skills.py",
+        fallback="Keep the skill where that CLI reads, or point the agent at it by path.",
+        implemented=lambda rt: bool(rt.skill_dirs),
+        cli_dependent=True,
+        claude=_ok(_SKILLS, _RELATIVE, verified_on="2.1.294"),
+        codex=_ok(_SKILLS, _RELATIVE, verified_on="0.160.0"),
+        gemini=_gap(note=_UNMEASURED_SKILLS),
+        opencode=_ok(_SKILLS, _RELATIVE, verified_on="1.18.32"),
+        deepcode=_gap(note=_UNMEASURED_SKILLS),
+        aider=_gap(),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "skills-live",
+        "Skill and tag changes reach a running agent",
+        "src/agent_backbone/services/agents/operations.py",
+        fallback="Restart the agent: its next launch links the change.",
+        implemented=lambda rt: bool(rt.skill_dirs),
+        cli_dependent=True,
+        claude=_ok(
+            _SKILLS_API, "live-checked: loads a skill linked mid-session", verified_on="2.1.294"
+        ),
+        codex=_ok(
+            _SKILLS_API, "live-checked: loads a skill linked mid-session", verified_on="0.160.0"
+        ),
+        gemini=_gap(note="whether it loads a skill mid-session is not measured"),
+        opencode=_ok(
+            "tests/unit/hooks/test_opencode_hook.py",
+            "its plugin reloads skills between turns (live-checked)",
+            verified_on="1.18.35",
+        ),
+        deepcode=_gap(note="whether it loads a skill mid-session is not measured"),
+        aider=_gap(),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "skills-view",
+        "Every skill an agent's CLI loads, listed by source",
+        "src/agent_backbone/services/agents/skills_preview.py",
+        fallback="Ask the agent to list its skills; `skills preview` still shows the shared ones.",
+        implemented=lambda rt: bool(rt.user_skill_dirs({})),
+        cli_dependent=True,
+        claude=_ok(_SKILLS_API, "live-checked against its /skills list", verified_on="2.1.294"),
+        codex=_ok(_SKILLS_API, "live-checked against its skill list", verified_on="0.160.0"),
+        gemini=_gap(note=_UNMEASURED_SKILLS),
+        opencode=_ok(_SKILLS_API, "live-checked: `opencode debug skill`", verified_on="1.18.32"),
+        deepcode=_gap(note=_UNMEASURED_SKILLS),
+        aider=_gap(),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
         "usage",
         "Token usage recorded",
         "src/agent_backbone/usage.py",
@@ -596,6 +681,41 @@ CAPABILITIES: tuple[Capability, ...] = (
         opencode=_ok("tests/unit/test_usage_accounting.py"),
         deepcode=_gap(),
         aider=_gap(),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "context-note",
+        "Context-size note recommending a fresh session",
+        "src/agent_backbone/services/jobs/context_note.py",
+        fallback="Check the conversation size with `backbone usage`; restart at a task boundary.",
+        implemented=lambda rt: rt.usage_supported and rt.hook_context,
+        cli_dependent=True,
+        claude=_ok(_CONTEXT_NOTE, _LIVE_AFTER_DEPLOY, verified_on="2.1.284"),
+        codex=_ok(_CONTEXT_NOTE, _LIVE_AFTER_DEPLOY, verified_on="0.157.1"),
+        gemini=_gap(note="usage is recorded, but its hook takes no offered context"),
+        opencode=_ok(_CONTEXT_NOTE, _LIVE_AFTER_DEPLOY, verified_on="1.18.32"),
+        deepcode=_gap(),
+        aider=_gap(),
+        shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "drafted-feedback-off",
+        "Drafted feedback to the CLI's vendor off unless the agent opts in",
+        "src/agent_backbone/services/runtimes/claude.py",
+        fallback="Turn drafted feedback off in the CLI's own settings.",
+        implemented=lambda rt: rt.default_env.get("CLAUDE_CODE_SEND_FEEDBACK") == "0",
+        cli_dependent=True,
+        claude=_ok(
+            "tests/unit/services/agents/test_launch.py",
+            "`--disallowedTools SendFeedback` and CLAUDE_CODE_SEND_FEEDBACK=0 at launch; "
+            "set the variable to 1 in the agent's env to opt in",
+            verified_on="2.1.296",
+        ),
+        codex=_na(_NO_FEEDBACK),
+        gemini=_na(_NO_FEEDBACK),
+        opencode=_na(_NO_FEEDBACK),
+        deepcode=_na(_NO_FEEDBACK),
+        aider=_na(_NO_FEEDBACK),
         shell=_na(_NO_MODEL),
     ),
     _row(
@@ -627,7 +747,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok(
             "tests/unit/services/agents/test_provider_failures.py",
             "from the terminal: Codex runs no hook for a failed turn",
-            verified_on="0.157.1",
+            verified_on="0.160.0",
         ),
         gemini=_gap(),
         opencode=_ok("tests/unit/services/agents/test_provider_failures.py", verified_on="1.18.32"),

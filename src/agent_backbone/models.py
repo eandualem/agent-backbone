@@ -253,10 +253,9 @@ class DeliveryOutcome(StrEnum):
     AGENT_WORKING = "agent_working"
     HUMAN_TYPING = "human_typing"
     HUMAN_READING = "human_reading"
+    UNATTENDED_COPY_MODE = "unattended_copy_mode"
     SETTLING = "settling"
     DELIVERY_FAILED = "delivery_failed"
-    NOT_WAITING = "not_waiting"
-    """A plan response with no plan on screen to answer — refused, never queued."""
     EXPIRED = "expired"
     """A queued message dropped after ``timing.queue_expiry_minutes`` — terminal, never retried."""
 
@@ -279,6 +278,7 @@ BLOCKED_OUTCOMES = frozenset(
         DeliveryOutcome.AGENT_WORKING,
         DeliveryOutcome.HUMAN_TYPING,
         DeliveryOutcome.HUMAN_READING,
+        DeliveryOutcome.UNATTENDED_COPY_MODE,
         DeliveryOutcome.SETTLING,
     }
 )
@@ -436,6 +436,8 @@ class IssueEvent(BaseModel):
     comment: CommentData | None = None
     review: ReviewData | None = None
     delivery_id: str = ""
+    action: str = ""
+    """GitHub's action (``opened``, ``reopened``, …); one event type covers several."""
 
     @classmethod
     def from_webhook(
@@ -496,4 +498,5 @@ class IssueEvent(BaseModel):
             comment=comment,
             review=review,
             delivery_id=delivery_id,
+            action=action,
         )

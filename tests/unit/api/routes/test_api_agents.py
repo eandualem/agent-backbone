@@ -801,6 +801,18 @@ async def test_group_tags_are_persistent_and_validated(api_client, auth_headers)
     assert response.status_code == 404
 
 
+async def test_tagging_an_agent_relinks_its_skills_now(api_client, auth_headers):
+    outcome = ["ike: skills: could not relink now (OSError)"]
+    with patch(f"{_ROUTE}.relink_skills", AsyncMock(return_value=outcome)) as relink:
+        response = await api_client.post(
+            "/api/agents/ike/tags", headers=auth_headers, json={"tags": ["python"]}
+        )
+    assert response.status_code == 200
+    (spec,) = relink.await_args.args[1]
+    assert spec.name == "ike" and "python" in spec.tags
+    assert response.json()["relinked"] == outcome  # the tag is saved; the outcome is shown
+
+
 async def test_offline_agent_retains_expired_session_end_recap(config):
     import json
 

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from agent_backbone.services.agents import StateSnapshot, agent_state, collect_usage
 from agent_backbone.services.github import QueueSnapshot
+from agent_backbone.services.jobs.context_note import note_context_size
 from agent_backbone.services.jobs.diagnostics import observe_job, observe_runtime
 from agent_backbone.services.jobs.escalation import (
     check_blocked,
@@ -115,6 +116,16 @@ async def monitor_agents(
                 stage="usage_collection",
                 error_type="usage_source_errors" if usage_result.get("errors") else None,
             )
+
+        try:
+            await note_context_size(config, db, states)
+        except Exception as exc:
+            log.exception("Context-size note failed (non-fatal)")
+            await observe_job(
+                db, source="agent-monitor", stage="context_note", error_type=type(exc).__name__
+            )
+        else:
+            await observe_job(db, source="agent-monitor", stage="context_note")
 
         if gh is not None:
             try:

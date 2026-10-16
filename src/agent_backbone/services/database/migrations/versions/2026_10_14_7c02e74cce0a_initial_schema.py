@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 59e64bd045d7
+Revision ID: 7c02e74cce0a
 Revises:
-Create Date: 2026-09-28 00:29:20.578455
+Create Date: 2026-10-14 16:47:34.046381
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "59e64bd045d7"
+revision: str = "7c02e74cce0a"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -113,6 +113,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
         sa.Column("updated_at", sa.Text(), nullable=False),
         sa.Column("last_started_at", sa.Text(), nullable=True),
+        sa.Column("conversation_started_at", sa.Text(), nullable=True),
         sa.Column("report_identity", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("name", name=op.f("pk_agents")),
     )
@@ -133,6 +134,7 @@ def upgrade() -> None:
         sa.Column("preview", sa.Text(), server_default="", nullable=False),
         sa.Column("created_at", sa.Text(), nullable=False),
         sa.Column("settled_at", sa.Text(), nullable=True),
+        sa.Column("superseded_at", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_deliveries")),
     )
     with op.batch_alter_table("deliveries", schema=None) as batch_op:
@@ -145,10 +147,10 @@ def upgrade() -> None:
             ["repo", "issue_number", "session_name"],
             unique=True,
             postgresql_where=sa.text(
-                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
             sqlite_where=sa.text(
-                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
         )
 
@@ -212,10 +214,27 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_events")),
     )
     with op.batch_alter_table("events", schema=None) as batch_op:
+        # Autogenerate skips expression indexes: written by hand (#394).
+        batch_op.create_index(
+            "idx_events_delivery_id_lower", [sa.text("lower(delivery_id)")], unique=False
+        )
         batch_op.create_index("idx_events_received", ["received_at"], unique=False)
         batch_op.create_index("idx_events_repo", ["repo"], unique=False)
         batch_op.create_index("uq_events_delivery_id", ["delivery_id"], unique=True)
 
+    op.create_table(
+        "fleet_snapshots",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("created_by", sa.Text(), server_default="", nullable=False),
+        sa.Column("note", sa.Text(), nullable=True),
+        sa.Column("stop", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column("force", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column("agents", sa.Text(), server_default="[]", nullable=False),
+        sa.Column("resumes", sa.Text(), server_default="[]", nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_fleet_snapshots")),
+        sqlite_autoincrement=True,
+    )
     op.create_table(
         "issue_dependencies",
         sa.Column("repo", sa.Text(), server_default="", nullable=False),
@@ -547,6 +566,7 @@ def upgrade() -> None:
         sa.Column("coverage", sa.Text(), server_default="unavailable", nullable=False),
         sa.Column("detail", sa.Text(), server_default="", nullable=False),
         sa.Column("launches", sa.Text(), server_default="[]", nullable=False),
+        sa.Column("context_noted", sa.BigInteger(), server_default="0", nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_usage_sessions")),
     )
     with op.batch_alter_table("usage_sessions", schema=None) as batch_op:
@@ -643,10 +663,12 @@ def downgrade() -> None:
         batch_op.drop_index("idx_deps_sub")
 
     op.drop_table("issue_dependencies")
+    op.drop_table("fleet_snapshots")
     with op.batch_alter_table("events", schema=None) as batch_op:
         batch_op.drop_index("uq_events_delivery_id")
         batch_op.drop_index("idx_events_repo")
         batch_op.drop_index("idx_events_received")
+        batch_op.drop_index("idx_events_delivery_id_lower")
 
     op.drop_table("events")
     with op.batch_alter_table("event_outbox", schema=None) as batch_op:
@@ -663,10 +685,10 @@ def downgrade() -> None:
         batch_op.drop_index(
             "uq_deliveries_active_owner",
             postgresql_where=sa.text(
-                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
             sqlite_where=sa.text(
-                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried')"
+                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
         )
         batch_op.drop_index("idx_deliveries_outcome")

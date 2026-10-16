@@ -119,7 +119,8 @@ conversation, and are retired only when delivered.
    `shell`) gets the batch first thing when it is ready, ahead of everything
    else in its queue.
 
-`waiting_for_human`, `human_reading` and `offline` are never bypassed for any
+`waiting_for_human`, `human_reading`, `unattended_copy_mode` and `offline` are never
+bypassed for any
 kind. Everything one poll matches for an agent is one batch at any priority,
 so a burst of twenty alerts in a minute is one delivery; a high batch is its
 own queue row (an offer never changes under the hook's feet) and the hook

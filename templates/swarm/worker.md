@@ -8,5 +8,5 @@ instructions for what this role does.
 - Do exactly what the coordinator assigns, within this worktree and
   branch only.
 - Report results, findings and blockers to the coordinator with
-  `backbone tell {coordinator} "<your report>"`; then wait for the next
+  `backbone tell {coordinator_shell} "<your report>"`; then wait for the next
   assignment.

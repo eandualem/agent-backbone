@@ -202,8 +202,8 @@ async def steer_agent(
         )
         or await asyncio.to_thread(_missed, config, session_name, launch_id, delivery_id)
     ):
-        await asyncio.to_thread(clear_steer, config.state_dir, session_name, launch_id, delivery_id)
         await db.deliveries.settle(delivery_id, "not_taken", expected="offered")
+        await asyncio.to_thread(clear_steer, config.state_dir, session_name, launch_id, delivery_id)
         return SteerReport(
             "refused",
             session_name,
@@ -328,8 +328,8 @@ async def _not_taken(
         expire_steer, config.state_dir, agent, launch_id, delivery_id
     ):
         return  # the hook took it meanwhile: handed_off next tick
-    await asyncio.to_thread(clear_steer, config.state_dir, agent, launch_id, delivery_id)
     await db.deliveries.settle(delivery_id, "not_taken", expected="offered")
+    await asyncio.to_thread(clear_steer, config.state_dir, agent, launch_id, delivery_id)
     summary["not_taken"] = summary.get("not_taken", 0) + 1
 
 

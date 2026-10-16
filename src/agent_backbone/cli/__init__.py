@@ -31,6 +31,7 @@ import argparse
 import logging
 import os
 import sys
+from pathlib import Path
 
 from agent_backbone import __version__
 from agent_backbone.cli.agents import (
@@ -43,6 +44,7 @@ from agent_backbone.cli.agents import (
 )
 from agent_backbone.cli.completion import cmd_completion, complete
 from agent_backbone.cli.diagnostics import add_diagnostics_parser
+from agent_backbone.cli.fleet import add_fleet_parser
 from agent_backbone.cli.instructions import add_instruction_commands
 from agent_backbone.cli.reports import add_report_parsers
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_up
@@ -125,6 +127,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("up", help="run the backbone")
     p.add_argument("--detach", "-d", action="store_true", help="run inside a tmux session")
     p.add_argument("--reload", action="store_true", help="auto-reload on code changes (dev)")
+    p.add_argument(
+        "--log-file",
+        type=Path,
+        default=None,
+        help="write the log to this file, rotated by size (the login service sets it)",
+    )
     p.set_defaults(func=cmd_up)
 
     p = sub.add_parser("down", help="stop a detached backbone")
@@ -142,6 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_status)
 
     add_diagnostics_parser(sub)
+    add_fleet_parser(sub)
     add_instruction_commands(sub)
     add_skill_commands(sub)
     add_report_parsers(sub)
@@ -214,6 +223,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="OWNER/REPO",
         help="also watch this repository (repeatable)",
+    )
+    ps.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        metavar="TAG",
+        help="add this tag before launching, so the first session already has "
+        "the skills and policies it selects (repeatable)",
     )
     ps.add_argument(
         "--no-wait",

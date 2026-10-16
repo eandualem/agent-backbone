@@ -10,18 +10,25 @@ need to use the same runtime as the reviewer. No managed agent or swarm is creat
    opening its PR, then follow the guide's "Before and after the pull request".
    For develop into main, head is develop and base is main. Preserve the
    implementing agent's active checkout.
-3. Use Codex `gpt-6-astra` for every review, whether the implementation used
-   Codex, Claude Code or another runtime:
-   `codex exec -c service_tier=default review --base BASE_COMMIT --model gpt-6-astra`.
+3. Use the reviewer for the CLI that wrote the change. On the Codex CLI, use
+   Claude Opus 5.5 (`claude-opus-5-5`), preferably, or Codex `gpt-6-astra`; on
+   Claude Code or any other runtime, use Codex `gpt-6-astra`. The core of each
+   command is `codex exec review --base BASE_COMMIT --model gpt-6-astra` and
+   `claude -p "REVIEW PROMPT" --model claude-opus-5-5 --effort high`; run the full
+   commands from the guide (its "Codex reviewer" and "Claude Opus reviewer"),
+   which add the read-only settings, the depth and the evidence files.
    Start a separate, fresh reviewer context; the implementing conversation reviewing itself does not
    satisfy the independent-review gate. A different family or CLI is not required.
-   Run with the read-only Codex sandbox and hooks disabled, in an environment
+   Run with the reviewer's read-only settings and hooks disabled, in an environment
    without the caller's Backbone identity, saving JSON evidence as the guide shows.
-   Pin the standard service tier explicitly, including with `--ignore-user-config`;
-   it is separate from reasoning effort.
-   Depth: `high` for a feature branch, **before** its PR opens; `ultra` for an
-   explicitly authorized develop → main release review. If Astra cannot run,
-   report the blocker rather than substituting another model.
+   For Codex, pin the standard service tier explicitly, including with
+   `--ignore-user-config`; it is separate from reasoning effort.
+   Depth: `high` for a feature branch, **before** its PR opens. An explicitly
+   authorized develop → main release review uses Codex `gpt-6-astra` at `ultra`,
+   whatever CLI wrote the change, until an Opus release depth is set. Record the
+   model the reviewer reports using (Opus: `modelUsage`), not only the one you
+   asked for. If no permitted reviewer can run, report the
+   blocker rather than substituting another model.
 4. Start the process in the background, retain its handle, and continue working.
    Capture exit status; a timeout, failed launch or missing report is not a clean
    review. Keep artifacts in ignored `.backbone/reviews/`, outside `docs/`.

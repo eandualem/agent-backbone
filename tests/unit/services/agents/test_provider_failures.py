@@ -380,6 +380,18 @@ async def test_a_failed_turn_reads_blocked_while_its_record_is_fresh(tmp_path, r
     assert snapshot.reason == "provider"
 
 
+async def test_a_codex_turn_out_of_retries_reads_blocked(tmp_path):
+    # codex-cli 0.160.0 ends such a turn with this error (its transcript, live)
+    # and draws it as the capacity banner above.
+    _record("codex", tmp_path, failed=True)
+    banner = "\x1b[38;5;1m■ exceeded retry limit, last status: 429 Too Many Requests\x1b[39m"
+    snapshot = await get_agent_state(
+        tmp_path, "desk", runtime_hint="codex", pane_content=_codex_turn(banner)
+    )
+    assert snapshot.state == AgentState.BLOCKED, snapshot.evidence
+    assert snapshot.detail == "exceeded retry limit, last status: 429 Too Many Requests"
+
+
 @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
 async def test_a_reply_echoing_the_error_leaves_a_fresh_busy_record(tmp_path, runtime):
     _record(runtime, tmp_path, failed=False)

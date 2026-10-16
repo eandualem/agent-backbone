@@ -78,7 +78,11 @@ def route_issue(issue: IssueData, event_type: EventType, config: BackboneConfig)
             routing.announce = owners
     # ISSUE_LABELED without for: labels is an edit — nobody is queued.
 
-    routing.watch = [n for n in watchers if n not in routing.queue and n not in routing.announce]
+    # Watchers hear "new issue": only an opened one is new, not a later edit.
+    if event_type == EventType.ISSUE_OPENED:
+        routing.watch = [
+            n for n in watchers if n not in routing.queue and n not in routing.announce
+        ]
     return routing
 
 

@@ -26,6 +26,12 @@
 // and joins the running turn as a user message, OpenCode's own path for
 // input typed while it works: the turn's next step reads it (verified live
 // against OpenCode 1.18).
+//
+// OpenCode reads skills only when its instance starts. When the backbone
+// changes a running agent's skill links it leaves <state_dir>/<agent>.skills-reload;
+// between turns the plugin restarts the instance (client.instance.dispose(),
+// verified on 1.18.35: the session and its history stay, skills are read
+// again). Never during a turn: disposing aborts it.
 
 import fs from "node:fs";
 import { createHash } from "node:crypto";
@@ -83,10 +89,16 @@ function takeContext(t) {
     return x[0] - y[0] || x[1] - y[1] || (x[2] < y[2] ? -1 : x[2] > y[2] ? 1 : 0);
   };
   const texts = [];
-  for (const dir of offerDirs(t)) {
+  const directories = offerDirs(t);
+  const current = readCurrent(t);
+  for (const dir of directories) {
     for (const name of offers(dir).sort(order)) {
       const offer = path.join(dir, name);
       try {
+        if (forEarlierTurn(offer, current)) {
+          fs.renameSync(offer, `${offer.slice(0, -3)}.missed`);
+          continue;
+        }
         // Read first: once it is .taken the backbone may settle and remove it.
         const text = fs.readFileSync(offer, "utf8");
         fs.renameSync(offer, `${offer.slice(0, -3)}.taken`);
@@ -95,6 +107,19 @@ function takeContext(t) {
     }
   }
   return texts;
+}
+
+function forEarlierTurn(offer, current) {
+  // Match backbone_state.py: compare only identity fields present on both
+  // sides, and keep legacy offers without readable turn metadata usable.
+  try {
+    const turn = JSON.parse(fs.readFileSync(`${offer.slice(0, -3)}.turn`, "utf8"));
+    if (!turn || typeof turn !== "object" || Array.isArray(turn)) return false;
+    return ["prompted_at", "session_id"].some((key) =>
+      turn[key] != null && current[key] != null && turn[key] !== current[key]);
+  } catch {
+    return false;
+  }
 }
 
 function retireSteers(t) {
@@ -229,11 +254,21 @@ function record(t, event, state, reason, extra = {}) {
   writeState(t, out);
 }
 
+const SKILLS_RELOAD_POLL_MS = 3000;
+// One check per process however often OpenCode builds the plugin again (each
+// instance does): the newest instance's check is the one the timer runs.
+const reloader = (globalThis[Symbol.for("agent-backbone.skills-reload")] ??= {
+  check: null,
+  loadedAt: Date.now(),
+  timer: null,
+});
+
 export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
   const t = target();
   if (!t) return {};
   const children = new Set(); // subagent sessions, never the agent's own state
-  const pending = new Set(); // permission and plan requests waiting for an answer
+  const pending = new Map(); // permission and plan requests waiting for an answer -> who asked
+  const held = new Map(); // session whose turn ended while a request waited -> what worked then
   const planCalls = new Set(); // plan_exit calls whose question is still to come
   const turns = new Map(); // sessionID -> what drives its turn: agent, model, ...
   const roots = new Set(); // sessions known to have no parent
@@ -255,6 +290,8 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
           if (info?.parentID) {
             children.add(sessionID);
             working.delete(sessionID); // its idle is ignored from now on
+            held.delete(sessionID);
+            withdraw(sessionID);
           } else if (info?.id) roots.add(sessionID);
         } catch { /* unknown stays unknown */ }
         lookups.delete(sessionID);
@@ -302,6 +339,75 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
     retireSteers(t);
   };
 
+  // A turn's end waits while a request does; it counts once none waits.
+  const idle = (event, sessionID) => {
+    if (pending.size === 0) endTurn(event, sessionID);
+    else held.set(sessionID, new Set(working));
+  };
+
+  // Its requests answered, the agent's work goes on: a turn's end seen while
+  // they waited is not counted.
+  const resume = (event, sessionID) => {
+    if (pending.size > 0) return;
+    held.clear();
+    record(t, event, STATE_BUSY, null, { session_id: sessionID });
+  };
+
+  // A session that asked before it was known as a subagent: its requests were
+  // never the agent's, and a turn that ended while they waited ends now.
+  const withdraw = (sessionID) => {
+    const asked = [...pending].filter(([, by]) => by === sessionID);
+    if (asked.length === 0) return;
+    for (const [id] of asked) pending.delete(id);
+    if (pending.size > 0) return;
+    const ended = [...held.keys()];
+    for (const [id, was] of held) {
+      working.delete(id);
+      // Its subagents are done too; work begun since goes on.
+      if (roots.has(id)) for (const other of was) working.delete(other);
+    }
+    held.clear();
+    const own = (ids) => ids.find((id) => roots.has(id)) ?? ids[0];
+    const event = "session.subagent";
+    if (working.size === 0) endTurn(event, own(ended) ?? root ?? sessionID);
+    else record(t, event, STATE_BUSY, null, { session_id: own([...working]) });
+  };
+
+  let reloading = false;
+  reloader.check = async () => {
+    const marker = path.join(t.dir, `${t.agent}.skills-reload`);
+    let changedAt;
+    try {
+      changedAt = fs.statSync(marker).mtimeMs;
+    } catch {
+      return; // nothing changed
+    }
+    if (reloading || working.size > 0 || pending.size > 0) return; // between turns only
+    try {
+      fs.unlinkSync(marker);
+    } catch {
+      return;
+    }
+    if (changedAt < reloader.loadedAt) return; // this process started after: it read them
+    reloading = true;
+    try {
+      // Busy while it reloads, so the backbone delivers nothing into it.
+      record(t, "skills.reload", STATE_BUSY, null);
+      await client?.instance?.dispose?.();
+    } catch {
+      /* the skills stay as they were until the next change or start */
+    } finally {
+      try {
+        record(t, "skills.reload", STATE_IDLE, null);
+      } catch { /* hook failures must not stop the agent */ }
+      reloading = false;
+    }
+  };
+  if (!reloader.timer) {
+    reloader.timer = setInterval(() => reloader.check?.(), SKILLS_RELOAD_POLL_MS);
+    reloader.timer.unref?.();
+  }
+
   return {
     "chat.params": async (input) => {
       // The user message this request answers drives the turn.
@@ -335,17 +441,19 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
             // A turn starts when nothing was working: the steer check's receipt.
             const starts = working.size === 0;
             working.add(p.sessionID);
+            held.delete(p.sessionID);
+            for (const was of held.values()) was.delete(p.sessionID);
             learn(p.sessionID);
             record(t, event.type, STATE_BUSY, null, {
               session_id: p.sessionID,
               ...(starts ? { prompted_at: Date.now() / 1000 } : {}),
             });
-          } else if (type === "idle" && pending.size === 0) endTurn(event.type, p.sessionID);
+          } else if (type === "idle") idle(event.type, p.sessionID);
           return;
         }
         case "session.idle": {
           if (isChild(p.sessionID)) return;
-          if (pending.size === 0) endTurn(event.type, p.sessionID);
+          idle(event.type, p.sessionID);
           return;
         }
         case "message.updated": {
@@ -378,20 +486,21 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
         }
         case "permission.asked": {
           if (isChild(p.sessionID)) return;
-          pending.add(p.id ?? p.requestID ?? "?");
+          pending.set(p.id ?? p.requestID ?? "?", p.sessionID);
           record(t, event.type, STATE_WAITING, REASON_PERMISSION, { session_id: p.sessionID });
+          learn(p.sessionID); // a subagent's that is not known yet withdraws it
           return;
         }
         case "permission.replied": {
           if (isChild(p.sessionID)) return;
           pending.delete(p.requestID ?? p.id ?? "?");
-          if (pending.size === 0) record(t, event.type, STATE_BUSY, null, { session_id: p.sessionID });
+          resume(event.type, p.sessionID);
           return;
         }
         case "question.asked": {
           // Only plan_exit's question is a plan decision; the agent's own session asked it.
           if (!planCalls.delete(p.tool?.callID)) return;
-          pending.add(p.id);
+          pending.set(p.id, p.sessionID);
           const plan = savePlan(t, p.questions?.[0]?.question, worktree ?? directory ?? process.cwd());
           record(t, event.type, STATE_WAITING, REASON_PLAN, { session_id: p.sessionID, ...plan });
           return;
@@ -399,7 +508,7 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
         case "question.replied":
         case "question.rejected": {
           if (!pending.delete(p.requestID)) return;
-          if (pending.size === 0) record(t, event.type, STATE_BUSY, null, { session_id: p.sessionID });
+          resume(event.type, p.sessionID);
           return;
         }
         default:

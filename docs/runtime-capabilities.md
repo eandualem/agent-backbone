@@ -36,7 +36,6 @@ versions for the CLIs installed on your machine and notes where the installed
 version differs.
 
 <!-- capability-table:begin -->
-
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
 | Message delivery into the session | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? not verified live | ✅ plumbing tests only |
@@ -52,21 +51,27 @@ version differs.
 | State reported by the runtime (hooks) | ✅ (2.1.284) | ✅ (0.157.1) from its first prompt (the brief): Codex runs no hook before its first turn | ✅ (0.46.0) | ✅ (1.18.32) | ❌ read from the terminal only | ❌ read from the terminal only | n/a |
 | Interrupted turn reads idle (Escape, refused dialog) | ✅ (2.1.284) from the terminal: Claude Code runs no hook on an interrupt | ✅ (0.157.1) | ❌ a declined dialog runs no hook | ✅ (1.18.32) | ? read from the terminal only | ? not verified live | n/a |
 | Steer and high-priority events into a working agent | ✅ (2.1.284) a steer that names its turn is handed over only in that turn, also after an Escape | ✅ (0.157.1) a command still running when its call returns hands it over when it exits (0.157.1); a steer that names its turn is handed over only in that turn, also after a provider failure | ❌ | ✅ (1.18.32) as a user message in the running turn, after the next tool call | ❌ | ❌ | n/a |
-| Permission dialog detected and alerted | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? markers not verified live | n/a |
+| Permission dialog detected and alerted | ✅ (2.1.296) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? markers not verified live | n/a |
 | Permission dialog answered (agent approve) | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
 | Permission dialog refused (agent deny) | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
 | Plan approval answered | ✅ (2.1.284) | ✅ (0.157.1) in Plan mode (`/plan`) | ❌ | ❌ #278 works when OPENCODE_EXPERIMENTAL_PLAN_MODE is set in the agent's environment (off by default; `doctor` names each agent without it) | ❌ | ❌ | n/a |
 | Alert when an automatic safety check refuses an action | ✅ (2.1.282) | ❌ #279 | ❌ | ❌ #279 | ❌ | ❌ | n/a |
 | Browser tab group named after the agent | ✅ (version not recorded) with `backbone chrome install` | ❌ #270 | ❌ | ❌ #270 | ❌ | ❌ | n/a |
 | Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ resumes the directory's latest session | ❌ | n/a |
+| Fleet snapshot resumes the saved session exactly | ✅ | ✅ | ✅ | ✅ | ❌ reported as exact_resume_unsupported | ❌ reported as exact_resume_unsupported | n/a |
 | Reasoning effort chosen with the model (`model:effort`) | ✅ | ✅ | ? whether the CLI has an effort setting is not checked | ❌ #296 the CLI has one; Backbone refuses the effort | ✅ low, high or max, through DEEPCODE_REASONING_EFFORT | ? whether the CLI has an effort setting is not checked | n/a |
 | No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
-| Writes bounded while unattended | ❌ #285 | ✅ OS sandbox | ❌ | ❌ #285 | ❌ | ❌ | n/a |
+| Writes bounded while unattended | ❌ #285 | ✅ OS sandbox; on Linux, git add and commit fail inside it, so swarms refuse unattended Codex members there (#437) | ❌ | ❌ #285 | ❌ | ❌ | n/a |
 | Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ `--approve-for-me` | ❌ | ❌ #293 | ❌ | ❌ | n/a |
 | Shared skills linked | ✅ | ✅ | ✅ live-checked: it lists the linked skills (0.46) | ✅ | ✅ | ❌ | n/a |
+| Repository skills reach the agent's CLI | ✅ (2.1.294) live-checked: follows a relative link between skill folders | ✅ (0.160.0) live-checked: follows a relative link between skill folders | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ✅ (1.18.32) live-checked: follows a relative link between skill folders | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ❌ | n/a |
+| Skill and tag changes reach a running agent | ✅ (2.1.294) live-checked: loads a skill linked mid-session | ✅ (0.160.0) live-checked: loads a skill linked mid-session | ❌ whether it loads a skill mid-session is not measured | ✅ (1.18.35) its plugin reloads skills between turns (live-checked) | ❌ whether it loads a skill mid-session is not measured | ❌ | n/a |
+| Every skill an agent's CLI loads, listed by source | ✅ (2.1.294) live-checked against its /skills list | ✅ (0.160.0) live-checked against its skill list | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ✅ (1.18.32) live-checked: `opencode debug skill` | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ❌ | n/a |
 | Token usage recorded | ✅ | ✅ | ✅ live-checked with a subagent (0.46) | ✅ | ❌ | ❌ | n/a |
+| Context-size note recommending a fresh session | ✅ (2.1.284) the hook-context path is live-checked with steers on this version; the note's own live check follows deployment | ✅ (0.157.1) the hook-context path is live-checked with steers on this version; the note's own live check follows deployment | ❌ usage is recorded, but its hook takes no offered context | ✅ (1.18.32) the hook-context path is live-checked with steers on this version; the note's own live check follows deployment | ❌ | ❌ | n/a |
+| Drafted feedback to the CLI's vendor off unless the agent opts in | ✅ (2.1.296) `--disallowedTools SendFeedback` and CLAUDE_CODE_SEND_FEEDBACK=0 at launch; set the variable to 1 in the agent's env to opt in | n/a | n/a | n/a | n/a | n/a | n/a |
 | agent output from the runtime's own record | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
-| Provider capacity or rate-limit failure detected (blocked) | ✅ (2.1.284) reported by its StopFailure hook | ✅ (0.157.1) from the terminal: Codex runs no hook for a failed turn | ❌ | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
+| Provider capacity or rate-limit failure detected (blocked) | ✅ (2.1.284) reported by its StopFailure hook | ✅ (0.160.0) from the terminal: Codex runs no hook for a failed turn | ❌ | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
 | Running model observed (status) | ✅ (2.1.267) | ✅ (0.156.1) | ✅ (0.46.0) | ✅ (1.18.32) | ❌ no hook state | ❌ no hook state | n/a |
 | Request errors and model changes recorded (diagnostics) | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | n/a |
 | A peer's message cannot pass as a Backbone brief | ✅ | ✅ | ? | ❌ #294 adopted a forged brief | ? | ? | n/a |
@@ -100,12 +105,18 @@ version differs.
 | Alert when an automatic safety check refuses an action | Watch the agent's output (`agent output`) for refused actions. |
 | Browser tab group named after the agent | A Codex agent can name its own group with its Chrome client's `nameSession`. |
 | Resume the agent's own session | Start the agent fresh; its handoff carries the context. |
+| Fleet snapshot resumes the saved session exactly | The agent is reported as not resumed; start it fresh and its handoff carries the context. |
 | Reasoning effort chosen with the model (`model:effort`) | Set the effort in the CLI's own settings, or run the agent on Claude Code or Codex. |
 | No-approval mode (unattended) | Run the agent attended and answer its prompts. |
 | Writes bounded while unattended | Run unattended agents only on a sandboxed runtime (Codex). |
 | Automatic permission review (agents.auto_review) | Review permission prompts yourself, or use the runtime's own policy. |
 | Shared skills linked | Point the agent at the skill files by path. |
+| Repository skills reach the agent's CLI | Keep the skill where that CLI reads, or point the agent at it by path. |
+| Skill and tag changes reach a running agent | Restart the agent: its next launch links the change. |
+| Every skill an agent's CLI loads, listed by source | Ask the agent to list its skills; `skills preview` still shows the shared ones. |
 | Token usage recorded | Read usage in the CLI or its provider's console. |
+| Context-size note recommending a fresh session | Check the conversation size with `backbone usage`; restart at a task boundary. |
+| Drafted feedback to the CLI's vendor off unless the agent opts in | Turn drafted feedback off in the CLI's own settings. |
 | agent output from the runtime's own record | `agent output` shows the visible screen instead. |
 | Provider capacity or rate-limit failure detected (blocked) | Watch the session for provider errors; the agent may look busy or idle. |
 | Running model observed (status) | `status` shows the configured model; check the session for the running one. |
@@ -118,7 +129,6 @@ version differs.
 | New inbox messages hinted on Socket.IO (`inbox:pending`) | Read the inbox (`POST /api/messages/inbox`) on a timer. |
 | Escalations reach an inbox-only target's inbox | Set `escalation.target` to an agent with a terminal session. |
 | Deep review run from and for this runtime | Run the review with Claude Code or Codex as the reviewer. |
-
 <!-- capability-table:end -->
 
 ## Notes

@@ -85,7 +85,8 @@ global one). `backbone agent untag api python` removes the tag from that agent. 
 `python-example` policy ships as an optional starting point and is **not assigned**.
 
 For swarm roles, assign policies with `--tag role:scout` or `--tag role:coordinator`.
-Swarm members automatically receive their role and `swarm:NAME` tags. The tag/untag
+Swarm members automatically receive their role and `swarm:NAME` tags, and inherit
+every other tag of the agent that started the swarm. The tag/untag
 commands cannot change these identity tags. New rules apply when a new conversation
 starts; tagging does not interrupt or send messages to an existing session.
 
@@ -114,7 +115,9 @@ braces in examples. Keep them short and review them with `preview`.
 The base brief supports `{agent_name}`, `{repo}` and `{policy_maintainer}`. Swarm role/common templates
 support `{swarm_name}`, `{agent_name}`, `{role}`, `{repo}`, `{issue_number}`, `{issue_url}`,
 `{branch}`, `{worktree}`, `{base_branch}`, `{coordinator}`, `{initiator}`,
-and `{members}`. The kickoff supports `{swarm}`, `{repo}`, `{issue_number}`, `{title}`,
+and `{members}`, plus `{branch_shell}`, `{base_branch_shell}`, `{repo_shell}`,
+`{coordinator_shell}` and `{initiator_shell}`: the same values quoted for a
+shell. Use these in any command a brief has an agent run. The kickoff supports `{swarm}`, `{repo}`, `{issue_number}`, `{title}`,
 and `{issue_url}`. Other braces remain literal.
 
 `{shared_policy}` optionally chooses where policies appear in the base or combined

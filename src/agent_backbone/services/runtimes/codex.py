@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import re
+import sys
 import time
 import tomllib
 from pathlib import Path
@@ -27,6 +28,10 @@ from agent_backbone.services.runtimes.base import (
 from agent_backbone.usage import UsageEvent, timestamp
 
 log = logging.getLogger(__name__)
+# Codex's Linux sandbox (bubblewrap) mounts every writable root as a directory:
+# a file root panics it at the first command, and a missing root under the
+# protected `.git` stops it (#433, codex-cli 0.160 measured in Debian 13).
+_DIRECTORY_ROOTS_ONLY = sys.platform == "linux"
 _usage_lineage: dict[str, tuple[float, dict[str, list[tuple[str, Path]]]]] = {}
 
 
@@ -114,6 +119,7 @@ class Codex(Runtime):
     supports_exact_resume = True
     id = "codex"
     skill_dirs = (".agents/skills",)
+    skill_read_dirs = (".agents/skills", ".codex/skills")  # 0.160.0
     fallback_prompts = ("›",)
     display_name = "Codex"
     binary = "codex"
@@ -153,6 +159,12 @@ class Codex(Runtime):
     # before `resume`.
     unattended_args = ("-a", "never", "-s", "workspace-write")
     sandboxed = True
+    sandbox_commit_block = (
+        "Codex's sandbox on Linux takes only directories, so git add and git commit "
+        "fail inside it (#437)"
+        if _DIRECTORY_ROOTS_ONLY
+        else ""
+    )
     mouse_scroll = True
     # Codex 0.153.4: on-request approvals go to its automatic reviewer,
     # with workspace-write enforced by this switch (verified with --help).
@@ -195,6 +207,9 @@ class Codex(Runtime):
         r"^(?:error:\s*)?you(?:'ve| have) hit your usage limit\b",
         r"^(?:error:\s*)?rate limit (?:reached|exceeded)\b",
         r"^(?:error:\s*)?(?:too many requests|insufficient_quota)\b",
+        # A turn whose retries ran out (0.160.0, live): "exceeded retry limit,
+        # last status: 429 Too Many Requests".
+        r"^(?:error:\s*)?exceeded retry limit, last status: \d{3}\b",
     )
     provider_error_prefixes = ("■",)
     prompt_markers = (
@@ -330,10 +345,17 @@ class Codex(Runtime):
         """``--add-dir <path>`` per writable root, including Git bookkeeping
         files and their locks. What a project's
         tooling keeps outside the checkout — uv's cache under `~/.cache`, the
-        one wall a member hit live — is opened here, nothing else."""
+        one wall a member hit live — is opened here, nothing else.
+
+        On Linux only existing directories: Git's files are left out, so
+        commits stay blocked inside the sandbox there (#433). A relative
+        entry is Codex's to resolve in the agent's directory, as before."""
         args: list[str] = []
         for directory in dirs:
-            args.extend(["--add-dir", str(Path(directory).expanduser())])
+            path = Path(directory).expanduser()
+            if _DIRECTORY_ROOTS_ONLY and path.is_absolute() and not os.path.isdir(path):
+                continue
+            args.extend(["--add-dir", str(path)])
         return args
 
     def effort_args(self, effort: str | None) -> list[str]:
@@ -381,10 +403,14 @@ class Codex(Runtime):
         # Pin the launch tier independently of model/effort and inherited config.
         # An operator can still explicitly change the tier inside the session.
         # Inline output preserves tmux scrollback and mouse handling.
+        # codex-cli 0.160: with any `-c` override, an available update stops the
+        # launch on a numbered dialog; upgrading stays the operator's choice.
         args = [
             *_LOCAL_API_ACCESS,
             "-c",
             "service_tier=default",
+            "-c",
+            "check_for_update_on_startup=false",
             "--no-alt-screen",
             *hook,
         ]
@@ -405,6 +431,13 @@ class Codex(Runtime):
             if has_text(path):
                 return [path]
         return []
+
+    def user_skill_dirs(self, env):
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
+        ).expanduser()
+        # 0.160.0 reads both recursively, $CODEX_HOME/skills/.system included.
+        return [agent_home(env) / ".agents" / "skills", home / "skills"]
 
     def native_memory(self, env, project=None):
         home = Path(
@@ -484,7 +517,7 @@ class Codex(Runtime):
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session_id):
             return []
         home = Path(
-            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
         ).expanduser()
         return sorted(
             [
@@ -497,7 +530,7 @@ class Codex(Runtime):
         self, path: Path, session_id: str, env: dict[str, str]
     ) -> list[tuple[str, Path]]:
         home = Path(
-            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
         ).expanduser()
         cached = _usage_lineage.get(str(home))
         if cached and time.monotonic() - cached[0] < 30:

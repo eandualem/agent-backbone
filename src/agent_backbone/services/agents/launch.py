@@ -20,12 +20,14 @@ from agent_backbone.hooks.backbone_state import clear_agent_context, offer_steer
 from agent_backbone.models import BRIEF_SOURCE
 from agent_backbone.services.agents._file_reader import (
     clear_starting_marker,
+    read_launch_session,
     read_state_file,
     write_starting_marker,
 )
 from agent_backbone.services.agents._inference import get_agent_state
 from agent_backbone.services.agents.instructions import instruction_preview
 from agent_backbone.services.agents.models import AgentState
+from agent_backbone.services.database import now_iso
 from agent_backbone.services.runtimes import (
     AGENT_ENV_KEY,
     RUNTIME_ENV_KEY,
@@ -33,6 +35,7 @@ from agent_backbone.services.runtimes import (
     STATE_DIR_ENV_KEY,
     Runtime,
     get_runtime,
+    project_skill_dirs,
     read_brief,
     resolve_runtime,
     sanitize_pane_content,
@@ -125,6 +128,7 @@ async def start_agent(
     runtime: str | None = None,
     model: str | None = None,
     resume: bool = False,
+    session_id: str | None = None,
     brief_file: Path | str | None = None,
     db: BackboneDB | None = None,
     wait: bool = True,
@@ -136,7 +140,8 @@ async def start_agent(
     owner decides when an agent continues, because a resumed agent trusts
     its own context over what happened in the checkout since (other
     runtimes, swarms, the shared memory). The saved runtime and model are
-    reused either way.
+    reused either way. ``session_id`` resumes exactly that conversation and
+    nothing else: a runtime that cannot open a session by id is refused.
 
     Diagnostic details contain classifications only. The human-facing result
     may include terminal evidence, paths or a session id; none of those are
@@ -144,6 +149,7 @@ async def start_agent(
     """
     operation_id = operation_id or uuid.uuid4().hex
     started = time.monotonic()
+    resume = resume or session_id is not None
     details: dict = {
         "stage": "preflight",
         "requested_runtime": runtime,
@@ -199,6 +205,7 @@ async def start_agent(
             runtime=runtime,
             model=model,
             resume=resume,
+            session_id=session_id,
             brief_file=brief_file,
             db=db,
             wait=wait,
@@ -237,6 +244,7 @@ async def _start_agent(
     runtime: str | None,
     model: str | None,
     resume: bool,
+    session_id: str | None = None,
     brief_file: Path | str | None,
     db: BackboneDB | None,
     wait: bool,
@@ -272,6 +280,9 @@ async def _start_agent(
         log.error("Cannot start agent '%s': unknown runtime %s", spec.name, runtime_id)
         return StartResult(ok=False, evidence=(f"unknown runtime: {runtime_id}",))
     rt = RUNTIMES[runtime_id]
+    if session_id is not None and not rt.supports_exact_resume:
+        details["reason"] = "exact_resume_unsupported"
+        return StartResult(ok=False, evidence=(f"{rt.id} cannot open a session by id",))
     effective_model = model if model is not None else spec.model
     section = config.launch
     details["stage"] = "preparation"
@@ -324,17 +335,34 @@ async def _start_agent(
         else None
     )
     saved_age = _age(last.timestamp, time.time()) if last is not None else ""
-    if resume and last is not None and last.session_id and own_session is None:
+    # The last launch's conversation is the id its hook reported or, before
+    # that, the one it resumed by id. A launch that ended before either leaves
+    # only an earlier session's id behind, which is never resumed.
+    reported = read_state_file(config.state_dir, spec.name, current_launch=True)
+    if reported is not None and reported.session_id and reported.runtime in (None, rt.id):
+        last_launch = reported.session_id
+        how = f"reported: {last_launch} ({_age(reported.timestamp, time.time())} old)"
+    else:
+        last_launch = read_launch_session(config.state_dir, spec.name, rt.id)
+        how = f"opened: {last_launch}"
+    if session_id is not None:
+        resume_target = session_id
+        details["resume_selection"] = "known_session"
+        resume_evidence.append(f"resuming the saved session: {session_id}")
+    elif resume and last_launch and rt.supports_exact_resume:
+        resume_target = last_launch
+        details["resume_selection"] = "known_session"
+        resume_evidence.append(f"resuming the session the last launch {how}")
+    elif resume and last is not None and last.session_id and own_session is None:
         resume_evidence.append(
             f"last session id belongs to {last.runtime}; using {rt.id}'s own resume"
         )
     elif resume and own_session and rt.supports_exact_resume:
-        resume_target = own_session
-        details["resume_selection"] = "known_session"
         resume_evidence.append(
-            f"resuming the session the backbone last saw: {own_session} ({saved_age} old)"
+            f"the last launch reported no session id; {own_session} ({saved_age} old) is from "
+            f"an earlier session, so using {rt.id}'s own resume"
         )
-    elif not resume and own_session and rt.supports_exact_resume:
+    elif not resume and last_launch and rt.supports_exact_resume:
         resume_evidence.append(
             f"fresh conversation; the previous one ({saved_age} old) is still available: "
             f"backbone agent resume {spec.name}"
@@ -351,6 +379,7 @@ async def _start_agent(
             unattended=unattended,
             writable_dirs=_writable_dirs(spec.path, section.writable_dirs),
             auto_review=section.auto_review,
+            env={**rt.default_env, **spec.env},
         )
     except RuntimeError as exc:
         details.update(reason="command_failed", error_type=type(exc).__name__)
@@ -358,10 +387,7 @@ async def _start_agent(
         return StartResult(ok=False, evidence=(str(exc),))
 
     details["stage"] = "preparation"
-    if unattended:
-        rt.prepare_unattended()
-
-    extra_env = {**spec.env, **rt.launch_env(*rt.split_model(effective_model))}
+    extra_env = {**rt.default_env, **spec.env, **rt.launch_env(*rt.split_model(effective_model))}
     resume_evidence.extend(
         f"user-level instructions: {path}" for path in rt.user_instructions(extra_env, spec.path)
     )
@@ -426,6 +452,7 @@ async def _start_agent(
     write_starting_marker(
         config.state_dir, spec.name, launched_at, launch_id=environment["BACKBONE_LAUNCH_ID"]
     )
+    session_started = now_iso()  # it may receive messages before it is ready
     ok = await start_session(
         spec.name,
         working_dir=str(spec.path),
@@ -438,6 +465,26 @@ async def _start_agent(
         details["reason"] = "session_failed"
         clear_starting_marker(config.state_dir, spec.name)
         return StartResult(ok=False, evidence=("tmux could not create the session",))
+    if db is not None and (not resume_target or command is None):
+        # A fresh conversation (a plain shell has none to resume): what earlier
+        # ones received no longer counts for it. Recorded before the readiness
+        # wait, which a backbone restart can cut short. The session is already
+        # up, so a failed write must not fail the start (a swarm would roll
+        # back a member that keeps running).
+        try:
+            await db.agents.conversation_started(spec.name, session_started)
+        except Exception:
+            log.warning("Could not record the start of '%s'", spec.name, exc_info=True)
+    if isinstance(resume_target, str):
+        # Recorded once the session runs: the conversation this launch holds
+        # until its hook reports. A launch that never ran records none.
+        write_starting_marker(
+            config.state_dir,
+            spec.name,
+            launched_at,
+            launch_id=environment["BACKBONE_LAUNCH_ID"],
+            opened=(rt.id, resume_target),
+        )
     extra = f", model: {effective_model}" if effective_model else ""
     if unattended:
         extra += ", unattended"
@@ -468,7 +515,9 @@ def _materialize_skills(
     Evidence lines for the start result, and an error when a selected skill
     does not resolve (the store's referential integrity is checked at every
     launch, like a missing policy). A name the repository already owns is
-    skipped, not fatal: the repository's own skill wins.
+    skipped, not fatal: the repository's own skill wins. The repository's
+    own skills in a directory this runtime does not read are linked where
+    it does, so they reach whichever CLI runs the agent.
     """
     store = config.skills.store_path
     if store is None or not rt.skill_dirs:
@@ -476,14 +525,31 @@ def _materialize_skills(
     try:
         selected = select_skills(read_store(store), spec.tags, spec.name)
         outcome = materialize(
-            store, spec.path, rt.skill_dirs, selected, manifest_path(config.data_dir, spec.name)
+            store,
+            spec.path,
+            rt.skill_dirs,
+            selected,
+            manifest_path(config.data_dir, spec.name),
+            read=rt.skill_read_dirs,
+            sources=project_skill_dirs(),
         )
     except OSError as exc:
         return [], f"skills: could not link into {spec.path}: {exc}"
     evidence: list[str] = []
-    if outcome.linked:
-        names = ", ".join(skill.name for skill in selected)
-        evidence.append(f"skills: {names} linked in {', '.join(rt.skill_dirs)} from {store}")
+    from_store = set(outcome.linked) - set(outcome.mirrored)
+    if names := [
+        skill.name
+        for skill in selected
+        if any(f"{directory}/{skill.name}" in from_store for directory in rt.skill_dirs)
+    ]:
+        evidence.append(
+            f"skills: {', '.join(names)} linked in {', '.join(rt.skill_dirs)} from {store}"
+        )
+    evidence.extend(
+        f"skills: repository skill {source} linked as {rel}"
+        for rel, source in outcome.mirrored.items()
+        if rel in outcome.linked
+    )
     evidence.extend(f"skills: {line}" for line in outcome.conflicts)
     if outcome.broken:
         return evidence, "skills: " + "; ".join(outcome.broken)
