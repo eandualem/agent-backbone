@@ -167,6 +167,19 @@ class TestPersistenceDependencies:
             await db.dependencies.sync(10, [])
             assert await db.dependencies.parents(20) == []
 
+    async def test_a_whole_sync_is_one_transaction(self):
+        async with BackboneDB.connect() as db:
+            await db.dependencies.sync(10, [20], repo="acme/app")
+            await db.dependencies.sync(11, [21], repo="acme/app")
+            with patch.object(db.dependencies, "_tx", wraps=db.dependencies._tx) as tx:
+                await db.dependencies.apply_sync(
+                    {"acme/app": {10, 12}}, {("acme/app", 10): [20], ("acme/app", 12): [22]}
+                )
+            assert tx.call_count == 1  # a monitor pass never reads half of it
+            assert await db.dependencies.parents(20, repo="acme/app") == [10]
+            assert await db.dependencies.parents(21, repo="acme/app") == []  # 11 is closed
+            assert await db.dependencies.parents(22, repo="acme/app") == [12]
+
 
 class TestSubIssueAnswers:
     async def test_empty_answer_syncs_but_a_failed_fetch_does_not(self, config):
@@ -176,12 +189,12 @@ class TestSubIssueAnswers:
         gh.get_sub_issues = AsyncMock(return_value=[])
         db = AsyncMock()
         await sync_dependencies(config, db, gh)
-        db.dependencies.sync.assert_awaited()
+        assert db.dependencies.apply_sync.await_args.args[1] == {("acme/app", 10): []}
 
         gh.get_sub_issues = AsyncMock(return_value=None)
         db = AsyncMock()
         await sync_dependencies(config, db, gh)
-        db.dependencies.sync.assert_not_awaited()
+        assert db.dependencies.apply_sync.await_args.args[1] == {}
 
     async def test_no_request_when_the_listing_counts_no_sub_issues(self, config):
         listed = _make_issue(10, "open").model_copy(update={"sub_issues_total": 0})
@@ -190,4 +203,4 @@ class TestSubIssueAnswers:
         db = AsyncMock()
         await sync_dependencies(config, db, gh)
         gh.get_sub_issues.assert_not_awaited()
-        db.dependencies.sync.assert_awaited_with(10, [], repo="acme/app")
+        assert db.dependencies.apply_sync.await_args.args[1] == {("acme/app", 10): []}

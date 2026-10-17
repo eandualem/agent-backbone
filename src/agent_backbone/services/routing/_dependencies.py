@@ -92,12 +92,15 @@ async def sync_dependencies(
     """Record sub-issue relationships for every open issue in every agent queue.
 
     GitHub's listing counts each issue's sub-issues, so only an issue with some
-    (or with no count) costs a request."""
+    (or with no count) costs a request. Everything is read first and written in
+    one transaction, so queue priority never counts half a sync."""
     if gh is None:
         return
+    open_parents: dict[str, set[int]] = {}
     for repo in config.agents.repos:
         open_issues = await gh.list_issues(state="open", repo_full_name=repo, all_pages=True)
-        await db.dependencies.retain_parents(repo, {issue.number for issue in open_issues})
+        open_parents[repo] = {issue.number for issue in open_issues}
+    sub_issues: dict[tuple[str, int], list[int]] = {}
     checked: set[tuple[str, int]] = set()
     for name in config.agents.names:
         for issue in await list_open_queue_for_target(config, name, gh):
@@ -111,6 +114,5 @@ async def sync_dependencies(
                 else await gh.get_sub_issues(issue.number, repo_full_name=issue.repo_full_name)
             )
             if subs is not None:  # an empty answer clears stale edges; a failed fetch keeps them
-                await db.dependencies.sync(
-                    issue.number, [s.number for s in subs], repo=issue.repo_full_name
-                )
+                sub_issues[key] = [s.number for s in subs]
+    await db.dependencies.apply_sync(open_parents, sub_issues)

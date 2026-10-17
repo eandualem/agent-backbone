@@ -527,8 +527,9 @@ Every `timing.monitor_interval_seconds` (60 s), `agent-monitor`:
 
 Every 10 minutes, and at startup, `dependency-sync` records the sub-issue
 relationships of the open issues in every agent's queue. It asks GitHub for
-sub-issues only where the issue listing counts some. It is a job of its own, so
-a monitor tick never waits on its repository listings.
+sub-issues only where the issue listing counts some, reads everything first and
+writes it in one transaction, so queue priority never counts half a sync. It is
+a job of its own, so a monitor tick never waits on its repository listings.
 
 Every `timing.retry_interval_seconds` (5 min), `delivery-retry` resumes pending
 GitHub outbox recipients, re-attempts older issue delivery records that ended
