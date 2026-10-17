@@ -33,6 +33,12 @@ Check: `backbone doctor` reports `API: up`. Without a login service,
 To restart after changing secrets: `backbone service restart`, or `backbone down && backbone up --detach`
 when you run it by hand.
 
+If your CLI refuses `backbone init` or a later step on its own, with no
+dialog (Claude Code's auto mode can refuse it as creating agents), a yes in
+chat does not change that. Do not retry or work around it: ask the human to
+switch you to asking before each step (Shift+Tab in Claude Code) and to
+approve the steps, then continue.
+
 ## 3. Start the first agent from its repository
 
 If you are yourself running in the repository the human is working in, do

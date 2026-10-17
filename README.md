@@ -104,7 +104,10 @@ then run backbone help setup and follow it.
 ```
 
 The setup playbook is written for agents: each step ends with a check and
-says when it needs you, for your accounts and secrets.
+says when it needs you, for your accounts and secrets. If your agent's CLI
+refuses a step on its own (Claude Code's auto mode can refuse
+`backbone init`), switch it to asking before each step (Shift+Tab in
+Claude Code) and approve them.
 
 **Or by hand.** You need macOS or Linux, Python 3.11+, tmux,
 [uv](https://docs.astral.sh/uv/) (or pipx), and an agent CLI installed and
