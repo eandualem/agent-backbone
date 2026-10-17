@@ -108,9 +108,18 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                 # It is moved aside, not deleted, so it stays recoverable.
                 if registration := row.get("_registration_path"):
                     rejected = registration.parent / "rejected"
-                    with suppress(OSError):
+                    try:
                         rejected.mkdir(exist_ok=True)
                         registration.replace(rejected / registration.name)
+                    except OSError as move_exc:
+                        log.warning(
+                            "Could not move refused usage registration for %s/%s (%s): %s",
+                            row["agent"],
+                            row["runtime"],
+                            usage_id(row["runtime"], sid),
+                            type(move_exc).__name__,
+                        )
+                    else:
                         log.warning(
                             "Moved refused usage registration for %s/%s (%s) to %s: %s",
                             row["agent"],
