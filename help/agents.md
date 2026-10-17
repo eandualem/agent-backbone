@@ -69,8 +69,8 @@ backbone help agent start                  # recall command options
 - To run an agent without permission prompts, the human sets
   `backbone agent set NAME unattended=true`. It applies at the next start;
   `backbone agent restart NAME --resume` keeps the conversation.
-  `backbone runtimes` shows each CLI's switch: Codex keeps its sandbox,
-  Claude Code, OpenCode and Gemini have none. Turning prompts off, for
+  `backbone runtimes` shows each CLI's switch: Codex keeps its OS sandbox;
+  Claude Code, OpenCode and Gemini have no OS sandbox. Turning prompts off, for
   you or another agent, is the human's call: offer them the commands.
 
 ## Reading what an agent has said
