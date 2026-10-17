@@ -146,7 +146,11 @@ async def start_session(
     except BaseException:  # a canceled launch (shutdown) leaves no file either
         _remove(env_file)
         raise
-    if rc != 0:
+    # tmux can start the session and still not answer in time: a first start
+    # that also started the server did, on a Linux host. A refusal stays one.
+    if rc == -1 and await session_exists(session_name):
+        log.warning("tmux did not confirm session '%s' in time, but it is running", session_name)
+    elif rc != 0:
         _remove(env_file)
         log.error("Failed to start session '%s': %s", session_name, stderr.decode())
         return False
