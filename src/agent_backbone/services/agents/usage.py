@@ -103,6 +103,22 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                     f"{row['agent']}/{row['runtime']}: invalid or conflicting session registration"
                 )
                 checked(row["agent"], row["runtime"], "usage_registration", type(exc).__name__)
+                # The file never changes and the session keeps its first owner, so
+                # it can never be accepted: report it this once, not every pass.
+                # It is moved aside, not deleted, so it stays recoverable.
+                if registration := row.get("_registration_path"):
+                    rejected = registration.parent / "rejected"
+                    with suppress(OSError):
+                        rejected.mkdir(exist_ok=True)
+                        registration.replace(rejected / registration.name)
+                        log.warning(
+                            "Moved refused usage registration for %s/%s (%s) to %s: %s",
+                            row["agent"],
+                            row["runtime"],
+                            usage_id(row["runtime"], sid),
+                            rejected,
+                            type(exc).__name__,
+                        )
             else:
                 checked(row["agent"], row["runtime"], "usage_registration")
         known = {s["id"]: s for s in await db.usage.sessions()}

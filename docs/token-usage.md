@@ -153,7 +153,10 @@ Only identity, timestamps, token counters, cursor metadata and price evidence go
 into Backbone's own database. No prompts or tool output are retained by the usage
 collector. Registration files live under Backbone's `state/usage-sessions/`.
 They are consumed after their launch identities commit to the database; usage
-history remains in the database. Source failures and recovery are visible in
+history remains in the database. A registration the database refuses, such as one
+that conflicts with a session's existing owner, is reported once and moved to
+`state/usage-sessions/rejected/`, which collection never reads; the owner keeps
+its history. Source failures and recovery are visible in
 the existing operational diagnostics.
 Nothing is required in a user's repository, and existing telemetry/status-line
 configuration is preserved. `usage.enabled=false` stops importing; stored history
