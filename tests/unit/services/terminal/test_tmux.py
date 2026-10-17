@@ -358,6 +358,22 @@ class TestStartSessionEnvironment:
             await start_session("test", environment={"API_TOKEN": "s3cret"})
         assert not list(Path(tempfile_dir).glob("backbone-env-*"))
 
+    async def test_env_file_is_removed_when_the_timeout_check_is_canceled(self):
+        tempfile_dir = tempfile.gettempdir()
+        with (
+            patch(
+                "agent_backbone.services.terminal._sessions.session_exists",
+                side_effect=[False, asyncio.CancelledError],
+            ),
+            patch(
+                "agent_backbone.services.terminal._sessions._run_tmux",
+                return_value=(-1, b"", b"tmux command timed out"),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await start_session("test", environment={"API_TOKEN": "s3cret"})
+        assert not list(Path(tempfile_dir).glob("backbone-env-*"))
+
     async def test_env_file_is_removed_when_tmux_refuses(self, mock_subprocess):
         with patch(
             "agent_backbone.services.terminal._sessions.session_exists",
