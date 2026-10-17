@@ -290,6 +290,15 @@ class TestGetParentNumber:
             assert await gh.get_parent_number(20, repo_full_name="acme/app") is None
 
     @respx.mock
+    async def test_dropped_connection_is_no_parent(self, config):
+        # Recorded parents are still checked after a failed lookup.
+        url = f"{API_BASE}/repos/acme/app/issues/20/parent"
+        respx.get(url).mock(side_effect=httpx.ConnectError("reset"))
+
+        async with GitHubClient(config) as gh:
+            assert await gh.get_parent_number(20, repo_full_name="acme/app") is None
+
+    @respx.mock
     async def test_parent_in_another_repository_is_not_this_repositorys(self, config):
         url = f"{API_BASE}/repos/acme/app/issues/20/parent"
         respx.get(url).respond(

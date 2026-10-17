@@ -413,8 +413,8 @@ class GitHubClient:
             if exc.response.status_code != 404:
                 log.warning("Failed to fetch the parent of #%d: %s", issue_number, exc)
             return None
-        except httpx.TimeoutException:
-            log.warning("Timeout fetching the parent of #%d", issue_number)
+        except httpx.RequestError as exc:  # timeouts and dropped connections
+            log.warning("Failed to fetch the parent of #%d: %s", issue_number, exc)
             return None
         parent = resp.json()
         parent_repo = (parent.get("repository_url") or "").rsplit("/repos/", 1)[-1]
