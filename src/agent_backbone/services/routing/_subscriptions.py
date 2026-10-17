@@ -121,13 +121,13 @@ async def dispatch_source_events(
         handed[key] = outcome != "failed"
         if handed[key]:
             # Note the holder now: a restart before this poll ends must not
-            # hand these events to the same agent again.
+            # hand these events to the same agent again. One write per batch.
+            holders = {}
             for event_id, keys in recipients.items():
                 if key in keys:
-                    holders = held_before[event_id] | {k[0] for k in keys if handed.get(k)}
-                    await db.events.mark_processed(
-                        event_id, _PARTIAL + ", ".join(sorted(holders)), processed=False
-                    )
+                    held = held_before[event_id] | {k[0] for k in keys if handed.get(k)}
+                    holders[event_id] = _PARTIAL + ", ".join(sorted(held))
+            await db.events.mark_partial(holders)
         summary[outcome] = summary.get(outcome, 0) + 1
         log.info(
             "Subscription batch for %s (%s, %d item(s)): %s%s",
