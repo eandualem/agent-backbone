@@ -335,11 +335,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 if memory := runtime.native_memory({}):
                     note(f"  ! {runtime.display_name} native memory: {memory}")
             # The capability contract: what each installed runtime lacks, and its issue.
+            # Titles, not ids: "bounded-unattended" read as "no unattended mode".
             gaps = [
                 (
                     runtime_id,
                     "\n".join(
-                        cap.id
+                        cap.title
                         + (f" (#{cell.issue})" if (cell := cap.cells[runtime_id]).issue else "")
                         for cap in missing
                     ),
