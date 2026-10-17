@@ -28,10 +28,9 @@ _MON = "agent_backbone.services.jobs.monitor"
 
 
 @pytest.fixture(autouse=True)
-def _clear_dedup(monkeypatch):
+def _clear_dedup():
     esc._escalated.clear()
     esc._plan_notified.clear()
-    monkeypatch.setattr(f"{_MON}._dependency_synced_at", None)
     yield
     esc._escalated.clear()
     esc._plan_notified.clear()
@@ -716,7 +715,6 @@ class TestMonitorAgents:
                 new_callable=AsyncMock,
                 return_value=_snap(AgentState.IDLE),
             ),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock) as sync,
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock) as stalls,
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock) as offline,
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock) as plans,
@@ -731,13 +729,12 @@ class TestMonitorAgents:
             result = await monitor_agents(config, db, gh, on_change=on_change)
 
         assert result == {"ike": "no_pending"}
-        for mock in (sync, stalls, offline, plans, on_change, drained, pend):
+        for mock in (stalls, offline, plans, on_change, drained, pend):
             mock.assert_awaited_once()
         steps = take_pass_steps()
         assert {step: ms for step, ms in steps.items() if ms} == {"queue_drain": 2_500}
         assert list(steps) == [
             "state_read",
-            "dependency_sync",
             "stall_detection",
             "offline_detection",
             "plan_notification",
@@ -751,23 +748,7 @@ class TestMonitorAgents:
             "pending_issues",
         ]
         assert take_pass_steps() == {}  # a later run that never reaches a pass gets none
-
-    async def test_dependency_sync_runs_at_most_every_ten_minutes(self, config, db):
-        clock = [1_000.0]
-        with (
-            patch(f"{_MON}.time", SimpleNamespace(monotonic=lambda: clock[0])),
-            patch(f"{_MON}.list_sessions", new_callable=AsyncMock, return_value=[]),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock) as sync,
-            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
-            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
-            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
-            patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock, return_value={}),
-            patch(f"{_MON}.deliver_pending_issues", new_callable=AsyncMock, return_value={}),
-        ):
-            for now in (1_000.0, 1_599.0, 1_600.0):
-                clock[0] = now
-                await monitor_agents(config, db, AsyncMock())
-        assert sync.await_count == 2
+        gh.list_issues.assert_not_awaited()  # dependency sync is its own job
 
     async def test_step_failure_is_isolated(self, config, db):
         with (
@@ -776,9 +757,6 @@ class TestMonitorAgents:
                 f"{_MON}.agent_state",
                 new_callable=AsyncMock,
                 return_value=_snap(AgentState.IDLE),
-            ),
-            patch(
-                f"{_MON}.sync_dependencies", new_callable=AsyncMock, side_effect=RuntimeError("x")
             ),
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock, side_effect=RuntimeError("x")),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
@@ -816,7 +794,6 @@ class TestMonitorAgents:
         gh = AsyncMock()
         with (
             patch(f"{_MON}.list_sessions", new_callable=AsyncMock, return_value=[]),
-            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock),
             patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
             patch(f"{_MON}.handle_offline", new_callable=AsyncMock) as offline,
             patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
