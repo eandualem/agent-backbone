@@ -169,6 +169,25 @@ class TestListIssues:
         assert len(issues) == 1
         assert issues[0].repo_full_name == "WF/agent-shell"
 
+    @respx.mock
+    async def test_reads_the_sub_issue_count(self, config, issues_url):
+        respx.get(issues_url).respond(
+            json=[
+                {
+                    "number": 10,
+                    "state": "open",
+                    "parent_issue_url": None,
+                    "sub_issues_summary": {"total": 2, "completed": 1, "percent_completed": 50},
+                },
+                {"number": 11, "state": "open"},
+            ]
+        )
+
+        async with GitHubClient(config) as gh:
+            issues = await gh.list_issues(repo_full_name=REPO)
+
+        assert [i.sub_issues_total for i in issues] == [2, None]
+
 
 class TestGetIssue:
     @respx.mock
@@ -241,6 +260,44 @@ class TestGetSubIssues:
             subs = await gh.get_sub_issues(10, repo_full_name=REPO)
 
         assert subs == []
+
+
+class TestGetParentNumber:
+    @respx.mock
+    async def test_returns_the_parent_in_the_same_repository(self, config):
+        url = f"{API_BASE}/repos/acme/app/issues/20/parent"
+        respx.get(url).respond(
+            json={
+                "url": f"{API_BASE}/repos/acme/app/issues/10",
+                "repository_url": f"{API_BASE}/repos/acme/app",
+                "number": 10,
+                "state": "open",
+                "title": "[task] Parent",
+                "parent_issue_url": None,
+                "sub_issues_summary": {"total": 1, "completed": 0, "percent_completed": 0},
+            }
+        )
+
+        async with GitHubClient(config) as gh:
+            assert await gh.get_parent_number(20, repo_full_name="acme/app") == 10
+
+    @respx.mock
+    async def test_no_parent_is_404(self, config):
+        url = f"{API_BASE}/repos/acme/app/issues/20/parent"
+        respx.get(url).respond(status_code=404, json={"message": "Not Found"})
+
+        async with GitHubClient(config) as gh:
+            assert await gh.get_parent_number(20, repo_full_name="acme/app") is None
+
+    @respx.mock
+    async def test_parent_in_another_repository_is_not_this_repositorys(self, config):
+        url = f"{API_BASE}/repos/acme/app/issues/20/parent"
+        respx.get(url).respond(
+            json={"number": 10, "repository_url": f"{API_BASE}/repos/acme/other"}
+        )
+
+        async with GitHubClient(config) as gh:
+            assert await gh.get_parent_number(20, repo_full_name="acme/app") is None
 
 
 class TestPagination:

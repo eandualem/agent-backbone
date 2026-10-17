@@ -44,6 +44,24 @@ _monitor_lock = asyncio.Lock()
 _last_steps: dict[str, int] = {}
 """Milliseconds each step of the latest pass took, for its slow-run record."""
 
+DEPENDENCY_SYNC_INTERVAL_SECONDS = 600
+"""Sub-issue links change rarely, and a close asks GitHub for its own parent."""
+
+_dependency_synced_at: float | None = None
+
+
+def _dependency_sync_due() -> bool:
+    """True at most once every ``DEPENDENCY_SYNC_INTERVAL_SECONDS``."""
+    global _dependency_synced_at
+    now = time.monotonic()
+    if (
+        _dependency_synced_at is not None
+        and now - _dependency_synced_at < DEPENDENCY_SYNC_INTERVAL_SECONDS
+    ):
+        return False
+    _dependency_synced_at = now
+    return True
+
 
 def take_pass_steps() -> dict[str, int]:
     """Each step of the latest monitor pass, in order, with its milliseconds.
@@ -133,7 +151,7 @@ async def monitor_agents(
         await observe_runtime(db, config, states)
         await sync_states(db, states)
         lap("state_read")
-        if gh is not None:
+        if gh is not None and _dependency_sync_due():
             try:
                 await sync_dependencies(config, db, gh)
             except Exception as exc:

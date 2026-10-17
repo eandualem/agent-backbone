@@ -28,9 +28,10 @@ _MON = "agent_backbone.services.jobs.monitor"
 
 
 @pytest.fixture(autouse=True)
-def _clear_dedup():
+def _clear_dedup(monkeypatch):
     esc._escalated.clear()
     esc._plan_notified.clear()
+    monkeypatch.setattr(f"{_MON}._dependency_synced_at", None)
     yield
     esc._escalated.clear()
     esc._plan_notified.clear()
@@ -750,6 +751,23 @@ class TestMonitorAgents:
             "pending_issues",
         ]
         assert take_pass_steps() == {}  # a later run that never reaches a pass gets none
+
+    async def test_dependency_sync_runs_at_most_every_ten_minutes(self, config, db):
+        clock = [1_000.0]
+        with (
+            patch(f"{_MON}.time", SimpleNamespace(monotonic=lambda: clock[0])),
+            patch(f"{_MON}.list_sessions", new_callable=AsyncMock, return_value=[]),
+            patch(f"{_MON}.sync_dependencies", new_callable=AsyncMock) as sync,
+            patch(f"{_MON}.handle_stalls", new_callable=AsyncMock),
+            patch(f"{_MON}.handle_offline", new_callable=AsyncMock),
+            patch(f"{_MON}.check_plan_waiting", new_callable=AsyncMock),
+            patch(f"{_MON}.drain_message_queue", new_callable=AsyncMock, return_value={}),
+            patch(f"{_MON}.deliver_pending_issues", new_callable=AsyncMock, return_value={}),
+        ):
+            for now in (1_000.0, 1_599.0, 1_600.0):
+                clock[0] = now
+                await monitor_agents(config, db, AsyncMock())
+        assert sync.await_count == 2
 
     async def test_step_failure_is_isolated(self, config, db):
         with (

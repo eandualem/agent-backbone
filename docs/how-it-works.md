@@ -478,8 +478,10 @@ anchored to the reviewed commit. See [review lifecycle](github.md#review-lifecyc
 2. Each target gets its **next** issue (highest priority in its queue).
 3. The opener (`from:`), if it is an agent and not a target, is told the
    issue was closed.
-4. If the issue was a sub-issue and all siblings are closed, the parent's
-   targets get an "unblocked" notice.
+4. If the issue was a sub-issue, all siblings are closed and the parent is
+   still open, the parent's targets get an "unblocked" notice. The parent is
+   the one recorded by the last sync or the one GitHub names at the close, so
+   a link made since the last sync still counts.
 
 ### Pull requests
 
@@ -505,7 +507,8 @@ Every `timing.monitor_interval_seconds` (60 s), `agent-monitor`:
 
 1. Refreshes agents and settings from the database, reads every running
    agent's state **once** and mirrors it into the `agent_states` table.
-2. Syncs sub-issue relationships for open issues.
+2. Syncs sub-issue relationships for open issues, at most every 10 minutes.
+   It asks GitHub for sub-issues only where the issue listing counts some.
 3. **Stalls**: `busy` on one issue for > `timing.stall_threshold_seconds`
    (90 min) → one message to `escalation.target`, deduplicated for
    `timing.escalation_dedup_seconds` (30 min).
