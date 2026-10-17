@@ -23,11 +23,33 @@ def _make_issue(number: int, state: str = "closed", targets: list[str] | None = 
     )
 
 
+def _gh(parent: int | None = None) -> AsyncMock:
+    gh = AsyncMock()
+    gh.get_parent_number = AsyncMock(return_value=parent)
+    return gh
+
+
 class TestOnDependencyResolved:
     async def test_no_parents_noop(self, config):
         async with BackboneDB.connect() as db:
-            result = await on_dependency_resolved(99, "", config, db, AsyncMock())
+            result = await on_dependency_resolved(99, "", config, db, _gh())
         assert result["parents_checked"] == "0"
+
+    async def test_link_made_since_the_last_sync_still_unblocks_the_parent(self, config):
+        # Nothing recorded yet: the parent comes from GitHub at close.
+        gh = _gh(parent=10)
+        gh.get_sub_issues = AsyncMock(return_value=[_make_issue(20)])
+        gh.get_issue = AsyncMock(return_value=_make_issue(10, state="open", targets=["brunel"]))
+        async with BackboneDB.connect() as db:
+            with patch(
+                f"{_DEP}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
+            ):
+                result = await on_dependency_resolved(20, "acme/app", config, db, gh)
+
+        gh.get_parent_number.assert_awaited_once_with(20, repo_full_name="acme/app")
+        assert result["parent_10"] == "unblocked_delivered_to:brunel"
 
     async def test_parent_found_all_resolved(self, config):
         parent = _make_issue(10, state="open", targets=["feynman"])
@@ -45,8 +67,9 @@ class TestOnDependencyResolved:
                     return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
                 ) as d,
             ):
-                result = await on_dependency_resolved(20, "", config, db, AsyncMock())
+                result = await on_dependency_resolved(20, "", config, db, _gh(parent=10))
 
+        assert result["parents_checked"] == "1"
         assert result["parent_10"] == "unblocked_delivered_to:feynman"
         assert d.await_args.args[0] == "feynman"
 
@@ -54,7 +77,7 @@ class TestOnDependencyResolved:
         async with BackboneDB.connect() as db:
             await db.dependencies.sync(10, [20, 21])
             with patch(f"{_DEP}.check_parent_resolved", new_callable=AsyncMock, return_value=None):
-                result = await on_dependency_resolved(20, "", config, db, AsyncMock())
+                result = await on_dependency_resolved(20, "", config, db, _gh())
         assert result["parent_10"] == "still_blocked"
 
     async def test_unknown_target_not_delivered(self, config):
@@ -69,7 +92,7 @@ class TestOnDependencyResolved:
                 ),
                 patch(f"{_DEP}.safe_deliver", new_callable=AsyncMock) as d,
             ):
-                result = await on_dependency_resolved(20, "", config, db, AsyncMock())
+                result = await on_dependency_resolved(20, "", config, db, _gh())
         assert result["parent_10"] == "unblocked_no_delivery"
         d.assert_not_called()
 
@@ -89,6 +112,14 @@ class TestCheckParentResolved:
 
         gh = AsyncMock()
         gh.get_sub_issues = AsyncMock(return_value=[_make_issue(20), _make_issue(21, "open")])
+        assert await check_parent_resolved(config, 10, gh) is None
+
+    async def test_closed_parent_is_not_unblocked(self, config):
+        from agent_backbone.services.routing._dependencies import check_parent_resolved
+
+        gh = AsyncMock()
+        gh.get_sub_issues = AsyncMock(return_value=[_make_issue(20)])
+        gh.get_issue = AsyncMock(return_value=_make_issue(10, state="closed"))
         assert await check_parent_resolved(config, 10, gh) is None
 
 
@@ -151,3 +182,12 @@ class TestSubIssueAnswers:
         db = AsyncMock()
         await sync_dependencies(config, db, gh)
         db.dependencies.sync.assert_not_awaited()
+
+    async def test_no_request_when_the_listing_counts_no_sub_issues(self, config):
+        listed = _make_issue(10, "open").model_copy(update={"sub_issues_total": 0})
+        gh = AsyncMock()
+        gh.list_issues = AsyncMock(return_value=[listed])
+        db = AsyncMock()
+        await sync_dependencies(config, db, gh)
+        gh.get_sub_issues.assert_not_awaited()
+        db.dependencies.sync.assert_awaited_with(10, [], repo="acme/app")

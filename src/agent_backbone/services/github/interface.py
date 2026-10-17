@@ -310,6 +310,7 @@ class GitHubClient:
             created_at=item.get("created_at") or "",
             closed_at=item.get("closed_at") or "",
             is_pull_request="pull_request" in item,
+            sub_issues_total=(item.get("sub_issues_summary") or {}).get("total"),
         )
 
     async def get_pull_raw(self, number: int, repo_full_name: str) -> dict:
@@ -399,6 +400,27 @@ class GitHubClient:
             return None
 
         return [self._build_issue(item, repo_full_name=repo_full_name) for item in items]
+
+    async def get_parent_number(self, issue_number: int, repo_full_name: str) -> int | None:
+        """The parent of a sub-issue in the same repository; ``None`` when it has
+        none (GitHub answers 404), the parent is in another repository, or the
+        fetch failed."""
+        try:
+            resp = await self._request(
+                "GET", f"/issues/{issue_number}/parent", repo_full_name=repo_full_name
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:
+                log.warning("Failed to fetch the parent of #%d: %s", issue_number, exc)
+            return None
+        except httpx.RequestError as exc:  # timeouts and dropped connections
+            log.warning("Failed to fetch the parent of #%d: %s", issue_number, exc)
+            return None
+        parent = resp.json()
+        parent_repo = (parent.get("repository_url") or "").rsplit("/repos/", 1)[-1]
+        if parent_repo.casefold() != repo_full_name.casefold():
+            return None
+        return parent["number"]
 
     async def get_issue(self, issue_number: int, repo_full_name: str) -> IssueData:
         """Get a single issue by number."""
