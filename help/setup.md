@@ -88,18 +88,24 @@ lifecycle commands unattended — give them this snippet:
       "Bash(backbone agent start)",
       "Bash(backbone agent start *)",
       "Bash(backbone agent stop *)",
+      "Bash(backbone agent restart)",
+      "Bash(backbone agent restart *)",
       "Bash(backbone agent inspect *)",
       "Bash(backbone agent approve *)",
       "Bash(backbone agent watch *)",
       "Bash(backbone agent unwatch *)",
       "Bash(backbone agent subscribe *)",
       "Bash(backbone agent unsubscribe *)",
+      "Bash(backbone swarm *)",
       "Bash(backbone tell *)",
       "Bash(backbone reply *)"
     ]
   }
 }
 ```
+
+`backbone agent set` is left out on purpose: it can make an agent run
+without prompts (`unattended=true`), and that is the human's decision.
 
 Agents use their own GitHub CLI credentials to push and merge pull requests.
 The backbone's credentials support issue intake and its issue API; they do not
