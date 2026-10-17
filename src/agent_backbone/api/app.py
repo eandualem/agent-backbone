@@ -45,6 +45,7 @@ def _register_jobs(app: FastAPI):
     """Wire the periodic jobs. Each job reads ``app.state.config`` at run time so
     setting changes and newly discovered agents are picked up without a restart."""
     from agent_backbone.services.agents import rotate_action_log
+    from agent_backbone.services.github import QueueSnapshot
     from agent_backbone.services.jobs import (
         GitHubPoller,
         SourcesPoller,
@@ -58,7 +59,11 @@ def _register_jobs(app: FastAPI):
         take_pass_steps,
     )
     from agent_backbone.services.jobs.transitions import INTERVAL_SECONDS as _TRANSITION_TICK
-    from agent_backbone.services.routing import routing_in_flight, settle_steers
+    from agent_backbone.services.routing import (
+        routing_in_flight,
+        settle_steers,
+        sync_dependencies,
+    )
     from agent_backbone.services.scheduler import PeriodicScheduler
 
     state = app.state
@@ -194,6 +199,13 @@ def _register_jobs(app: FastAPI):
             )
         elif config.github_intake == "webhook" and config.github.backfill_on_start:
             scheduler.add("github-backfill", 0, poller.backfill, run_immediately=True, once=True)
+
+        async def _dependencies():
+            await sync_dependencies(state.config, state.db, QueueSnapshot(state.github))
+
+        # Sub-issue links change rarely, and a close asks GitHub for its own
+        # parent. Their own job: a monitor pass never waits on these listings.
+        scheduler.add("dependency-sync", 600, _dependencies, run_immediately=True)
 
     sources = getattr(state, "sources", None)
     sources_poller = SourcesPoller(lambda: state.config, state.db, sources) if sources else None
