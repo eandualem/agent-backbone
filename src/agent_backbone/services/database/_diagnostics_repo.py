@@ -60,8 +60,14 @@ _INT_DETAILS = frozenset(
 )
 
 
+def _counter(item: object) -> bool:
+    return type(item) is int and 0 <= item <= 2**63 - 1
+
+
 def diagnostic_details(value: object) -> dict:
-    """Keep only declared scalar codes/counters, never arbitrary evidence or exception text."""
+    """Keep only declared scalar codes/counters, never arbitrary evidence or exception text.
+
+    ``steps`` is a job's milliseconds per step: step names are codes, values counters."""
     if not isinstance(value, dict):
         return {}
     clean: dict = {}
@@ -70,9 +76,20 @@ def diagnostic_details(value: object) -> dict:
             if (_DISPLAY_NAME if key == "observed_model" else _TOKEN).fullmatch(item):
                 clean[key] = item
         elif (key in _BOOL_DETAILS and isinstance(item, bool)) or (
-            key in _INT_DETAILS and type(item) is int and 0 <= item <= 2**63 - 1
+            key in _INT_DETAILS and _counter(item)
         ):
             clean[key] = item
+        elif key == "steps" and isinstance(item, dict) and len(item) <= 32:
+            steps = {
+                step: ms
+                for step, ms in item.items()
+                if isinstance(step, str)
+                and len(step) <= 60
+                and _TOKEN.fullmatch(step)
+                and _counter(ms)
+            }
+            if steps:
+                clean[key] = steps
     return clean
 
 
