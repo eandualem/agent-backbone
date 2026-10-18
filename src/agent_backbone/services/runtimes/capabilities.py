@@ -163,6 +163,7 @@ _FRESH = "live: #290 post-fix probe (stale brief retired, current brief first)"
 _RESUME = "live: #273 post-fix probe (resume and compaction)"
 _GEMINI_STUB = "live: #302 (Gemini CLI 0.46 against a local API stub)"
 _LAUNCH = "tests/unit/services/runtimes/test_launch_commands.py"
+_STARTERS = "tests/unit/services/agents/test_launch.py"
 _FLEET = "tests/unit/services/agents/test_fleet.py"
 _NO_MODEL = "a plain shell runs no model"
 _CONTEXT_NOTE = "tests/unit/services/jobs/test_context_note.py"
@@ -229,10 +230,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/services/agents/launch.py",
         fallback="Check that the agent's first reply follows its brief; start it fresh if not.",
         implemented=lambda rt: rt.brief_mode != "none",
-        claude=_ok(_B3),
-        codex=_ok(_FRESH),
+        claude=_ok(_STARTERS, f"base launch: {_B3}; starter content tested without model calls"),
+        codex=_ok(_STARTERS, f"base launch: {_FRESH}; starter content tested without model calls"),
         gemini=_ok(_GEMINI_STUB),
-        opencode=_ok(_B3),
+        opencode=_ok(_STARTERS, f"base launch: {_B3}; starter content tested without model calls"),
         deepcode=_unverified(),
         aider=_unverified(note="not verified live"),
         shell=_na(_NO_MODEL),

@@ -74,6 +74,38 @@ def test_init_copies_legacy_and_never_overwrites(tmp_path, capsys):
     assert not list(data.glob("*.db"))
 
 
+def test_starter_setup_preserves_customization_and_can_be_removed(tmp_path, capsys):
+    starters = ["starter-collaboration", "starter-continuity", "starter-learning"]
+    with patch.object(_common, "api_up", AsyncMock(return_value=False)):
+        assert run(["init"]) == 0
+        capsys.readouterr()
+        assert run(["templates", "list", "--json"]) == 0
+        listing = json.loads(capsys.readouterr().out)
+        assert listing["global"] == []
+        assert {f"policy:{name}" for name in starters} <= {
+            row["name"] for row in listing["templates"]
+        }
+        assert run(["templates", "use", *starters]) == 0
+        assert run(["templates", "init", "starter-learning"]) == 0
+        dirs = TemplateDirs.default(tmp_path / "data")
+        custom = template_path(dirs, "starter-learning")
+        custom.write_text("Keep our chosen examples and feedback.")
+        assert run(["init"]) == 0  # reinitialization must not reset the choices
+        capsys.readouterr()
+        assert run(["templates", "list", "--json"]) == 0
+        assert json.loads(capsys.readouterr().out)["global"] == starters
+        assert read_template("starter-learning", dirs) == custom.read_text()
+        assert run(["templates", "use", "starter-collaboration"]) == 0
+        capsys.readouterr()
+        assert run(["templates", "list", "--json"]) == 0
+        assert json.loads(capsys.readouterr().out)["global"] == ["starter-collaboration"]
+        assert run(["templates", "use", "--clear"]) == 0
+        capsys.readouterr()
+        assert run(["templates", "list", "--json"]) == 0
+        assert json.loads(capsys.readouterr().out)["global"] == []
+        assert custom.read_text() == "Keep our chosen examples and feedback."
+
+
 def test_empty_override_and_bad_name_fail_clearly(tmp_path, capsys):
     base = template_path(TemplateDirs.default(tmp_path / "data"), "base")
     base.parent.mkdir(parents=True)

@@ -40,7 +40,7 @@ version differs.
 |---|---|---|---|---|---|---|---|
 | Message delivery into the session | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? not verified live | ✅ plumbing tests only |
 | Folder-trust dialog answered at start | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (version not recorded) `--skip-trust` | n/a | n/a | ? not checked | n/a |
-| Brief reaches a fresh session before other work | ✅ | ✅ | ✅ | ✅ | ? | ? not verified live | n/a |
+| Brief reaches a fresh session before other work | ✅ base launch: live: #271 batch 3 (scratch probe); starter content tested without model calls | ✅ base launch: live: #290 post-fix probe (stale brief retired, current brief first); starter content tested without model calls | ✅ | ✅ base launch: live: #271 batch 3 (scratch probe); starter content tested without model calls | ? | ? not verified live | n/a |
 | Current brief after resume | ✅ (2.1.284) | ✅ (0.157.1) | ❌ | ❌ #273 | ❌ | ❌ | n/a |
 | Brief followed after context compaction | ✅ (2.1.282) | ✅ (0.156.1) | ? | ❌ #291 the rule is kept but no longer followed | ? | ? | n/a |
 | Project AGENTS.md loaded at start | ✅ | ✅ | ❌ reads GEMINI.md unless context.fileName is set | ✅ | ✅ | ❌ reads only files passed to it | n/a |

@@ -69,6 +69,11 @@ def cmd_init(args: argparse.Namespace) -> int:
     print(f"database ready: {redact_url(config.database_url)}")
 
     print("\nNext steps:")
+    print("  Choose starting practices: backbone docs team")
+    print("  Inspect current assignments: backbone templates use")
+    print("  For a new team:")
+    print("    backbone templates use starter-collaboration starter-continuity starter-learning")
+    print("  (replaces global policies; edit or remove any starter with backbone templates)")
     print("  1. backbone service install    # start now and at login")
     print("     (no login service, as in a container: backbone up --detach)")
     print("  2. backbone doctor")

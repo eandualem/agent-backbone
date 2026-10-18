@@ -62,7 +62,9 @@ from agent_backbone.config import RUNTIMES
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="backbone",
-        description="Start agents, follow their work and connect their sessions.",
+        description=(
+            "Run agents across CLIs and projects as one team, with communication and continuity."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Start here:\n  backbone agent start --attach\n  backbone status --watch\n"
         "\nRecall a command: backbone help agent start\n"

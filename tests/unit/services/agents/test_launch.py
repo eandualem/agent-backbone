@@ -22,6 +22,7 @@ from agent_backbone.services.agents import (
 )
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.runtimes import RUNTIMES
+from agent_backbone.templates import read_template
 
 _MOD = "agent_backbone.services.agents.launch"
 _BASE = "agent_backbone.services.runtimes.base"
@@ -550,6 +551,30 @@ class TestStartAgentBrief:
             patch(f"{_BASE}.Runtime.pre_trust"),
             patch(f"{_MOD}.wait_until_ready", new_callable=AsyncMock, return_value=("ready", [])),
         )
+
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    async def test_starter_policies_reach_the_fresh_launch(self, tmp_path, runtime):
+        config = bootstrap_config(tmp_path / "data")
+        starters = ("starter-collaboration", "starter-continuity", "starter-learning")
+        config = replace(config, launch=replace(config.launch, shared_policy=starters))
+        db = AsyncMock()
+        db.queue.retire_pending_briefs.return_value = 0
+        exists, start, _cmd, _trust, _wait = self._launch()
+        with exists, start as started, _cmd, _trust, _wait:
+            result = await start_agent(self._spec(tmp_path, runtime), config, db=db)
+        assert result.ok and result.ready == "ready"
+        command = started.await_args.kwargs["command"]
+        if runtime == "claude":
+            content = Path(command[command.index("--append-system-prompt-file") + 1]).read_text()
+        elif runtime == "opencode":
+            content = command[command.index("--prompt") + 1]
+        else:
+            db.queue.enqueue.assert_awaited_once()
+            content = db.queue.enqueue.await_args.kwargs["message"]
+        for name in starters:
+            assert content.count(f"## Shared policy: {name}") == 1
+            assert read_template(name).strip() in content
+        assert not list(Path(self._spec(tmp_path, runtime).dir).iterdir())
 
     async def test_claude_gets_the_brief_at_launch(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")

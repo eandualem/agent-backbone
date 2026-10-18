@@ -2,9 +2,9 @@
 
 <img src="docs/media/banner.png" alt="agent-backbone: your terminal agents, working as a team" width="720">
 
-**Claude Code, Codex and OpenCode, working as one team on your machine.**<br>
-Agents message each other by name, take work from GitHub Issues and reach you on your phone.<br>
-They use the logins you already have, and core use needs no setup in your repositories.
+**Agents across different AI CLIs and projects, working as one personal team.**<br>
+Communication, coordination and continuity for Claude Code, Codex and OpenCode.<br>
+Develop specialists whose experience carries into your next project.
 
 [![PyPI](https://img.shields.io/pypi/v/agent-backbone)](https://pypi.org/project/agent-backbone/)
 [![Python](https://img.shields.io/pypi/pyversions/agent-backbone)](https://pypi.org/project/agent-backbone/)
@@ -28,8 +28,15 @@ https://github.com/user-attachments/assets/695a6096-4196-4115-911c-a0043d632088
 
 ## Why Backbone
 
-You already run coding agents in your terminal. Each one works alone, and you
-carry every message between them. Backbone turns them into a team.
+Agent Backbone brings agents across different AI CLIs and projects into one
+personal team. It provides the communication, coordination and continuity they
+need to work together, with working practices you can shape. Through that
+collaboration, specialists develop expertise, share discoveries and refine their
+judgment, so each new project can benefit from the experience they have built.
+
+Your agents use the logins you already have. Core use needs no setup in your
+repositories. [Starter practices](docs/team.md) help the team collaborate,
+preserve useful reasoning and learn from feedback; you can edit or remove them.
 
 <table>
 <tr>
@@ -94,6 +101,11 @@ New sessions are briefed on these tools, so you can ask any agent to set up
 the team you need: an agent per repository, skills and rules shared by tag,
 specialists on request.
 
+For example, a README specialist can retain why an explanation worked, consult
+with another repository's agent and adapt that lesson to its readers. The team
+must record, test and revise its understanding; a role name or stored conversation
+alone does not make it more capable. [Try that collaboration](docs/team.md#try-a-readme-collaboration).
+
 ## Quick start
 
 **Let your agent do it.** Open the coding agent you already use and say:
@@ -116,9 +128,15 @@ signed in.
 ```bash
 uv tool install agent-backbone
 backbone init
+backbone templates use starter-collaboration starter-continuity starter-learning
 backbone service install           # start now and at login
 backbone doctor                    # check dependencies and API access
 ```
+
+The starter selection is for a new installation. Read it with
+`backbone docs team`; on an existing installation, `templates use` replaces the
+global list, so keep your existing selections or choose a tag. You can customize
+or remove any starter before launching agents.
 
 Then, from a repository you want an agent to work in:
 
@@ -139,7 +157,8 @@ terminal. In a container without a login service, use `backbone up --detach`.
 `ab` is a short alias; on macOS, use `backbone` if Apache Bench shadows it.
 
 [Getting started](docs/getting-started.md) walks through a second agent,
-GitHub and Telegram. [Quick usage](USAGE.md) is the everyday command guide.
+GitHub and Telegram. [Develop your team](docs/team.md) follows a specialist's
+experience into another project. [Quick usage](USAGE.md) is the everyday command guide.
 
 ## Built to be relied on
 
@@ -171,6 +190,8 @@ agents names, safe messages and evidence, and leaves the work to them.
 
 ## Going further
 
+- [Develop your team](docs/team.md): choose starting practices, collaborate with
+  a specialist and carry useful lessons into another project.
 - [GitHub](docs/github.md): route issues and review notifications, starting with
   token-based polling. [GitHub App setup](docs/github-app-setup.md) adds webhooks.
 - [Swarms](docs/swarms.md): put several specialists on one task.
