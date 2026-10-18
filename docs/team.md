@@ -29,12 +29,18 @@ backbone templates show starter-collaboration
 backbone templates show starter-continuity
 backbone templates show starter-learning
 backbone templates use
+```
+
+For a **new installation**, select the starter set below. On an existing installation,
+selection **replaces the global assignment**: keep the policies you still want in
+the command, or assign the starters to a tag instead. Inspect the output above
+before deciding.
+
+```bash
 backbone templates use starter-collaboration starter-continuity starter-learning
 ```
 
-The last command **replaces the global assignment**. On an existing installation,
-keep any policies you still want in that command, or assign the starters to a tag
-instead. Installation and upgrades do not select them for you. Once selected, they
+Installation and upgrades do not select them for you. Once selected, they
 are included in fresh agent instructions through the existing brief mechanism.
 See “Brief reaches a fresh session before other work” in
 [runtime coverage](runtime-capabilities.md) for adapter limits.

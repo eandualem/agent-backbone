@@ -71,11 +71,18 @@ backbone templates show starter-collaboration
 backbone templates show starter-continuity
 backbone templates show starter-learning
 backbone templates use
+```
+
+For a **new installation**, select the starter set below. On an existing installation,
+selection **replaces the global assignment**: keep the policies you still want in
+the command, or assign the starters to a tag instead. Inspect the output above
+before deciding.
+
+```bash
 backbone templates use starter-collaboration starter-continuity starter-learning
 ```
 
-The last command replaces the global list, so preserve existing selections if this
-is not a new installation. Nothing is assigned merely by installing or upgrading.
+Nothing is assigned merely by installing or upgrading.
 The selected practices reach agents at fresh starts. You can change them with
 `backbone templates edit NAME`, replace the list with `templates use NAME...`, or
 remove all global policies with `templates use --clear`. Local edits survive
