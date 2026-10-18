@@ -1,6 +1,7 @@
 # Concepts
 
-agent-backbone is a **control plane for terminal AI agents** on one machine.
+agent-backbone brings agents across AI CLIs and projects into one personal team.
+It is a **control plane for terminal AI agents** on one machine.
 You run Claude Code, Codex, Gemini CLI, OpenCode, Deep Code or Aider in tmux sessions;
 the backbone starts those sessions, knows whether each one is ready to
 receive input, delivers text to them safely, and connects them to GitHub
@@ -9,6 +10,13 @@ through **integrations** (Telegram today), and to each other.
 
 It is *not* an agent framework (it does not call models), not a workflow
 engine (there are no DAGs), and not a dashboard (it feeds one).
+
+Communication, coordination and continuity let specialists collaborate and carry
+experience into later projects. [Starting practices](team.md) help agents retain
+reasoning, apply lessons in context and revise them after feedback. You can change
+those policies as your team develops. Expertise depends on the models, useful
+records, investigation and judgment; Backbone does not automatically learn or
+validate knowledge on their behalf.
 
 ## Agent
 
@@ -41,7 +49,7 @@ app: ready — claude repo acme/app
   Codex or OpenCode agent on its next tool call through hook context, or on Codex when a long-running
   command exits; other runtimes first when ready).
 
-There are no roles, groups or hierarchies. An orchestrator is an ordinary
+There are no prescribed roles or hierarchies. An orchestrator is an ordinary
 agent whose directory is its own repository and which watches the others.
 The one grouping that exists is a [swarm](swarms.md): a coordinator plus
 members sharing a worktree to complete a single issue — and its members

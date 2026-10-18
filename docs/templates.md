@@ -49,7 +49,7 @@ backbone templates init                       # adds bundled defaults you have n
 reports the directory. Both warn when files are left under the old default
 location, where they are no longer read. Policy assignments stay database settings (below); a
 fresh machine restores them with `backbone templates use`. Nothing in this
-repository is user-specific: it ships generic defaults and one example policy,
+repository is user-specific: it ships generic defaults, three starter policies and a Python example,
 and the [templates README](../templates/README.md) explains which kind of text
 belongs where.
 
@@ -62,6 +62,15 @@ the bundled default again (or a legacy override, if one still exists).
 The editor works on a temporary copy. An empty result, failed editor, or concurrent
 change leaves the active file untouched. An editor that launches a window should
 wait until you close it; configure its wait option in `$VISUAL` or `$EDITOR`.
+
+## Starting practices
+
+The [team guide](team.md) introduces `starter-collaboration`, `starter-continuity`
+and `starter-learning`. They give new agents a practical model for working together
+and carrying useful experience into later projects. Setup selects them explicitly;
+installation and upgrades never replace existing assignments. You can edit, replace
+or remove any of them using the controls below. Working practices do not change
+authentication, authorization or runtime confinement.
 
 ## Global rules and tagged groups
 
@@ -103,6 +112,13 @@ Composition is deterministic:
 2. Global policies, in their configured order.
 3. Policies for matching tags, with tags sorted alphabetically and each tag's
    policy order preserved. A policy selected more than once is included once.
+
+This determines text order, not which conflicting instruction a model will follow.
+Resolve contradictions when customizing; appending a differently named policy is
+not a guaranteed override. A same-name local file replaces its bundled policy.
+To remove a policy, remove it from each applicable assignment. Deleting a local
+copy of a bundled policy restores the bundled text; it does not remove the policy.
+Deleting a custom-only policy leaves missing content and fails launch.
 
 Assignments are database settings: `agents.shared_policy` and `agents.tag_policy`.
 Markdown stays in files. Selected missing, unreadable or empty policies fail launch
