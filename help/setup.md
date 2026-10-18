@@ -43,7 +43,7 @@ chat does not change that. Do not retry or work around it: ask the human to
 switch you to asking before each step (Shift+Tab in Claude Code) and to
 approve the steps, then continue.
 
-## 3. Start the first agent from its repository
+### Choose starting practices
 
 Before starting agents, read `backbone docs team` and the three starter policies:
 
@@ -71,9 +71,11 @@ Show how `templates edit NAME`, `templates use NAME...` and `templates use --cle
 change or remove the practices. Do not create repository memory files or a private
 fleet structure by assumption. Policies do not grant permission or change sandboxes.
 
+## 3. Start the first agent from its repository
+
 If you are yourself running in the repository the human is working in, do
 not start an agent there: it would be a second conversation, and a later
-`--resume` would bring that one back instead of this one. Skip this step,
+`--resume` would bring that one back instead of this one. Skip starting another agent,
 finish the others, then tell the human how to move this session in: exit it,
 then in this folder run `backbone agent start --resume --runtime <this CLI>
 --no-wait` and `backbone agent attach <name>` (the name `start` prints). That

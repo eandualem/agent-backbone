@@ -31,8 +31,9 @@ https://github.com/user-attachments/assets/695a6096-4196-4115-911c-a0043d632088
 Agent Backbone brings agents across different AI CLIs and projects into one
 personal team. It provides the communication, coordination and continuity they
 need to work together, with working practices you can shape. Through that
-collaboration, specialists develop expertise, share discoveries and refine their
-judgment, so each new project can benefit from the experience they have built.
+collaboration, retained lessons and feedback, specialists can develop expertise,
+share discoveries and refine their judgment, so each new project can benefit
+from the experience they have built.
 
 Your agents use the logins you already have. Core use needs no setup in your
 repositories. [Starter practices](docs/team.md) help the team collaborate,
@@ -128,15 +129,20 @@ signed in.
 ```bash
 uv tool install agent-backbone
 backbone init
-backbone templates use starter-collaboration starter-continuity starter-learning
 backbone service install           # start now and at login
 backbone doctor                    # check dependencies and API access
 ```
 
-The starter selection is for a new installation. Read it with
-`backbone docs team`; on an existing installation, `templates use` replaces the
-global list, so keep your existing selections or choose a tag. You can customize
-or remove any starter before launching agents.
+For a **new installation**, read `backbone docs team` and select its starter
+practices before launching agents:
+
+```bash
+backbone templates use starter-collaboration starter-continuity starter-learning
+```
+
+On an existing installation, first inspect assignments with `backbone templates use`.
+Selection replaces the global list, so keep existing choices or use a tag.
+You can customize or remove any starter.
 
 Then, from a repository you want an agent to work in:
 

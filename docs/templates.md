@@ -116,8 +116,9 @@ Composition is deterministic:
 This determines text order, not which conflicting instruction a model will follow.
 Resolve contradictions when customizing; appending a differently named policy is
 not a guaranteed override. A same-name local file replaces its bundled policy.
-To remove a policy, remove it from each applicable assignment. Do not delete a
-selected file: missing content fails launch rather than silently dropping the rule.
+To remove a policy, remove it from each applicable assignment. Deleting a local
+copy of a bundled policy restores the bundled text; it does not remove the policy.
+Deleting a custom-only policy leaves missing content and fails launch.
 
 Assignments are database settings: `agents.shared_policy` and `agents.tag_policy`.
 Markdown stays in files. Selected missing, unreadable or empty policies fail launch

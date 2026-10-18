@@ -12,7 +12,6 @@ to follow `backbone help setup`. For prerequisites and a first task, use
 ```bash
 uv tool install agent-backbone
 backbone init
-backbone templates use starter-collaboration starter-continuity starter-learning
 backbone service install          # start now and at login
 backbone status
 ```
@@ -21,10 +20,17 @@ Without a login service (for example, in a container), use `backbone up --detach
 Run `backbone doctor` if setup needs attention.
 
 The starter policies teach collaboration, continuity and learning from feedback.
-The selection above is for a new installation: `templates use` replaces the global
-list. Inspect existing assignments with `backbone templates use` before changing
-them. Read `backbone docs team` to customize the practices and try a specialist
-collaboration across projects.
+For a **new installation**, read `backbone docs team` and select them before
+starting agents:
+
+```bash
+backbone templates use starter-collaboration starter-continuity starter-learning
+```
+
+On an existing installation, inspect assignments with `backbone templates use`
+first: selecting policies replaces the global list. Preserve the choices you
+still want. The team guide explains customization and a specialist collaboration
+across projects.
 
 ## Work with an agent
 

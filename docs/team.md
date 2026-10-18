@@ -36,7 +36,8 @@ The last command **replaces the global assignment**. On an existing installation
 keep any policies you still want in that command, or assign the starters to a tag
 instead. Installation and upgrades do not select them for you. Once selected, they
 are included in fresh agent instructions through the existing brief mechanism.
-See the `brief-at-start` row in [runtime coverage](runtime-capabilities.md) for adapter limits.
+See “Brief reaches a fresh session before other work” in
+[runtime coverage](runtime-capabilities.md) for adapter limits.
 
 ```bash
 backbone templates preview app       # after registering the agent
@@ -46,7 +47,8 @@ backbone templates use --clear       # remove all global policies
 ```
 
 You can edit, replace or remove these practices. Remove an unwanted policy from
-each applicable global/tag assignment; deleting an assigned file can block launch.
+each applicable global/tag assignment. Deleting a local starter copy restores its
+bundled text; deleting a custom-only policy blocks launch while it remains assigned.
 A same-name local edit replaces its bundled text and stays unchanged on upgrades.
 Without a local override, package updates supply the next version. Additional
 policies are composed as text, so resolve contradictions explicitly rather than
