@@ -18,13 +18,14 @@ Develop specialists whose experience carries into your next project.
 
 ## Watch
 
-https://github.com/user-attachments/assets/695a6096-4196-4115-911c-a0043d632088
-
-<p align="center"><sub>The overview, 1:23, captioned. Unmute for the narration.</sub></p>
-
-<p align="center"><b>Up next</b>&nbsp;&nbsp;›<br>
-<a href="docs/media/films.md#why-backbone"><img src="docs/media/film-why-backbone.jpg" width="49%" alt="Why Backbone, 2 minutes 23: from 'set up Backbone for me' to a team on three CLIs"></a>
+<p align="center">
+<a href="https://youtu.be/3gOH3t3woXM"><img src="docs/media/film-overview.jpg" width="49%" alt="Watch the agent-backbone overview, 1 minute 23 seconds"></a>
+<a href="https://youtu.be/yKV8RNgqRsE"><img src="docs/media/film-why-backbone.jpg" width="49%" alt="Watch Why Backbone, 2 minutes 23 seconds"></a>
 </p>
+
+[Overview (1:23)](https://youtu.be/3gOH3t3woXM) · [Why Backbone (2:23)](https://youtu.be/yKV8RNgqRsE) · [YouTube playlist](https://www.youtube.com/playlist?list=PLMq17WKA4Z88)
+
+Both films have English captions. [Read the film guide](docs/media/films.md).
 
 ## Why Backbone
 
