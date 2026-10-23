@@ -200,6 +200,20 @@ class DeliveryRecord(BaseModel):
     created_at: str = ""
 
 
+class AgentStateObservation(BaseModel):
+    id: int
+    agent: str
+    state: str
+    reason: str | None
+    at: str
+
+
+class AgentStateHistory(BaseModel):
+    items: list[AgentStateObservation]
+    has_more: bool
+    next_before_id: int | None
+
+
 class AgentInspectResponse(BaseModel):
     """Everything the backbone knows about one agent, with the evidence."""
 

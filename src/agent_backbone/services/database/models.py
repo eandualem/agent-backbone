@@ -275,6 +275,24 @@ class AgentStateORM(Base):
     plan_title: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class AgentStateHistoryORM(Base):
+    """Observed changes of reconciled state, separate from the hook mirror."""
+
+    __tablename__ = "agent_state_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    at: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        Index("idx_state_history_agent", "agent", "id"),
+        Index("idx_state_history_at", "at"),
+        {"sqlite_autoincrement": True},  # A pruned cursor must never be reused.
+    )
+
+
 class AgentTransitionORM(Base):
     """An explicit, one-time stop/restart an agent asked for (``backbone agent
     restart``). The backbone owns the transition, so a caller stopping its

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -25,6 +26,7 @@ from agent_backbone.api.models import (
     AgentStartRequest,
     AgentStartResponse,
     AgentStateDetail,
+    AgentStateHistory,
     AgentStopResponse,
     AgentTransitionView,
     AgentUpdateRequest,
@@ -69,7 +71,7 @@ from agent_backbone.services.agents.transitions import (
     parse_start_at,
     request_transition,
 )
-from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.database import BackboneDB, format_iso
 from agent_backbone.services.routing import get_session_intelligence
 from agent_backbone.services.runtimes import RUNTIMES, sanitize_pane_content
 from agent_backbone.services.terminal import (
@@ -152,6 +154,34 @@ async def get_agent_state_endpoint(session: str, config: BackboneConfig = Depend
         plan_title=snapshot.plan_title,
         evidence=list(snapshot.evidence),
     )
+
+
+@router.get("/agents/states", response_model=AgentStateHistory)
+async def get_agent_state_history(
+    since: str = Query(max_length=100),
+    agent: str | None = Query(default=None, min_length=1, max_length=200),
+    limit: int = Query(default=200, ge=1, le=500),
+    before_id: int | None = Query(default=None, ge=1, le=2**63 - 1),
+    db: BackboneDB = Depends(get_db),
+):
+    """Observed state changes, newest IDs first; no runtime reads or historical backfill."""
+    try:
+        moment = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        if moment.tzinfo is None or moment.utcoffset() is None:
+            raise ValueError("timezone required")
+        normalized = format_iso(moment)
+    except (ValueError, OverflowError) as exc:
+        raise HTTPException(422, "since must be an ISO timestamp with a timezone") from exc
+    rows = await db.state_history.query(
+        since=normalized, agent=agent, limit=limit + 1, before_id=before_id
+    )
+    has_more = len(rows) > limit
+    items = rows[:limit]
+    return {
+        "items": items,
+        "has_more": has_more,
+        "next_before_id": items[-1]["id"] if has_more else None,
+    }
 
 
 @router.get("/agents/{name}/instructions")
