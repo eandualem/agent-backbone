@@ -286,3 +286,38 @@ async def test_slow_history_does_not_block_live_feed(db, caplog):
         assert await feed.snapshot(force_refresh=True) == [_agent()]
         assert record.await_count == 2
     assert "State history write timed out" in caplog.text
+
+
+async def test_shutdown_waits_for_history_cleanup_and_prevents_new_writes(db):
+    feed = _feed(db=db, ttl_seconds=0)
+    cancelling, release = asyncio.Event(), asyncio.Event()
+    cleaned = []
+
+    async def stalled_write(states):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelling.set()
+            await release.wait()
+            cleaned.append(True)
+
+    with (
+        patch(_BUILD, AsyncMock(return_value=[_agent()])),
+        patch.object(db.state_history, "observe", AsyncMock(side_effect=stalled_write)) as record,
+        patch("agent_backbone.api.session_updates.HISTORY_WRITE_TIMEOUT_SECONDS", 0.01),
+    ):
+        await feed.snapshot()
+        await asyncio.wait_for(cancelling.wait(), 1)
+        closing = None
+        try:
+            closing = asyncio.create_task(feed.close())
+            await asyncio.sleep(0)
+            assert not closing.done()  # Do not cancel transaction cleanup a second time.
+        finally:
+            release.set()
+            await asyncio.gather(feed._history_task, return_exceptions=True)
+            if closing is not None:
+                await asyncio.wait_for(closing, 1)
+        assert cleaned == [True]
+        await feed.snapshot(force_refresh=True)
+        record.assert_awaited_once()

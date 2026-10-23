@@ -346,6 +346,7 @@ async def lifespan(app: FastAPI):
         )
         yield
     finally:
+        await app.state.feed.close()
         await lifecycle.stop_all()
         await get_pty_manager().cleanup_all()
         log.info("agent-backbone shutting down")

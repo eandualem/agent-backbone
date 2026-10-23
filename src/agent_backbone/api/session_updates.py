@@ -46,6 +46,7 @@ class SessionFeed:
         self._ttl = ttl_seconds
         self._db = db
         self._history_task: asyncio.Task[None] | None = None
+        self._closed = False
         self._cache: list[EnrichedAgent] = []
         self._cached_at: float | None = None
         self._lock = asyncio.Lock()
@@ -71,7 +72,11 @@ class SessionFeed:
             if not force_refresh and self._fresh():
                 return self._cache
             self._cache = await build_session_snapshot(self._config())
-            if self._db is not None and (self._history_task is None or self._history_task.done()):
+            if (
+                not self._closed
+                and self._db is not None
+                and (self._history_task is None or self._history_task.done())
+            ):
                 self._history_task = asyncio.create_task(
                     self._record_history(
                         [(a.name, a.state, a.reason) for a in self._cache if a.configured]
@@ -91,6 +96,17 @@ class SessionFeed:
                     raise
             self._cached_at = time.monotonic()
             return self._cache
+
+    async def close(self) -> None:
+        """Finish any history transaction before the application closes the database."""
+        async with self._lock:
+            self._closed = True
+            if self._history_task is not None:
+                # A timed-out write may already be rolling back. A second cancel
+                # would interrupt that cleanup instead of waiting for it.
+                if not self._history_task.done() and not self._history_task.cancelling():
+                    self._history_task.cancel()
+                await asyncio.gather(self._history_task, return_exceptions=True)
 
     async def _record_history(self, states: list[tuple[str, str, str | None]]) -> None:
         try:
