@@ -82,7 +82,8 @@ actually generated a response in the running session.
 
 Read retained observations for an Activity timeline. `since` is required: an
 inclusive ISO 8601 timestamp with a timezone. Optional `agent` filters by exact
-name, `limit` defaults to 200 (1–500), and `before_id` is an exclusive cursor.
+name, `limit` defaults to 200 (1–500), and `before_id` is an exclusive cursor
+(a positive signed 64-bit integer).
 Invalid parameters return 422; no matching history returns an empty page.
 
 ```http

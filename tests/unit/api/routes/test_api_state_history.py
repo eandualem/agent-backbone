@@ -91,6 +91,9 @@ async def test_filtered_stable_pages(api_app, api_client, auth_headers):
     second = (await api_client.get(_PATH, params=params, headers=auth_headers)).json()
     assert [r["state"] for r in second["items"]] == ["busy"]
     assert second["has_more"] is False and second["next_before_id"] is None
+    params["before_id"] = 2**63 - 1
+    largest = await api_client.get(_PATH, params=params, headers=auth_headers)
+    assert largest.status_code == 200 and largest.json()["items"]
     empty = await api_client.get(
         _PATH, params={"since": _SINCE, "agent": "absent"}, headers=auth_headers
     )
@@ -107,6 +110,7 @@ async def test_filtered_stable_pages(api_app, api_client, auth_headers):
         {"since": _SINCE, "limit": 0},
         {"since": _SINCE, "limit": 501},
         {"since": _SINCE, "before_id": 0},
+        {"since": _SINCE, "before_id": 2**63},
         {"since": _SINCE, "agent": ""},
     ],
 )

@@ -161,7 +161,7 @@ async def get_agent_state_history(
     since: str = Query(max_length=100),
     agent: str | None = Query(default=None, min_length=1, max_length=200),
     limit: int = Query(default=200, ge=1, le=500),
-    before_id: int | None = Query(default=None, ge=1),
+    before_id: int | None = Query(default=None, ge=1, le=2**63 - 1),
     db: BackboneDB = Depends(get_db),
 ):
     """Observed state changes, newest IDs first; no runtime reads or historical backfill."""

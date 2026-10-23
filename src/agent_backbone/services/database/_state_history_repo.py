@@ -49,7 +49,7 @@ class StateHistoryRepo(Repo):
             clauses.append("agent = :agent")
             params["agent"] = agent
         if before_id is not None:
-            clauses.append("id < :before_id")
+            clauses.append("id < CAST(:before_id AS BIGINT)")
             params["before_id"] = before_id
         async with self._tx() as conn:
             result = await conn.execute(
