@@ -884,24 +884,46 @@ async def test_a_missing_source_with_several_matches_is_not_marked_gone(tmp_path
     assert session["detail"] != "source file is gone"
 
 
-async def test_missing_parent_still_discovers_readable_child_usage(tmp_path, db, monkeypatch):
-    config = config_for(tmp_path)
+@pytest.mark.parametrize("runtime", ["claude", "codex"])
+async def test_missing_parent_still_discovers_readable_child_usage(
+    tmp_path, db, monkeypatch, runtime
+):
+    config = config_for(tmp_path, runtime)
     path = tmp_path / "s1.jsonl"
-    append(path, claude())
+    append(path, claude() if runtime == "claude" else codex())
     searches = []
 
     def usage_paths(sid, env):
         searches.append(sid)
         return [path] if path.exists() else []
 
-    monkeypatch.setattr(RUNTIMES["claude"], "usage_paths", usage_paths)
-    register(config)
+    monkeypatch.setattr(RUNTIMES[runtime], "usage_paths", usage_paths)
+    register(config, runtime)
     await collect_usage(config, db)
     path.unlink()
-    children = tmp_path / "s1" / "subagents"
+    children = (
+        tmp_path / "s1" / "subagents"
+        if runtime == "claude"
+        else tmp_path / "CODEX_HOME" / "sessions"
+    )
     children.mkdir(parents=True)
     for name in ("first", "later"):
-        append(children / f"agent-{name}.jsonl", claude(name, T2, output=40))
+        if runtime == "claude":
+            records = [claude(name, T2, output=40)]
+        else:
+            records = [
+                dict(
+                    type="session_meta",
+                    payload=dict(
+                        id=name,
+                        source={"subagent": {"thread_spawn": {"parent_thread_id": "s1"}}},
+                    ),
+                ),
+                codex(at=T2, output=40),
+            ]
+            # Simulate the next lineage-cache refresh without waiting 30 seconds.
+            monkeypatch.setattr("agent_backbone.services.runtimes.codex._usage_lineage", {})
+        append(children / f"agent-{name}.jsonl", *records)
         result = await collect_usage(config, db)
         assert result["errors"] == []
     assert len(searches) == 2  # The missing parent is still searched only once.

@@ -59,8 +59,9 @@ Coverage describes retained source evidence, not an independent provider audit:
 
 Missing/deleted records cannot be recovered. When a conversation's source file
 is gone, Backbone searches for it once, then records it as `source file is gone`
-and stops searching; the usage already collected stays. Readable child transcripts
-are still discovered and collected independently. The file is read again
+and stops searching for that parent; the usage already collected stays. Readable
+child transcripts are still discovered and collected independently. Codex uses
+its shared lineage scan for child discovery even when a parent is gone. The file is read again
 if it returns to the same path, and searched for again when the conversation is
 launched again (resumed). Tokens may be incomplete for
 interrupted requests, unrecorded descendants, or runtime versions that omit
