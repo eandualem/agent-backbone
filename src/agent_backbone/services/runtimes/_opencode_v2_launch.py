@@ -41,7 +41,7 @@ def api(
     try:
         # Native startup may migrate its database. Readiness can time out while
         # this continues; never kill a migration to meet that UI wait deadline.
-        result = subprocess.run(command, capture_output=True, text=True, check=False, env=env)
+        result = subprocess.run(command, stdout=subprocess.PIPE, text=True, check=False, env=env)
     except OSError as exc:
         raise RuntimeError(f"OpenCode {operation} failed: {type(exc).__name__}") from exc
     if result.returncode:
@@ -89,7 +89,8 @@ def standalone(binary: str):
         [binary, "serve", "--stdio", "--hostname", "127.0.0.1", "--port", "0"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        # Keep native errors in the terminal, never copied into the API diagnostic.
+        stderr=None,
         text=True,
         env=environment,
     )

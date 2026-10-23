@@ -104,6 +104,7 @@ export default {
     // Native plugin teardown owns the subscription; it must not survive a reload.
     events.catch(() => {});
     return async () => {
+      hook.dispose();
       controller.abort();
       await events.catch(() => {});
     };

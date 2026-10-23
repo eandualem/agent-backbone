@@ -286,7 +286,9 @@ running; inspect the agent before retrying. A fresh launch with an explicit mode
 creates a native session, which remains in history even if you quit before sending
 a prompt. Until that launch reports a session ID, a later `agent resume` uses
 OpenCode's latest session in the directory, which can be this empty session.
-Failed selection before opening the TUI removes that unused new session.
+Failed selection before opening the TUI removes that unused new session. Native
+startup errors stay in the terminal; inspection retains the failed operation,
+without copying raw native configuration diagnostics into the API.
 
 The `unattended:` line shows the no-approval switch and sandbox support;
 `-` means unattended startup is unsupported. See the

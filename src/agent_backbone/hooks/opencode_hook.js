@@ -408,7 +408,9 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
   };
 
   let reloading = false;
-  reloader.check = async () => {
+  let disposed = false;
+  const checkReload = async () => {
+    if (disposed) return;
     const marker = path.join(t.dir, `${t.agent}.skills-reload`);
     let changedAt;
     try {
@@ -437,17 +439,22 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
         // The plugin OpenCode builds again while disposing may have recorded a
         // turn since (in the same millisecond, too): only our own record ends.
         const now = readCurrent(t);
-        if (now.event === "skills.reload" && now.ts === mine) record(t, "skills.reload", STATE_IDLE, null);
+        if (!disposed && now.event === "skills.reload" && now.ts === mine) record(t, "skills.reload", STATE_IDLE, null);
       } catch { /* hook failures must not stop the agent */ }
       reloading = false;
     }
   };
+  reloader.check = checkReload;
   if (!reloader.timer) {
     reloader.timer = setInterval(() => reloader.check?.(), SKILLS_RELOAD_POLL_MS);
     reloader.timer.unref?.();
   }
 
   return {
+    dispose() {
+      disposed = true;
+      if (reloader.check === checkReload) reloader.check = null;
+    },
     "chat.params": async (input) => {
       // The user message this request answers drives the turn.
       const message = input?.message;

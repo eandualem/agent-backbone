@@ -208,6 +208,7 @@ def test_metadata_waits_for_native_migration_on_one_server(monkeypatch, final):
             "--port",
             "0",
         ]
+        assert kwargs["stderr"] is None
         assert kwargs["env"]["OPENCODE_PASSWORD"]
         assert "BACKBONE_AGENT" not in kwargs["env"]
         assert "BACKBONE_STATE_DIR" not in kwargs["env"]
@@ -248,3 +249,17 @@ def test_missing_binary_is_distinct_from_unknown_version(monkeypatch):
     monkeypatch.setattr(type(runtime), "installed_version", version)
     with pytest.raises(RuntimeError, match="binary not found: opencode"):
         runtime.build_command()
+
+
+def test_native_api_failure_keeps_stderr_in_terminal(capfd, monkeypatch, tmp_path):
+    import sys
+
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(RuntimeError, match=r"session.get failed \(exit 2\)"):
+        _opencode_v2_launch.api(
+            sys.executable,
+            "session.get",
+            server="http://127.0.0.1:1234",
+            env={},
+        )
+    assert "can't open file" in capfd.readouterr().err

@@ -112,9 +112,18 @@ const recovered = state();
 fs.writeFileSync(path.join(dir, "app.skills-reload"), "");
 await poll();
 await cleanup();
+const afterCleanup = fs.readFileSync(statePath, "utf8");
+fs.writeFileSync(path.join(dir, "app.skills-reload"), "");
+await poll();
+const stopped = fs.readFileSync(statePath, "utf8") === afterCleanup
+  && fs.existsSync(path.join(dir, "app.skills-reload")) && reloaded === 1;
+const newerCleanup = await plugin.setup(ctx);
+await cleanup(); // Old cleanup must not clear the newer callback.
+await poll();
+await newerCleanup();
 console.log(JSON.stringify({waiting, afterChild, idle, recovered, admitted,
   structured: structured.result, fallback: fallback.result,
-  loggingFailure: loggingFailure.result, reloaded}));
+  loggingFailure: loggingFailure.result, reloaded, stopped}));
 """
     result = subprocess.run(
         [node, "--input-type=module", "-e", script, plugin.as_uri()],
@@ -146,4 +155,5 @@ console.log(JSON.stringify({waiting, afterChild, idle, recovered, admitted,
         {"type": "text", "text": "shell result"},
         {"type": "text", "text": "offer before logging failure"},
     ]
-    assert actual["reloaded"] == 1
+    assert actual["stopped"] is True
+    assert actual["reloaded"] == 2
