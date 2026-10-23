@@ -86,7 +86,7 @@ def read_template(
     name: str,
     dirs: TemplateDirs | None = None,
     *,
-    source_texts: dict[Path, str] | None = None,
+    source_reads: dict[str, tuple[Path, str]] | None = None,
 ) -> str:
     source = template_source(name, dirs)
     try:
@@ -95,8 +95,8 @@ def read_template(
         raise ValueError(f"Cannot read template {name!r}: {source}") from exc
     if not text.strip():
         raise ValueError(f"Template {name!r} is empty: {source}")
-    if source_texts is not None:
-        source_texts[source] = text
+    if source_reads is not None:
+        source_reads[name] = (source, text)
     return text
 
 
@@ -132,7 +132,7 @@ def append_policies(
     dirs: TemplateDirs | None,
     policy_names: tuple[str, ...],
     *,
-    source_texts: dict[Path, str] | None = None,
+    source_reads: dict[str, tuple[Path, str]] | None = None,
 ) -> str:
     """Required policies compose even with a customized base brief."""
     sections = []
@@ -144,8 +144,8 @@ def append_policies(
             text = path.read_text()
         except OSError as exc:
             raise ValueError(f"Cannot read configured shared policy {name!r}: {path}") from exc
-        if source_texts is not None:
-            source_texts[path] = text
+        if source_reads is not None:
+            source_reads[f"policy:{name}"] = (path, text)
         policy = text.strip()
         if not policy:
             raise ValueError(f"Configured shared policy {name!r} is empty: {path}")
@@ -163,13 +163,13 @@ def render_agent_brief(
     dirs: TemplateDirs | None = None,
     *,
     policy_names: tuple[str, ...] = (),
-    source_texts: dict[Path, str] | None = None,
+    source_reads: dict[str, tuple[Path, str]] | None = None,
 ) -> str:
     return append_policies(
-        render(read_template("base", dirs, source_texts=source_texts), facts),
+        render(read_template("base", dirs, source_reads=source_reads), facts),
         dirs,
         policy_names,
-        source_texts=source_texts,
+        source_reads=source_reads,
     )
 
 

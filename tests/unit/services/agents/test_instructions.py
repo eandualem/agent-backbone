@@ -80,6 +80,28 @@ def test_source_text_matches_content_when_policy_changes_during_preview(setup, m
     assert read_text(policy) == "Changed rule"
 
 
+def test_source_path_follows_override_created_during_preview(setup, monkeypatch):
+    spec, config = setup
+    base = config.data_dir / "agent-brief.md"
+    base.write_text("Hello {agent_name}")
+    override = config.template_dirs.editable / "policies" / "coding.md"
+    read_text = Path.read_text
+
+    def read_then_add_override(path, *args, **kwargs):
+        text = read_text(path, *args, **kwargs)
+        if path == base:
+            override.parent.mkdir(parents=True, exist_ok=True)
+            override.write_text("Override rule")
+        return text
+
+    monkeypatch.setattr(Path, "read_text", read_then_add_override)
+    preview = instruction_preview(spec, config)
+    assert "Override rule" in preview["content"]
+    assert preview["sources"][1]["path"] == str(override)
+    assert preview["sources"][1]["text"] == "Override rule"
+    assert not any("Cannot read" in notice for notice in preview["notices"])
+
+
 @pytest.mark.parametrize("runtime", ["codex", "claude"])
 async def test_launch_writes_exact_preview(setup, runtime):
     spec, config = setup

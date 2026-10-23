@@ -27,7 +27,6 @@ def instruction_preview(
         brief_file = config.data_dir / "swarms" / spec.swarm / f"{spec.name}.md"
     dirs = config.template_dirs
     source = brief_file or brief_source(dirs)
-    legacy = not brief_file and source == legacy_template_path(dirs, "base")
     enabled = runtime.brief_mode != "none" and (
         brief_file is not None or config.launch.inject_brief
     )
@@ -54,7 +53,7 @@ def instruction_preview(
             }
         )
     content = ""
-    source_texts: dict[Path, str] = {}
+    source_reads: dict[str, tuple[Path, str]] = {}
     if enabled:
         facts = {
             "agent_name": spec.name,
@@ -62,14 +61,18 @@ def instruction_preview(
             "policy_maintainer": config.templates.maintainer or "the owner of this backbone",
         }
         if brief_file:
-            source_texts[source] = source.read_text()
-            content = append_policies(source_texts[source], dirs, names, source_texts=source_texts)
+            source_reads["swarm"] = (source, source.read_text())
+            content = append_policies(
+                source_reads["swarm"][1], dirs, names, source_reads=source_reads
+            )
         else:
-            content = render_agent_brief(facts, dirs, policy_names=names, source_texts=source_texts)
+            content = render_agent_brief(facts, dirs, policy_names=names, source_reads=source_reads)
     notices = []
-    for item in sources:
+    for index, item in enumerate(sources):
         if enabled:
-            item["text"] = source_texts.get(Path(item["path"]))
+            key = item["name"] if index == 0 else f"policy:{item['name']}"
+            path, item["text"] = source_reads[key]
+            item["path"] = str(path)
         else:
             try:
                 item["text"] = Path(item["path"]).read_text(encoding="utf-8")
@@ -83,7 +86,7 @@ def instruction_preview(
         )
     if not enabled:
         notices.append("Brief injection is disabled for this agent or runtime.")
-    if legacy:
+    if not brief_file and Path(sources[0]["path"]) == legacy_template_path(dirs, "base"):
         notices.append(
             "Using legacy agent-brief.md; `backbone templates edit base` "
             "saves to templates/base.md."
