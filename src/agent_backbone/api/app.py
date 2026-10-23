@@ -116,6 +116,7 @@ def _register_jobs(app: FastAPI):
         return {
             "deliveries": await state.db.deliveries.prune(days),
             "events": await state.db.events.prune(days),
+            "state_history": await state.db.state_history.prune(),
             # A settled batch's hook receipt must not outlive its row: queue ids
             # can be used again once old rows are gone, so receipts go before
             # the rows that free them. Receipts are listed before the active
@@ -302,7 +303,9 @@ async def lifespan(app: FastAPI):
     app.state.github = GitHubClient(config) if config.github_ready else None
     if app.state.github is not None:
         lifecycle.register("github", app.state.github)
-    app.state.feed = SessionFeed(lambda: app.state.config, getattr(app.state, "sio", None))
+    app.state.feed = SessionFeed(
+        lambda: app.state.config, getattr(app.state, "sio", None), db=app.state.db
+    )
     app.state.integrations = build_integrations(lambda: app.state.config, db=app.state.db)
     lifecycle.register("integrations", app.state.integrations)
     app.state.sources = build_sources(lambda: app.state.config)

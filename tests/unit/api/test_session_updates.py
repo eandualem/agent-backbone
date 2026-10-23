@@ -240,3 +240,17 @@ class TestInboxHint:
         await tell
         await feed.hint_inbox(tell_read, complete=True)  # the next tick: nothing new
         assert sio.emit.await_count == 2
+
+
+async def test_history_failure_preserves_live_feed_and_retries(db, caplog):
+    feed = _feed(db=db, ttl_seconds=0)
+    with (
+        patch(_BUILD, AsyncMock(return_value=[_agent()])),
+        patch.object(
+            db.state_history, "observe", AsyncMock(side_effect=[OSError("unavailable"), None])
+        ) as record,
+    ):
+        assert await feed.snapshot() == [_agent()]
+        assert "Failed to record state history" in caplog.text
+        assert await feed.snapshot() == [_agent()]
+    assert record.await_count == 2

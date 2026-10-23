@@ -78,6 +78,47 @@ Agent responses label the saved model with `model_source: "configured"`.
 That model is configuration metadata, not proof of which model or provider
 actually generated a response in the running session.
 
+### `GET /api/agents/states`
+
+Read retained observations for an Activity timeline. `since` is required: an
+inclusive ISO 8601 timestamp with a timezone. Optional `agent` filters by exact
+name, `limit` defaults to 200 (1–500), and `before_id` is an exclusive cursor.
+Invalid parameters return 422; no matching history returns an empty page.
+
+```http
+GET /api/agents/states?since=2026-10-23T00:00:00Z&agent=worker&limit=200
+```
+
+```json
+{
+  "items": [
+    {"id": 42, "agent": "worker", "state": "busy", "reason": null,
+     "at": "2026-10-23T14:02:00.000000Z"}
+  ],
+  "has_more": false,
+  "next_before_id": null
+}
+```
+
+Items are newest first by monotonically increasing ID. When `has_more` is true,
+repeat the same filters with `before_id=next_before_id` to fetch the next older
+page. New observations do not shift older pages. `state` uses all seven states
+listed above; `reason` keeps the reconciled reason or null.
+
+The first observation of a registered agent establishes a baseline. Subsequent
+rows are appended only when `(state, reason)` changes, including going offline.
+The existing session feed records refreshed snapshots, including the monitor
+pass (normally every 60 seconds), even without an app connected. Cached reads
+do not create observations. `at` is the UTC observation time, **not** the exact
+runtime transition time; short changes between observations or during downtime
+can be missed. History begins at deployment, with no backfill. It is unsuitable
+for exact duration accounting. This GET reads records without refreshing agents.
+
+Records survive service restarts. The existing prune job keeps at least seven
+days, plus each agent's last observation so unchanged states remain deduplicated.
+Names identify the agent at observation time; the feed omits unregistered tmux
+sessions. The endpoint uses the same API-key protection as the live roster.
+
 ### `GET /api/agents/{name}/instructions`
 
 Read the configured instructions for an agent's next launch, using the same

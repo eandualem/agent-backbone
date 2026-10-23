@@ -193,6 +193,20 @@ _INSTRUCTIONS_API = "tests/unit/api/routes/test_api_instructions.py"
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
+        "state-history",
+        "Retained observations of reconciled state over the API",
+        "src/agent_backbone/api/session_updates.py",
+        fallback="Read current state and delivery records; earlier states cannot be reconstructed.",
+        implemented=lambda rt: True,  # The shared feed records every adapter's reconciled state.
+        claude=_ok("tests/unit/api/routes/test_api_state_history.py", _API_BOUNDARY),
+        codex=_ok("tests/unit/api/routes/test_api_state_history.py", _API_BOUNDARY),
+        gemini=_ok("tests/unit/api/routes/test_api_state_history.py", _API_BOUNDARY),
+        opencode=_ok("tests/unit/api/routes/test_api_state_history.py", _API_BOUNDARY),
+        deepcode=_ok("tests/unit/api/routes/test_api_state_history.py", _API_BOUNDARY),
+        aider=_ok("tests/unit/api/routes/test_api_state_history.py", _API_BOUNDARY),
+        shell=_ok("tests/unit/api/routes/test_api_state_history.py", _API_BOUNDARY),
+    ),
+    _row(
         "instruction-preview",
         "Configured instruction sources and text over the API",
         "src/agent_backbone/services/agents/instructions.py",

@@ -23,6 +23,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
     app.state.db = SimpleNamespace(
         deliveries=SimpleNamespace(prune=AsyncMock(return_value=2)),
         events=SimpleNamespace(prune=AsyncMock(return_value=3)),
+        state_history=SimpleNamespace(prune=AsyncMock(return_value=10)),
         queue=SimpleNamespace(
             prune=AsyncMock(return_value=4), active_ids=AsyncMock(return_value=set())
         ),
@@ -53,6 +54,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
         assert await job.args[2]() == {
             "deliveries": 2,
             "events": 3,
+            "state_history": 10,
             "queue": 4,
             "context_receipts": 1,
             "diagnostics": 6,
@@ -70,6 +72,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
         app.state.db.signing,
     ):
         repo.prune.assert_awaited_once_with(9)
+    app.state.db.state_history.prune.assert_awaited_once_with()
     # Receipts take their delivery times from records that the deliveries prune removes.
     order = [c[0] for c in manager.mock_calls if c[0] in ("receipts", "deliveries")]
     assert order == ["receipts", "deliveries"]

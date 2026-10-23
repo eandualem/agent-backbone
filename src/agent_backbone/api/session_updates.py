@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import EnrichedAgent, build_session_snapshot
+from agent_backbone.services.database import BackboneDB
 
 if TYPE_CHECKING:
     import socketio
@@ -37,10 +38,12 @@ class SessionFeed:
         sio: socketio.AsyncServer | None = None,
         *,
         ttl_seconds: float = SNAPSHOT_TTL_SECONDS,
+        db: BackboneDB | None = None,
     ) -> None:
         self._config = config
         self._sio = sio
         self._ttl = ttl_seconds
+        self._db = db
         self._cache: list[EnrichedAgent] = []
         self._cached_at: float | None = None
         self._lock = asyncio.Lock()
@@ -66,6 +69,13 @@ class SessionFeed:
             if not force_refresh and self._fresh():
                 return self._cache
             self._cache = await build_session_snapshot(self._config())
+            if self._db is not None:
+                try:
+                    await self._db.state_history.observe(
+                        [(a.name, a.state, a.reason) for a in self._cache if a.configured]
+                    )
+                except Exception:
+                    log.exception("Failed to record state history (non-fatal)")
             self._cached_at = time.monotonic()
             return self._cache
 
@@ -84,12 +94,14 @@ class SessionFeed:
         With ``only_if_changed`` (the monitor tick) nothing is sent when the
         payload equals the last one broadcast.
         """
-        if self._sio is None:
+        if self._sio is None and self._db is None:
             return False
         async with self._emit_lock:
             payload = [
                 agent.model_dump(mode="json") for agent in await self.snapshot(force_refresh=True)
             ]
+            if self._sio is None:
+                return False
             signature = json.dumps(
                 payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
             )
