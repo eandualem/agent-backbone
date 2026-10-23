@@ -135,6 +135,33 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
         processed = set()
         unchanged = []
         prices = config.settings.get("usage.prices", DEFAULT_PRICES)
+
+        async def discover_children(session, path, env):
+            rt = RUNTIMES[session["runtime"]]
+            children = await asyncio.to_thread(rt.usage_children, path, session["session_id"], env)
+            for child_id, child_path in children:
+                child_key = usage_id(session["runtime"], child_id)
+                child = known.get(child_key)
+                if (
+                    child is None
+                    or child["parent_id"] != session["id"]
+                    or child["agent_name"] != session["agent_name"]
+                ):
+                    await db.usage.remember(
+                        session["agent_name"],
+                        session["runtime"],
+                        child_id,
+                        at=now,
+                        parent_id=session["id"],
+                    )
+                    if child is None:
+                        child = known[child_key] = {}
+                    child.update(await db.usage.session(child_key))
+                if child_key in processed:
+                    continue
+                child["_discovered_path"] = str(child_path)
+                pending.append(child)
+
         while pending:
             session = pending.popleft()
             if session["id"] in processed:
@@ -153,6 +180,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                         and session["detail"] == SOURCE_GONE
                         and session["id"] not in registered
                     ):
+                        await discover_children(session, path, env)
                         continue  # searched once; a new launch (a resume) searches again
                     paths = await asyncio.to_thread(rt.usage_paths, session["session_id"], env)
                     if len(paths) == 1:
@@ -171,6 +199,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                             prices=prices,
                             observed_at=now,
                         )
+                        await discover_children(session, path, env)
                         continue
                 if path is None:
                     continue
@@ -220,31 +249,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                         prices=prices,
                         observed_at=now,
                     )
-                children = await asyncio.to_thread(
-                    rt.usage_children, path, session["session_id"], env
-                )
-                for child_id, child_path in children:
-                    child_key = usage_id(session["runtime"], child_id)
-                    child = known.get(child_key)
-                    if (
-                        child is None
-                        or child["parent_id"] != session["id"]
-                        or child["agent_name"] != session["agent_name"]
-                    ):
-                        await db.usage.remember(
-                            session["agent_name"],
-                            session["runtime"],
-                            child_id,
-                            at=now,
-                            parent_id=session["id"],
-                        )
-                        if child is None:
-                            child = known[child_key] = {}
-                        child.update(await db.usage.session(child_key))
-                    if child_key in processed:
-                        continue
-                    child["_discovered_path"] = str(child_path)
-                    pending.append(child)
+                await discover_children(session, path, env)
             except Exception as exc:
                 errors.append(f"{session['id']}: {type(exc).__name__}")
                 checked(

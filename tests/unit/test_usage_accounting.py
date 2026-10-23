@@ -882,3 +882,41 @@ async def test_a_missing_source_with_several_matches_is_not_marked_gone(tmp_path
     await collect_usage(config, db)
     (session,) = await db.usage.sessions()
     assert session["detail"] != "source file is gone"
+
+
+async def test_missing_parent_still_discovers_readable_child_usage(tmp_path, db, monkeypatch):
+    config = config_for(tmp_path)
+    path = tmp_path / "s1.jsonl"
+    append(path, claude())
+    searches = []
+
+    def usage_paths(sid, env):
+        searches.append(sid)
+        return [path] if path.exists() else []
+
+    monkeypatch.setattr(RUNTIMES["claude"], "usage_paths", usage_paths)
+    register(config)
+    await collect_usage(config, db)
+    path.unlink()
+    children = tmp_path / "s1" / "subagents"
+    children.mkdir(parents=True)
+    for name in ("first", "later"):
+        append(children / f"agent-{name}.jsonl", claude(name, T2, output=40))
+        result = await collect_usage(config, db)
+        assert result["errors"] == []
+    assert len(searches) == 2  # The missing parent is still searched only once.
+    sessions = await db.usage.sessions()
+    parent = next(s for s in sessions if s["session_id"] == "s1")
+    assert parent["detail"] == "source file is gone"
+    child_rows = [s for s in sessions if s["parent_id"] == parent["id"]]
+    assert len(child_rows) == 2
+    events = await db.usage.events()
+    assert len(events) == 3
+    assert sum(e["output_tokens"] for e in events) == 100
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+def test_child_discovery_handles_a_missing_source(tmp_path, runtime):
+    path = tmp_path / "missing-source"
+    assert RUNTIMES[runtime].usage_children(path, "parent", {}) == []
+    assert not path.exists()
