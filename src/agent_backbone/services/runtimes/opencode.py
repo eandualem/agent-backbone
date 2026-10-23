@@ -16,6 +16,7 @@ from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.hooks import install as hooks
+from agent_backbone.services.runtimes._opencode_v2_launch import failure_path
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes._usage import UsageBatch, count
 from agent_backbone.services.runtimes.base import (
@@ -149,6 +150,8 @@ class OpenCode(Runtime):
 
     def build_command(self, **kwargs):
         version = self._version()
+        if not version:
+            raise RuntimeError("Could not determine the OpenCode version; launch refused")
         v2 = version >= (2,)
         selection = None
         if v2:
@@ -199,6 +202,12 @@ class OpenCode(Runtime):
             *command,
         ]
 
+    def startup_error(self, state_dir, agent, launch_id):
+        try:
+            return failure_path(Path(state_dir), agent, launch_id).read_text()[:1000] or None
+        except OSError:
+            return None
+
     def user_skill_dirs(self, env):
         home = agent_home(env)
         config = Path(_setting(env, "XDG_CONFIG_HOME") or home / ".config").expanduser()
@@ -231,6 +240,11 @@ class OpenCode(Runtime):
         return [first] if first is not None and has_text(first) else []
 
     def plan_approval_needs(self, env):
+        if self._version() >= (2,):
+            return (
+                "plan approval is unavailable on OpenCode v2: "
+                "switch between Plan and Build in the native session"
+            )
         # plan_exit, the step that asks to approve a plan, exists only with
         # this flag, which falls back to OPENCODE_EXPERIMENTAL (1.18.32).
         flag = _setting(env, "OPENCODE_EXPERIMENTAL_PLAN_MODE")

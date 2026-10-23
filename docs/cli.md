@@ -280,6 +280,10 @@ verifies the selection before opening the TUI. Older OpenCode versions refuse
 explicit effort selection; their ordinary model strings still work unchanged.
 OpenCode v2 launches with a private native server (`--standalone`). Its native
 startup still applies OpenCode database migrations, including legacy-session migration.
+Selection waits for migration completion. A readiness timeout leaves the migration
+running; inspect the agent before retrying. A fresh launch with an explicit model
+creates a native session, which remains in history even if you quit before sending
+a prompt. Failed selection before opening the TUI removes that unused new session.
 
 The `unattended:` line shows the no-approval switch and sandbox support;
 `-` means unattended startup is unsupported. See the

@@ -610,8 +610,12 @@ mergeable inline JSON object. Its adapter translates native session and tool eve
 into the same state and context-offer protocol, reloads skills through `skill.reload`,
 and reads usage and completed assistant text from the v2 session tables. Explicit
 model and effort selection uses the native catalog and session APIs before the TUI
-starts, with exact selection readback. These metadata calls use temporary standalone
-servers and do not submit prompts.
+starts, with exact selection readback. These metadata calls share one private native
+server and wait for its legacy-history migration to complete before selecting a
+session. They do not submit prompts. A failed selection is retained with the launch
+for `agent inspect` and startup errors, including when the terminal closes.
+The readiness wait may time out while native migration continues; Backbone does
+not terminate that migration to meet the readiness deadline.
 
 
 For automatic upgrades, `backbone up` requests Uvicorn’s graceful exit directly

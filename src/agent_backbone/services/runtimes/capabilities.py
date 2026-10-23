@@ -494,13 +494,12 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok(_PLAN, verified_on="2.1.284"),
         codex=_ok(_PLAN, "in Plan mode (`/plan`)", verified_on="0.157.1"),
         gemini=_gap(),
-        # Implemented, but OpenCode asks for no approval unless its own
-        # off-by-default flag is set, and such a flag is not support. Revisit
-        # when an OpenCode release enables plan mode by default or drops the flag.
+        # V1's off-by-default flag is not declared support. V2's Plan agent
+        # waits for the user to switch agents instead of presenting plan_exit.
         opencode=_gap(
             278,
-            "works when OPENCODE_EXPERIMENTAL_PLAN_MODE is set in the agent's environment "
-            "(off by default; `doctor` names each agent without it)",
+            "v1 requires OPENCODE_EXPERIMENTAL_PLAN_MODE (off by default); "
+            "v2 requires switching agents in the native session, not structured plan approval",
         ),
         deepcode=_gap(),
         aider=_gap(),

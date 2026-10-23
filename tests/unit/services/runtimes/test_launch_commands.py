@@ -24,6 +24,12 @@ _NEVER_ASK = ["-a", "never", "-s", "workspace-write"]
 _NO_FEEDBACK = ["--disallowedTools", "SendFeedback"]  # Claude Code, unless the agent opts in
 
 
+@pytest.fixture(autouse=True)
+def opencode_version(monkeypatch):
+    # Launch tests use fake executable paths, never the installed native CLI.
+    monkeypatch.setattr(type(RUNTIMES["opencode"]), "installed_version", lambda self: "1.18.35")
+
+
 def _resolve(binary: str):
     return patch(f"{_BASE}.resolve_command", return_value=binary)
 

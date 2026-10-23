@@ -35,9 +35,9 @@ const admitted = [];
 const ctx = {
   location: { directory: dir },
   session: {
-    get: async ({sessionID}) => ({data: {
+    get: async ({sessionID}) => ({
       id: sessionID, ...(sessionID === "child" ? {parentID: "root"} : {})
-    }}),
+    }),
     synthetic: async (request) => {
       if (reject) throw new Error("admission failed");
       admitted.push(request);
@@ -64,8 +64,7 @@ const emit = async (type, data) => {
   await tick();
 };
 const state = () => JSON.parse(fs.readFileSync(path.join(dir, "app.json")));
-await emit("session.created", {sessionID: "root"});
-await emit("session.created", {sessionID: "child", parentID: "root"});
+// Both sessions predate this plugin instance, as on an explicit resume.
 await emit("session.status", {sessionID: "root", status: {type: "busy"}});
 await emit("permission.asked", {sessionID: "root", id: "per_one"});
 const waiting = state();
@@ -95,10 +94,18 @@ const fallback = {...tool(), result: {output: {found: 3}}};
 await callbacks["execute.after"](fallback);
 await emit("session.execution.interrupted", {sessionID: "root", reason: "user"});
 const idle = state();
+// Make one state write fail, then verify the same subscription recovers.
+const statePath = path.join(dir, "app.json");
+fs.unlinkSync(statePath);
+fs.mkdirSync(statePath);
+await emit("session.status", {sessionID: "root", status: {type: "busy"}});
+fs.rmdirSync(statePath);
+await emit("session.idle", {sessionID: "root"});
+const recovered = state();
 fs.writeFileSync(path.join(dir, "app.skills-reload"), "");
 await poll();
 await cleanup();
-console.log(JSON.stringify({waiting, afterChild, idle, admitted,
+console.log(JSON.stringify({waiting, afterChild, idle, recovered, admitted,
   structured: structured.result, fallback: fallback.result, reloaded}));
 """
     result = subprocess.run(
@@ -118,6 +125,7 @@ console.log(JSON.stringify({waiting, afterChild, idle, admitted,
     assert actual["afterChild"]["session_id"] == "root"
     assert actual["idle"]["state"] == "idle"
     assert actual["idle"]["model"] == "provider/model"
+    assert actual["recovered"]["state"] == "idle"
     assert actual["admitted"] == [
         {"sessionID": "root", "text": "first offer", "delivery": "steer", "resume": False}
     ]

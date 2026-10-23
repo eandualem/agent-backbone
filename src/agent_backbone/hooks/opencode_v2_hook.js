@@ -10,7 +10,7 @@ export default {
       directory: ctx.location.directory,
       client: {
         session: {
-          get: ({ path }) => ctx.session.get({ sessionID: path.id }),
+          get: async ({ path }) => ({ data: await ctx.session.get({ sessionID: path.id }) }),
           prompt: ({ path, body }) => ctx.session.synthetic({
             sessionID: path.id,
             text: body.parts.map((part) => part.text).join("\n\n"),
@@ -95,7 +95,8 @@ export default {
     const controller = new AbortController();
     const events = (async () => {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
-        await receive(event);
+        // A transient state-file failure must not drop every subsequent event.
+        try { await receive(event); } catch {}
       }
     })();
     // Native plugin teardown owns the subscription; it must not survive a reload.

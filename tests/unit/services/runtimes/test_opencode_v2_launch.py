@@ -1,6 +1,8 @@
 """Native session selection is metadata-only and checked before TUI launch."""
 
 import json
+from contextlib import nullcontext
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -24,8 +26,11 @@ def test_native_selection_is_verified_before_returning_session(monkeypatch, resu
     operations = []
 
     def run(command, **kwargs):
-        assert command[:3] == ["/bin/opencode", "api", "--standalone"]
-        operation = command[3]
+        assert command[:4] == ["/bin/opencode", "api", "--server", "http://127.0.0.1:1234"]
+        assert "timeout" not in kwargs
+        operation = command[4]
+        if operation == "model.list":
+            assert any(arg.startswith("location[directory]=") for arg in command)
         operations.append(operation)
         if operation in ("session.create", "session.switchModel"):
             assert json.loads(command[command.index("--data") + 1])["model"] == target
@@ -35,7 +40,9 @@ def test_native_selection_is_verified_before_returning_session(monkeypatch, resu
     monkeypatch.setattr(_opencode_v2_launch.subprocess, "run", run)
     assert (
         _opencode_v2_launch.prepare_session(
-            "/bin/opencode",
+            partial(
+                _opencode_v2_launch.api, "/bin/opencode", server="http://127.0.0.1:1234", env={}
+            ),
             "provider/model:high",
             "high",
             session_id="ses_example" if resume else None,
@@ -52,13 +59,12 @@ def test_native_selection_is_verified_before_returning_session(monkeypatch, resu
 def test_unknown_variant_does_not_mutate_a_session(monkeypatch):
     operations = []
 
-    def api(binary, operation, **kwargs):
+    def api(operation, **kwargs):
         operations.append(operation)
         return {"data": [{"providerID": "provider", "id": "model", "variants": [{"id": "low"}]}]}
 
-    monkeypatch.setattr(_opencode_v2_launch, "api", api)
     with pytest.raises(RuntimeError, match="has no variant 'high'"):
-        _opencode_v2_launch.prepare_session("/bin/opencode", "provider/model", "high")
+        _opencode_v2_launch.prepare_session(api, "provider/model", "high")
     assert operations == ["model.list"]
 
 
@@ -75,9 +81,17 @@ def test_changed_selection_is_not_reported_as_success(monkeypatch):
             },
         ]
     )
-    monkeypatch.setattr(_opencode_v2_launch, "api", lambda *args, **kwargs: next(responses))
+    removed = []
+
+    def request(operation, **kwargs):
+        if operation == "session.remove":
+            removed.append(kwargs["session_id"])
+            return None
+        return next(responses)
+
     with pytest.raises(RuntimeError, match="did not retain"):
-        _opencode_v2_launch.prepare_session("/bin/opencode", "provider/model", "high")
+        _opencode_v2_launch.prepare_session(request, "provider/model", "high")
+    assert removed == ["ses_example"]
 
 
 @pytest.mark.parametrize("resume", [False, "ses_existing"])
@@ -122,9 +136,96 @@ def test_legacy_version_refuses_explicit_effort(monkeypatch):
 
 
 def test_exact_resume_cannot_silently_create_a_missing_session(monkeypatch):
-    monkeypatch.setattr(_opencode_v2_launch, "api", lambda *args, **kwargs: {"data": None})
+    monkeypatch.setattr(
+        _opencode_v2_launch,
+        "standalone",
+        lambda binary: nullcontext(lambda *args, **kwargs: {"data": None}),
+    )
     executions = []
     monkeypatch.setattr(_opencode_v2_launch.os, "execv", lambda *args: executions.append(args))
     with pytest.raises(RuntimeError, match="requested session"):
         _opencode_v2_launch.launch({"resume": "ses_missing"}, ["/bin/opencode", "--standalone"])
     assert executions == []
+
+
+def test_v2_does_not_claim_legacy_flag_enables_plan_approval(monkeypatch):
+    runtime = RUNTIMES["opencode"]
+    monkeypatch.setattr(type(runtime), "installed_version", lambda self: "2.1.4")
+    reason = runtime.plan_approval_needs({"OPENCODE_EXPERIMENTAL_PLAN_MODE": "1"})
+    assert "unavailable on OpenCode v2" in reason
+
+
+@pytest.mark.parametrize("version", [None, "unrecognized version"])
+def test_unknown_version_refuses_to_guess_launch_protocol(monkeypatch, version):
+    runtime = RUNTIMES["opencode"]
+    monkeypatch.setattr(type(runtime), "installed_version", lambda self: version)
+    with pytest.raises(RuntimeError, match="Could not determine the OpenCode version"):
+        runtime.build_command()
+
+
+def test_continue_without_history_starts_fresh(monkeypatch):
+    monkeypatch.setattr(
+        _opencode_v2_launch,
+        "standalone",
+        lambda binary: nullcontext(lambda *args, **kwargs: {"data": []}),
+    )
+    selected = []
+
+    def prepare(request, model, effort, *, session_id):
+        selected.append(session_id)
+        return "ses_new"
+
+    monkeypatch.setattr(_opencode_v2_launch, "prepare_session", prepare)
+    executed = []
+    monkeypatch.setattr(_opencode_v2_launch.os, "execv", lambda *args: executed.append(args))
+    _opencode_v2_launch.launch({"resume": True, "model": "provider/model"}, ["/bin/opencode"])
+    assert selected == [None]
+    assert executed == [("/bin/opencode", ["/bin/opencode", "--session", "ses_new"])]
+
+
+@pytest.mark.parametrize("final", ["completed", "error"])
+def test_metadata_waits_for_native_migration_on_one_server(monkeypatch, final):
+    import io
+
+    server = SimpleNamespace(
+        stdin=io.StringIO(),
+        stdout=io.StringIO('{"url":"http://127.0.0.1:1234"}\n'),
+        wait=lambda **kwargs: 0,
+    )
+    launched = []
+
+    def start(command, **kwargs):
+        assert command == [
+            "/bin/opencode",
+            "serve",
+            "--stdio",
+            "--hostname",
+            "127.0.0.1",
+            "--port",
+            "0",
+        ]
+        assert kwargs["env"]["OPENCODE_PASSWORD"]
+        launched.append(command)
+        return server
+
+    monkeypatch.setattr(_opencode_v2_launch.subprocess, "Popen", start)
+    monkeypatch.setattr(_opencode_v2_launch.time, "sleep", lambda delay: None)
+    states = iter(["required", "running", final])
+    calls = []
+
+    def status(endpoint, password):
+        assert endpoint == "http://127.0.0.1:1234" and password
+        calls.append("migration")
+        return {"status": next(states)}
+
+    monkeypatch.setattr(_opencode_v2_launch, "migration_status", status)
+    entered = False
+    try:
+        with _opencode_v2_launch.standalone("/bin/opencode"):
+            entered = True
+            assert len(calls) == 3
+    except RuntimeError as exc:
+        assert final == "error" and "migration failed" in str(exc)
+    assert entered is (final == "completed")
+    assert len(launched) == 1
+    assert server.stdin.closed

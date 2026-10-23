@@ -10,6 +10,11 @@ import os
 import sys
 from pathlib import Path
 
+if __package__:
+    from ._opencode_v2_launch import record_failure
+else:
+    from _opencode_v2_launch import record_failure
+
 
 def merge_config(raw: str | None, plugin: str, *, v2: bool = False) -> str | None:
     """Return merged JSON, or None to preserve an unsupported config verbatim."""
@@ -37,10 +42,12 @@ def main() -> None:
     )
     if content is None:
         if v2:
-            raise SystemExit(
+            error = (
                 "Cannot inject OpenCode v2 hooks into unsupported inline configuration; "
                 "use a JSON object with a plugins list"
             )
+            record_failure(error)
+            raise SystemExit(error)
         print(
             "Skipping OpenCode hook injection: preserving unsupported inline configuration",
             file=sys.stderr,
