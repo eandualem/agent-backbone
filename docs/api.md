@@ -78,6 +78,25 @@ Agent responses label the saved model with `model_source: "configured"`.
 That model is configuration metadata, not proof of which model or provider
 actually generated a response in the running session.
 
+### `GET /api/agents/{name}/instructions`
+
+Read the configured instructions for an agent's next launch, using the same
+composition as `backbone instructions preview NAME --json`. This does not report
+what a running conversation received or include project and runtime-owned rules.
+The normal API-key requirement applies; an unknown agent returns 404 and a
+preview that cannot compose its required sources returns 422.
+
+The response contains `name`, `runtime`, `mode`, `enabled`, `sources`, `content`
+and `notices`. Sources are ordered: base (or saved swarm brief), then deduplicated
+global and tag policies. Each source has `name`, `path`, `scope`, `applied` and
+`text`. `text` is that file's raw contents, so a base template may still contain
+placeholders. `content` is the rendered, combined preview. Clients can display
+individual policies directly from `sources[].text` without splitting headings.
+
+Disabled injection leaves `content` empty and `applied` false, while readable
+source text remains available. An unreadable source has `text: null` and an
+explanation in `notices`; required-source composition failures still return 422.
+
 ### `POST /api/agents/start`
 
 Starting an existing agent reuses its saved CLI and model and begins a **new

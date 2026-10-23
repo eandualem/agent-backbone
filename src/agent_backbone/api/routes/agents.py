@@ -46,6 +46,7 @@ from agent_backbone.services.agents import (
     agent_state,
     approve_agent,
     deny_agent,
+    instruction_preview,
     read_state_file,
     record_answer,
     subscription_views,
@@ -151,6 +152,16 @@ async def get_agent_state_endpoint(session: str, config: BackboneConfig = Depend
         plan_title=snapshot.plan_title,
         evidence=list(snapshot.evidence),
     )
+
+
+@router.get("/agents/{name}/instructions")
+def get_agent_instructions(name: str, config: BackboneConfig = Depends(get_config)):
+    """Next-launch instruction preview, including each source's raw text."""
+    spec = registered_agent_or_404(config, name)
+    try:
+        return instruction_preview(spec, config)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/agents/{name}/inspect", response_model=AgentInspectResponse)
