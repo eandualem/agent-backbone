@@ -114,6 +114,9 @@ do not create observations. `at` is the UTC observation time, **not** the exact
 runtime transition time; short changes between observations or during downtime
 can be missed. History begins at deployment, with no backfill. It is unsuitable
 for exact duration accounting. This GET reads records without refreshing agents.
+Storage failures or timeouts can also leave gaps. History writes have a one-second
+wait budget; a cancelled write may finish cleaning up later, during which further
+observations are skipped so live state remains available.
 
 Records survive service restarts. The existing prune job keeps at least seven
 days, plus each agent's last observation so unchanged states remain deduplicated.

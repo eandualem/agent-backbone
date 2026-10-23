@@ -254,3 +254,35 @@ async def test_history_failure_preserves_live_feed_and_retries(db, caplog):
         assert "Failed to record state history" in caplog.text
         assert await feed.snapshot() == [_agent()]
     assert record.await_count == 2
+
+
+async def test_slow_history_does_not_block_live_feed(db, caplog):
+    feed = _feed(db=db)
+    cancelled = asyncio.Event()
+    cleanup = asyncio.Event()
+
+    async def stalled_write(states):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+            await cleanup.wait()
+
+    with (
+        patch(_BUILD, AsyncMock(return_value=[_agent()])),
+        patch.object(db.state_history, "observe", AsyncMock(side_effect=stalled_write)) as record,
+        patch("agent_backbone.api.session_updates.HISTORY_WRITE_TIMEOUT_SECONDS", 0.01),
+    ):
+        assert await asyncio.wait_for(feed.snapshot(), 1) == [_agent()]
+        await asyncio.wait_for(cancelled.wait(), 1)
+        assert cancelled.is_set()
+        try:
+            assert await asyncio.wait_for(feed.snapshot(force_refresh=True), 1) == [_agent()]
+            record.assert_awaited_once()  # Never queue another write behind stalled cleanup.
+        finally:
+            cleanup.set()
+            await asyncio.gather(feed._history_task, return_exceptions=True)
+        record.side_effect = None
+        assert await feed.snapshot(force_refresh=True) == [_agent()]
+        assert record.await_count == 2
+    assert "State history write timed out" in caplog.text

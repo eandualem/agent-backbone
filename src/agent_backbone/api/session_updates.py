@@ -23,6 +23,7 @@ SESSIONS_NAMESPACE = "/sessions"
 SESSIONS_UPDATE_EVENT = "sessions:update"
 INBOX_PENDING_EVENT = "inbox:pending"
 SNAPSHOT_TTL_SECONDS = 5.0
+HISTORY_WRITE_TIMEOUT_SECONDS = 1.0
 
 
 class SessionFeed:
@@ -44,6 +45,7 @@ class SessionFeed:
         self._sio = sio
         self._ttl = ttl_seconds
         self._db = db
+        self._history_task: asyncio.Task[None] | None = None
         self._cache: list[EnrichedAgent] = []
         self._cached_at: float | None = None
         self._lock = asyncio.Lock()
@@ -69,15 +71,32 @@ class SessionFeed:
             if not force_refresh and self._fresh():
                 return self._cache
             self._cache = await build_session_snapshot(self._config())
-            if self._db is not None:
-                try:
-                    await self._db.state_history.observe(
+            if self._db is not None and (self._history_task is None or self._history_task.done()):
+                self._history_task = asyncio.create_task(
+                    self._record_history(
                         [(a.name, a.state, a.reason) for a in self._cache if a.configured]
                     )
-                except Exception:
-                    log.exception("Failed to record state history (non-fatal)")
+                )
+                try:
+                    async with asyncio.timeout(HISTORY_WRITE_TIMEOUT_SECONDS):
+                        await asyncio.shield(self._history_task)
+                except TimeoutError:
+                    # Database cancellation can itself wait for a locked connection.
+                    # Keep its task until cleanup ends, without delaying live reads
+                    # or accumulating more writes behind the stalled one.
+                    self._history_task.cancel()
+                    log.warning("State history write timed out; observation may be missing")
+                except asyncio.CancelledError:
+                    self._history_task.cancel()
+                    raise
             self._cached_at = time.monotonic()
             return self._cache
+
+    async def _record_history(self, states: list[tuple[str, str, str | None]]) -> None:
+        try:
+            await self._db.state_history.observe(states)
+        except Exception:
+            log.exception("Failed to record state history (non-fatal)")
 
     def _fresh(self) -> bool:
         return self._cached_at is not None and time.monotonic() - self._cached_at < self._ttl
