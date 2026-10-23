@@ -189,8 +189,23 @@ _HINT = "tests/unit/api/routes/test_api_messages.py"
 _QUEUE_ONLY = "read from the queue, the same for every runtime"
 _INTERRUPTED = "tests/unit/services/agents/test_interrupted_turn.py"
 _PLAN = "tests/unit/services/agents/test_plan_approval.py"
+_INSTRUCTIONS_API = "tests/unit/api/routes/test_api_instructions.py"
 
 CAPABILITIES: tuple[Capability, ...] = (
+    _row(
+        "instruction-preview",
+        "Configured instruction sources and text over the API",
+        "src/agent_backbone/services/agents/instructions.py",
+        fallback="Read the preview with `backbone instructions preview NAME --json`.",
+        implemented=lambda rt: True,
+        claude=_ok(_INSTRUCTIONS_API, _API_BOUNDARY),
+        codex=_ok(_INSTRUCTIONS_API, _API_BOUNDARY),
+        gemini=_ok(_INSTRUCTIONS_API, _API_BOUNDARY),
+        opencode=_ok(_INSTRUCTIONS_API, _API_BOUNDARY),
+        deepcode=_ok(_INSTRUCTIONS_API, _API_BOUNDARY),
+        aider=_ok(_INSTRUCTIONS_API, _API_BOUNDARY),
+        shell=_ok(_INSTRUCTIONS_API, "source preview only; no instruction injection"),
+    ),
     _row(
         "delivery",
         "Message delivery into the session",

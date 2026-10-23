@@ -66,6 +66,12 @@ def instruction_preview(
             else render_agent_brief(facts, dirs, policy_names=names)
         )
     notices = []
+    for item in sources:
+        try:
+            item["text"] = Path(item["path"]).read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            item["text"] = None
+            notices.append(f"Cannot read instruction source '{item['name']}'.")
     if brief_file:
         notices.append(
             "This member reuses its saved role brief. Template edits apply to new swarms."

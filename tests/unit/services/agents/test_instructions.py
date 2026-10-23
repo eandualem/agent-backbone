@@ -89,6 +89,7 @@ def test_swarm_resume_source_and_policies_are_stable(setup):
     restart = instruction_preview(spec, config)
     assert first == restart
     assert first["content"].startswith("Inspect the assigned issue.")
+    assert first["sources"][0]["text"] == "Inspect the assigned issue.\n"
     assert "Rule for python" in first["content"]
     assert role.read_text() == "Inspect the assigned issue.\n"
 
