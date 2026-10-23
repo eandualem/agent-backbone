@@ -14,7 +14,9 @@ import re
 import sqlite3
 from pathlib import Path
 
+from agent_backbone.fs import atomic_write_text
 from agent_backbone.hooks import install as hooks
+from agent_backbone.services.runtimes._opencode_v2_launch import failure_path
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes._usage import UsageBatch, count
 from agent_backbone.services.runtimes.base import (
@@ -40,6 +42,17 @@ def _setting(env: dict[str, str], key: str) -> str:
     return env.get(key) or os.environ.get(key) or ""
 
 
+def _session_table(conn: sqlite3.Connection, session_id: str) -> str | None:
+    """A migrated session uses v2; an unmigrated v1 session keeps its old reader."""
+    for table in ("session_v2", "session"):
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        if exists and conn.execute(f"SELECT 1 FROM {table} WHERE id=?", (session_id,)).fetchone():
+            return table
+    return None
+
+
 class OpenCode(Runtime):
     supports_exact_resume = True
     id = "opencode"
@@ -56,6 +69,15 @@ class OpenCode(Runtime):
         {"observed-model", "project-instructions", "request-diagnostics", "interrupted-turn"}
     )
     model_tags = True
+    efforts = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+    def split_model(self, spec):
+        if not spec or "::" not in spec:
+            return spec or None, None
+        model, effort = spec.rsplit("::", 1)
+        if not effort.strip():
+            raise ValueError("OpenCode model::effort requires an effort after '::'")
+        return model or None, effort.strip().lower()
 
     runtime_markers = ("opencode", "ask anything...", "tab agents")
     placeholder_fragments = ("ask anything...", "ctrl+p commands")
@@ -116,22 +138,77 @@ class OpenCode(Runtime):
     def hook_settings(self, data_dir, state_dir, *, python=None):
         raise RuntimeError("OpenCode state comes from a plugin, not a command hook")
 
+    def check_effort(self, effort):
+        super().check_effort(effort)
+        if effort and self._version() < (2, 1, 4):
+            raise RuntimeError("OpenCode effort selection requires @opencode/cli 2.1.4 or newer")
+
+    def _version(self) -> tuple[int, ...]:
+        version = self.installed_version() or ""
+        match = re.match(r"(\d+)\.(\d+)\.(\d+)", version)
+        return tuple(map(int, match.groups())) if match else ()
+
     def build_command(self, **kwargs):
+        if not self.available():
+            raise RuntimeError(f"Runtime '{self.id}' binary not found: {self.binary}")
+        version = self._version()
+        if not version:
+            raise RuntimeError("Could not determine the OpenCode version; launch refused")
+        v2 = version >= (2,)
+        selection = None
+        if v2:
+            if version < (2, 1, 4):
+                raise RuntimeError("OpenCode v2 integration requires @opencode/cli 2.1.4 or newer")
+            model, effort = self.split_model(kwargs.get("model"))
+            if effort and not model:
+                raise RuntimeError("OpenCode effort selection requires a provider/model")
+            Runtime.check_effort(self, effort)
+            resume = kwargs.get("resume", False)
+            selection = {"model": model, "effort": effort, "resume": resume}
+            kwargs = {**kwargs, "model": None, "resume": False}
+            if resume:
+                kwargs["brief_file"] = None
         command = super().build_command(**kwargs)
+        if command is None:
+            return command
+        if v2:
+            command = [
+                hooks.default_python(),
+                str(Path(__file__).with_name("_opencode_v2_launch.py")),
+                json.dumps(selection),
+                command[0],
+                "--standalone",
+                *command[1:],
+            ]
         data_dir, state_dir = kwargs.get("data_dir"), kwargs.get("state_dir")
-        if command is None or data_dir is None or state_dir is None:
+        if data_dir is None or state_dir is None:
             return command
         try:
             plugin = hooks.install_hook_files(Path(data_dir)) / self.hook_script
+            if v2:
+                plugin = plugin.parent / "opencode-v2"
+                plugin.mkdir(exist_ok=True)
+                atomic_write_text(
+                    plugin / "index.js", hooks.hook_source("opencode_v2_hook.js").read_text()
+                )
         except OSError as exc:
+            if v2:
+                raise RuntimeError("Could not install OpenCode v2 launch hooks") from exc
             log.warning("Could not install OpenCode launch hooks: %s", exc)
             return command
         return [
             hooks.default_python(),
             str(Path(__file__).with_name("_opencode_launch.py")),
+            *(["--v2"] if v2 else []),
             str(plugin),
             *command,
         ]
+
+    def startup_error(self, state_dir, agent, launch_id):
+        try:
+            return failure_path(Path(state_dir), agent, launch_id).read_text()[:1000] or None
+        except OSError:
+            return None
 
     def user_skill_dirs(self, env):
         home = agent_home(env)
@@ -165,6 +242,11 @@ class OpenCode(Runtime):
         return [first] if first is not None and has_text(first) else []
 
     def plan_approval_needs(self, env):
+        if self._version() >= (2,):
+            return (
+                "plan approval is unavailable on OpenCode v2: "
+                "switch between Plan and Build in the native session"
+            )
         # plan_exit, the step that asks to approve a plan, exists only with
         # this flag, which falls back to OPENCODE_EXPERIMENTAL (1.18.32).
         flag = _setting(env, "OPENCODE_EXPERIMENTAL_PLAN_MODE")
@@ -199,7 +281,7 @@ class OpenCode(Runtime):
         if not path.is_file():
             return []
         with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
-            found = conn.execute("SELECT 1 FROM session WHERE id=?", (session_id,)).fetchone()
+            found = _session_table(conn, session_id)
         return [path] if found else []
 
     def usage_children(
@@ -208,9 +290,12 @@ class OpenCode(Runtime):
         if not path.is_file():
             return []  # Parent and child usage share the same database.
         with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+            table = _session_table(conn, session_id)
+            if table is None:
+                return []
             return [
                 (row[0], path)
-                for row in conn.execute("SELECT id FROM session WHERE parent_id=?", (session_id,))
+                for row in conn.execute(f"SELECT id FROM {table} WHERE parent_id=?", (session_id,))
             ]
 
     def read_usage(self, path: Path, offset: int, state: dict):
@@ -221,8 +306,18 @@ class OpenCode(Runtime):
                 # Replay the boundary timestamp to catch same-millisecond revisions.
                 floor = state.get("scan_floor", max(0, offset - 1000))
                 after_time, after_id = state.get("scan_after", (floor, ""))
+                v2 = _session_table(conn, state["_session_id"]) == "session_v2"
+                table = "session_message" if v2 else "message"
+                data = (
+                    "json_set(data, '$.role', CASE WHEN type='compaction' THEN 'assistant' "
+                    "ELSE type END, '$.modelID', "
+                    "json_extract(data, '$.model.id'), '$.providerID', "
+                    "json_extract(data, '$.model.providerID'))"
+                    if v2
+                    else "data"
+                )
                 rows = conn.execute(
-                    "SELECT id,time_updated,data FROM message WHERE session_id=? "
+                    f"SELECT id,time_updated,{data} FROM {table} WHERE session_id=? "
                     "AND time_updated>=? AND (time_updated>? OR (time_updated=? AND id>?)) "
                     "ORDER BY time_updated,id LIMIT 10001",
                     (state["_session_id"], floor, after_time, after_time, after_id),
@@ -306,6 +401,19 @@ class OpenCode(Runtime):
         )
         try:
             with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+                if _session_table(conn, session_id) == "session_v2":
+                    messages = (
+                        "WITH positioned AS (SELECT m.time_created * 1000 + ROW_NUMBER() "
+                        "OVER (PARTITION BY m.time_created ORDER BY m.seq, p.key) - 1 AS position, "
+                        "json_object('text', json_extract(p.value, '$.text'), 'time', "
+                        "json_object('end', json_extract(m.data, '$.time.completed'))) AS data "
+                        "FROM session_message m, json_each(m.data, '$.content') p "
+                        "WHERE m.session_id=? AND m.type='assistant' "
+                        "AND json_extract(m.data, '$.time.completed') IS NOT NULL "
+                        "AND json_extract(p.value, '$.type')='text'), "
+                        "messages AS (SELECT position, data FROM positioned "
+                        "WHERE trim(json_extract(data, '$.text'), ' ' || char(9, 10, 13)) != '') "
+                    )
 
                 def exists(condition: str, value: int) -> bool:
                     query = f"{messages}SELECT EXISTS(SELECT 1 FROM messages WHERE {condition})"

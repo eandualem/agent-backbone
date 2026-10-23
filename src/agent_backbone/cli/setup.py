@@ -233,7 +233,9 @@ def cmd_runtimes(args: argparse.Namespace) -> int:
     note("complete list. Effort rides on the model as `model:effort` (e.g.")
     note("`gpt-6-astra:high`), so every surface that names a model can name an effort:")
     note("`--model`, `agent set model=…`, and a roster entry `coordinator@codex/…:high`.")
-    note("Such a spec is split: the CLI gets the bare model plus its own effort switch.")
+    note("Such a spec is split: the CLI gets the bare model plus its own effort setting.")
+    note("OpenCode @opencode/cli 2.1.4+ uses `provider/model::effort` instead;")
+    note("a single colon stays part of its model ID. Older OpenCode refuses explicit effort.")
     note("`unattended` is the switch an `unattended=true` agent is launched with (its")
     note("runtime then never asks a person). `sandboxed` means an OS sandbox still")
     note("confines it to its directory; `no sandbox` means trust on the machine. `unsupported`:")
@@ -335,6 +337,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             # Reported, not failed: the file may be meant, but never unnoticed (#274).
             for runtime_id in found:
                 runtime = REGISTRY[runtime_id]
+                if runtime.efforts:
+                    try:
+                        runtime.check_effort(runtime.efforts[0])
+                    except RuntimeError as exc:
+                        note(f"  ! {runtime.display_name}: reasoning effort unavailable: {exc}")
                 for path in runtime.user_instructions({}):
                     note(f"  ! {runtime.display_name} user-level instructions: {path}")
                 if memory := runtime.native_memory({}):

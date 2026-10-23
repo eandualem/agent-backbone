@@ -28,6 +28,12 @@ _MOD = "agent_backbone.services.agents.launch"
 _BASE = "agent_backbone.services.runtimes.base"
 
 
+@pytest.fixture(autouse=True)
+def opencode_version(monkeypatch):
+    # These starts use mocked executables; choose the legacy launch contract.
+    monkeypatch.setattr(type(RUNTIMES["opencode"]), "installed_version", lambda self: "1.18.35")
+
+
 def _codex_sandbox(*, linux: bool):
     """Codex on macOS takes file roots; on Linux only directories (#433)."""
     return patch("agent_backbone.services.runtimes.codex._DIRECTORY_ROOTS_ONLY", linux)

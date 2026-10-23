@@ -662,7 +662,13 @@ async def wait_until_ready(
         if not await session_exists(name):
             details.update(state="offline", state_source="terminal", reason="session_exited")
             clear_starting_marker(state_path, name)
-            return "exited", ["tmux session ended before the agent reached its prompt"]
+            snapshot = await get_agent_state(
+                state_path, name, runtime_hint=rt.id, pane_content="", since=wall_started
+            )
+            return "exited", [
+                "tmux session ended before the agent reached its prompt",
+                *([snapshot.detail] if snapshot.source == "launch" and snapshot.detail else []),
+            ]
 
         pane = await capture_pane(name, lines=60)
         if pane:
