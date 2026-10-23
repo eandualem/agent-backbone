@@ -54,23 +54,28 @@ def instruction_preview(
             }
         )
     content = ""
+    source_texts: dict[Path, str] = {}
     if enabled:
         facts = {
             "agent_name": spec.name,
             "repo": spec.repo or "(no GitHub remote)",
             "policy_maintainer": config.templates.maintainer or "the owner of this backbone",
         }
-        content = (
-            append_policies(source.read_text(), dirs, names)
-            if brief_file
-            else render_agent_brief(facts, dirs, policy_names=names)
-        )
+        if brief_file:
+            source_texts[source] = source.read_text()
+            content = append_policies(source_texts[source], dirs, names, source_texts=source_texts)
+        else:
+            content = render_agent_brief(facts, dirs, policy_names=names, source_texts=source_texts)
     notices = []
     for item in sources:
-        try:
-            item["text"] = Path(item["path"]).read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
-            item["text"] = None
+        if enabled:
+            item["text"] = source_texts.get(Path(item["path"]))
+        else:
+            try:
+                item["text"] = Path(item["path"]).read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                item["text"] = None
+        if item["text"] is None:
             notices.append(f"Cannot read instruction source '{item['name']}'.")
     if brief_file:
         notices.append(

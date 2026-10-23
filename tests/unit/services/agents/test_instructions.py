@@ -1,6 +1,7 @@
 """Preview, ordinary launch and swarm restarts agree on instruction content."""
 
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -59,6 +60,24 @@ def test_missing_policy_fails_before_session_creation(setup):
     (config.data_dir / "policies" / "python.md").unlink()
     with pytest.raises(ValueError, match="Cannot read configured shared policy"):
         instruction_preview(spec, config)
+
+
+def test_source_text_matches_content_when_policy_changes_during_preview(setup, monkeypatch):
+    spec, config = setup
+    policy = config.data_dir / "policies" / "coding.md"
+    read_text = Path.read_text
+
+    def read_then_edit(path, *args, **kwargs):
+        text = read_text(path, *args, **kwargs)
+        if path == policy:
+            policy.write_text("Changed rule")
+        return text
+
+    monkeypatch.setattr(Path, "read_text", read_then_edit)
+    preview = instruction_preview(spec, config)
+    assert "Rule for coding" in preview["content"]
+    assert preview["sources"][1]["text"] == "Rule for coding"
+    assert read_text(policy) == "Changed rule"
 
 
 @pytest.mark.parametrize("runtime", ["codex", "claude"])
