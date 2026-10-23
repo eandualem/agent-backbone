@@ -153,6 +153,14 @@ messages are held until it is acknowledged.
 
 ## 2. State: how the backbone knows what an agent is doing
 
+Permission requests do not always open a human dialog: an automatic reviewer can
+handle them. After the three-second redraw window, a visible busy state, current
+provider error or input prompt can supersede a permission hook when no active
+dialog remains. An input prompt alone reads as `busy` until turn completion is
+established, so messages cannot interrupt unfinished work. Old dialog text above
+a new input prompt does not count as a current human wait. Refusal records remain
+action history; they do not mean an approval is pending.
+
 ```mermaid
 flowchart TD
     A[tmux session exists?] -->|no| OFF[offline]

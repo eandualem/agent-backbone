@@ -484,7 +484,7 @@ class TestActiveDialogGate:
         # Stale "Press enter to confirm" above an idle prompt: Enter here would
         # submit whatever is typed at that prompt.
         codex = RUNTIMES["codex"]
-        assert codex.detect_waiting_for_human(CODEX_DIALOG_ANSWERED)  # loose state reading
+        assert not codex.detect_waiting_for_human(CODEX_DIALOG_ANSWERED)
         assert not codex.detect_active_dialog(CODEX_DIALOG_ANSWERED)  # strict answer gate
         claude = RUNTIMES["claude"]
         assert not claude.detect_active_dialog(CLAUDE_DIALOG_ANSWERED_WITH_TYPED_TEXT)

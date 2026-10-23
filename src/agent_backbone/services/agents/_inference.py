@@ -443,6 +443,49 @@ async def _get_agent_state(
                 dialog.diagnostics = push.diagnostics
                 dialog.evidence.append("the choice dialog on screen beats the hook's permission")
                 return _with_diagnostics(dialog, pane_content, runtime_hint)
+            if (
+                pane_content
+                and push_age >= INTERRUPT_SETTLE_SECONDS
+                and not runtime.detect_active_dialog(pane_content)
+            ):
+                pull = infer_state_from_pane(pane_content, runtime.id)
+                if pull.state in (AgentState.IDLE, AgentState.BUSY, AgentState.BLOCKED):
+                    latest = read_state_file(state_dir, session, current_launch=True)
+                    if latest is not None and latest.timestamp != push.timestamp:
+                        return await _get_agent_state(
+                            state_dir,
+                            session,
+                            stale_threshold,
+                            runtime_hint=runtime_hint,
+                            since=since,
+                        )
+                    # A permission request may go to an automatic reviewer.
+                    # No dialog is not proof that the turn ended: keep delivery
+                    # blocked until a later hook or stale-state reconciliation.
+                    state = AgentState.BUSY if pull.state == AgentState.IDLE else pull.state
+                    return _with_diagnostics(
+                        replace(
+                            push,
+                            state=state,
+                            reason=pull.reason,
+                            detail=pull.detail,
+                            prompt_ref=None,
+                            source="pull",
+                            timestamp=time.time(),
+                            evidence=[
+                                *push.evidence,
+                                *pull.evidence,
+                                "no active permission dialog; the hook does not prove a human wait",
+                                *(
+                                    ["turn completion is unproven; delivery remains blocked"]
+                                    if pull.state == AgentState.IDLE
+                                    else []
+                                ),
+                            ],
+                        ),
+                        pane_content,
+                        runtime_hint,
+                    )
         return _with_diagnostics(push, pane_content, runtime_hint)
 
     if push and push.is_plan_waiting:
