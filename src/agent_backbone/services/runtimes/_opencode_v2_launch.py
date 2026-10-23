@@ -14,6 +14,7 @@ import os
 import secrets
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -85,60 +86,67 @@ def standalone(binary: str):
         if key not in {"BACKBONE_AGENT", "BACKBONE_STATE_DIR"}
     }
     environment["OPENCODE_PASSWORD"] = secrets.token_urlsafe(32)
-    process = subprocess.Popen(
-        [binary, "serve", "--stdio", "--hostname", "127.0.0.1", "--port", "0"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        # Keep native errors in the terminal, never copied into the API diagnostic.
-        stderr=None,
-        text=True,
-        env=environment,
-    )
-    try:
+    with tempfile.TemporaryFile() as errors:
+        process = subprocess.Popen(
+            [binary, "serve", "--stdio", "--hostname", "127.0.0.1", "--port", "0"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=errors,
+            text=True,
+            env=environment,
+        )
         try:
-            ready = json.loads(process.stdout.readline())
-            endpoint = ready["url"]
-            address = urlsplit(endpoint)
-            if address.scheme != "http" or address.hostname != "127.0.0.1" or not address.port:
-                raise ValueError("not the requested loopback address")
-        except (ValueError, KeyError, TypeError) as exc:
-            raise RuntimeError(
-                "OpenCode private server did not report its loopback address"
-            ) from exc
-
-        # Native stdout remains a pipe after readiness; keep it drained.
-        def drain_output():
-            for _ in process.stdout:
-                pass
-
-        drain = threading.Thread(target=drain_output, daemon=True)
-        drain.start()
-        request = partial(api, binary, server=endpoint, env=environment)
-        while True:
-            status = migration_status(endpoint, environment["OPENCODE_PASSWORD"])
-            state = status.get("status") if isinstance(status, dict) else None
-            if state == "completed":
-                break
-            if state not in ("required", "running"):
-                raise RuntimeError(
-                    "OpenCode history migration failed; inspect it in OpenCode before retrying"
-                )
-            time.sleep(0.5)
-        yield request
-    finally:
-        # EOF releases only this process. Never stop a managed native service.
-        process.stdin.close()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.terminate()
             try:
-                process.wait(timeout=3)
+                ready = json.loads(process.stdout.readline())
+                endpoint = ready["url"]
+                address = urlsplit(endpoint)
+                if address.scheme != "http" or address.hostname != "127.0.0.1" or not address.port:
+                    raise ValueError("not the requested loopback address")
+            except (ValueError, KeyError, TypeError) as exc:
+                raise RuntimeError(
+                    "OpenCode private server did not report its loopback address"
+                ) from exc
+
+            # Native stdout remains a pipe after readiness; keep it drained.
+            def drain_output():
+                for _ in process.stdout:
+                    pass
+
+            drain = threading.Thread(target=drain_output, daemon=True)
+            drain.start()
+            request = partial(api, binary, server=endpoint, env=environment)
+            while True:
+                status = migration_status(endpoint, environment["OPENCODE_PASSWORD"])
+                state = status.get("status") if isinstance(status, dict) else None
+                if state == "completed":
+                    break
+                if state not in ("required", "running"):
+                    raise RuntimeError(
+                        "OpenCode history migration failed; inspect it in OpenCode before retrying"
+                    )
+                time.sleep(0.5)
+            yield request
+        except BaseException:
+            # Show bounded native details only on failure, never in retained state.
+            # A surviving native descendant keeps this file, not the later TUI's fd.
+            offset = max(0, os.fstat(errors.fileno()).st_size - 8192)
+            detail = os.pread(errors.fileno(), 8192, offset)
+            sys.stderr.write(detail.decode("utf-8", "replace"))
+            raise
+        finally:
+            # EOF releases only this process. Never stop a managed native service.
+            process.stdin.close()
+            try:
+                process.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-        # A descendant may still hold the pipe open. Do not wait for the drain
-        # thread or close its locked reader; exec/exit closes our descriptors.
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            # A descendant may still hold the pipe open. Do not wait for the drain
+            # thread or close its locked reader; exec/exit closes our descriptors.
 
 
 def prepare_session(

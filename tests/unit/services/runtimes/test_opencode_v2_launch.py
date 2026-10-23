@@ -185,7 +185,7 @@ def test_continue_without_history_starts_fresh(monkeypatch):
 
 
 @pytest.mark.parametrize("final", ["completed", "error"])
-def test_metadata_waits_for_native_migration_on_one_server(monkeypatch, final):
+def test_metadata_waits_for_native_migration_on_one_server(monkeypatch, capfd, final):
     import io
 
     monkeypatch.setenv("BACKBONE_AGENT", "app")
@@ -208,7 +208,8 @@ def test_metadata_waits_for_native_migration_on_one_server(monkeypatch, final):
             "--port",
             "0",
         ]
-        assert kwargs["stderr"] is None
+        kwargs["stderr"].write(b"x" * 9000 + b"native fixture details")
+        kwargs["stderr"].flush()
         assert kwargs["env"]["OPENCODE_PASSWORD"]
         assert "BACKBONE_AGENT" not in kwargs["env"]
         assert "BACKBONE_STATE_DIR" not in kwargs["env"]
@@ -237,6 +238,9 @@ def test_metadata_waits_for_native_migration_on_one_server(monkeypatch, final):
     assert entered is (final == "completed")
     assert len(launched) == 1
     assert server.stdin.closed
+    stderr = capfd.readouterr().err
+    assert len(stderr) <= 8192
+    assert stderr.endswith("native fixture details") if final == "error" else not stderr
 
 
 def test_missing_binary_is_distinct_from_unknown_version(monkeypatch):

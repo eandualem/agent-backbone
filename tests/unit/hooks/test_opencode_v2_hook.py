@@ -31,6 +31,8 @@ const callbacks = {};
 const queue = [];
 let wake;
 let reloaded = 0;
+let finishReload;
+let holdReload = false;
 let reject = false;
 const admitted = [];
 const ctx = {
@@ -46,7 +48,10 @@ const ctx = {
     hook: async (name, fn) => { callbacks[name] = fn; },
   },
   tool: { hook: async (name, fn) => { callbacks[name] = fn; } },
-  skill: { reload: async () => { reloaded++; } },
+  skill: { reload: async () => {
+    reloaded++;
+    if (holdReload) await new Promise(resolve => { finishReload = resolve; });
+  } },
   event: { subscribe: async function* ({signal}) {
     signal.addEventListener("abort", () => wake?.(), {once: true});
     while (!signal.aborted) {
@@ -120,10 +125,17 @@ const stopped = fs.readFileSync(statePath, "utf8") === afterCleanup
 const newerCleanup = await plugin.setup(ctx);
 await cleanup(); // Old cleanup must not clear the newer callback.
 await poll();
+// Teardown during a reload must finish its own busy record.
+holdReload = true;
+fs.writeFileSync(path.join(dir, "app.skills-reload"), "");
+const inFlight = poll();
 await newerCleanup();
+finishReload();
+await inFlight;
+const afterInFlight = state();
 console.log(JSON.stringify({waiting, afterChild, idle, recovered, admitted,
   structured: structured.result, fallback: fallback.result,
-  loggingFailure: loggingFailure.result, reloaded, stopped}));
+  loggingFailure: loggingFailure.result, reloaded, stopped, afterInFlight}));
 """
     result = subprocess.run(
         [node, "--input-type=module", "-e", script, plugin.as_uri()],
@@ -156,4 +168,5 @@ console.log(JSON.stringify({waiting, afterChild, idle, recovered, admitted,
         {"type": "text", "text": "offer before logging failure"},
     ]
     assert actual["stopped"] is True
-    assert actual["reloaded"] == 2
+    assert actual["reloaded"] == 3
+    assert actual["afterInFlight"]["state"] == "idle"

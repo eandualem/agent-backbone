@@ -439,7 +439,7 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
         // The plugin OpenCode builds again while disposing may have recorded a
         // turn since (in the same millisecond, too): only our own record ends.
         const now = readCurrent(t);
-        if (!disposed && now.event === "skills.reload" && now.ts === mine) record(t, "skills.reload", STATE_IDLE, null);
+        if (now.event === "skills.reload" && now.ts === mine) record(t, "skills.reload", STATE_IDLE, null);
       } catch { /* hook failures must not stop the agent */ }
       reloading = false;
     }

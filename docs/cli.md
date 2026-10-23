@@ -287,8 +287,9 @@ creates a native session, which remains in history even if you quit before sendi
 a prompt. Until that launch reports a session ID, a later `agent resume` uses
 OpenCode's latest session in the directory, which can be this empty session.
 Failed selection before opening the TUI removes that unused new session. Native
-startup errors stay in the terminal; inspection retains the failed operation,
-without copying raw native configuration diagnostics into the API.
+startup failures show diagnostics in the terminal (including APIs that read the
+terminal). The retained startup diagnostic contains the failed operation, without
+copying raw native configuration details.
 
 The `unattended:` line shows the no-approval switch and sandbox support;
 `-` means unattended startup is unsupported. See the
