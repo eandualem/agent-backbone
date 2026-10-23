@@ -147,7 +147,7 @@ async def test_repeats_during_an_outage_do_not_crowd_out_other_notices(config):
     ]
 
 
-# One behaviour, run against the required pair: each runtime's own refusal
+# One behaviour, run against the required three: each runtime's own refusal
 # evidence (Claude Code's PermissionDenied event; Codex's screen line after a
 # PermissionRequest, from its 0.157.1 TUI snapshot) reaches the humans as one
 # notice naming the action safely and the runtime's own way to allow it.
@@ -180,6 +180,96 @@ def _refuse_in_codex(state_dir, agent):
             _run_hook(codex_hook, state_dir, agent, payload)
 
 
+def _refuse_in_opencode(state_dir, agent):
+    """Native v2 payloads: only the automatic policy denial becomes an alert."""
+    import os
+    import shutil
+    import subprocess
+
+    from agent_backbone.hooks.install import hook_source
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to exercise the OpenCode plugin")
+    plugin_dir = state_dir / "plugin"
+    (plugin_dir / "v2").mkdir(parents=True)
+    (plugin_dir / "package.json").write_text('{"type":"module"}')
+    for name in ("opencode_hook.js", "backbone_state.py"):
+        (plugin_dir / name).write_text(hook_source(name).read_text())
+    plugin = plugin_dir / "v2" / "index.js"
+    plugin.write_text(hook_source("opencode_v2_hook.js").read_text())
+    script = r"""
+const {default: plugin} = await import(process.argv[1]);
+const callbacks = {};
+const tools = Object.fromEntries(["shell", "private_custom_tool"].map(id => [id, {
+  execute: async (args, context) => {
+    if (args.failure) throw args.failure;
+    return args.result;
+  },
+}]));
+const cleanup = await plugin.setup({
+  location: {directory: process.env.BACKBONE_STATE_DIR},
+  session: {hook: async () => {}},
+  tool: {
+    hook: async (name, fn) => {callbacks[name] = fn;},
+    transform: async fn => fn({
+      list: () => Object.keys(tools).map(id => ({id})),
+      update: (id, fn) => fn(tools[id]),
+    }),
+  },
+  skill: {reload: async () => {}},
+  event: {subscribe: async function* () {}},
+});
+const failure = tag => ({_tag: "Tool.Error", error: {_tag: tag,
+  permission: "shell", resources: ["private"], rules: ["private"]}});
+const run = async (error, id, tool = "shell", sessionID = "root") => {
+  try {
+    await tools[tool].execute({failure: error, command: "private"}, {id, sessionID});
+    throw new Error("expected original failure");
+  } catch (received) {
+    if (received !== error) throw new Error("failure changed");
+  }
+};
+// A person's answer and ordinary errors are not automatic policy refusals.
+for (const tag of ["Permission.DeclinedError", "Permission.CorrectedError", "OtherError"])
+  await run(failure(tag), tag);
+const denial = failure("Permission.BlockedError");
+await run(denial, "call_one");
+await run(denial, "call_one"); // Replays are deduplicated by the consumer.
+await run(denial, "call_two", "private_custom_tool", "child");
+const result = {content: "original", metadata: {exit: 0}};
+if (await tools.shell.execute({result}, {id: "success"}) !== result)
+  throw new Error("result changed");
+// A failed action-log write must preserve the original native denial too.
+const fs = await import("node:fs");
+const log = process.env.BACKBONE_STATE_DIR + "/actions.jsonl";
+fs.renameSync(log, log + ".saved");
+fs.mkdirSync(log);
+await run(denial, "logging_failure");
+fs.rmdirSync(log);
+fs.renameSync(log + ".saved", log);
+await cleanup();
+"""
+    subprocess.run(
+        [node, "--input-type=module", "-e", script, str(plugin)],
+        env={**os.environ, "BACKBONE_STATE_DIR": str(state_dir), "BACKBONE_AGENT": agent},
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    lines = (state_dir / "actions.jsonl").read_text().splitlines()
+    assert len(lines) == 3
+    records = [json.loads(line) for line in lines]
+    assert all(record["session"] == agent for record in records)
+    assert [record["summary"] for record in records] == [
+        "a local command",
+        "a local command",
+        "a tool call",
+    ]
+    assert "private" not in "".join(lines)
+
+
 def _run_hook(module, state_dir, agent, payload):
     import io
 
@@ -188,14 +278,21 @@ def _run_hook(module, state_dir, agent, payload):
 
 
 @pytest.mark.parametrize(
-    ("runtime", "refuse", "why", "allow"),
+    ("runtime", "refuse", "why", "allow", "summary"),
     [
-        ("claude", _refuse_in_claude, "(External System Writes)", "/permissions"),
-        ("codex", _refuse_in_codex, "(risk: high)", "/approve"),
+        (
+            "claude",
+            _refuse_in_claude,
+            " (External System Writes)",
+            ", then /permissions",
+            "gh issue edit",
+        ),
+        ("codex", _refuse_in_codex, " (risk: high)", ", then /approve", "gh issue edit"),
+        ("opencode", _refuse_in_opencode, "", "", "a local command"),
     ],
 )
-async def test_a_refusal_without_a_dialog_reaches_the_humans_in_both_runtimes(
-    config, monkeypatch, runtime, refuse, why, allow
+async def test_a_refusal_without_a_dialog_reaches_the_humans_in_required_runtimes(
+    config, monkeypatch, runtime, refuse, why, allow, summary
 ):
     from dataclasses import replace
 
@@ -206,12 +303,14 @@ async def test_a_refusal_without_a_dialog_reaches_the_humans_in_both_runtimes(
     await _check(config)  # the watch starts
     refuse(config.state_dir, "ike")
     notify = await _check(config)
-    [call] = notify.await_args_list
+    calls = notify.await_args_list
+    assert len(calls) == (2 if runtime == "opencode" else 1)
+    call = calls[0]
     text = call.args[1]
     assert call.kwargs == {"agent": "ike"}  # no buttons: nothing to approve remotely
-    assert "Refused — ike" in text and "Action: gh issue edit" in text
-    assert f"{RUNTIMES[runtime].refusal_check} refused it {why}" in text
-    assert f"tmux attach -t ike, then {allow}" in text and "does not retry" in text
+    assert "Refused — ike" in text and f"Action: {summary}" in text
+    assert f"{RUNTIMES[runtime].refusal_check} refused it{why}." in text
+    assert f"tmux attach -t ike{allow}" in text and "does not retry" in text
     assert "private" not in text and "40" not in text
 
 

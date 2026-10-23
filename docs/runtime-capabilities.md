@@ -58,7 +58,7 @@ version differs.
 | Permission dialog answered (agent approve) | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
 | Permission dialog refused (agent deny) | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
 | Plan approval answered | ✅ (2.1.284) | ✅ (0.157.1) in Plan mode (`/plan`) | ❌ | ❌ #278 v1 requires OPENCODE_EXPERIMENTAL_PLAN_MODE (off by default); v2 requires switching agents in the native session, not structured plan approval | ❌ | ❌ | n/a |
-| Alert when an automatic safety check refuses an action | ✅ (2.1.282) | ✅ (0.160.0) its automatic reviewer (`agents.auto_review`) | ❌ | ❌ #279 | ❌ | ❌ | n/a |
+| Alert when an automatic safety check refuses an action | ✅ (2.1.282) | ✅ (0.160.0) its automatic reviewer (`agents.auto_review`) | ❌ | ✅ (2.1.4) 2.1.4+ typed policy denials; native simulated fixture, working-agent check pending | ❌ | ❌ | n/a |
 | Browser tab group named after the agent | ✅ (version not recorded) with `backbone chrome install` | ❌ #270 | ❌ | ❌ #270 | ❌ | ❌ | n/a |
 | Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ resumes the directory's latest session | ❌ | n/a |
 | Fleet snapshot resumes the saved session exactly | ✅ | ✅ | ✅ | ✅ | ❌ reported as exact_resume_unsupported | ❌ reported as exact_resume_unsupported | n/a |

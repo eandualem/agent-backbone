@@ -73,6 +73,28 @@ export default {
     });
     await ctx.tool.hook("execute.before", (event) =>
       hook["tool.execute.before"](input(event), { args: event.input }));
+    // Observe the original failure before built-in after hooks replace its cause
+    // (Plan mode replaces policy errors with a message-only tool error).
+    await ctx.tool.transform((editor) => {
+      for (const { id } of editor.list()) editor.update(id, (tool) => {
+        const execute = tool.execute;
+        tool.execute = async (args, context) => {
+          try { return await execute(args, context); } catch (error) {
+            if (error?._tag === "Tool.Error"
+                && error.error?._tag === "Permission.BlockedError") {
+              const summary = new Map([
+                ["shell", "a local command"], ["read", "read a file"],
+                ["write", "write a file"], ["edit", "edit a file"],
+                ["webfetch", "fetch a web page"],
+              ]).get(id) ?? "a tool call";
+              // Observability must not change a failure, including on log errors.
+              try { await dispatch("permission.denied", { callID: context.id, summary }); } catch {}
+            }
+            throw error;
+          }
+        };
+      });
+    });
     await ctx.tool.hook("execute.after", async (event) => {
       if (event.status !== "completed") return;
       // A failed synthetic admission still delivers the offer with this result.
