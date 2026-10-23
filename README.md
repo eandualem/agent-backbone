@@ -18,10 +18,9 @@ Develop specialists whose experience carries into your next project.
 
 ## Watch
 
-<p align="center">
-<a href="https://youtu.be/3gOH3t3woXM"><img src="docs/media/film-overview.jpg" width="49%" alt="Watch the agent-backbone overview, 1 minute 23 seconds"></a>
-<a href="https://youtu.be/yKV8RNgqRsE"><img src="docs/media/film-why-backbone.jpg" width="49%" alt="Watch Why Backbone, 2 minutes 23 seconds"></a>
-</p>
+https://github.com/user-attachments/assets/695a6096-4196-4115-911c-a0043d632088
+
+https://github.com/user-attachments/assets/4218fdbe-e581-49bd-879f-288d41c9f72f
 
 [Overview (1:23)](https://youtu.be/3gOH3t3woXM) · [Why Backbone (2:23)](https://youtu.be/yKV8RNgqRsE) · [YouTube playlist](https://www.youtube.com/playlist?list=PLMq17WKA4Z88)
 
