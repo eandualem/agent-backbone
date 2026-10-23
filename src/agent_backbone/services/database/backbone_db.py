@@ -23,6 +23,7 @@ from agent_backbone.services.database._queue_repo import QueueRepo
 from agent_backbone.services.database._reports_repo import ReportRepo
 from agent_backbone.services.database._settings_repo import SettingRepo
 from agent_backbone.services.database._signing_repo import SigningRepo
+from agent_backbone.services.database._state_history_repo import StateHistoryRepo
 from agent_backbone.services.database._state_repo import StateRepo
 from agent_backbone.services.database._swarms_repo import SwarmRepo
 from agent_backbone.services.database._transitions_repo import TransitionRepo
@@ -229,6 +230,7 @@ class BackboneDB:
         self.agents = AgentRepo(engine)
         self.swarms = SwarmRepo(engine)
         self.states = StateRepo(engine)
+        self.state_history = StateHistoryRepo(engine)
         self.transitions = TransitionRepo(engine)
         self.fleet = FleetSnapshotRepo(engine)
         self.usage = UsageRepo(engine)

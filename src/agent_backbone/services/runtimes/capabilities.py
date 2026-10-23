@@ -189,8 +189,37 @@ _HINT = "tests/unit/api/routes/test_api_messages.py"
 _QUEUE_ONLY = "read from the queue, the same for every runtime"
 _INTERRUPTED = "tests/unit/services/agents/test_interrupted_turn.py"
 _PLAN = "tests/unit/services/agents/test_plan_approval.py"
+_INSTRUCTIONS_API = "tests/unit/api/routes/test_api_instructions.py"
 
 CAPABILITIES: tuple[Capability, ...] = (
+    _row(
+        "state-history",
+        "Retained observations of reconciled state over the API",
+        "src/agent_backbone/api/session_updates.py",
+        fallback="Read current state and delivery records; earlier states cannot be reconstructed.",
+        implemented=lambda rt: True,  # The shared feed records every adapter's reconciled state.
+        claude=_ok("tests/unit/api/routes/test_api_state_history.py", _API_BOUNDARY),
+        codex=_ok("tests/unit/api/routes/test_api_state_history.py", _API_BOUNDARY),
+        gemini=_ok("tests/unit/api/routes/test_api_state_history.py", _API_BOUNDARY),
+        opencode=_ok("tests/unit/api/routes/test_api_state_history.py", _API_BOUNDARY),
+        deepcode=_ok("tests/unit/api/routes/test_api_state_history.py", _API_BOUNDARY),
+        aider=_ok("tests/unit/api/routes/test_api_state_history.py", _API_BOUNDARY),
+        shell=_ok("tests/unit/api/routes/test_api_state_history.py", _API_BOUNDARY),
+    ),
+    _row(
+        "instruction-preview",
+        "Configured instruction sources and text over the API",
+        "src/agent_backbone/services/agents/instructions.py",
+        fallback="Read the preview with `backbone instructions preview NAME --json`.",
+        implemented=lambda rt: True,
+        claude=_ok(_INSTRUCTIONS_API, _API_BOUNDARY),
+        codex=_ok(_INSTRUCTIONS_API, _API_BOUNDARY),
+        gemini=_ok(_INSTRUCTIONS_API, _API_BOUNDARY),
+        opencode=_ok(_INSTRUCTIONS_API, _API_BOUNDARY),
+        deepcode=_ok(_INSTRUCTIONS_API, _API_BOUNDARY),
+        aider=_ok(_INSTRUCTIONS_API, _API_BOUNDARY),
+        shell=_ok(_INSTRUCTIONS_API, "source preview only; no instruction injection"),
+    ),
     _row(
         "delivery",
         "Message delivery into the session",
@@ -418,10 +447,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Watch the session (`agent attach`) for dialogs.",
         implemented=lambda rt: bool(rt.prompt_markers),
         cli_dependent=True,
-        claude=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="2.1.296"),
-        codex=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.157.1"),
+        claude=_ok("tests/unit/services/agents/test_permission_state.py", verified_on="2.1.296"),
+        codex=_ok("tests/unit/services/agents/test_permission_state.py", verified_on="0.157.1"),
         gemini=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.46.0"),
-        opencode=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="1.18.32"),
+        opencode=_ok("tests/unit/services/agents/test_permission_state.py", verified_on="1.18.32"),
         deepcode=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.3.1"),
         aider=_unverified(note="markers not verified live"),
         shell=_na("a plain shell shows no permission dialog"),

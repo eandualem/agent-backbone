@@ -45,6 +45,7 @@ def _register_jobs(app: FastAPI):
     """Wire the periodic jobs. Each job reads ``app.state.config`` at run time so
     setting changes and newly discovered agents are picked up without a restart."""
     from agent_backbone.services.agents import rotate_action_log
+    from agent_backbone.services.github import QueueSnapshot
     from agent_backbone.services.jobs import (
         GitHubPoller,
         SourcesPoller,
@@ -55,9 +56,14 @@ def _register_jobs(app: FastAPI):
         observe_job,
         run_transitions,
         sample_resources,
+        take_pass_steps,
     )
     from agent_backbone.services.jobs.transitions import INTERVAL_SECONDS as _TRANSITION_TICK
-    from agent_backbone.services.routing import routing_in_flight, settle_steers
+    from agent_backbone.services.routing import (
+        routing_in_flight,
+        settle_steers,
+        sync_dependencies,
+    )
     from agent_backbone.services.scheduler import PeriodicScheduler
 
     state = app.state
@@ -68,7 +74,11 @@ def _register_jobs(app: FastAPI):
         )
         slow = state.config.settings.get("diagnostics.slow_job_seconds", 30)
         await observe_duration(
-            state.db, source=name, duration_ms=duration_ms, threshold_ms=int(slow * 1000)
+            state.db,
+            source=name,
+            duration_ms=duration_ms,
+            threshold_ms=int(slow * 1000),
+            steps=take_pass_steps() if name == "agent-monitor" else None,
         )
 
     scheduler = PeriodicScheduler(on_result=_job_result)
@@ -106,6 +116,7 @@ def _register_jobs(app: FastAPI):
         return {
             "deliveries": await state.db.deliveries.prune(days),
             "events": await state.db.events.prune(days),
+            "state_history": await state.db.state_history.prune(),
             # A settled batch's hook receipt must not outlive its row: queue ids
             # can be used again once old rows are gone, so receipts go before
             # the rows that free them. Receipts are listed before the active
@@ -189,6 +200,13 @@ def _register_jobs(app: FastAPI):
             )
         elif config.github_intake == "webhook" and config.github.backfill_on_start:
             scheduler.add("github-backfill", 0, poller.backfill, run_immediately=True, once=True)
+
+        async def _dependencies():
+            await sync_dependencies(state.config, state.db, QueueSnapshot(state.github))
+
+        # Sub-issue links change rarely, and a close asks GitHub for its own
+        # parent. Their own job: a monitor pass never waits on these listings.
+        scheduler.add("dependency-sync", 600, _dependencies, run_immediately=True)
 
     sources = getattr(state, "sources", None)
     sources_poller = SourcesPoller(lambda: state.config, state.db, sources) if sources else None
@@ -285,7 +303,9 @@ async def lifespan(app: FastAPI):
     app.state.github = GitHubClient(config) if config.github_ready else None
     if app.state.github is not None:
         lifecycle.register("github", app.state.github)
-    app.state.feed = SessionFeed(lambda: app.state.config, getattr(app.state, "sio", None))
+    app.state.feed = SessionFeed(
+        lambda: app.state.config, getattr(app.state, "sio", None), db=app.state.db
+    )
     app.state.integrations = build_integrations(lambda: app.state.config, db=app.state.db)
     lifecycle.register("integrations", app.state.integrations)
     app.state.sources = build_sources(lambda: app.state.config)
@@ -326,6 +346,7 @@ async def lifespan(app: FastAPI):
         )
         yield
     finally:
+        await app.state.feed.close()
         await lifecycle.stop_all()
         await get_pty_manager().cleanup_all()
         log.info("agent-backbone shutting down")

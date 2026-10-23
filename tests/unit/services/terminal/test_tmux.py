@@ -155,6 +155,26 @@ class TestStartSession:
         else:
             assert len(calls) == 1
 
+    @pytest.mark.parametrize("running", [True, False])
+    async def test_a_timed_out_start_counts_when_the_session_runs(self, running):
+        """tmux started the session but did not answer in time (seen on Linux)."""
+
+        async def _tmux(*args, **kwargs):
+            timed_out = args[0] == "start-server"
+            return (-1, b"", b"tmux command timed out") if timed_out else (0, b"", b"")
+
+        with (
+            patch(
+                "agent_backbone.services.terminal._sessions.session_exists",
+                side_effect=[False, running],
+            ),
+            patch("agent_backbone.services.terminal._sessions._run_tmux", side_effect=_tmux) as run,
+        ):
+            started = await start_session("test", command=["claude"], scrub=["GITHUB_TOKEN"])
+        assert started is running
+        scrubbed = ("set-environment", "-t", "=test:", "-r", "GITHUB_TOKEN")
+        assert (scrubbed in [call.args for call in run.await_args_list]) is running
+
     async def test_start_with_working_dir_and_command(self, mock_subprocess):
         with patch(
             "agent_backbone.services.terminal._sessions.session_exists",
@@ -332,6 +352,22 @@ class TestStartSessionEnvironment:
             patch(
                 "agent_backbone.services.terminal._sessions._run_tmux",
                 side_effect=asyncio.CancelledError,
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await start_session("test", environment={"API_TOKEN": "s3cret"})
+        assert not list(Path(tempfile_dir).glob("backbone-env-*"))
+
+    async def test_env_file_is_removed_when_the_timeout_check_is_canceled(self):
+        tempfile_dir = tempfile.gettempdir()
+        with (
+            patch(
+                "agent_backbone.services.terminal._sessions.session_exists",
+                side_effect=[False, asyncio.CancelledError],
+            ),
+            patch(
+                "agent_backbone.services.terminal._sessions._run_tmux",
+                return_value=(-1, b"", b"tmux command timed out"),
             ),
             pytest.raises(asyncio.CancelledError),
         ):

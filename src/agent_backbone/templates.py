@@ -82,7 +82,12 @@ def template_source(name: str, dirs: TemplateDirs | None = None) -> Path:
     return bundled_dir("templates") / relative
 
 
-def read_template(name: str, dirs: TemplateDirs | None = None) -> str:
+def read_template(
+    name: str,
+    dirs: TemplateDirs | None = None,
+    *,
+    source_reads: dict[str, tuple[Path, str]] | None = None,
+) -> str:
     source = template_source(name, dirs)
     try:
         text = source.read_text()
@@ -90,6 +95,8 @@ def read_template(name: str, dirs: TemplateDirs | None = None) -> str:
         raise ValueError(f"Cannot read template {name!r}: {source}") from exc
     if not text.strip():
         raise ValueError(f"Template {name!r} is empty: {source}")
+    if source_reads is not None:
+        source_reads[name] = (source, text)
     return text
 
 
@@ -120,7 +127,13 @@ def policy_source(dirs: TemplateDirs, name: str) -> Path:
     return template_source(f"policy:{name}", dirs)
 
 
-def append_policies(brief: str, dirs: TemplateDirs | None, policy_names: tuple[str, ...]) -> str:
+def append_policies(
+    brief: str,
+    dirs: TemplateDirs | None,
+    policy_names: tuple[str, ...],
+    *,
+    source_reads: dict[str, tuple[Path, str]] | None = None,
+) -> str:
     """Required policies compose even with a customized base brief."""
     sections = []
     for name in dict.fromkeys(policy_names):
@@ -128,9 +141,12 @@ def append_policies(brief: str, dirs: TemplateDirs | None, policy_names: tuple[s
             raise ValueError(f"Invalid shared policy name: {name!r}")
         path = policy_source(dirs, name)
         try:
-            policy = path.read_text().strip()
+            text = path.read_text()
         except OSError as exc:
             raise ValueError(f"Cannot read configured shared policy {name!r}: {path}") from exc
+        if source_reads is not None:
+            source_reads[f"policy:{name}"] = (path, text)
+        policy = text.strip()
         if not policy:
             raise ValueError(f"Configured shared policy {name!r} is empty: {path}")
         sections.append(f"## Shared policy: {name}\n\n{policy}\n")
@@ -143,9 +159,18 @@ def append_policies(brief: str, dirs: TemplateDirs | None, policy_names: tuple[s
 
 
 def render_agent_brief(
-    facts: dict[str, str], dirs: TemplateDirs | None = None, *, policy_names: tuple[str, ...] = ()
+    facts: dict[str, str],
+    dirs: TemplateDirs | None = None,
+    *,
+    policy_names: tuple[str, ...] = (),
+    source_reads: dict[str, tuple[Path, str]] | None = None,
 ) -> str:
-    return append_policies(render(read_template("base", dirs), facts), dirs, policy_names)
+    return append_policies(
+        render(read_template("base", dirs, source_reads=source_reads), facts),
+        dirs,
+        policy_names,
+        source_reads=source_reads,
+    )
 
 
 def brief_source(dirs: TemplateDirs) -> Path:

@@ -69,8 +69,14 @@ def cmd_init(args: argparse.Namespace) -> int:
     print(f"database ready: {redact_url(config.database_url)}")
 
     print("\nNext steps:")
-    print("  1. backbone doctor")
-    print("  2. backbone up --detach")
+    print("  Choose starting practices: backbone docs team")
+    print("  Inspect current assignments: backbone templates use")
+    print("  For a new team:")
+    print("    backbone templates use starter-collaboration starter-continuity starter-learning")
+    print("  (replaces global policies; edit or remove any starter with backbone templates)")
+    print("  1. backbone service install    # start now and at login")
+    print("     (no login service, as in a container: backbone up --detach)")
+    print("  2. backbone doctor")
     print("  3. cd ~/code/my-app && backbone agent start")
     print(f"\nTokens (GitHub, Telegram) go in {env_path} — `backbone secrets set TELEGRAM_TOKEN`.")
     if args.data_dir and os.environ.get("BACKBONE_DATA_DIR") != str(data_dir):
@@ -334,11 +340,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 if memory := runtime.native_memory({}):
                     note(f"  ! {runtime.display_name} native memory: {memory}")
             # The capability contract: what each installed runtime lacks, and its issue.
+            # Titles, not ids: "bounded-unattended" read as "no unattended mode".
             gaps = [
                 (
                     runtime_id,
                     "\n".join(
-                        cap.id
+                        cap.title
                         + (f" (#{cell.issue})" if (cell := cap.cells[runtime_id]).issue else "")
                         for cap in missing
                     ),

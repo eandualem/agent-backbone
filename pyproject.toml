@@ -1,8 +1,8 @@
 [project]
 name = "agent-backbone"
 version = "0.3.0"
-description = "Local control plane for terminal AI agents: run them, message them, coordinate them through GitHub Issues, reach them from Telegram."
-readme = "README.md"
+description = "Bring agents across AI CLIs and projects into one personal team, with communication, coordination and continuity."
+dynamic = ["readme"]
 requires-python = ">=3.11"
 license = { text = "MIT" }
 keywords = ["agents", "claude-code", "codex", "tmux", "orchestration", "telegram", "github"]
@@ -58,8 +58,33 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-fancy-pypi-readme>=25.1"]
 build-backend = "hatchling.build"
+
+# PyPI shows the README as the project description but cannot resolve its
+# relative paths: point them at the released branch on GitHub instead.
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+# GitHub renders these attachments as players; PyPI keeps the linked posters.
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(?m)^https://github\.com/user-attachments/assets/695a6096-4196-4115-911c-a0043d632088$'
+replacement = '<a href="https://youtu.be/3gOH3t3woXM"><img src="docs/media/film-overview.jpg" width="49%" alt="Watch the agent-backbone overview, 1 minute 23 seconds"></a>'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(?m)^https://github\.com/user-attachments/assets/4218fdbe-e581-49bd-879f-288d41c9f72f$'
+replacement = '<a href="https://youtu.be/yKV8RNgqRsE"><img src="docs/media/film-why-backbone.jpg" width="49%" alt="Watch Why Backbone, 2 minutes 23 seconds"></a>'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = 'src="(?![a-z]+:)([^"]+)"'
+replacement = 'src="https://raw.githubusercontent.com/eandualem/agent-backbone/main/\1"'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(\]\(|href=")(?![a-z]+:|#)'
+replacement = '\1https://github.com/eandualem/agent-backbone/blob/main/'
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_backbone"]

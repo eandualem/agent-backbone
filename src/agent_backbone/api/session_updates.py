@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import EnrichedAgent, build_session_snapshot
+from agent_backbone.services.database import BackboneDB
 
 if TYPE_CHECKING:
     import socketio
@@ -22,6 +23,7 @@ SESSIONS_NAMESPACE = "/sessions"
 SESSIONS_UPDATE_EVENT = "sessions:update"
 INBOX_PENDING_EVENT = "inbox:pending"
 SNAPSHOT_TTL_SECONDS = 5.0
+HISTORY_WRITE_TIMEOUT_SECONDS = 1.0
 
 
 class SessionFeed:
@@ -37,10 +39,14 @@ class SessionFeed:
         sio: socketio.AsyncServer | None = None,
         *,
         ttl_seconds: float = SNAPSHOT_TTL_SECONDS,
+        db: BackboneDB | None = None,
     ) -> None:
         self._config = config
         self._sio = sio
         self._ttl = ttl_seconds
+        self._db = db
+        self._history_task: asyncio.Task[None] | None = None
+        self._closed = False
         self._cache: list[EnrichedAgent] = []
         self._cached_at: float | None = None
         self._lock = asyncio.Lock()
@@ -66,8 +72,47 @@ class SessionFeed:
             if not force_refresh and self._fresh():
                 return self._cache
             self._cache = await build_session_snapshot(self._config())
+            if (
+                not self._closed
+                and self._db is not None
+                and (self._history_task is None or self._history_task.done())
+            ):
+                self._history_task = asyncio.create_task(
+                    self._record_history(
+                        [(a.name, a.state, a.reason) for a in self._cache if a.configured]
+                    )
+                )
+                try:
+                    async with asyncio.timeout(HISTORY_WRITE_TIMEOUT_SECONDS):
+                        await asyncio.shield(self._history_task)
+                except TimeoutError:
+                    # Database cancellation can itself wait for a locked connection.
+                    # Keep its task until cleanup ends, without delaying live reads
+                    # or accumulating more writes behind the stalled one.
+                    self._history_task.cancel()
+                    log.warning("State history write timed out; observation may be missing")
+                except asyncio.CancelledError:
+                    self._history_task.cancel()
+                    raise
             self._cached_at = time.monotonic()
             return self._cache
+
+    async def close(self) -> None:
+        """Finish any history transaction before the application closes the database."""
+        async with self._lock:
+            self._closed = True
+            if self._history_task is not None:
+                # A timed-out write may already be rolling back. A second cancel
+                # would interrupt that cleanup instead of waiting for it.
+                if not self._history_task.done() and not self._history_task.cancelling():
+                    self._history_task.cancel()
+                await asyncio.gather(self._history_task, return_exceptions=True)
+
+    async def _record_history(self, states: list[tuple[str, str, str | None]]) -> None:
+        try:
+            await self._db.state_history.observe(states)
+        except Exception:
+            log.exception("Failed to record state history (non-fatal)")
 
     def _fresh(self) -> bool:
         return self._cached_at is not None and time.monotonic() - self._cached_at < self._ttl
@@ -84,12 +129,14 @@ class SessionFeed:
         With ``only_if_changed`` (the monitor tick) nothing is sent when the
         payload equals the last one broadcast.
         """
-        if self._sio is None:
+        if self._sio is None and self._db is None:
             return False
         async with self._emit_lock:
             payload = [
                 agent.model_dump(mode="json") for agent in await self.snapshot(force_refresh=True)
             ]
+            if self._sio is None:
+                return False
             signature = json.dumps(
                 payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
             )

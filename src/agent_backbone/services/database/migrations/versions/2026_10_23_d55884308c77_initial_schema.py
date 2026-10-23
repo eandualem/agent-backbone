@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 7c02e74cce0a
+Revision ID: d55884308c77
 Revises:
-Create Date: 2026-10-14 16:47:34.046381
+Create Date: 2026-10-23 18:56:14.103949
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "7c02e74cce0a"
+revision: str = "d55884308c77"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -29,6 +29,20 @@ def upgrade() -> None:
             "repo", "issue_number", "target_entity", name=op.f("pk_acknowledgments")
         ),
     )
+    op.create_table(
+        "agent_state_history",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("agent", sa.Text(), nullable=False),
+        sa.Column("state", sa.Text(), nullable=False),
+        sa.Column("reason", sa.Text(), nullable=True),
+        sa.Column("at", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_agent_state_history")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("agent_state_history", schema=None) as batch_op:
+        batch_op.create_index("idx_state_history_agent", ["agent", "id"], unique=False)
+        batch_op.create_index("idx_state_history_at", ["at"], unique=False)
+
     op.create_table(
         "agent_states",
         sa.Column("session_name", sa.Text(), nullable=False),
@@ -716,5 +730,10 @@ def downgrade() -> None:
 
     op.drop_table("agent_subscriptions")
     op.drop_table("agent_states")
+    with op.batch_alter_table("agent_state_history", schema=None) as batch_op:
+        batch_op.drop_index("idx_state_history_at")
+        batch_op.drop_index("idx_state_history_agent")
+
+    op.drop_table("agent_state_history")
     op.drop_table("acknowledgments")
     # ### end Alembic commands ###

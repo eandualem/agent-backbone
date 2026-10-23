@@ -134,7 +134,9 @@ When the machine slows down, the digest shows what the backbone saw:
 - **Slow jobs:** a scheduled job run that takes `diagnostics.slow_job_seconds`
   (30) or longer is recorded as `run_slow`. Consecutive slow runs of one job
   are one record with its count and longest run; the next ordinary run ends
-  it. The digest lists each with its job name.
+  it. The digest lists each with its job name. An agent-monitor record also
+  carries `steps`: how many milliseconds each step of that longest run took
+  (`backbone diagnostics show ID`).
 - **Memory pressure:** every `diagnostics.resource_sample_seconds` (300) the
   backbone reads available memory and swap (`sysctl` on macOS,
   `/proc/meminfo` on Linux). Only while swap use reaches

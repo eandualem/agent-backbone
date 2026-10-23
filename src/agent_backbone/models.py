@@ -384,6 +384,8 @@ class IssueData(BaseModel):
     """A pull request's head branch — how the backbone recognises one an agent opened."""
     head_repo: str = ""
     """The repository the head branch lives in (a fork, or the base repository)."""
+    sub_issues_total: int | None = None
+    """GitHub's count of its sub-issues (``sub_issues_summary.total``); ``None`` when not given."""
 
     def linked_issues(self) -> list[int]:
         """Issues this body closes (``Closes #N``, ``Fixes #N``, ``Resolves #N``)."""

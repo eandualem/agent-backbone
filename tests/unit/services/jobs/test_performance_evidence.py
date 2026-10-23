@@ -37,6 +37,19 @@ async def test_a_slow_episode_is_one_record_with_its_longest_run(db):
     ]
 
 
+async def test_a_slow_episode_keeps_the_steps_of_its_longest_run(db):
+    for duration, step in ((45_000, "queue_drain"), (90_000, "pending_issues"), (31_000, "x")):
+        await observe_duration(
+            db,
+            source="agent-monitor",
+            duration_ms=duration,
+            threshold_ms=30_000,
+            steps={step: duration - 1_000, "not a code": 1, "usage_collection": "slow"},
+        )
+    (slow,) = await db.diagnostics.query()
+    assert slow["details"]["steps"] == {"pending_issues": 89_000}  # only codes and counters
+
+
 async def test_a_threshold_of_zero_records_no_slow_run(db):
     await observe_duration(db, source="prune", duration_ms=600_000, threshold_ms=0)
     assert await db.diagnostics.query() == []

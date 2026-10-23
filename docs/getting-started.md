@@ -1,7 +1,9 @@
 # Getting started
 
-Install Backbone, send your first agent a task, then connect a second agent.
-GitHub and Telegram are optional.
+Bring agents across CLIs and projects into one team. Choose editable starting
+practices, send your first agent a task, then try a specialist collaboration.
+GitHub and Telegram are optional. [Develop your team](team.md) follows useful
+discoveries and corrections from that collaboration into a later project.
 
 Prefer to delegate? Give any agent with a shell this and continue at [GitHub setup](#7-github-issues-as-the-task-list):
 *"Install agent-backbone from PyPI (`uv tool install agent-backbone`),
@@ -58,6 +60,34 @@ Creates the data directory (`~/.local/share/agent-backbone`, or
 
 Settings live in the database and are changed with
 `backbone config set` (see [Configuration](configuration.md)).
+
+### Select your starting practices
+
+Three bundled policies provide a working model for collaborating, retaining context
+and developing expertise. Read them, then choose the set you want:
+
+```bash
+backbone templates show starter-collaboration
+backbone templates show starter-continuity
+backbone templates show starter-learning
+backbone templates use
+```
+
+For a **new installation**, select the starter set below. On an existing installation,
+selection **replaces the global assignment**: keep the policies you still want in
+the command, or assign the starters to a tag instead. Inspect the output above
+before deciding.
+
+```bash
+backbone templates use starter-collaboration starter-continuity starter-learning
+```
+
+Nothing is assigned merely by installing or upgrading.
+The selected practices reach agents at fresh starts. You can change them with
+`backbone templates edit NAME`, replace the list with `templates use NAME...`, or
+remove all global policies with `templates use --clear`. Local edits survive
+upgrades. These choices do not alter authentication or runtime permissions.
+[Starting a team](team.md) explains the model, its limits and how to adapt it.
 
 ## 3. Run the backbone
 
@@ -140,6 +170,12 @@ run `backbone instructions preview app` (project/runtime instructions load separ
 where to edit shared policies and assign them to tags.
 
 ## 6. A second agent, and agents talking to each other
+
+A useful starting pattern is one continuing agent responsible for each repository,
+with specialists and temporary helpers contributing to it. This avoids competing
+directions while preserving project context. You can choose another arrangement;
+Backbone imposes no hierarchy. [Try a README specialist](team.md#try-a-readme-collaboration)
+to practice sharing reasoning, checking advice and retaining a useful correction.
 
 ```bash
 cd ~/code/web && backbone agent start --runtime codex

@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 _locks: WeakKeyDictionary = WeakKeyDictionary()
+SOURCE_GONE = "source file is gone"
 
 
 def _registrations(config: BackboneConfig) -> list[dict]:
@@ -76,6 +77,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
             checks[key] = checks.get(key) or error_type
 
         registrations = await asyncio.to_thread(_registrations, config)
+        registered = set()
         for row in registrations:
             if row.get("agent") not in config.agents.names or row.get("runtime") not in RUNTIMES:
                 continue
@@ -83,7 +85,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
             if not isinstance(sid, str) or not sid or len(sid) > 300:
                 continue
             try:
-                await db.usage.remember(
+                identity = await db.usage.remember(
                     row["agent"],
                     row["runtime"],
                     sid,
@@ -93,6 +95,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                 # The database has committed this immutable launch identity.
                 # Consume the registration; no age-based deletion or new job needed.
                 if registration := row.get("_registration_path"):
+                    registered.add(identity)  # a launch, not the saved hook state
                     with suppress(OSError):
                         registration.unlink(missing_ok=True)
             except (ValueError, KeyError, TypeError) as exc:
@@ -100,6 +103,31 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                     f"{row['agent']}/{row['runtime']}: invalid or conflicting session registration"
                 )
                 checked(row["agent"], row["runtime"], "usage_registration", type(exc).__name__)
+                # The file never changes and the session keeps its first owner, so
+                # it can never be accepted: report it this once, not every pass.
+                # It is moved aside, not deleted, so it stays recoverable.
+                if registration := row.get("_registration_path"):
+                    rejected = registration.parent / "rejected"
+                    try:
+                        rejected.mkdir(exist_ok=True)
+                        registration.replace(rejected / registration.name)
+                    except OSError as move_exc:
+                        log.warning(
+                            "Could not move refused usage registration for %s/%s (%s): %s",
+                            row["agent"],
+                            row["runtime"],
+                            usage_id(row["runtime"], sid),
+                            type(move_exc).__name__,
+                        )
+                    else:
+                        log.warning(
+                            "Moved refused usage registration for %s/%s (%s) to %s: %s",
+                            row["agent"],
+                            row["runtime"],
+                            usage_id(row["runtime"], sid),
+                            rejected,
+                            type(exc).__name__,
+                        )
             else:
                 checked(row["agent"], row["runtime"], "usage_registration")
         known = {s["id"]: s for s in await db.usage.sessions()}
@@ -107,6 +135,33 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
         processed = set()
         unchanged = []
         prices = config.settings.get("usage.prices", DEFAULT_PRICES)
+
+        async def discover_children(session, path, env):
+            rt = RUNTIMES[session["runtime"]]
+            children = await asyncio.to_thread(rt.usage_children, path, session["session_id"], env)
+            for child_id, child_path in children:
+                child_key = usage_id(session["runtime"], child_id)
+                child = known.get(child_key)
+                if (
+                    child is None
+                    or child["parent_id"] != session["id"]
+                    or child["agent_name"] != session["agent_name"]
+                ):
+                    await db.usage.remember(
+                        session["agent_name"],
+                        session["runtime"],
+                        child_id,
+                        at=now,
+                        parent_id=session["id"],
+                    )
+                    if child is None:
+                        child = known[child_key] = {}
+                    child.update(await db.usage.session(child_key))
+                if child_key in processed:
+                    continue
+                child["_discovered_path"] = str(child_path)
+                pending.append(child)
+
         while pending:
             session = pending.popleft()
             if session["id"] in processed:
@@ -120,9 +175,32 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                 source_path = session.get("_discovered_path", session["source_path"])
                 path = Path(source_path) if source_path else None
                 if not path or not path.is_file():
+                    if (
+                        path
+                        and session["detail"] == SOURCE_GONE
+                        and session["id"] not in registered
+                    ):
+                        await discover_children(session, path, env)
+                        continue  # searched once; a new launch (a resume) searches again
                     paths = await asyncio.to_thread(rt.usage_paths, session["session_id"], env)
                     if len(paths) == 1:
                         path = paths[0]
+                    elif path and not paths:
+                        # The transcript it was read from is gone: note that once and
+                        # keep the usage already collected, instead of searching every pass.
+                        await db.usage.ingest(
+                            session,
+                            path=str(path),
+                            offset=session["offset"],
+                            cursor=session["cursor"],
+                            events=[],
+                            coverage="partial" if session["offset"] else "unavailable",
+                            detail=SOURCE_GONE,
+                            prices=prices,
+                            observed_at=now,
+                        )
+                        await discover_children(session, path, env)
+                        continue
                 if path is None:
                     continue
                 processed.add(session["id"])
@@ -171,31 +249,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                         prices=prices,
                         observed_at=now,
                     )
-                children = await asyncio.to_thread(
-                    rt.usage_children, path, session["session_id"], env
-                )
-                for child_id, child_path in children:
-                    child_key = usage_id(session["runtime"], child_id)
-                    child = known.get(child_key)
-                    if (
-                        child is None
-                        or child["parent_id"] != session["id"]
-                        or child["agent_name"] != session["agent_name"]
-                    ):
-                        await db.usage.remember(
-                            session["agent_name"],
-                            session["runtime"],
-                            child_id,
-                            at=now,
-                            parent_id=session["id"],
-                        )
-                        if child is None:
-                            child = known[child_key] = {}
-                        child.update(await db.usage.session(child_key))
-                    if child_key in processed:
-                        continue
-                    child["_discovered_path"] = str(child_path)
-                    pending.append(child)
+                await discover_children(session, path, env)
             except Exception as exc:
                 errors.append(f"{session['id']}: {type(exc).__name__}")
                 checked(

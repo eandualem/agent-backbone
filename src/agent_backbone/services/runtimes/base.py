@@ -796,13 +796,7 @@ class Runtime:
         Either a known question (``prompt_markers``) or, whatever the
         question says, a dialog's own chrome (``detect_dialog_chrome``).
         """
-        if self.detect_dialog_chrome(pane_content):
-            return True
-        if not self.prompt_markers:
-            return False
-        tail = sanitize_pane_content(pane_content).strip().splitlines()[-15:]
-        lowered = "\n".join(line.lower() for line in tail)
-        return any(marker in lowered for marker in self.prompt_markers)
+        return self.detect_active_dialog(pane_content)
 
     def detect_permission_prompt(self, pane_content: str) -> bool:
         """Whether the dialog on screen is a known permission prompt, not
@@ -828,9 +822,8 @@ class Runtime:
         """Whether a permission dialog is on screen *right now*.
 
         The stricter gate used before answering one (``approve_prompt``).
-        ``detect_waiting_for_human`` is a state reading — a marker anywhere
-        in the tail is enough. Answering needs more, because ``Enter`` on an
-        idle prompt submits whatever is typed there. So the last marker must
+        Both state readings and answering need this check: ``Enter`` on an
+        idle prompt submits whatever is typed there. The last marker must
         be the runtime's most recent surface: nothing after it may look like
         an input prompt (empty or with typed text), a placeholder or status
         chrome — only the dialog's own numbered options and hints.

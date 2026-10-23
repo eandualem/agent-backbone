@@ -182,8 +182,8 @@ The score adds the `blocking` bonus, type weight (`spec-gap` 100, `bug` 90,
 `age_in_days * priority.age_tiebreaker_weight`. Creation time comes from GitHub;
 missing, invalid or future dates get no age bonus. Repository and issue number
 break equal scores deterministically. Dependency counts come from the database's
-sub-issue graph, refreshed by the monitor; closing parents removes stale edges
-at the next sync. Until an edge is discovered it contributes no bonus.
+sub-issue graph, refreshed every 10 minutes by the `dependency-sync` job;
+closing parents removes stale edges at the next sync. Until an edge is discovered it contributes no bonus.
 
 ## What the agent receives
 

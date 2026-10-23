@@ -38,6 +38,8 @@ version differs.
 <!-- capability-table:begin -->
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
+| Retained observations of reconciled state over the API | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
+| Configured instruction sources and text over the API | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ source preview only; no instruction injection |
 | Message delivery into the session | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? not verified live | ✅ plumbing tests only |
 | Folder-trust dialog answered at start | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (version not recorded) `--skip-trust` | n/a | n/a | ? not checked | n/a |
 | Brief reaches a fresh session before other work | ✅ | ✅ | ✅ | ✅ | ? | ? not verified live | n/a |
@@ -85,6 +87,8 @@ version differs.
 
 | Capability | Fallback where it is unavailable |
 |---|---|
+| Retained observations of reconciled state over the API | Read current state and delivery records; earlier states cannot be reconstructed. |
+| Configured instruction sources and text over the API | Read the preview with `backbone instructions preview NAME --json`. |
 | Message delivery into the session | Check `agent inspect` for the delivery evidence before relying on it. |
 | Folder-trust dialog answered at start | Answer the dialog in the session (`agent attach`). |
 | Brief reaches a fresh session before other work | Check that the agent's first reply follows its brief; start it fresh if not. |

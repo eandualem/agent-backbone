@@ -24,11 +24,13 @@ SOURCE = "dependency-tracker"
 async def check_parent_resolved(
     config: BackboneConfig, parent_number: int, gh: GitHubClient, *, repo: str = ""
 ) -> dict | None:
-    """Parent issue + targets if every sub-issue is closed, else None."""
+    """Parent issue + targets if it is open and every sub-issue is closed, else None."""
     sub_issues = await gh.get_sub_issues(parent_number, repo_full_name=repo) or []
     if not sub_issues or not all(si.state == "closed" for si in sub_issues):
         return None
     parent = await gh.get_issue(parent_number, repo_full_name=repo)
+    if parent.state != "open":
+        return None
     return {"parent": parent, "targets": parent.labels.targets}
 
 
@@ -42,6 +44,10 @@ async def on_dependency_resolved(
     """If closing this issue unblocks a parent, tell the parent's targets."""
     result: dict[str, str] = {"parents_checked": "0"}
     parents = await db.dependencies.parents(closed_issue_number, repo=repo)
+    # A link made since the last sync is not recorded yet: GitHub names the parent.
+    live_parent = await gh.get_parent_number(closed_issue_number, repo_full_name=repo)
+    if live_parent is not None and live_parent not in parents:
+        parents = [*parents, live_parent]
     if not parents:
         return result
     result["parents_checked"] = str(len(parents))
@@ -83,12 +89,18 @@ async def on_dependency_resolved(
 async def sync_dependencies(
     config: BackboneConfig, db: BackboneDB, gh: GitHubClient | None
 ) -> None:
-    """Record sub-issue relationships for every open issue in every agent queue."""
+    """Record sub-issue relationships for every open issue in every agent queue.
+
+    GitHub's listing counts each issue's sub-issues, so only an issue with some
+    (or with no count) costs a request. Everything is read first and written in
+    one transaction, so queue priority never counts half a sync."""
     if gh is None:
         return
+    open_parents: dict[str, set[int]] = {}
     for repo in config.agents.repos:
         open_issues = await gh.list_issues(state="open", repo_full_name=repo, all_pages=True)
-        await db.dependencies.retain_parents(repo, {issue.number for issue in open_issues})
+        open_parents[repo] = {issue.number for issue in open_issues}
+    sub_issues: dict[tuple[str, int], list[int]] = {}
     checked: set[tuple[str, int]] = set()
     for name in config.agents.names:
         for issue in await list_open_queue_for_target(config, name, gh):
@@ -96,8 +108,11 @@ async def sync_dependencies(
             if key in checked:
                 continue
             checked.add(key)
-            subs = await gh.get_sub_issues(issue.number, repo_full_name=issue.repo_full_name)
+            subs = (
+                []
+                if issue.sub_issues_total == 0
+                else await gh.get_sub_issues(issue.number, repo_full_name=issue.repo_full_name)
+            )
             if subs is not None:  # an empty answer clears stale edges; a failed fetch keeps them
-                await db.dependencies.sync(
-                    issue.number, [s.number for s in subs], repo=issue.repo_full_name
-                )
+                sub_issues[key] = [s.number for s in subs]
+    await db.dependencies.apply_sync(open_parents, sub_issues)

@@ -153,6 +153,14 @@ messages are held until it is acknowledged.
 
 ## 2. State: how the backbone knows what an agent is doing
 
+Permission requests do not always open a human dialog: an automatic reviewer can
+handle them. After the three-second redraw window, a visible busy state, current
+provider error or input prompt can supersede a permission hook when no active
+dialog remains. An input prompt alone reads as `busy` until turn completion is
+established, so messages cannot interrupt unfinished work. Old dialog text above
+a new input prompt does not count as a current human wait. Refusal records remain
+action history; they do not mean an approval is pending.
+
 ```mermaid
 flowchart TD
     A[tmux session exists?] -->|no| OFF[offline]
@@ -478,8 +486,10 @@ anchored to the reviewed commit. See [review lifecycle](github.md#review-lifecyc
 2. Each target gets its **next** issue (highest priority in its queue).
 3. The opener (`from:`), if it is an agent and not a target, is told the
    issue was closed.
-4. If the issue was a sub-issue and all siblings are closed, the parent's
-   targets get an "unblocked" notice.
+4. If the issue was a sub-issue, all siblings are closed and the parent is
+   still open, the parent's targets get an "unblocked" notice. The parent is
+   the one recorded by the last sync or the one GitHub names at the close, so
+   a link made since the last sync still counts.
 
 ### Pull requests
 
@@ -505,24 +515,29 @@ Every `timing.monitor_interval_seconds` (60 s), `agent-monitor`:
 
 1. Refreshes agents and settings from the database, reads every running
    agent's state **once** and mirrors it into the `agent_states` table.
-2. Syncs sub-issue relationships for open issues.
-3. **Stalls**: `busy` on one issue for > `timing.stall_threshold_seconds`
+2. **Stalls**: `busy` on one issue for > `timing.stall_threshold_seconds`
    (90 min) → one message to `escalation.target`, deduplicated for
    `timing.escalation_dedup_seconds` (30 min).
-4. **Dead sessions**: an `always_on` agent that had a live state and has no
+3. **Dead sessions**: an `always_on` agent that had a live state and has no
    session now → reported to `escalation.target` and Telegram, once; state
    reset. Any other absent agent is reported only when messages are queued
    for it. Never restarted. If no notification route accepts the alert, the transition
    stays pending for the next monitor tick.
-5. **Plan waiting**: Telegram notification (`/viewplan`, `/approve`) and a
+4. **Plan waiting**: Telegram notification (`/viewplan`, `/approve`) and a
    message to `escalation.target`, once per plan after delivery or successful
    queue storage. A failed queue write is retried on the next monitor tick.
-6. Socket.IO `/sessions` snapshot if anything changed.
-7. Drains the queue for sessions that are now idle.
-8. **Pending issues**: every idle agent with an empty in-flight slot gets
+5. Socket.IO `/sessions` snapshot if anything changed.
+6. Drains the queue for sessions that are now idle.
+7. **Pending issues**: every idle agent with an empty in-flight slot gets
    the highest-priority unacknowledged open issue from its queue.
    A failed queue lookup or delivery for one agent leaves the others running;
    diagnostics record that agent's failure and later recovery.
+
+Every 10 minutes, and at startup, `dependency-sync` records the sub-issue
+relationships of the open issues in every agent's queue. It asks GitHub for
+sub-issues only where the issue listing counts some, reads everything first and
+writes it in one transaction, so queue priority never counts half a sync. It is
+a job of its own, so a monitor tick never waits on its repository listings.
 
 Every `timing.retry_interval_seconds` (5 min), `delivery-retry` resumes pending
 GitHub outbox recipients, re-attempts older issue delivery records that ended
@@ -577,8 +592,8 @@ A failed plan-notification delivery remains retryable on the next monitor cycle;
 it does not prevent notifications for other waiting plans in the same cycle.
 
 Queue lists and sub-issue reads share one complete repository snapshot within a
-monitor tick or close event. Each tick/request starts a new snapshot; a failed
-read stays failed within that snapshot. Arbitrary label queries go directly to
+monitor tick, dependency sync or close event. Each tick/request starts a new
+snapshot; a failed read stays failed within that snapshot. Arbitrary label queries go directly to
 GitHub with their requested filters and pagination. Status fans out with at most eight
 concurrent reads. Terminal readiness and individual issue retirement checks stay
 fresh at delivery time.

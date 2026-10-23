@@ -167,6 +167,19 @@ class EventRepo(Repo):
                 {"now": now_iso(), "outcome": outcome[:500], "id": event_id},
             )
 
+    async def mark_partial(self, outcomes: dict[int, str]) -> None:
+        """Note several events' partial outcomes in one transaction; they stay replayable."""
+        if not outcomes:
+            return
+        async with self._tx() as conn:
+            await conn.execute(
+                text("UPDATE events SET outcome = :outcome WHERE id = :id"),
+                [
+                    {"id": event_id, "outcome": outcome[:500]}
+                    for event_id, outcome in outcomes.items()
+                ],
+            )
+
     async def get(self, event_id: int) -> dict | None:
         async with self._tx() as conn:
             result = await conn.execute(

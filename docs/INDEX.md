@@ -9,8 +9,9 @@ branch or tag you are viewing. Relative links keep you on that same revision.
 ## 1. Get started
 
 1. [Getting started](getting-started.md) — install, start agents and send a message.
-2. [Concepts](concepts.md) — names, runtimes, states and delivery conditions.
-3. [CLI reference](cli.md) — start, resume, attach, rename and configure agents.
+2. [Develop your team](team.md) — editable starting practices and expertise shared across projects.
+3. [Concepts](concepts.md) — names, runtimes, states and delivery conditions.
+4. [CLI reference](cli.md) — start, resume, attach, rename and configure agents.
 
 ## 2. Run your team
 

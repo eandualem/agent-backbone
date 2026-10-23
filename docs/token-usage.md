@@ -57,7 +57,13 @@ Coverage describes retained source evidence, not an independent provider audit:
 - `partial`: malformed, reset, replaced or otherwise incomplete source evidence.
 - `unavailable`: no identified readable source; this does not mean zero usage.
 
-Missing/deleted records cannot be recovered. Tokens may be incomplete for
+Missing/deleted records cannot be recovered. When a conversation's source file
+is gone, Backbone searches for it once, then records it as `source file is gone`
+and stops searching for that parent; the usage already collected stays. Readable
+child transcripts are still discovered and collected independently. Codex uses
+its shared lineage scan for child discovery even when a parent is gone. The file is read again
+if it returns to the same path, and searched for again when the conversation is
+launched again (resumed). Tokens may be incomplete for
 interrupted requests, unrecorded descendants, or runtime versions that omit
 usage. `unpriced` is separate: token counts remain available without a price.
 
@@ -149,7 +155,10 @@ Only identity, timestamps, token counters, cursor metadata and price evidence go
 into Backbone's own database. No prompts or tool output are retained by the usage
 collector. Registration files live under Backbone's `state/usage-sessions/`.
 They are consumed after their launch identities commit to the database; usage
-history remains in the database. Source failures and recovery are visible in
+history remains in the database. A registration the database refuses, such as one
+that conflicts with a session's existing owner, is reported once and moved to
+`state/usage-sessions/rejected/`, which collection never reads; the owner keeps
+its history. Source failures and recovery are visible in
 the existing operational diagnostics.
 Nothing is required in a user's repository, and existing telemetry/status-line
 configuration is preserved. `usage.enabled=false` stops importing; stored history

@@ -16,6 +16,7 @@ from tests.support import queue_row
 _EXPECTED_TABLES = {
     "acknowledgments",
     "agent_states",
+    "agent_state_history",
     "agent_subscriptions",
     "agent_transitions",
     "agent_watches",
@@ -47,6 +48,8 @@ _EXPECTED_TABLES = {
 }
 
 _EXPECTED_INDEXES = {
+    "idx_state_history_agent",
+    "idx_state_history_at",
     "uq_agents_report_identity",
     "uq_reports_request",
     "idx_reports_author",

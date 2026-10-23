@@ -3,6 +3,7 @@
 import json
 from dataclasses import replace
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -14,6 +15,7 @@ from agent_backbone.services.runtimes import RUNTIMES, read_usage_jsonl
 from agent_backbone.usage import DEFAULT_PRICES, UsageEvent, estimate, timestamp
 from tests.conftest import make_config
 
+_USAGE = "agent_backbone.services.agents.usage"
 T = "2026-09-12T10:00:00Z"
 T2 = "2026-09-12T10:01:00Z"
 
@@ -769,7 +771,9 @@ async def test_streamed_usage_page_preserves_full_exact_totals(tmp_path, db):
 @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
 async def test_registration_conflict_has_safe_agent_scoped_evidence(tmp_path, db, runtime):
     config = config_for(tmp_path, runtime)
-    await db.usage.remember("original-owner", runtime, "private-session", at=T)
+    # A case-only twin's launch owns the session; the hook later registered it
+    # for the agent that shared the twin's state file.
+    await db.usage.remember("Worker", runtime, "private-session", at=T)
     register(config, runtime, "private-session")
     register(config, runtime, "valid-session")
     result = await collect_usage(config, db)
@@ -784,8 +788,11 @@ async def test_registration_conflict_has_safe_agent_scoped_evidence(tmp_path, db
     assert "worker/" + runtime in result["errors"][0]
     assert "private-session" not in str(result["checks"])
     # A conflict is evidence, never permission to reassign somebody else's history.
-    assert {row["agent_name"] for row in await db.usage.sessions()} == {"worker", "original-owner"}
-    assert len(list((config.state_dir / "usage-sessions").glob("*.json"))) == 1
+    assert {row["agent_name"] for row in await db.usage.sessions()} == {"worker", "Worker"}
+    # It can never be accepted, so it is reported once and kept aside, not re-read.
+    assert not list((config.state_dir / "usage-sessions").glob("*.json"))
+    assert len(list((config.state_dir / "usage-sessions" / "rejected").glob("*.json"))) == 1
+    assert (await collect_usage(config, db))["errors"] == []
 
 
 async def test_usage_source_failure_is_separate_from_registration(tmp_path, db, monkeypatch):
@@ -805,3 +812,133 @@ async def test_usage_source_failure_is_separate_from_registration(tmp_path, db, 
         "usage_source": "OSError",
     }
     assert "private path" not in str(result)
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex"])
+async def test_gone_source_is_searched_for_once_and_keeps_its_usage(
+    tmp_path, db, monkeypatch, runtime
+):
+    first, later = {
+        "claude": (claude(), claude("m2")),
+        "codex": (codex(), codex(total=200, at=T2)),
+    }[runtime]
+    config = config_for(tmp_path, runtime)
+    path = tmp_path / "source.jsonl"
+    append(path, first)
+    searches = []
+
+    def usage_paths(sid, env):
+        searches.append(sid)
+        return [path] if path.exists() else []
+
+    monkeypatch.setattr(RUNTIMES[runtime], "usage_paths", usage_paths)
+    saved = SimpleNamespace(runtime=runtime, session_id="s1", timestamp=1789207200)
+    monkeypatch.setattr(f"{_USAGE}.read_state_file", lambda state_dir, name: saved)
+    register(config, runtime)
+    await collect_usage(config, db)
+    path.unlink()
+    for _ in range(3):  # the saved hook state names it on every pass: not a launch
+        result = await collect_usage(config, db)
+    assert len(searches) == 2  # found, then searched for once after it went
+    assert result["errors"] == []
+    (session,) = await db.usage.sessions()
+    assert (session["coverage"], session["detail"]) == ("partial", "source file is gone")
+    assert len(await db.usage.events()) == 1
+    append(path, first, later)  # back at the recorded path, grown: read again
+    await collect_usage(config, db)
+    assert len(await db.usage.events()) == 2
+
+
+async def test_a_gone_source_registered_again_is_searched_for_again(tmp_path, db, monkeypatch):
+    config = config_for(tmp_path)
+    path, resumed = tmp_path / "source.jsonl", tmp_path / "resumed.jsonl"
+    append(path, claude())
+    found = [path]
+    monkeypatch.setattr(RUNTIMES["claude"], "usage_paths", lambda sid, env: found)
+    register(config)
+    await collect_usage(config, db)
+    path.unlink()
+    found = []
+    await collect_usage(config, db)  # marked gone
+    append(resumed, claude(), claude("m2"))
+    found = [resumed]
+    await collect_usage(config, db)
+    assert len(await db.usage.events()) == 1  # not searched while gone
+    register(config, launch="resume")  # a resume writes to a new path
+    await collect_usage(config, db)
+    assert len(await db.usage.events()) == 2
+
+
+async def test_a_missing_source_with_several_matches_is_not_marked_gone(tmp_path, db, monkeypatch):
+    config = config_for(tmp_path)
+    path = tmp_path / "source.jsonl"
+    append(path, claude())
+    found = [path]
+    monkeypatch.setattr(RUNTIMES["claude"], "usage_paths", lambda sid, env: found)
+    register(config)
+    await collect_usage(config, db)
+    path.unlink()
+    found = [tmp_path / "a.jsonl", tmp_path / "b.jsonl"]
+    await collect_usage(config, db)
+    (session,) = await db.usage.sessions()
+    assert session["detail"] != "source file is gone"
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex"])
+async def test_missing_parent_still_discovers_readable_child_usage(
+    tmp_path, db, monkeypatch, runtime
+):
+    config = config_for(tmp_path, runtime)
+    path = tmp_path / "s1.jsonl"
+    append(path, claude() if runtime == "claude" else codex())
+    searches = []
+
+    def usage_paths(sid, env):
+        searches.append(sid)
+        return [path] if path.exists() else []
+
+    monkeypatch.setattr(RUNTIMES[runtime], "usage_paths", usage_paths)
+    register(config, runtime)
+    await collect_usage(config, db)
+    path.unlink()
+    children = (
+        tmp_path / "s1" / "subagents"
+        if runtime == "claude"
+        else tmp_path / "CODEX_HOME" / "sessions"
+    )
+    children.mkdir(parents=True)
+    for name in ("first", "later"):
+        if runtime == "claude":
+            records = [claude(name, T2, output=40)]
+        else:
+            records = [
+                dict(
+                    type="session_meta",
+                    payload=dict(
+                        id=name,
+                        source={"subagent": {"thread_spawn": {"parent_thread_id": "s1"}}},
+                    ),
+                ),
+                codex(at=T2, output=40),
+            ]
+            # Simulate the next lineage-cache refresh without waiting 30 seconds.
+            monkeypatch.setattr("agent_backbone.services.runtimes.codex._usage_lineage", {})
+        append(children / f"agent-{name}.jsonl", *records)
+        result = await collect_usage(config, db)
+        assert result["errors"] == []
+    assert len(searches) == 2  # The missing parent is still searched only once.
+    sessions = await db.usage.sessions()
+    parent = next(s for s in sessions if s["session_id"] == "s1")
+    assert parent["detail"] == "source file is gone"
+    child_rows = [s for s in sessions if s["parent_id"] == parent["id"]]
+    assert len(child_rows) == 2
+    events = await db.usage.events()
+    assert len(events) == 3
+    assert sum(e["output_tokens"] for e in events) == 100
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+def test_child_discovery_handles_a_missing_source(tmp_path, runtime):
+    path = tmp_path / "missing-source"
+    assert RUNTIMES[runtime].usage_children(path, "parent", {}) == []
+    assert not path.exists()

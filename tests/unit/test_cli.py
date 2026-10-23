@@ -45,7 +45,9 @@ class TestInit:
         assert "BACKBONE_API_KEY=" in env.read_text()
         assert len(env.read_text().split("BACKBONE_API_KEY=")[1].splitlines()[0]) >= 32
         assert oct(env.stat().st_mode)[-3:] == "600"
-        assert "backbone agent start" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "backbone agent start" in out
+        assert out.index("backbone service install") < out.index("backbone doctor")
 
     def test_keeps_env_without_force(self, _isolated_data_dir):
         data = _isolated_data_dir
@@ -184,6 +186,19 @@ class TestDoctor:
         out = capsys.readouterr().out
         assert "Verified on a CLI version" in out
         assert "2.1.284" in out and "plan-approval" in out and "not recorded" in out
+
+    def test_names_a_missing_capability_by_its_title(self, monkeypatch, capsys):
+        """An id like bounded-unattended read as "Claude Code has no unattended mode"."""
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        assert _run(["init"]) == 0
+        with (
+            patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"),
+            patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True),
+        ):
+            assert _run(["doctor"]) == 0
+        out = " ".join(capsys.readouterr().out.split())  # a long cell wraps
+        assert "Writes bounded while unattended (#285)" in out
+        assert "bounded-unattended" not in out
 
     @pytest.mark.parametrize("runtime_id", ["claude", "codex", "opencode", "gemini", "deepcode"])
     def test_advises_checking_again_where_the_installed_cli_differs(

@@ -205,6 +205,8 @@ class OpenCode(Runtime):
     def usage_children(
         self, path: Path, session_id: str, env: dict[str, str]
     ) -> list[tuple[str, Path]]:
+        if not path.is_file():
+            return []  # Parent and child usage share the same database.
         with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
             return [
                 (row[0], path)
