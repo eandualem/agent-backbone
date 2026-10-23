@@ -47,7 +47,10 @@ const ctx = {
     },
     hook: async (name, fn) => { callbacks[name] = fn; },
   },
-  tool: { hook: async (name, fn) => { callbacks[name] = fn; } },
+  tool: {
+    hook: async (name, fn) => { callbacks[name] = fn; },
+    transform: async () => {},
+  },
   skill: { reload: async () => {
     reloaded++;
     if (holdReload) await new Promise(resolve => { finishReload = resolve; });

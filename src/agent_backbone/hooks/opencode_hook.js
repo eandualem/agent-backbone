@@ -471,6 +471,12 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
     event: async ({ event }) => {
       const p = props(event);
       switch (event.type) {
+        case "permission.denied":
+          appendAction(t, {
+            ts: Date.now() / 1000, action: "permission_denied", runtime: "opencode",
+            kind: "policy", category: "", summary: p.summary, tool_use_id: p.callID,
+          });
+          return;
         case "session.created": {
           const info = p.info ?? {};
           if (info.parentID) children.set(info.id, info.parentID);

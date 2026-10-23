@@ -60,6 +60,7 @@ class OpenCode(Runtime):
     # 1.18.32; the first skill found under a name wins.
     skill_read_dirs = (".claude/skills", ".agents/skills", ".opencode/skills", ".opencode/skill")
     display_name = "OpenCode"
+    refusal_check = "OpenCode's permission policy"
     aliases = ("open-code", "open_code")
     binary = "opencode"
     brief_mode = "initial_prompt"
