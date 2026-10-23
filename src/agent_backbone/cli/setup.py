@@ -335,6 +335,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             # Reported, not failed: the file may be meant, but never unnoticed (#274).
             for runtime_id in found:
                 runtime = REGISTRY[runtime_id]
+                if runtime.efforts:
+                    try:
+                        runtime.check_effort(runtime.efforts[0])
+                    except RuntimeError as exc:
+                        note(f"  ! {runtime.display_name}: reasoning effort unavailable: {exc}")
                 for path in runtime.user_instructions({}):
                     note(f"  ! {runtime.display_name} user-level instructions: {path}")
                 if memory := runtime.native_memory({}):

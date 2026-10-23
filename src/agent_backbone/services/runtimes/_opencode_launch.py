@@ -11,24 +11,36 @@ import sys
 from pathlib import Path
 
 
-def merge_config(raw: str | None, plugin: str) -> str | None:
+def merge_config(raw: str | None, plugin: str, *, v2: bool = False) -> str | None:
     """Return merged JSON, or None to preserve an unsupported config verbatim."""
     try:
         content = json.loads(raw or "{}")
     except ValueError:
         return None
-    if not isinstance(content, dict) or not isinstance(content.get("plugin", []), list):
+    key = "plugins" if v2 else "plugin"
+    if not isinstance(content, dict) or not isinstance(content.get(key, []), list):
         return None
-    plugins = content.setdefault("plugin", [])
+    plugins = content.setdefault(key, [])
     if plugin not in plugins:
         plugins.append(plugin)
     return json.dumps(content)
 
 
 def main() -> None:
-    plugin, *command = sys.argv[1:]
-    content = merge_config(os.environ.get("OPENCODE_CONFIG_CONTENT"), Path(plugin).as_uri())
+    args = sys.argv[1:]
+    v2 = args[0] == "--v2"
+    plugin, *command = args[1:] if v2 else args
+    content = merge_config(
+        os.environ.get("OPENCODE_CONFIG_CONTENT"),
+        str(Path(plugin).resolve()) if v2 else Path(plugin).as_uri(),
+        v2=v2,
+    )
     if content is None:
+        if v2:
+            raise SystemExit(
+                "Cannot inject OpenCode v2 hooks into unsupported inline configuration; "
+                "use a JSON object with a plugins list"
+            )
         print(
             "Skipping OpenCode hook injection: preserving unsupported inline configuration",
             file=sys.stderr,

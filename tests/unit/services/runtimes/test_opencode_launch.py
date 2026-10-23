@@ -59,3 +59,14 @@ def test_child_launcher_keeps_an_existing_hook_once(tmp_path):
     plugin = (tmp_path / "hook with spaces.js").as_uri()
     raw = json.dumps({"plugin": [plugin], "permission": {"bash": "deny"}})
     assert json.loads(_opencode_launch.merge_config(raw, plugin)) == json.loads(raw)
+
+
+def test_v2_config_adds_directory_plugin_without_changing_permission_rules(tmp_path):
+    plugin = str(tmp_path / "hooks" / "opencode-v2")
+    raw = {
+        "permissions": [{"action": "shell", "resource": "*", "effect": "deny"}],
+        "plugins": ["existing-plugin"],
+    }
+    result = json.loads(_opencode_launch.merge_config(json.dumps(raw), plugin, v2=True))
+    assert result == {**raw, "plugins": ["existing-plugin", plugin]}
+    assert _opencode_launch.merge_config("{/* JSONC */}", plugin, v2=True) is None

@@ -603,8 +603,15 @@ or `cwd` override when provided, rather than attributing a command to the parent
 conversation directory. Explicit GitHub repository arguments still take precedence.
 OpenCode's launch wrapper merges the state plugin into the environment actually
 inherited by the new process, preserving inline provider settings and permission
-denies. Unsupported inline JSON/JSONC is preserved unchanged and hook injection
-is skipped; terminal state detection remains available.
+denies. OpenCode 1.x uses its `plugin` list; unsupported inline JSON/JSONC is
+preserved unchanged and hook injection is skipped, leaving terminal state detection
+available. OpenCode 2.1.4+ uses a local plugin directory in `plugins` and requires a
+mergeable inline JSON object. Its adapter translates native session and tool events
+into the same state and context-offer protocol, reloads skills through `skill.reload`,
+and reads usage and completed assistant text from the v2 session tables. Explicit
+model and effort selection uses the native catalog and session APIs before the TUI
+starts, with exact selection readback. These metadata calls use temporary standalone
+servers and do not submit prompts.
 
 
 For automatic upgrades, `backbone up` requests Uvicorn’s graceful exit directly

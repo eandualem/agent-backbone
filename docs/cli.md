@@ -272,7 +272,14 @@ OpenCode and Aider use literal colon tags in model IDs. Their model values,
 such as `ollama/qwen3:8b`, pass through unchanged at registration, update and
 launch; a suffix like `:high` is also a model tag for those runtimes. The
 `model:effort` convention continues to select reasoning effort for Codex and
-Claude Code.
+Claude Code. With OpenCode 2.1.4 or newer (`@opencode/cli`), use two colons:
+`provider/model::high`. A model with a literal tag can also select an effort,
+for example `provider/model:tag::high`. Backbone checks that the model offers
+the requested variant before creating or changing the native session, then
+verifies the selection before opening the TUI. Older OpenCode versions refuse
+explicit effort selection; their ordinary model strings still work unchanged.
+OpenCode v2 launches with a private native server (`--standalone`). Its native
+startup still applies OpenCode database migrations, including legacy-session migration.
 
 The `unattended:` line shows the no-approval switch and sandbox support;
 `-` means unattended startup is unsupported. See the
@@ -420,7 +427,7 @@ an orchestrator that should spin up workers runs these commands itself.
 | `NAME` (positional) | Agent name = tmux session = `for:` label. Known name: starts from its recorded directory. Unknown name: registers the cwd under it. Omitted: the folder name is the name — the usual case for single-repository agents | yes (the key) |
 | `--dir D` | Project directory to discover (name defaults from its folder name; repo from its `origin` remote) | yes |
 | `--runtime R` | Which CLI runs the agent: `claude` (default via `agents.default_runtime`), `codex`, `gemini`, `opencode`, `deepcode`, `aider`, or `shell` | yes — later bare starts reuse it |
-| `--model M` | Passed to the runtime as `--model M` (e.g. `opus`, `sonnet`, or a full model id — whatever that CLI accepts). Use it to run cheaper models per agent. Write it as `M:EFFORT` (e.g. `gpt-6-astra:high`, `opus:max`) to set the reasoning effort too — such a spec is **not** passed verbatim: it is split, and the CLI gets the bare model plus its own effort switch. A level the runtime does not have, or an effort with no model (`:high`), is refused rather than dropped | yes — later bare starts reuse it |
+| `--model M` | Passed to the runtime as `--model M` (e.g. `opus`, `sonnet`, or a full model id — whatever that CLI accepts). Use it to run cheaper models per agent. Write it as `M:EFFORT` (e.g. `gpt-6-astra:high`, `opus:max`) to set the reasoning effort too — such a spec is **not** passed verbatim: it is split, and the CLI gets the bare model plus its own effort switch. OpenCode uses `provider/model::EFFORT` on `@opencode/cli` 2.1.4+. A level the runtime or model does not have, or an effort with no model (`:high`), is refused rather than dropped | yes — later bare starts reuse it |
 | `--watch OWNER/REPO` | Also subscribe to a repository (repeatable) | yes |
 | `--tag TAG` | Add a tag before launching (repeatable), so the first session already has the skills and policies it selects. Tags are only added here; `agent untag` removes one | yes |
 | `--resume` | Continue the conversation the backbone last saw for this runtime (the runtime's own last conversation when no ID is saved); same as `agent resume` | no |

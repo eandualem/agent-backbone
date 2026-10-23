@@ -36,6 +36,7 @@ versions for the CLIs installed on your machine and notes where the installed
 version differs.
 
 <!-- capability-table:begin -->
+
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
 | Retained observations of reconciled state over the API | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
@@ -61,7 +62,7 @@ version differs.
 | Browser tab group named after the agent | ✅ (version not recorded) with `backbone chrome install` | ❌ #270 | ❌ | ❌ #270 | ❌ | ❌ | n/a |
 | Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ resumes the directory's latest session | ❌ | n/a |
 | Fleet snapshot resumes the saved session exactly | ✅ | ✅ | ✅ | ✅ | ❌ reported as exact_resume_unsupported | ❌ reported as exact_resume_unsupported | n/a |
-| Reasoning effort chosen with the model (`model:effort`) | ✅ | ✅ | ? whether the CLI has an effort setting is not checked | ❌ #296 the CLI has one; Backbone refuses the effort | ✅ low, high or max, through DEEPCODE_REASONING_EFFORT | ? whether the CLI has an effort setting is not checked | n/a |
+| Reasoning effort chosen with the model (`model:effort`, OpenCode `model::effort`) | ✅ | ✅ | ? whether the CLI has an effort setting is not checked | ✅ requires @opencode/cli 2.1.4+; model::effort; older versions refuse it | ✅ low, high or max, through DEEPCODE_REASONING_EFFORT | ? whether the CLI has an effort setting is not checked | n/a |
 | No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
 | Writes bounded while unattended | ❌ #285 | ✅ OS sandbox; on Linux, git add and commit fail inside it, so swarms refuse unattended Codex members there (#437) | ❌ | ❌ #285 | ❌ | ❌ | n/a |
 | Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ `--approve-for-me` | ❌ | ❌ #293 | ❌ | ❌ | n/a |
@@ -110,7 +111,7 @@ version differs.
 | Browser tab group named after the agent | A Codex agent can name its own group with its Chrome client's `nameSession`. |
 | Resume the agent's own session | Start the agent fresh; its handoff carries the context. |
 | Fleet snapshot resumes the saved session exactly | The agent is reported as not resumed; start it fresh and its handoff carries the context. |
-| Reasoning effort chosen with the model (`model:effort`) | Set the effort in the CLI's own settings, or run the agent on Claude Code or Codex. |
+| Reasoning effort chosen with the model (`model:effort`, OpenCode `model::effort`) | Set the effort in the CLI's own settings, or run the agent on Claude Code or Codex. |
 | No-approval mode (unattended) | Run the agent attended and answer its prompts. |
 | Writes bounded while unattended | Run unattended agents only on a sandboxed runtime (Codex). |
 | Automatic permission review (agents.auto_review) | Review permission prompts yourself, or use the runtime's own policy. |
@@ -133,6 +134,7 @@ version differs.
 | New inbox messages hinted on Socket.IO (`inbox:pending`) | Read the inbox (`POST /api/messages/inbox`) on a timer. |
 | Escalations reach an inbox-only target's inbox | Set `escalation.target` to an agent with a terminal session. |
 | Deep review run from and for this runtime | Run the review with Claude Code or Codex as the reviewer. |
+
 <!-- capability-table:end -->
 
 ## Notes

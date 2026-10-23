@@ -59,7 +59,6 @@ REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
         ("plan-approval", "opencode", 278),
         ("refusal-alert", "opencode", 279),
         ("browser-group-name", "opencode", 270),
-        ("reasoning-effort", "opencode", 296),
         ("bounded-unattended", "opencode", 285),
         ("auto-review", "opencode", 293),
         ("message-authority", "opencode", 294),
@@ -574,7 +573,7 @@ CAPABILITIES: tuple[Capability, ...] = (
     ),
     _row(
         "reasoning-effort",
-        "Reasoning effort chosen with the model (`model:effort`)",
+        "Reasoning effort chosen with the model (`model:effort`, OpenCode `model::effort`)",
         "src/agent_backbone/services/runtimes/base.py",
         fallback=(
             "Set the effort in the CLI's own settings, or run the agent on Claude Code or Codex."
@@ -583,7 +582,9 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok(_LAUNCH),
         codex=_ok(_LAUNCH),
         gemini=_unverified(note="whether the CLI has an effort setting is not checked"),
-        opencode=_gap(296, "the CLI has one; Backbone refuses the effort"),
+        opencode=_ok(
+            _LAUNCH, note="requires @opencode/cli 2.1.4+; model::effort; older versions refuse it"
+        ),
         deepcode=_ok(_LAUNCH, note="low, high or max, through DEEPCODE_REASONING_EFFORT"),
         aider=_unverified(note="whether the CLI has an effort setting is not checked"),
         shell=_na(_NO_MODEL),

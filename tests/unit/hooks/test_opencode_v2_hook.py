@@ -1,0 +1,129 @@
+"""Exercise the v2 plugin at native API boundaries without a model call."""
+
+import json
+import os
+import shutil
+import subprocess
+
+import pytest
+
+from agent_backbone.hooks.install import hook_source
+
+
+def test_v2_state_context_and_skill_reload(tmp_path):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to exercise the JavaScript plugin")
+    (tmp_path / "package.json").write_text('{"type":"module"}')
+    (tmp_path / "opencode_hook.js").write_text(hook_source("opencode_hook.js").read_text())
+    plugin = tmp_path / "v2" / "index.js"
+    plugin.parent.mkdir()
+    plugin.write_text(hook_source("opencode_v2_hook.js").read_text())
+    script = r"""
+const { default: plugin } = await import(process.argv[1]);
+const fs = await import("node:fs");
+const path = await import("node:path");
+const dir = process.env.BACKBONE_STATE_DIR;
+let poll;
+globalThis.setInterval = (callback) => { poll = callback; return {unref() {}}; };
+const callbacks = {};
+const queue = [];
+let wake;
+let reloaded = 0;
+let reject = false;
+const admitted = [];
+const ctx = {
+  location: { directory: dir },
+  session: {
+    get: async ({sessionID}) => ({data: {
+      id: sessionID, ...(sessionID === "child" ? {parentID: "root"} : {})
+    }}),
+    synthetic: async (request) => {
+      if (reject) throw new Error("admission failed");
+      admitted.push(request);
+    },
+    hook: async (name, fn) => { callbacks[name] = fn; },
+  },
+  tool: { hook: async (name, fn) => { callbacks[name] = fn; } },
+  skill: { reload: async () => { reloaded++; } },
+  event: { subscribe: async function* ({signal}) {
+    signal.addEventListener("abort", () => wake?.(), {once: true});
+    while (!signal.aborted) {
+      if (!queue.length) await new Promise(resolve => { wake = resolve; });
+      if (signal.aborted) return;
+      yield queue.shift();
+    }
+  } },
+};
+const cleanup = await plugin.setup(ctx);
+const tick = () => new Promise(resolve => setImmediate(resolve));
+const emit = async (type, data) => {
+  queue.push({type, data, created: Date.now()});
+  wake?.();
+  await tick();
+  await tick();
+};
+const state = () => JSON.parse(fs.readFileSync(path.join(dir, "app.json")));
+await emit("session.created", {sessionID: "root"});
+await emit("session.created", {sessionID: "child", parentID: "root"});
+await emit("session.status", {sessionID: "root", status: {type: "busy"}});
+await emit("permission.asked", {sessionID: "root", id: "per_one"});
+const waiting = state();
+await emit("permission.replied", {sessionID: "root", requestID: "per_one", reply: "reject"});
+await emit("session.step.started", {
+  sessionID: "root", assistantMessageID: "msg_one", model: {providerID: "provider", id: "model"}
+});
+await emit("session.step.ended", {
+  sessionID: "root", assistantMessageID: "msg_one", finish: "tool-calls"
+});
+await emit("session.status", {sessionID: "child", status: {type: "idle"}});
+const afterChild = state();
+await callbacks.context({sessionID: "root", agent: "build", model: {
+  providerID: "provider", id: "model", variant: "high"
+}});
+const offers = path.join(dir, "context", "app");
+fs.mkdirSync(offers, {recursive: true});
+fs.writeFileSync(path.join(offers, "1.md"), "first offer");
+const tool = () => ({sessionID: "root", tool: "read", id: "call", input: {},
+  status: "completed", result: {content: "original result"}});
+await callbacks["execute.after"](tool());
+const structured = {...tool(), result: {output: {found: 3}}};
+await callbacks["execute.after"](structured);
+reject = true;
+fs.writeFileSync(path.join(offers, "2.md"), "fallback offer");
+const fallback = {...tool(), result: {output: {found: 3}}};
+await callbacks["execute.after"](fallback);
+await emit("session.execution.interrupted", {sessionID: "root", reason: "user"});
+const idle = state();
+fs.writeFileSync(path.join(dir, "app.skills-reload"), "");
+await poll();
+await cleanup();
+console.log(JSON.stringify({waiting, afterChild, idle, admitted,
+  structured: structured.result, fallback: fallback.result, reloaded}));
+"""
+    result = subprocess.run(
+        [node, "--input-type=module", "-e", script, plugin.as_uri()],
+        env={**os.environ, "BACKBONE_AGENT": "app", "BACKBONE_STATE_DIR": str(tmp_path)},
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    actual = json.loads(result.stdout)
+    assert (actual["waiting"]["state"], actual["waiting"]["reason"]) == (
+        "waiting_for_human",
+        "permission",
+    )
+    assert actual["afterChild"]["state"] == "busy"
+    assert actual["afterChild"]["session_id"] == "root"
+    assert actual["idle"]["state"] == "idle"
+    assert actual["idle"]["model"] == "provider/model"
+    assert actual["admitted"] == [
+        {"sessionID": "root", "text": "first offer", "delivery": "steer", "resume": False}
+    ]
+    assert actual["structured"] == {"output": {"found": 3}}
+    assert actual["fallback"]["content"] == [
+        {"type": "text", "text": '{"found":3}'},
+        {"type": "text", "text": "fallback offer"},
+    ]
+    assert actual["reloaded"] == 1
