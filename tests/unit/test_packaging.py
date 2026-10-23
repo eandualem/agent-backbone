@@ -22,3 +22,9 @@ def test_package_description_has_no_relative_links():
     assert [t for t in targets if not t.startswith(("https://", "#"))] == []
     images = re.findall(r'src="([^"]*)"', text)
     assert all(i.startswith("https://raw.githubusercontent.com/") for i in images)
+
+    assert "https://github.com/user-attachments/assets/" not in text
+    posters = re.findall(r'<a href="([^"]+)"><img src="([^"]+)"', text)
+    image_base = "https://raw.githubusercontent.com/eandualem/agent-backbone/main/docs/media/"
+    assert ("https://youtu.be/3gOH3t3woXM", image_base + "film-overview.jpg") in posters
+    assert ("https://youtu.be/yKV8RNgqRsE", image_base + "film-why-backbone.jpg") in posters

@@ -69,6 +69,15 @@ content-type = "text/markdown"
 [[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
 path = "README.md"
 
+# GitHub renders these attachments as players; PyPI keeps the linked posters.
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(?m)^https://github\.com/user-attachments/assets/695a6096-4196-4115-911c-a0043d632088$'
+replacement = '<a href="https://youtu.be/3gOH3t3woXM"><img src="docs/media/film-overview.jpg" width="49%" alt="Watch the agent-backbone overview, 1 minute 23 seconds"></a>'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(?m)^https://github\.com/user-attachments/assets/4218fdbe-e581-49bd-879f-288d41c9f72f$'
+replacement = '<a href="https://youtu.be/yKV8RNgqRsE"><img src="docs/media/film-why-backbone.jpg" width="49%" alt="Watch Why Backbone, 2 minutes 23 seconds"></a>'
+
 [[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
 pattern = 'src="(?![a-z]+:)([^"]+)"'
 replacement = 'src="https://raw.githubusercontent.com/eandualem/agent-backbone/main/\1"'
