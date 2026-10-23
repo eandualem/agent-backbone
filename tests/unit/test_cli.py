@@ -1158,6 +1158,7 @@ class TestRuntimesCommand:
         assert "deepcode" in out and "deepseek-v4-flash" in out
         assert "claude" in out and "opus, sonnet, haiku" in out
         assert "passed to the CLI verbatim" in out
+        assert "provider/model::effort" in out and "2.1.4+" in out
 
 
 class TestAlwaysOnStart:

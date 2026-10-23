@@ -169,9 +169,10 @@ start` lists them for the agent it starts, with the agent's own environment
 applied. Both also name a CLI's own memory across sessions while its
 settings leave it on, such as Claude Code's auto-memory, with the setting
 that turns it off where there is one; Backbone does not change it. It names each
-OpenCode agent whose environment (its `env`, then the shell) lacks
-`OPENCODE_EXPERIMENTAL_PLAN_MODE`: without it OpenCode's plan agent asks for no
-approval, so there is no plan to approve remotely. It names each running
+OpenCode 1.x agent whose environment (its `env`, then the shell) lacks
+`OPENCODE_EXPERIMENTAL_PLAN_MODE`: without it the plan agent asks for no
+approval. OpenCode v2 has no structured plan-approval dialog, so its remote
+plan control remains unavailable. It names each running
 agent whose pane is in tmux copy mode with no client viewing it: messages wait
 until someone attaches to its session and presses `q`. These are notes, not
 failures. `doctor` resolves `CODEX_HOME`,
@@ -283,7 +284,9 @@ startup still applies OpenCode database migrations, including legacy-session mig
 Selection waits for migration completion. A readiness timeout leaves the migration
 running; inspect the agent before retrying. A fresh launch with an explicit model
 creates a native session, which remains in history even if you quit before sending
-a prompt. Failed selection before opening the TUI removes that unused new session.
+a prompt. Until that launch reports a session ID, a later `agent resume` uses
+OpenCode's latest session in the directory, which can be this empty session.
+Failed selection before opening the TUI removes that unused new session.
 
 The `unattended:` line shows the no-approval switch and sandbox support;
 `-` means unattended startup is unsupported. See the

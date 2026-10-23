@@ -84,7 +84,9 @@ export default {
           : [...(result.content ?? [])],
       };
       const length = output.content.length;
-      await hook["tool.execute.after"](input(event), output);
+      try { await hook["tool.execute.after"](input(event), output); } catch {
+        // Already-taken context must survive a later action-log write failure.
+      }
       if (output.content.length > length) {
         if (result.content === undefined && result.output !== undefined) {
           output.content.unshift({ type: "text", text: JSON.stringify(result.output) });

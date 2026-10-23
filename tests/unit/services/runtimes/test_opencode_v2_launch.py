@@ -159,6 +159,7 @@ def test_v2_does_not_claim_legacy_flag_enables_plan_approval(monkeypatch):
 def test_unknown_version_refuses_to_guess_launch_protocol(monkeypatch, version):
     runtime = RUNTIMES["opencode"]
     monkeypatch.setattr(type(runtime), "installed_version", lambda self: version)
+    monkeypatch.setattr(type(runtime), "available", lambda self: True)
     with pytest.raises(RuntimeError, match="Could not determine the OpenCode version"):
         runtime.build_command()
 
@@ -187,6 +188,9 @@ def test_continue_without_history_starts_fresh(monkeypatch):
 def test_metadata_waits_for_native_migration_on_one_server(monkeypatch, final):
     import io
 
+    monkeypatch.setenv("BACKBONE_AGENT", "app")
+    monkeypatch.setenv("BACKBONE_STATE_DIR", "/example/state")
+    monkeypatch.setenv("OPENCODE_CONFIG_CONTENT", '{"plugins":["example-provider"]}')
     server = SimpleNamespace(
         stdin=io.StringIO(),
         stdout=io.StringIO('{"url":"http://127.0.0.1:1234"}\n'),
@@ -205,6 +209,9 @@ def test_metadata_waits_for_native_migration_on_one_server(monkeypatch, final):
             "0",
         ]
         assert kwargs["env"]["OPENCODE_PASSWORD"]
+        assert "BACKBONE_AGENT" not in kwargs["env"]
+        assert "BACKBONE_STATE_DIR" not in kwargs["env"]
+        assert kwargs["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugins":["example-provider"]}'
         launched.append(command)
         return server
 
@@ -229,3 +236,15 @@ def test_metadata_waits_for_native_migration_on_one_server(monkeypatch, final):
     assert entered is (final == "completed")
     assert len(launched) == 1
     assert server.stdin.closed
+
+
+def test_missing_binary_is_distinct_from_unknown_version(monkeypatch):
+    runtime = RUNTIMES["opencode"]
+    monkeypatch.setattr("agent_backbone.services.runtimes.base.resolve_command", lambda name: None)
+
+    def version(self):
+        pytest.fail("a missing executable must not be queried for its version")
+
+    monkeypatch.setattr(type(runtime), "installed_version", version)
+    with pytest.raises(RuntimeError, match="binary not found: opencode"):
+        runtime.build_command()

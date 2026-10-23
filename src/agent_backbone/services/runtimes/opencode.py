@@ -149,6 +149,8 @@ class OpenCode(Runtime):
         return tuple(map(int, match.groups())) if match else ()
 
     def build_command(self, **kwargs):
+        if not self.available():
+            raise RuntimeError(f"Runtime '{self.id}' binary not found: {self.binary}")
         version = self._version()
         if not version:
             raise RuntimeError("Could not determine the OpenCode version; launch refused")

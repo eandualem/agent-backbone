@@ -78,7 +78,13 @@ def migration_status(endpoint: str, password: str):
 @contextmanager
 def standalone(binary: str):
     """Use the native stdin lease, without registering or touching a shared service."""
-    environment = {**os.environ, "OPENCODE_PASSWORD": secrets.token_urlsafe(32)}
+    # This server selects metadata; only the later TUI may report agent state.
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"BACKBONE_AGENT", "BACKBONE_STATE_DIR"}
+    }
+    environment["OPENCODE_PASSWORD"] = secrets.token_urlsafe(32)
     process = subprocess.Popen(
         [binary, "serve", "--stdio", "--hostname", "127.0.0.1", "--port", "0"],
         stdin=subprocess.PIPE,
@@ -130,7 +136,8 @@ def standalone(binary: str):
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-        process.stdout.close()
+        # A descendant may still hold the pipe open. Do not wait for the drain
+        # thread or close its locked reader; exec/exit closes our descriptors.
 
 
 def prepare_session(

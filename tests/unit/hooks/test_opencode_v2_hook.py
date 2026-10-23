@@ -16,6 +16,7 @@ def test_v2_state_context_and_skill_reload(tmp_path):
         pytest.skip("Node is needed to exercise the JavaScript plugin")
     (tmp_path / "package.json").write_text('{"type":"module"}')
     (tmp_path / "opencode_hook.js").write_text(hook_source("opencode_hook.js").read_text())
+    (tmp_path / "backbone_state.py").write_text(hook_source("backbone_state.py").read_text())
     plugin = tmp_path / "v2" / "index.js"
     plugin.parent.mkdir()
     plugin.write_text(hook_source("opencode_v2_hook.js").read_text())
@@ -92,6 +93,12 @@ reject = true;
 fs.writeFileSync(path.join(offers, "2.md"), "fallback offer");
 const fallback = {...tool(), result: {output: {found: 3}}};
 await callbacks["execute.after"](fallback);
+fs.writeFileSync(path.join(offers, "3.md"), "offer before logging failure");
+fs.mkdirSync(path.join(dir, "actions.jsonl"));
+const loggingFailure = {...tool(), tool: "shell",
+  input: {command: "gh issue comment 1 --repo acme/app --body note"},
+  result: {content: "shell result", metadata: {exit: 0}}};
+await callbacks["execute.after"](loggingFailure);
 await emit("session.execution.interrupted", {sessionID: "root", reason: "user"});
 const idle = state();
 // Make one state write fail, then verify the same subscription recovers.
@@ -106,7 +113,8 @@ fs.writeFileSync(path.join(dir, "app.skills-reload"), "");
 await poll();
 await cleanup();
 console.log(JSON.stringify({waiting, afterChild, idle, recovered, admitted,
-  structured: structured.result, fallback: fallback.result, reloaded}));
+  structured: structured.result, fallback: fallback.result,
+  loggingFailure: loggingFailure.result, reloaded}));
 """
     result = subprocess.run(
         [node, "--input-type=module", "-e", script, plugin.as_uri()],
@@ -133,5 +141,9 @@ console.log(JSON.stringify({waiting, afterChild, idle, recovered, admitted,
     assert actual["fallback"]["content"] == [
         {"type": "text", "text": '{"found":3}'},
         {"type": "text", "text": "fallback offer"},
+    ]
+    assert actual["loggingFailure"]["content"] == [
+        {"type": "text", "text": "shell result"},
+        {"type": "text", "text": "offer before logging failure"},
     ]
     assert actual["reloaded"] == 1
