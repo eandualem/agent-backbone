@@ -35,6 +35,10 @@ let reloaded = 0;
 let finishReload;
 let holdReload = false;
 let reject = false;
+let failSubscription = false;
+const warnings = [];
+const originalWarn = console.warn;
+console.warn = (text) => warnings.push(text);
 const admitted = [];
 const ctx = {
   location: { directory: dir },
@@ -60,7 +64,8 @@ const ctx = {
     signal.addEventListener("abort", () => wake?.(), {once: true});
     while (!signal.aborted) {
       if (!queue.length) await new Promise(resolve => { wake = resolve; });
-      if (signal.aborted) return;
+      if (signal.aborted) throw new Error("expected abort details");
+      if (failSubscription) throw new Error("private failure details");
       yield queue.shift();
     }
   } },
@@ -153,8 +158,14 @@ await newerCleanup();
 finishReload();
 await inFlight;
 const afterInFlight = state();
+const teardownWarnings = warnings.length;
+failSubscription = true;
+const brokenCleanup = await plugin.setup(ctx);
+await emit("unrelated", {});
+await brokenCleanup();
+console.warn = originalWarn;
 console.log(JSON.stringify({waiting, afterChild, idle, recovered, admitted,
-  retired, oldPrompt, newPrompt,
+  retired, oldPrompt, newPrompt, warnings, teardownWarnings,
   structured: structured.result, fallback: fallback.result,
   loggingFailure: loggingFailure.result, reloaded, stopped, afterInFlight}));
 """
@@ -194,6 +205,11 @@ console.log(JSON.stringify({waiting, afterChild, idle, recovered, admitted,
     assert actual["loggingFailure"]["content"] == [
         {"type": "text", "text": "shell result"},
         {"type": "text", "text": "offer before logging failure"},
+    ]
+    assert actual["teardownWarnings"] == 0
+    assert actual["warnings"] == [
+        "Backbone: OpenCode event subscription failed; "
+        "native state updates stopped until plugin reload."
     ]
     assert actual["stopped"] is True
     assert actual["reloaded"] == 3
