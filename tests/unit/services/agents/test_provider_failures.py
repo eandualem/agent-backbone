@@ -481,6 +481,7 @@ async def test_opencode_v2_live_quota_overrides_idle_and_clears_after_reply(tmp_
     assert "5-hour usage limit" in failed.detail
     for pane in (
         screen.replace(_OC_RED, _OC_TEXT),
+        screen.replace(_OC_RED, _OC_TEXT, 1).replace("quota", _OC_RED + "quota" + _OC_WHITE, 1),
         screen.replace(_OC_V2_INPUT, "\nCompleted successfully.\n" + _OC_V2_INPUT),
     ):
         recovered = await get_agent_state(

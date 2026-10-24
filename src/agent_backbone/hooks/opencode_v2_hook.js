@@ -48,6 +48,10 @@ export default {
             } } : {}),
           } });
         }
+        case "session.execution.started":
+          return dispatch("session.status", { sessionID: data.sessionID, status: { type: "busy" } });
+        case "session.execution.succeeded":
+          return dispatch("session.idle", data);
         case "session.execution.failed":
           return dispatch("session.error", data);
         case "session.execution.interrupted":

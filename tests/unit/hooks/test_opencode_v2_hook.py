@@ -74,7 +74,7 @@ const emit = async (type, data) => {
 };
 const state = () => JSON.parse(fs.readFileSync(path.join(dir, "app.json")));
 // Both sessions predate this plugin instance, as on an explicit resume.
-await emit("session.status", {sessionID: "root", status: {type: "busy"}});
+await emit("session.execution.started", {sessionID: "root"});
 await emit("permission.asked", {sessionID: "root", id: "per_one"});
 const waiting = state();
 await emit("permission.replied", {sessionID: "root", requestID: "per_one", reply: "reject"});
@@ -84,7 +84,7 @@ await emit("session.step.started", {
 await emit("session.step.ended", {
   sessionID: "root", assistantMessageID: "msg_one", finish: "tool-calls"
 });
-await emit("session.status", {sessionID: "child", status: {type: "idle"}});
+await emit("session.execution.succeeded", {sessionID: "child"});
 const afterChild = state();
 await callbacks.context({sessionID: "root", agent: "build", model: {
   providerID: "provider", id: "model", variant: "high"
@@ -113,9 +113,9 @@ const idle = state();
 const statePath = path.join(dir, "app.json");
 fs.unlinkSync(statePath);
 fs.mkdirSync(statePath);
-await emit("session.status", {sessionID: "root", status: {type: "busy"}});
+await emit("session.execution.started", {sessionID: "root"});
 fs.rmdirSync(statePath);
-await emit("session.idle", {sessionID: "root"});
+await emit("session.execution.succeeded", {sessionID: "root"});
 const recovered = state();
 fs.writeFileSync(path.join(dir, "app.skills-reload"), "");
 await poll();

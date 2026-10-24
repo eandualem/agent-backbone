@@ -133,7 +133,10 @@ class OpenCode(Runtime):
             while latest and not clean[latest - 1]:
                 latest -= 1
             start = latest
-            while start and clean[start - 1] and _error_foreground(lines[start - 1]):
+            while start and clean[start - 1]:
+                prefix = re.match(r"(?:\s|\x1b\[[0-9;]*m)*[^\s\x1b]+", lines[start - 1])
+                if not prefix or not _error_foreground(prefix[0]):
+                    break
                 start -= 1
             text = " ".join(clean[start:latest])
             if any(
