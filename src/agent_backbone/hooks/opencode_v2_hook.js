@@ -126,7 +126,11 @@ export default {
       }
     })();
     // Native plugin teardown owns the subscription; it must not survive a reload.
-    events.catch(() => {});
+    events.catch(() => {
+      if (!controller.signal.aborted) {
+        console.warn("Backbone: OpenCode event subscription failed; native state updates stopped until plugin reload.");
+      }
+    });
     return async () => {
       hook.dispose();
       controller.abort();

@@ -608,7 +608,9 @@ mergeable inline JSON object. Its adapter translates native session and tool eve
 into the same state and context-offer protocol, reloads skills through `skill.reload`,
 and reads usage and assistant text from the v2 session tables. Text becomes available
 after streaming finishes, even while a tool awaits permission or completion. Terminal
-execution events clear cancelled permission requests and retire that turn’s steers. Explicit
+execution events clear cancelled permission requests and retire that turn’s steers.
+An unexpected event-subscription failure writes a warning without event or error contents;
+normal plugin teardown stays quiet. Explicit
 model and effort selection uses the native catalog and session APIs before the TUI
 starts, with exact selection readback. Resume validates the model against the saved
 session’s directory. These metadata calls share one private native
