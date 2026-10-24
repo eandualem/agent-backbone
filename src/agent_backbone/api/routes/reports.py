@@ -36,6 +36,9 @@ def _validation_errors(exc: ValidationError | RequestValidationError) -> list[di
 
 
 class _ReportRoute(APIRoute):
+    body_limit = REPORT_BODY_BYTES
+    label = "report"
+
     def get_route_handler(self):
         handler = super().get_route_handler()
 
@@ -44,9 +47,9 @@ class _ReportRoute(APIRoute):
             if request.method == "POST":
                 data = bytearray()
                 async for chunk in request.stream():
-                    if len(data) + len(chunk) > REPORT_BODY_BYTES:
+                    if len(data) + len(chunk) > self.body_limit:
                         raise HTTPException(
-                            413, f"report request exceeds {REPORT_BODY_BYTES} UTF-8 bytes"
+                            413, f"{self.label} request exceeds {self.body_limit} UTF-8 bytes"
                         )
                     data.extend(chunk)
                 request._body = bytes(data)

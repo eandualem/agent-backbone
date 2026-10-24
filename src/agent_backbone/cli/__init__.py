@@ -7,6 +7,8 @@ backbone down                        stop a detached backbone
 backbone status                      agents, sessions, repositories and health
 backbone doctor                      check tmux, runtimes, credentials
 backbone diagnostics                 recorded problems, grouped without message content
+backbone respond --file FILE         save a question, answer and action for later retrieval
+backbone responses [show ID]         read saved answers independently of progress
 backbone report --file FILE          publish a short structured progress report
 backbone updates [--agent NAME]      read reports, with --history or show ID for depth
 backbone runtimes                    supported CLIs, installed or not, example model ids
@@ -47,6 +49,7 @@ from agent_backbone.cli.diagnostics import add_diagnostics_parser
 from agent_backbone.cli.fleet import add_fleet_parser
 from agent_backbone.cli.instructions import add_instruction_commands
 from agent_backbone.cli.reports import add_report_parsers
+from agent_backbone.cli.responses import add_response_parsers
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_up
 from agent_backbone.cli.service import cmd_service
 from agent_backbone.cli.setup import cmd_doctor, cmd_init, cmd_runtimes, cmd_secrets
@@ -156,6 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_instruction_commands(sub)
     add_skill_commands(sub)
     add_report_parsers(sub)
+    add_response_parsers(sub)
 
     p = sub.add_parser("config", help="settings (stored in the database)")
     csub = p.add_subparsers(dest="config_command", required=True)

@@ -274,6 +274,7 @@ editing or starting them. No agent is silently deleted or migrated to a runtime.
 
 `telegram.report_updates` defaults to `true`. Newly published reports are queued
 in the database and posted to the allowlisted agents group every 30 seconds.
+Explicit [responses](responses.md) use their author topic and are not paused by this progress setting.
 Set it to `false` to pause sending without deleting reports; setting it back to
 `true` drains pending reports still within retention. No group means delivery waits.
 Destinations are General and the agent’s own topic, not the private alert chat. Reports

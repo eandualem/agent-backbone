@@ -57,11 +57,13 @@ class AgentORM(Base):
 
 
 class ReportORM(Base):
-    """Short authored progress reports, separate from operational diagnostics."""
+    """Authored reports and responses sharing durable delivery receipts."""
 
     __tablename__ = "reports"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="report")
+    supersedes_id: Mapped[int | None] = mapped_column(Integer)
     author_id: Mapped[str] = mapped_column(Text, nullable=False)
     author_name: Mapped[str] = mapped_column(Text, nullable=False)
     request_id: Mapped[str] = mapped_column(Text, nullable=False)
@@ -90,7 +92,8 @@ class ReportORM(Base):
     telegram_audio_lease: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
-        Index("uq_reports_request", "author_id", "request_id", unique=True),
+        Index("uq_reports_request", "author_id", "kind", "request_id", unique=True),
+        Index("idx_reports_supersedes", "kind", "supersedes_id", "id"),
         Index("idx_reports_author", "author_id", "id"),
         Index("idx_reports_created", "created_at"),
         Index("idx_reports_telegram", "telegram_delivery", "telegram_retry_at", "id"),
