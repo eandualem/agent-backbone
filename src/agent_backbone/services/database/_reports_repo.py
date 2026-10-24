@@ -13,7 +13,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import and_, delete, func, insert, or_, select, update
 
-from agent_backbone.models import REPORTS_PER_HOUR, PublishReport, ReportQuery
+from agent_backbone.models import REPORTS_PER_HOUR, PublishReport, PublishResponse, ReportQuery
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 from agent_backbone.services.database.models import AgentORM, ReportORM
@@ -84,17 +84,22 @@ def _encode(query: ReportQuery, snapshot: int, row: dict, key: bytes) -> str:
 def _record(row: dict) -> dict:
     created = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
     age = max(0, int((datetime.now(UTC) - created).total_seconds()))
-    return {
+    record = {
         key: row[key]
         for key in ("id", "author_id", "author_name", "request_id", "created_at", "source")
     } | {
         "agent_name": row.get("agent_name"),
-        "report": json.loads(row["content"]),
         "age_seconds": age,
         "telegram_delivery": row.get("telegram_delivery", "not_requested"),
         "telegram_audio_delivery": row.get("telegram_audio_delivery", "not_requested"),
-        "stale": age >= STALE_REPORT_SECONDS,
     }
+    if row.get("kind", "report") == "response":
+        return record | {
+            "response": json.loads(row["content"]),
+            "supersedes_id": row.get("supersedes_id"),
+            "superseded_by": row.get("superseded_by"),
+        }
+    return record | {"report": json.loads(row["content"]), "stale": age >= STALE_REPORT_SECONDS}
 
 
 class ReportRepo(Repo):
@@ -105,11 +110,16 @@ class ReportRepo(Repo):
         # Restarting the service expires cursors and asks readers to refresh.
         self._cursor_key = secrets.token_bytes(32)
 
-    async def publish(self, publication: PublishReport) -> tuple[dict, bool]:
+    async def publish(self, publication: PublishReport | PublishResponse) -> tuple[dict, bool]:
         # Revalidate even typed values: model_construct/copy must not bypass the
         # database boundary. All callers get the same character and link limits.
-        publication = PublishReport.model_validate(publication.model_dump())
-        content = json.dumps(publication.report.model_dump(), sort_keys=True, ensure_ascii=False)
+        response = isinstance(publication, PublishResponse)
+        model = PublishResponse if response else PublishReport
+        publication = model.model_validate(publication.model_dump())
+        kind = "response" if response else "report"
+        payload = publication.response if response else publication.report
+        supersedes = publication.supersedes_id if response else None
+        content = json.dumps(payload.model_dump(), sort_keys=True, ensure_ascii=False)
         async with self._tx() as conn:
             # This acquires the author row lock on PostgreSQL, and the writer lock
             # on SQLite. Concurrent publications/forget cannot race the identity,
@@ -130,7 +140,9 @@ class ReportRepo(Repo):
                 raise KeyError(publication.agent)
             if any(tag.startswith("swarm:") for tag in json.loads(author["tags"])):
                 raise ReportForbidden(
-                    "Swarm participants cannot publish progress reports; send findings to "
+                    "Swarm participants cannot publish "
+                    + ("responses" if response else "progress reports")
+                    + "; send findings to "
                     "the coordinator, who reports to the repository agent"
                 )
             identity = author["report_identity"]
@@ -138,7 +150,9 @@ class ReportRepo(Repo):
                 (
                     await conn.execute(
                         select(_R).where(
-                            _R.c.author_id == identity, _R.c.request_id == publication.request_id
+                            _R.c.author_id == identity,
+                            _R.c.kind == kind,
+                            _R.c.request_id == publication.request_id,
                         )
                     )
                 )
@@ -146,35 +160,57 @@ class ReportRepo(Repo):
                 .first()
             )
             if previous:
-                if previous["content"] != content:
+                if previous["content"] != content or previous["supersedes_id"] != supersedes:
                     raise ReportConflict(
                         "request_id already published different content; use a new key"
                     )
-                return _record(dict(previous) | {"agent_name": publication.agent}), False
+                record = dict(previous) | {"agent_name": publication.agent}
+                if response:
+                    record["superseded_by"] = await conn.scalar(
+                        select(func.max(_R.c.id)).where(
+                            _R.c.kind == "response", _R.c.supersedes_id == previous["id"]
+                        )
+                    )
+                return _record(record), False
+            if supersedes is not None:
+                previous_author = await conn.scalar(
+                    select(_R.c.author_id).where(_R.c.id == supersedes, _R.c.kind == "response")
+                )
+                if previous_author != identity:
+                    raise ReportConflict(
+                        "supersedes_id must name a retained response by this author"
+                    )
             latest = (
                 await conn.execute(
-                    select(_R.c.id, _R.c.content)
-                    .where(_R.c.author_id == identity)
+                    select(_R.c.id, _R.c.content, _R.c.supersedes_id)
+                    .where(_R.c.author_id == identity, _R.c.kind == kind)
                     .order_by(_R.c.id.desc())
                     .limit(1)
                 )
             ).first()
-            if latest and latest.content == content:
+            if latest and latest.content == content and latest.supersedes_id == supersedes:
                 raise ReportConflict(
-                    f"report is unchanged from report {latest.id}; publish after progress"
+                    f"{kind} is unchanged from {kind} {latest.id}; publish after "
+                    + ("a change" if response else "progress")
                 )
             count = await conn.scalar(
                 select(func.count())
                 .select_from(_R)
-                .where(_R.c.author_id == identity, _R.c.created_at >= cutoff_iso(hours=1))
+                .where(
+                    _R.c.author_id == identity,
+                    _R.c.kind == kind,
+                    _R.c.created_at >= cutoff_iso(hours=1),
+                )
             )
             if count >= REPORTS_PER_HOUR:
                 raise ReportRateLimit(
-                    f"maximum {REPORTS_PER_HOUR} reports per agent per rolling hour"
+                    f"maximum {REPORTS_PER_HOUR} {kind}s per agent per rolling hour"
                 )
-            report = publication.report
+            report = None if response else publication.report
             priority = (
-                0
+                2
+                if response
+                else 0
                 if report.blockers.kind == "owner"
                 else 1
                 if report.status == "blocked"
@@ -185,6 +221,8 @@ class ReportRepo(Repo):
                     await conn.execute(
                         insert(_R)
                         .values(
+                            kind=kind,
+                            supersedes_id=supersedes,
                             author_id=identity,
                             author_name=publication.agent,
                             request_id=publication.request_id,
@@ -203,13 +241,17 @@ class ReportRepo(Repo):
             )
             return _record(dict(row) | {"agent_name": publication.agent}), True
 
-    async def claim_telegram(self, *, audio: bool = False) -> dict | None:
+    async def claim_telegram(
+        self, *, audio: bool = False, include_reports: bool = True
+    ) -> dict | None:
         """Lease one due text/audio job. Each lane has independent retry state."""
         prefix = "telegram_audio_" if audio else "telegram_"
         state, retry, lease, attempts = (
             _R.c[prefix + k] for k in ("delivery", "retry_at", "lease", "attempts")
         )
         due = and_(state.in_(("pending", "sending")), retry <= now_iso())
+        if not include_reports:
+            due = and_(due, _R.c.kind == "response")
         token = uuid4().hex
         async with self._tx() as conn:
             # Retire pre-upgrade jobs as well as reports whose author was removed
@@ -313,20 +355,65 @@ class ReportRepo(Repo):
             )
             return bool(result.rowcount)
 
-    async def get(self, report_id: int) -> dict | None:
+    async def get(self, report_id: int, *, kind: str = "report") -> dict | None:
         async with self._tx() as conn:
             row = (
                 (
                     await conn.execute(
                         select(_R, _A.c.name.label("agent_name"))
                         .select_from(_R.outerjoin(_A, _A.c.report_identity == _R.c.author_id))
-                        .where(_R.c.id == report_id)
+                        .where(_R.c.id == report_id, _R.c.kind == kind)
                     )
                 )
                 .mappings()
                 .first()
             )
-            return _record(dict(row)) if row else None
+            if row is None:
+                return None
+            record = _record(dict(row))
+            if kind == "response":
+                record["superseded_by"] = await conn.scalar(
+                    select(func.max(_R.c.id)).where(
+                        _R.c.kind == "response", _R.c.supersedes_id == report_id
+                    )
+                )
+            return record
+
+    async def responses(
+        self, *, agent: str | None = None, before_id: int | None = None, limit: int = 20
+    ) -> dict:
+        """Retained responses, newest first; separate from the progress feed."""
+        if not 1 <= limit <= 100 or (before_id is not None and before_id < 1):
+            raise ValueError("limit must be 1–100 and before_id must be positive")
+        newer = _R.alias("newer")
+        superseded_by = (
+            select(func.max(newer.c.id))
+            .where(newer.c.kind == "response", newer.c.supersedes_id == _R.c.id)
+            .correlate(_R)
+            .scalar_subquery()
+        )
+        statement = (
+            select(_R, _A.c.name.label("agent_name"), superseded_by.label("superseded_by"))
+            .select_from(_R.outerjoin(_A, _A.c.report_identity == _R.c.author_id))
+            .where(_R.c.kind == "response")
+        )
+        if agent is not None:
+            statement = statement.where(_A.c.name == agent)
+        if before_id is not None:
+            statement = statement.where(_R.c.id < before_id)
+        async with self._tx() as conn:
+            rows = (
+                (await conn.execute(statement.order_by(_R.c.id.desc()).limit(limit + 1)))
+                .mappings()
+                .all()
+            )
+        items = [_record(dict(row)) for row in rows[:limit]]
+        more = len(rows) > limit
+        return {
+            "items": items,
+            "has_more": more,
+            "next_before_id": items[-1]["id"] if more else None,
+        }
 
     async def query(self, query: ReportQuery) -> dict:
         query = ReportQuery.model_validate(query.model_dump())
@@ -347,7 +434,7 @@ class ReportRepo(Repo):
                 statement = (
                     select(_R, _A.c.name.label("agent_name"))
                     .select_from(_R.outerjoin(_A, _A.c.report_identity == _R.c.author_id))
-                    .where(_R.c.id <= snapshot)
+                    .where(_R.c.id <= snapshot, _R.c.kind == "report")
                 )
                 if cursor:
                     statement = statement.where(_R.c.id < cursor.id)
@@ -364,7 +451,11 @@ class ReportRepo(Repo):
             else:
                 latest = (
                     select(_R.c.id)
-                    .where(_R.c.author_id == _A.c.report_identity, _R.c.id <= snapshot)
+                    .where(
+                        _R.c.author_id == _A.c.report_identity,
+                        _R.c.id <= snapshot,
+                        _R.c.kind == "report",
+                    )
                     .order_by(_R.c.id.desc())
                     .limit(1)
                     .correlate(_A)
@@ -417,7 +508,7 @@ class ReportRepo(Repo):
 
     async def prune(self, days: int) -> int:
         """Prune old history, keeping each author's last account (including inactive)."""
-        latest = select(func.max(_R.c.id)).group_by(_R.c.author_id)
+        latest = select(func.max(_R.c.id)).group_by(_R.c.author_id, _R.c.kind)
         async with self._tx() as conn:
             result = await conn.execute(
                 delete(_R).where(_R.c.created_at < cutoff_iso(days=days), _R.c.id.not_in(latest))

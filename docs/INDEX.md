@@ -17,6 +17,7 @@ branch or tag you are viewing. Relative links keep you on that same revision.
 
 - [Token usage](token-usage.md) — per-agent CLI sessions, model tokens and optional API estimates.
 - [Report audio](report-audio.md) — optional local read-aloud in Telegram.
+- [Saved answers](responses.md) — question, answer and action, retrievable while work continues.
 - [Progress reports](reports.md) — goals, progress, blockers and next steps.
 - [Instruction templates](templates.md) — edit base, role and tag instructions.
 - [Skills](skills.md) — one shared store of skills, given to agents by tag.

@@ -116,6 +116,14 @@ Completion installers serialize updates to the same resolved rc file using a
 conflict check protect existing content. Editors and dotfile managers that do not
 use that lock must not write the rc file concurrently with installation.
 
+## `backbone respond` · `backbone responses`
+
+Save a question, answer and action with `backbone respond --file answer.json`.
+Use `--example`, `--schema` and `--validate` to prepare it, or `--supersedes ID`
+for an explicit correction. Read with `backbone responses [--agent NAME]` or
+`backbone responses show ID`; `--json` includes text and audio delivery receipts.
+See [Saved answers](responses.md) for limits, retention and topic delivery.
+
 ## `backbone report` · `backbone updates`
 
 Publish a short structured progress report with `backbone report --file report.json`

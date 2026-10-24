@@ -142,3 +142,19 @@ def test_native_totals_expose_missing_attribution_without_adding_usage(
     # A prior malformed record remains partial even if aggregate totals agree.
     damaged = runtime.read_usage(path, after.offset, {**after.state, "partial": True})
     assert damaged.state["partial"] and not damaged.state.get("coverage_detail")
+
+
+def test_unsupported_store_reports_coverage_error_without_changing_checkpoint(tmp_path):
+    folder = tmp_path / "opencode"
+    folder.mkdir()
+    path = folder / "opencode.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE session (id TEXT PRIMARY KEY)")
+    runtime = RUNTIMES["opencode"]
+    state = {"_session_id": "existing", "prior_checkpoint": "retained"}
+    assert runtime.usage_paths("existing", {"XDG_DATA_HOME": str(tmp_path)}) == [path]
+    assert runtime.usage_children(path, "existing", {}) == []
+    batch = runtime.read_usage(path, 123, state)
+    assert batch.error == "unsupported OpenCode storage format: session_v2 is required"
+    assert not batch.caught_up and not batch.events
+    assert batch.offset == 123 and batch.state == state

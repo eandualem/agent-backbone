@@ -98,7 +98,7 @@ these fields count:
 | `POST /api/agents/{name}/approve`, `/deny` | `from_entity` |
 | `POST /api/agents/{name}/restart` | `from_entity`, when given |
 | `POST /api/integrations/reply` | `session` |
-| `POST /api/reports` | `agent` |
+| `POST /api/reports`, `/api/responses` | `agent` |
 | `POST /api/swarms` | `initiator` |
 | `POST /api/skills`, `PUT /api/skills/{name}/tags` | `actor` |
 | `POST /api/agents/{name}/state` | the `{name}` path parameter (a hook writing its own state) |

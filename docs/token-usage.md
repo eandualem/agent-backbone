@@ -68,6 +68,10 @@ launched again (resumed). Tokens may be incomplete for
 interrupted requests, unrecorded descendants, or runtime versions that omit
 usage. `unpriced` is separate: token counts remain available without a price.
 
+OpenCode usage requires its current `session_v2` storage format. An older store
+is reported as unsupported, with unavailable or partial coverage; retained usage
+and checkpoints stay intact. Backbone does not read or migrate the older format.
+
 OpenCode's current session total can include migrated summaries, title generation
 or reverted work that is no longer attributable from its message records. Backbone
 compares those sources after catching up and marks mismatches as `partial`, with an

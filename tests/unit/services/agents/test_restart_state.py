@@ -174,7 +174,9 @@ async def test_fresh_restart_delivers_brief_then_continuation(db, tmp_path, runt
             "launch_id": "previous-launch",
         },
     )
-    row = await db.transitions.create(agent_name="app", delay_seconds=0, message="continue")
+    row = await db.transitions.create(
+        agent_name="app", delay_seconds=0, message="resume-task-after-startup-brief"
+    )
     sent = []
     launch_env = {}
 
@@ -220,8 +222,8 @@ async def test_fresh_restart_delivers_brief_then_continuation(db, tmp_path, runt
             assert sent == []  # The startup brief must arrive first.
             await drain_message_queue(config, db, None, active_sessions=["app"])
             assert len(sent) == 2
-            assert "continue" not in sent[0]
-        assert sent[-1] == "[via:backbone from:backbone] continue"
+            assert "resume-task-after-startup-brief" not in sent[0]
+        assert sent[-1] == "[via:backbone from:backbone] resume-task-after-startup-brief"
 
 
 @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode", "gemini"])

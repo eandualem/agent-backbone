@@ -1,5 +1,8 @@
 # Report audio
 
+Explicit [responses](responses.md) use the same audio opt-in and speech service,
+sent only to their author topic after the complete text. Text never waits for audio.
+
 Audio uses the local Kokoro-82M model through `kokoro-onnx` in the setup below.
 It is optional and off by default. With it enabled, each new report gets a
 playable voice recording below its text in General and, for ordinary agents,

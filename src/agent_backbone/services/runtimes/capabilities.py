@@ -60,7 +60,6 @@ REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
         ("bounded-unattended", "opencode", 285),
         ("auto-review", "opencode", 293),
         ("message-authority", "opencode", 294),
-        ("deep-review", "opencode", 288),
     }
 )
 """``(row, runtime, issue)``: required-set cells that shipped before the
@@ -188,7 +187,25 @@ _INTERRUPTED = "tests/unit/services/agents/test_interrupted_turn.py"
 _PLAN = "tests/unit/services/agents/test_plan_approval.py"
 _INSTRUCTIONS_API = "tests/unit/api/routes/test_api_instructions.py"
 
+_RESPONSE_DELIVERY = (
+    _API_BOUNDARY + "; topic delivery: tests/unit/services/integrations/telegram/test_responses.py"
+)
+
 CAPABILITIES: tuple[Capability, ...] = (
+    _row(
+        "responses",
+        "Stored questions, answers and actions with durable topic delivery",
+        "src/agent_backbone/api/routes/responses.py",
+        fallback="Use ordinary replies; they have no separately stored answer record.",
+        implemented=lambda rt: True,
+        claude=_ok("tests/unit/api/routes/test_api_responses.py", _RESPONSE_DELIVERY),
+        codex=_ok("tests/unit/api/routes/test_api_responses.py", _RESPONSE_DELIVERY),
+        gemini=_ok("tests/unit/api/routes/test_api_responses.py", _RESPONSE_DELIVERY),
+        opencode=_ok("tests/unit/api/routes/test_api_responses.py", _RESPONSE_DELIVERY),
+        deepcode=_ok("tests/unit/api/routes/test_api_responses.py", _RESPONSE_DELIVERY),
+        aider=_ok("tests/unit/api/routes/test_api_responses.py", _RESPONSE_DELIVERY),
+        shell=_ok("tests/unit/api/routes/test_api_responses.py", _RESPONSE_DELIVERY),
+    ),
     _row(
         "state-history",
         "Retained observations of reconciled state over the API",
@@ -928,7 +945,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok("docs/deep-reviews.md"),
         codex=_ok("docs/deep-reviews.md", "completed Opus and Astra reviews launched from Codex"),
         gemini=_gap(),
-        opencode=_unverified(288, "caller workflow documented; completed caller receipt pending"),
+        opencode=_ok(
+            "docs/deep-reviews.md",
+            "OpenCode 2.1.4 with Kimi K3 low launched Astra high and returned its findings",
+        ),
         deepcode=_gap(),
         aider=_gap(),
         shell=_na(_NO_MODEL),
