@@ -488,3 +488,13 @@ async def test_opencode_v2_live_quota_overrides_idle_and_clears_after_reply(tmp_
             tmp_path, "desk", runtime_hint="opencode", pane_content=pane
         )
         assert recovered.state == AgentState.IDLE
+
+
+def test_opencode_v2_wrapped_error_keeps_foreground_between_rows():
+    # tmux capture-pane -e keeps SGR state across soft-wrapped terminal rows.
+    screen = (
+        f"{_OC_RED}Error: You've reached your 5-hour\n"
+        "usage limit. Try later.\x1b[39m\n\nBuild · Model · 2.5s\n" + _OC_V2_INPUT
+    )
+    assert RUNTIMES["opencode"].provider_failure(screen) is not None
+    assert RUNTIMES["opencode"].provider_failure(screen.replace(_OC_RED, _OC_TEXT)) is None

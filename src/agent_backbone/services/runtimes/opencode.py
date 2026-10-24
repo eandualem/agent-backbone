@@ -132,11 +132,16 @@ class OpenCode(Runtime):
             latest -= 1
             while latest and not clean[latest - 1]:
                 latest -= 1
+            # capture-pane preserves SGR state across wrapped rows.
+            red_prefixes = []
+            color = ""
+            for raw in lines[:latest]:
+                prefix = re.match(r"(?:\s|\x1b\[[0-9;]*m)*[^\s\x1b]+", raw)
+                red_prefixes.append(bool(prefix and _error_foreground(color + prefix[0])))
+                styles = "".join(re.findall(r"\x1b\[[0-9;]*m", raw))
+                color = "\x1b[31m" if _error_foreground(color + styles + "x") else ""
             start = latest
-            while start and clean[start - 1]:
-                prefix = re.match(r"(?:\s|\x1b\[[0-9;]*m)*[^\s\x1b]+", lines[start - 1])
-                if not prefix or not _error_foreground(prefix[0]):
-                    break
+            while start and clean[start - 1] and red_prefixes[start - 1]:
                 start -= 1
             text = " ".join(clean[start:latest])
             if any(
