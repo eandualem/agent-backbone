@@ -43,7 +43,7 @@ async def test_partial_response_retry_and_audio_failure_do_not_duplicate_text(co
         SimpleNamespace(message_id=42 + n) for n in range(len(chunks) - 1)
     ]
     await bot.flush_reports()
-    sent = bot._app.bot.send_message.await_args_list
+    sent = list(bot._app.bot.send_message.await_args_list)
     assert [call.kwargs["text"] for call in sent] == [chunks[0], chunks[1], *chunks[1:]]
     assert all(call.kwargs["message_thread_id"] == 77 for call in sent)
     assert all(call.kwargs["parse_mode"] is None for call in sent)

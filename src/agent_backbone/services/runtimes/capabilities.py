@@ -188,6 +188,10 @@ _INTERRUPTED = "tests/unit/services/agents/test_interrupted_turn.py"
 _PLAN = "tests/unit/services/agents/test_plan_approval.py"
 _INSTRUCTIONS_API = "tests/unit/api/routes/test_api_instructions.py"
 
+_RESPONSE_DELIVERY = (
+    _API_BOUNDARY + "; topic delivery: tests/unit/services/integrations/telegram/test_responses.py"
+)
+
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
         "responses",
@@ -195,13 +199,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/api/routes/responses.py",
         fallback="Use ordinary replies; they have no separately stored answer record.",
         implemented=lambda rt: True,
-        claude=_ok("tests/unit/api/routes/test_api_responses.py", _API_BOUNDARY),
-        codex=_ok("tests/unit/api/routes/test_api_responses.py", _API_BOUNDARY),
-        gemini=_ok("tests/unit/api/routes/test_api_responses.py", _API_BOUNDARY),
-        opencode=_ok("tests/unit/api/routes/test_api_responses.py", _API_BOUNDARY),
-        deepcode=_ok("tests/unit/api/routes/test_api_responses.py", _API_BOUNDARY),
-        aider=_ok("tests/unit/api/routes/test_api_responses.py", _API_BOUNDARY),
-        shell=_ok("tests/unit/api/routes/test_api_responses.py", _API_BOUNDARY),
+        claude=_ok("tests/unit/api/routes/test_api_responses.py", _RESPONSE_DELIVERY),
+        codex=_ok("tests/unit/api/routes/test_api_responses.py", _RESPONSE_DELIVERY),
+        gemini=_ok("tests/unit/api/routes/test_api_responses.py", _RESPONSE_DELIVERY),
+        opencode=_ok("tests/unit/api/routes/test_api_responses.py", _RESPONSE_DELIVERY),
+        deepcode=_ok("tests/unit/api/routes/test_api_responses.py", _RESPONSE_DELIVERY),
+        aider=_ok("tests/unit/api/routes/test_api_responses.py", _RESPONSE_DELIVERY),
+        shell=_ok("tests/unit/api/routes/test_api_responses.py", _RESPONSE_DELIVERY),
     ),
     _row(
         "state-history",
