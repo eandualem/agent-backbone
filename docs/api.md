@@ -382,11 +382,7 @@ creation time in milliseconds × 1000 plus its order within that millisecond,
 used the same way): by default the last `lines` messages; `before=OFFSET`
 the messages ending at or before it (earlier pages); `since=OFFSET` the
 messages starting at or after it (later pages), with `end=OFFSET` bounding a
-range. Offsets belong to the selected native conversation; start a new read
-when changing conversations or native storage formats. When OpenCode retains
-both v1 and v2 copies, its hook identifies the active format. Before that
-format is known, output uses the screen fallback with an explanation rather
-than combining divergent histories. `range_start`/`range_end` are the page's offsets, `more_before` /
+range. `range_start`/`range_end` are the page's offsets, `more_before` /
 `more_after` say whether messages exist beyond it. One read scans at most
 64 MiB of file; a page that hit that bound says so in `evidence` with the
 offset to continue from. `400` when `since` and `before` are both given or

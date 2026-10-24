@@ -22,33 +22,26 @@ async def queue_row(db: BackboneDB, message_id: int) -> dict | None:
 
 
 def opencode_db(path: Path, messages: list[tuple[str, dict, list[dict]]]) -> Path:
-    """An OpenCode database with the ``session``, ``message`` and ``part``
-    tables it keeps (1.18), holding ``(session id, message data, [part data,
-    ...])`` in order. Each part is created a millisecond after the previous
-    one unless its data carries ``_created`` (milliseconds)."""
+    """Current native session/message tables, with ordered message content."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    with conn:
-        conn.execute("CREATE TABLE session (id TEXT PRIMARY KEY)")
-        for table, parent in (("message", ""), ("part", "message_id TEXT NOT NULL, ")):
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT)")
+        conn.execute(
+            "CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, "
+            "seq INTEGER, time_created INTEGER, time_updated INTEGER, data TEXT)"
+        )
+        for index, (session, data, parts) in enumerate(messages):
+            conn.execute("INSERT OR IGNORE INTO session_v2 VALUES (?,NULL)", (session,))
+            created = 1790071200001 + index
+            completed = max((p.get("time", {}).get("end", 0) for p in parts), default=0)
+            native = {"content": parts, "time": {"created": created}}
+            if completed:
+                native["time"]["completed"] = completed
+            kind = "compaction" if data.get("summary") else data["role"]
             conn.execute(
-                f"CREATE TABLE {table} (id TEXT PRIMARY KEY, {parent}session_id TEXT NOT NULL, "
-                "time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)"
+                "INSERT INTO session_message VALUES (?,?,?,?,?,?,?)",
+                (f"msg_{index}", session, kind, index, created, created, json.dumps(native)),
             )
-        created = 1790071200000
-        for m, (session, data, parts) in enumerate(messages):
-            conn.execute("INSERT OR IGNORE INTO session VALUES (?)", (session,))
-            conn.execute(
-                "INSERT INTO message VALUES (?,?,0,0,?)", (f"msg_{m}", session, json.dumps(data))
-            )
-            for n, part in enumerate(parts):
-                part = dict(part)
-                created = part.pop("_created", created + 1)
-                conn.execute(
-                    "INSERT INTO part VALUES (?,?,?,?,0,?)",
-                    (f"prt_{m}_{n}", f"msg_{m}", session, created, json.dumps(part)),
-                )
-    conn.close()
     return path
 
 

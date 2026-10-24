@@ -1008,7 +1008,6 @@ class Runtime:
         since: int | None = None,
         before: int | None = None,
         end: int | None = None,
-        transcript_format: str | None = None,
     ) -> tuple[list[TranscriptEntry], bool, bool] | None:
         """A page of messages out of a record that cannot be read a chunk at
         a time, as ``(messages, more_before, more_after)``, navigated by the

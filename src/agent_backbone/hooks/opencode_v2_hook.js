@@ -8,7 +8,6 @@ export default {
     const steps = new Map();
     const hook = await AgentBackbone({
       directory: ctx.location.directory,
-      transcriptFormat: "opencode-v2",
       client: {
         session: {
           get: async ({ path }) => ({ data: await ctx.session.get({ sessionID: path.id }) }),

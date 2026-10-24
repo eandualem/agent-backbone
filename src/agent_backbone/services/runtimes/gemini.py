@@ -312,7 +312,6 @@ class Gemini(Runtime):
         since: int | None = None,
         before: int | None = None,
         end: int | None = None,
-        transcript_format: str | None = None,
     ) -> tuple[list[TranscriptEntry], bool, bool]:
         """The session's replies, each at the byte offsets of its first
         record. A reply is a ``gemini`` record whose ``content`` is a string,

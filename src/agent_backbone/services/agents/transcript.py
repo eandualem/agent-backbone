@@ -64,7 +64,7 @@ class OutputPage:
 
 def locate_transcript(
     config: BackboneConfig, name: str, runtime_id: str | None, *, online: bool = False
-) -> tuple[Path | None, Runtime, str, list[str], str | None]:
+) -> tuple[Path | None, Runtime, str, list[str]]:
     """The transcript file for the agent's live session, its runtime, the
     session id and why not.
 
@@ -78,23 +78,22 @@ def locate_transcript(
     if not runtime_id and spec is not None:
         runtime_id = spec.runtime
     rt = get_runtime(runtime_id)
-    transcript_format = last.transcript_format if last is not None else None
     if not rt.transcript_supported:
-        return None, rt, "", [f"{rt.id} keeps no transcript the backbone can read"], None
+        return None, rt, "", [f"{rt.id} keeps no transcript the backbone can read"]
     session_id = last.session_id if last is not None else None
     recorded_runtime = last.runtime if last is not None else None
     if not session_id and online:
         session_id, recorded_runtime = read_launch_session(config.state_dir, name, rt.id), rt.id
     if not session_id:
-        return None, rt, "", ["no session id recorded by the hook yet"], None
+        return None, rt, "", ["no session id recorded by the hook yet"]
     if recorded_runtime and recorded_runtime != rt.id:
         why = f"the recorded session id belongs to {recorded_runtime}, not {rt.id}"
-        return None, rt, "", [why], None
+        return None, rt, "", [why]
     env = dict(spec.env) if spec is not None else {}
     try:
         candidates = rt.usage_paths(session_id, env)
     except Exception as exc:  # a runtime's store may be locked or corrupt
-        return None, rt, "", [f"transcript unreadable: {type(exc).__name__}"], None
+        return None, rt, "", [f"transcript unreadable: {type(exc).__name__}"]
     stamped = []
     for p in candidates:
         try:
@@ -103,9 +102,9 @@ def locate_transcript(
         except OSError:  # archived or removed while we looked
             continue
     if not stamped:
-        return None, rt, "", [f"no transcript file found for session {session_id}"], None
+        return None, rt, "", [f"no transcript file found for session {session_id}"]
     newest = max(stamped, key=lambda item: item[0])[1]
-    return newest, rt, session_id, [f"transcript {newest}"], transcript_format
+    return newest, rt, session_id, [f"transcript {newest}"]
 
 
 def _records(raw: bytes, base: int) -> list[dict]:
@@ -138,7 +137,6 @@ def read_messages(
     before: int | None = None,
     end: int | None = None,
     session_id: str = "",
-    transcript_format: str | None = None,
 ) -> tuple[list[TranscriptEntry], bool, bool, list[str]]:
     """A page of complete messages and whether more exist before and after it.
 
@@ -146,15 +144,7 @@ def read_messages(
     ending at or before that offset. Forwards (``since``): the first ``limit``
     messages starting at or after it, up to ``end``. Returns
     ``(messages, more_before, more_after, evidence)``."""
-    page = rt.transcript_page(
-        path,
-        session_id,
-        limit=limit,
-        since=since,
-        before=before,
-        end=end,
-        transcript_format=transcript_format,
-    )
+    page = rt.transcript_page(path, session_id, limit=limit, since=since, before=before, end=end)
     if page is not None:
         return (*page, [])
     size = path.stat().st_size
@@ -242,7 +232,7 @@ async def output_page(
     live_runtime = await query_environment_var(name, "BACKBONE_RUNTIME") if online else None
     evidence: list[str] = []
     if not screen:
-        path, rt, session_id, why, transcript_format = await asyncio.to_thread(
+        path, rt, session_id, why = await asyncio.to_thread(
             locate_transcript, config, name, live_runtime, online=online
         )
         evidence.extend(why)
@@ -257,7 +247,6 @@ async def output_page(
                     before=before,
                     end=end,
                     session_id=session_id,
-                    transcript_format=transcript_format,
                 )
             except OSError as exc:
                 evidence.append(f"transcript unreadable: {type(exc).__name__}")

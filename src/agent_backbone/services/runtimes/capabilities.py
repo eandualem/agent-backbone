@@ -496,8 +496,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         # waits for the user to switch agents instead of presenting plan_exit.
         opencode=_gap(
             278,
-            "v1 requires OPENCODE_EXPERIMENTAL_PLAN_MODE (off by default); "
-            "v2 requires switching agents in the native session, not structured plan approval",
+            "requires switching agents in the native session, not structured plan approval",
         ),
         deepcode=_gap(),
         aider=_gap(),
@@ -583,9 +582,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok(_LAUNCH),
         codex=_ok(_LAUNCH),
         gemini=_unverified(note="whether the CLI has an effort setting is not checked"),
-        opencode=_ok(
-            _LAUNCH, note="requires @opencode/cli 2.1.4+; model::effort; older versions refuse it"
-        ),
+        opencode=_ok(_LAUNCH, note="requires current @opencode/cli (2.1.4+); model::effort"),
         deepcode=_ok(_LAUNCH, note="low, high or max, through DEEPCODE_REASONING_EFFORT"),
         aider=_unverified(note="whether the CLI has an effort setting is not checked"),
         shell=_na(_NO_MODEL),
