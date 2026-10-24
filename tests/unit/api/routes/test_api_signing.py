@@ -525,3 +525,25 @@ async def test_a_rotation_without_a_verifier_is_refused_in_shape(api_client, aut
             "/api/signing/rotation", headers={**auth_headers, **signed}, content=raw
         )
     assert resp.status_code == 503 and resp.json()["detail"]["reason"] == "verifier_unavailable"
+
+
+async def test_response_publication_preserves_enrolled_author_signature(
+    api_client, auth_headers, api_app
+):
+    from tests.report_support import author
+    from tests.unit.api.routes.test_api_responses import body
+
+    db = api_app.state.db
+    await author(db, SENDER)
+    key = Ed25519PrivateKey.generate()
+    await _enroll(api_client, auth_headers, db, key)
+    publication = body(agent=SENDER)
+    refused = await api_client.post("/api/responses", headers=auth_headers, json=publication)
+    assert refused.status_code == 403
+    assert refused.json()["detail"]["reason"] == "signature_required"
+    assert (await db.reports.responses())["items"] == []
+    raw, signed = await _signed(db, key, "POST", "/api/responses", publication)
+    accepted = await api_client.post(
+        "/api/responses", headers={**auth_headers, **signed}, content=raw
+    )
+    assert accepted.status_code == 201

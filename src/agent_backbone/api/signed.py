@@ -58,6 +58,7 @@ SENDER_ROUTES: tuple[SenderRoute, ...] = (
     SenderRoute("POST", "/api/agents/{session}/restart", "body", "from_entity"),
     SenderRoute("POST", "/api/integrations/reply", "body", "session"),
     SenderRoute("POST", "/api/reports", "body", "agent"),
+    SenderRoute("POST", "/api/responses", "body", "agent"),
     SenderRoute("POST", "/api/swarms", "body", "initiator"),
     SenderRoute("POST", "/api/agents/{session}/state", "path", "session"),
     SenderRoute("POST", "/api/skills", "body", "actor"),

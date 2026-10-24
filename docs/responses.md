@@ -35,7 +35,8 @@ or interrupt an agent.
 
 Inside an agent session, `$BACKBONE_AGENT` supplies the author. Other trusted
 local callers pass `--agent NAME`. This is a supplied author name, not a separate
-authentication identity. Swarm participants cannot publish human-facing
+authentication identity. Enrolled sender names retain the existing
+[signed-request requirement](owner-confirmed-messages.md#signed-requests). Swarm participants cannot publish human-facing
 responses: send findings to the initiating repository agent.
 
 Publication returns a stored ID and delivery state. Use `--json` for the complete
@@ -75,6 +76,7 @@ targets and retry keys can expire. Store anything needed longer elsewhere.
 A response queues its full text for the author's existing configured or
 discovered topic in the allowlisted agents group. It never falls back to General
 or a private chat. If the topic is unavailable, delivery remains pending.
+Headers use the original publication name so a rename cannot shift chunk boundaries.
 Long answers are split into continuation messages carrying the response ID;
 each successful chunk is checkpointed before continuing. A retry sends the
 remaining chunks. A crash after Telegram accepts a chunk but before its receipt

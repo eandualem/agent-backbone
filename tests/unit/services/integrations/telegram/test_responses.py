@@ -36,6 +36,7 @@ async def test_partial_response_retry_and_audio_failure_do_not_duplicate_text(co
     ]
     await bot.flush_reports()
     assert (await db.reports.get(record["id"], kind="response"))["telegram_delivery"] == "pending"
+    await db.agents.rename("writer", "renamed_writer_with_longer_name")
     async with db.engine.begin() as conn:
         await conn.execute(text("UPDATE reports SET telegram_retry_at = ''"))
     bot._app.bot.send_message.side_effect = [

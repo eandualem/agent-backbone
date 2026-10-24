@@ -5,7 +5,8 @@ from agent_backbone.models import AgentResponse
 
 def response_text(record: dict) -> str:
     response = AgentResponse.model_validate(record["response"])
-    author = record["agent_name"] or record["author_name"]
+    # Chunk boundaries must stay stable across retries, including agent renames.
+    author = record["author_name"]
     lines = [f"Response {record['id']} · {author}", record["created_at"]]
     if record.get("supersedes_id"):
         lines.append(f"Updates Response {record['supersedes_id']}")
