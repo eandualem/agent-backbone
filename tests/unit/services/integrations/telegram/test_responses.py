@@ -19,7 +19,7 @@ from tests.unit.services.integrations.telegram.test_report_notifications import 
 async def test_partial_response_retry_and_audio_failure_do_not_duplicate_text(config, db):
     await author(db)
     request = body(agent="writer")
-    request["response"]["answer"] = "🧪" * 6000
+    request["response"]["answer"] = "👩‍💻" * 1900
     record, _ = await db.reports.publish(PublishResponse.model_validate(request))
     bot = configured_bot(config, db)
     # Explicit responses continue while progress notifications are paused.
@@ -27,6 +27,7 @@ async def test_partial_response_retry_and_audio_failure_do_not_duplicate_text(co
     bot._config_provider = lambda: paused
     report, _ = await db.reports.publish(publication())
     chunks = response_chunks(record)
+    assert chunks != response_chunks(record, joined=False)
     assert all(len(chunk.encode("utf-16-le")) // 2 <= 4096 for chunk in chunks)
     assert response_text(record) == chunks[0] + "".join(
         chunk.split("\n", 1)[1] for chunk in chunks[1:]
