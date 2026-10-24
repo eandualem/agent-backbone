@@ -60,7 +60,6 @@ REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
         ("bounded-unattended", "opencode", 285),
         ("auto-review", "opencode", 293),
         ("message-authority", "opencode", 294),
-        ("deep-review", "opencode", 288),
     }
 )
 """``(row, runtime, issue)``: required-set cells that shipped before the
@@ -946,7 +945,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok("docs/deep-reviews.md"),
         codex=_ok("docs/deep-reviews.md", "completed Opus and Astra reviews launched from Codex"),
         gemini=_gap(),
-        opencode=_unverified(288, "caller workflow documented; completed caller receipt pending"),
+        opencode=_ok(
+            "docs/deep-reviews.md",
+            "OpenCode 2.1.4 with Kimi K3 low launched Astra high and returned its findings",
+        ),
         deepcode=_gap(),
         aider=_gap(),
         shell=_na(_NO_MODEL),

@@ -62,7 +62,13 @@ class OpenCode(Runtime):
     # An interrupted turn, or a rejected permission, ends in session.status
     # idle and session.idle (live, 1.18.32): its plugin reports it.
     declared_capabilities = frozenset(
-        {"observed-model", "project-instructions", "request-diagnostics", "interrupted-turn"}
+        {
+            "observed-model",
+            "project-instructions",
+            "request-diagnostics",
+            "interrupted-turn",
+            "deep-review",
+        }
     )
     model_tags = True
     efforts = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
