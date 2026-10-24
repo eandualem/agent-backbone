@@ -320,10 +320,16 @@ class OpenCode(Runtime):
                     "SELECT COUNT(*),MAX(time_updated) FROM session_message WHERE session_id=?",
                     (state["_session_id"],),
                 ).fetchone()
-                boundary = hashlib.sha256(json.dumps(rows).encode()).hexdigest()
+                boundary = hashlib.sha256(
+                    (state.get("native_scan", "") + json.dumps(rows[:10000])).encode()
+                ).hexdigest()
+                if len(rows) > 10000:
+                    state["native_scan"] = boundary
+                else:
+                    state.pop("native_scan", None)
                 signature = [*native, *version, boundary]
                 # Only compare whole-session evidence after catching up, in the same snapshot.
-                # Include the replayed message contents: compaction can finish within the
+                # Include every replay page, not just the last: compaction can finish within the
                 # same millisecond without advancing timestamps or the native aggregate.
                 # Stable histories, including mismatches, need no repeated full summation.
                 if len(rows) <= 10000 and state.get("native_coverage") != signature:

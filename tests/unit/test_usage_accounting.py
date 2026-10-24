@@ -477,7 +477,7 @@ def test_missing_cache_duration_is_unpriced_but_tokens_retained():
     assert estimate(event, DEFAULT_PRICES)["usd"] is None
 
 
-def test_opencode_large_history_makes_progress_across_equal_timestamps(tmp_path):
+def test_opencode_large_history_makes_progress_across_equal_timestamps(tmp_path, monkeypatch):
     import sqlite3
 
     path = tmp_path / "opencode.db"
@@ -486,7 +486,7 @@ def test_opencode_large_history_makes_progress_across_equal_timestamps(tmp_path)
     )
     with sqlite3.connect(path) as c:
         opencode_session_table(c)
-        c.execute("INSERT INTO session_v2(id) VALUES ('s')")
+        c.execute("INSERT INTO session_v2(id,tokens_input) VALUES ('s',260001)")
         c.execute(
             "CREATE TABLE session_message(id TEXT,session_id TEXT,time_created INTEGER DEFAULT 0,"
             "time_updated INTEGER,"
@@ -501,6 +501,30 @@ def test_opencode_large_history_makes_progress_across_equal_timestamps(tmp_path)
     second = RUNTIMES["opencode"].read_usage(path, first.offset, first.state)
     assert second.caught_up and len(second.events) == 2
     assert not {e.key for e in first.events} & {e.key for e in second.events}
+
+    assert second.state["coverage_detail"]
+    # A revision on an earlier page leaves the final page and all timestamps unchanged.
+    revised = json.loads(encoded)
+    revised["tokens"]["input"] = 250_000
+    with sqlite3.connect(path) as c:
+        c.execute("UPDATE session_message SET data=? WHERE id='m00000'", (json.dumps(revised),))
+    third = RUNTIMES["opencode"].read_usage(path, second.offset, second.state)
+    assert third.events[0].input_tokens == 250_000 and not third.caught_up
+    fourth = RUNTIMES["opencode"].read_usage(path, third.offset, third.state)
+    assert fourth.caught_up and not fourth.state.get("coverage_detail")
+    queries = []
+    real_connect = sqlite3.connect
+
+    def connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        conn.set_trace_callback(queries.append)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    fifth = RUNTIMES["opencode"].read_usage(path, fourth.offset, fourth.state)
+    sixth = RUNTIMES["opencode"].read_usage(path, fifth.offset, fifth.state)
+    assert sixth.caught_up and sixth.state == fourth.state
+    assert not any("SUM(" in query for query in queries)
 
 
 def test_codex_missing_observations_keep_tokens_but_do_not_price_gap(tmp_path):
