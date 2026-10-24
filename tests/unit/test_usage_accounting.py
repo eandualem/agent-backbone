@@ -14,6 +14,7 @@ from agent_backbone.services.agents import collect_usage, usage_view
 from agent_backbone.services.runtimes import RUNTIMES, read_usage_jsonl
 from agent_backbone.usage import DEFAULT_PRICES, UsageEvent, estimate, timestamp
 from tests.conftest import make_config
+from tests.support import opencode_session_table
 
 _USAGE = "agent_backbone.services.agents.usage"
 T = "2026-09-12T10:00:00Z"
@@ -271,6 +272,8 @@ def test_opencode_reasoning_and_cache_are_counted_once(tmp_path):
 
     path = tmp_path / "opencode.db"
     with sqlite3.connect(path) as conn:
+        opencode_session_table(conn)
+        conn.execute("INSERT INTO session_v2(id) VALUES ('s'),('other')")
         conn.execute(
             "CREATE TABLE session_message(id TEXT, session_id TEXT, time_updated INTEGER, "
             "data TEXT, type TEXT DEFAULT 'assistant')"
@@ -481,6 +484,8 @@ def test_opencode_large_history_makes_progress_across_equal_timestamps(tmp_path)
         {"role": "assistant", "time": {"created": 1789207200000}, "tokens": {"input": 1}}
     )
     with sqlite3.connect(path) as c:
+        opencode_session_table(c)
+        c.execute("INSERT INTO session_v2(id) VALUES ('s')")
         c.execute(
             "CREATE TABLE session_message(id TEXT,session_id TEXT,time_updated INTEGER,"
             "data TEXT,type TEXT DEFAULT 'assistant')"
@@ -540,6 +545,8 @@ def test_opencode_malformed_observation_keeps_coverage_partial_after_recovery(tm
         )
 
     with sqlite3.connect(path) as c:
+        opencode_session_table(c)
+        c.execute("INSERT INTO session_v2(id) VALUES ('s')")
         c.execute(
             "CREATE TABLE session_message(id TEXT,session_id TEXT,time_updated INTEGER,"
             "data TEXT,type TEXT DEFAULT 'assistant')"
@@ -605,6 +612,8 @@ def test_opencode_invalid_structured_tokens_return_partial_batch(tmp_path, token
 
     path = tmp_path / "opencode.db"
     with sqlite3.connect(path) as c:
+        opencode_session_table(c)
+        c.execute("INSERT INTO session_v2(id) VALUES ('s')")
         c.execute(
             "CREATE TABLE session_message(id TEXT,session_id TEXT,time_updated INTEGER,"
             "data TEXT,type TEXT DEFAULT 'assistant')"

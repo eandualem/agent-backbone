@@ -227,7 +227,11 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                     "usage_source",
                     "source_read_error" if batch.error else None,
                 )
-                detail = batch.error or ("source read incomplete" if not batch.caught_up else "")
+                detail = (
+                    batch.error
+                    or batch.state.get("coverage_detail")
+                    or ("source read incomplete" if not batch.caught_up else "")
+                )
                 if (
                     not batch.events
                     and session["source_path"] == str(path)

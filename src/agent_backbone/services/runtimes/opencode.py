@@ -8,6 +8,7 @@ without the working spinner's "esc interrupt".
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sqlite3
@@ -295,15 +296,69 @@ class OpenCode(Runtime):
         batch = UsageBatch(offset, state)
         try:
             with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+                conn.execute("BEGIN")
+                native = conn.execute(
+                    "SELECT cost,tokens_input,tokens_output,tokens_reasoning,"
+                    "tokens_cache_read,tokens_cache_write,fork_session_id,"
+                    "time_created,time_updated "
+                    "FROM session_v2 WHERE id=?",
+                    (state["_session_id"],),
+                ).fetchone()
+                if native is None:
+                    raise ValueError("native session is unavailable")
+                # A fork copies context with new message IDs but starts its own usage at zero.
+                fork_filter = "AND time_created>=? " if native[6] is not None else ""
+                fork_params = (native[7],) if fork_filter else ()
                 # Replay the boundary timestamp to catch same-millisecond revisions.
                 floor = state.get("scan_floor", max(0, offset - 1000))
                 after_time, after_id = state.get("scan_after", (floor, ""))
                 rows = conn.execute(
                     "SELECT id,time_updated,data,type FROM session_message WHERE session_id=? "
-                    "AND time_updated>=? AND (time_updated>? OR (time_updated=? AND id>?)) "
+                    f"{fork_filter}AND time_updated>=? "
+                    "AND (time_updated>? OR (time_updated=? AND id>?)) "
                     "ORDER BY time_updated,id LIMIT 10001",
-                    (state["_session_id"], floor, after_time, after_time, after_id),
+                    (state["_session_id"], *fork_params, floor, after_time, after_time, after_id),
                 ).fetchall()
+                version = conn.execute(
+                    "SELECT COUNT(*),MAX(time_updated) FROM session_message WHERE session_id=?",
+                    (state["_session_id"],),
+                ).fetchone()
+                signature = [*native, *version]
+                # Only compare whole-session evidence after catching up, in the same snapshot.
+                # Cache a successful comparison until the native session changes; never add
+                # aggregate totals to message/ledger counts, which would double count usage.
+                if (
+                    len(rows) <= 10000
+                    and not state.get("partial")
+                    and state.get("native_coverage") != signature
+                ):
+                    paths = (
+                        "cost",
+                        "tokens.input",
+                        "tokens.output",
+                        "tokens.reasoning",
+                        "tokens.cache.read",
+                        "tokens.cache.write",
+                    )
+                    sums = ",".join(
+                        "COALESCE(SUM(CASE WHEN json_valid(data) THEN "
+                        f"json_extract(data, '$.{path}') ELSE 0 END),0)"
+                        for path in paths
+                    )
+                    visible = conn.execute(
+                        f"SELECT {sums} FROM session_message WHERE session_id=? "
+                        f"AND type IN ('assistant','compaction') {fork_filter}",
+                        (state["_session_id"], *fork_params),
+                    ).fetchone()
+                    if native[1:6] != visible[1:6] or not math.isclose(
+                        native[0], visible[0], rel_tol=1e-9, abs_tol=1e-9
+                    ):
+                        state["partial"] = True
+                        state["coverage_detail"] = (
+                            "native session totals do not match current message history; "
+                            "historical usage attribution is incomplete"
+                        )
+                    state["native_coverage"] = signature
             batch.caught_up = len(rows) <= 10000
             for key, updated, encoded, kind in rows[:10000]:
                 batch.offset = max(batch.offset, updated)

@@ -21,17 +21,30 @@ async def queue_row(db: BackboneDB, message_id: int) -> dict | None:
         return dict(row._mapping) if row else None
 
 
+def opencode_session_table(conn):
+    """Current native session fields used for discovery and usage reconciliation."""
+    conn.execute(
+        "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, cost REAL DEFAULT 0, "
+        "tokens_input INTEGER DEFAULT 0, tokens_output INTEGER DEFAULT 0, "
+        "tokens_reasoning INTEGER DEFAULT 0, tokens_cache_read INTEGER DEFAULT 0, "
+        "tokens_cache_write INTEGER DEFAULT 0, fork_session_id TEXT, "
+        "time_created INTEGER DEFAULT 0, time_updated INTEGER DEFAULT 0)"
+    )
+
+
 def opencode_db(path: Path, messages: list[tuple[str, dict, list[dict]]]) -> Path:
     """Current native session/message tables, with ordered message content."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
-        conn.execute("CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT)")
+        opencode_session_table(conn)
         conn.execute(
             "CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, "
             "seq INTEGER, time_created INTEGER, time_updated INTEGER, data TEXT)"
         )
         for index, (session, data, parts) in enumerate(messages):
-            conn.execute("INSERT OR IGNORE INTO session_v2 VALUES (?,NULL)", (session,))
+            conn.execute(
+                "INSERT OR IGNORE INTO session_v2(id,parent_id) VALUES (?,NULL)", (session,)
+            )
             created = 1790071200001 + index
             completed = max((p.get("time", {}).get("end", 0) for p in parts), default=0)
             native = {"content": parts, "time": {"created": created}}

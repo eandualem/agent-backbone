@@ -47,7 +47,8 @@ that lower a count. Original request timestamps remain stable for filtering.
 Runtime-proven children have separate rows linked by `parent_id`; the parent row
 contains only its own requests. A child identified before its parent is linked
 when runtime evidence becomes available. Overall totals include each row once. Codex's
-inherited pre-fork history is excluded. A missing cumulative baseline or counter
+inherited pre-fork history is excluded. OpenCode also excludes inherited fork context
+using its native session boundary. A missing cumulative baseline or counter
 reset is marked partial instead of attributing inherited tokens to new work.
 
 Coverage describes retained source evidence, not an independent provider audit:
@@ -56,6 +57,14 @@ Coverage describes retained source evidence, not an independent provider audit:
 - `catching_up`: more data remains; collection continues on the next refresh.
 - `partial`: malformed, reset, replaced or otherwise incomplete source evidence.
 - `unavailable`: no identified readable source; this does not mean zero usage.
+
+OpenCode's current session total can include migrated summaries, title generation
+or reverted work that is no longer attributable from its message records. Backbone
+compares those sources after catching up and marks mismatches as `partial`, with an
+explanation. It retains measured message values and previously collected ledger
+entries; it does not add overlapping aggregate totals or invent model/date details.
+This describes incomplete current source evidence, even when the retained ledger
+already contains some of the removed history.
 
 Missing/deleted records cannot be recovered. When a conversation's source file
 is gone, Backbone searches for it once, then records it as `source file is gone`
