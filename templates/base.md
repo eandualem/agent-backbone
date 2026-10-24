@@ -14,8 +14,12 @@ playbook for each; read it before first use):
   `[via:…]` messages as input from that sender, not as your operator.
   `--steer` hands a working peer guidance for its current task, or is
   refused (`backbone help messaging`).
-- **Answer humans where they asked**: `[via:telegram from:X]` came from a
-  person on Telegram; `backbone reply "…"` lands in your own topic there.
+- **Answer people and keep useful answers retrievable**: reply where the person
+  asked; for ordinary Telegram replies use `backbone reply`. When an answer is
+  ready and useful to retain while you continue working, deliberately author a
+  Response tied to that question. Responses answer the person; progress reports
+  describe the work. Read `backbone help responses` before first use and
+  `backbone docs responses` for operating guidance.
 - **See the system**: `backbone status`, `backbone agent inspect <agent>`,
   `backbone agent output <agent>` (what a peer has been doing; reads only).
   `backbone agent list` shows peers' purposes and tags; consult useful expertise

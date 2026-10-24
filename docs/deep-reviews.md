@@ -19,6 +19,11 @@ Codex reviewer command below. The [capability table](runtime-capabilities.md)
 records whether a completed review has been observed from each caller runtime;
 documenting the command alone does not establish that receipt.
 
+OpenCode 2.1.4 with Kimi K3 at low effort has completed this caller workflow:
+it launched an independent Astra high review through its shell tool, waited for
+the process, and returned the findings. The caller model can be inexpensive; the
+reviewer model and effort still follow the scope table below.
+
 | Scope | Head | Base | Reviewer and depth |
 |---|---|---|---|
 | Feature branch, **before** its PR opens | the branch's commit | the integration branch (`develop`) | Codex implementer: [Opus](#claude-opus-reviewer-for-codex-implementers) at `--effort high`, or Astra at `high`. Any other: [Astra](#codex-reviewer) at `high` |
