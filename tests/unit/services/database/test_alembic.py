@@ -758,3 +758,43 @@ async def test_an_installed_database_frees_an_earlier_sessions_delivery_slot(tmp
         assert outcome == "delivered"  # the earlier delivery survives as evidence
     finally:
         await db.stop()
+
+
+@pytest.mark.skipif(
+    sqlite3.sqlite_version_info < (3, 35, 0),
+    reason="constructing the previous reports schema uses SQLite 3.35+ DROP COLUMN",
+)
+async def test_populated_report_upgrade_preserves_history_and_separates_retry_keys(tmp_path):
+    from agent_backbone.models import PublishResponse
+    from tests.report_support import author, publication
+
+    path = tmp_path / "before-responses.db"
+    url = f"sqlite+aiosqlite:///{path}"
+    async with BackboneDB.connect(url) as db:
+        await author(db)
+        old, _ = await db.reports.publish(publication())
+    # Restore the populated pre-response table and its author/request unique key.
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP INDEX idx_reports_supersedes")
+        conn.execute("DROP INDEX uq_reports_request")
+        conn.execute("ALTER TABLE reports DROP COLUMN kind")
+        conn.execute("ALTER TABLE reports DROP COLUMN supersedes_id")
+        conn.execute("CREATE UNIQUE INDEX uq_reports_request ON reports(author_id, request_id)")
+        conn.execute("UPDATE alembic_version SET version_num='before_responses'")
+    async with BackboneDB.connect(url) as db:
+        saved = await db.reports.get(old["id"])
+        assert saved["report"] == old["report"]
+        assert saved["author_id"] == old["author_id"]
+        response, created = await db.reports.publish(
+            PublishResponse(
+                agent="writer",
+                request_id=old["request_id"],
+                response={"question": "Ready?", "answer": "Yes.", "action": "Continue."},
+            )
+        )
+        assert created and response["id"] != old["id"]
+        assert (await db.reports.get(response["id"], kind="response"))["response"][
+            "answer"
+        ] == "Yes."
+        retried, created = await db.reports.publish(publication())
+        assert not created and retried["id"] == old["id"]

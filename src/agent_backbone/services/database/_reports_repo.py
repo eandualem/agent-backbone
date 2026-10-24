@@ -164,7 +164,14 @@ class ReportRepo(Repo):
                     raise ReportConflict(
                         "request_id already published different content; use a new key"
                     )
-                return _record(dict(previous) | {"agent_name": publication.agent}), False
+                record = dict(previous) | {"agent_name": publication.agent}
+                if response:
+                    record["superseded_by"] = await conn.scalar(
+                        select(func.max(_R.c.id)).where(
+                            _R.c.kind == "response", _R.c.supersedes_id == previous["id"]
+                        )
+                    )
+                return _record(record), False
             if supersedes is not None:
                 previous_author = await conn.scalar(
                     select(_R.c.author_id).where(_R.c.id == supersedes, _R.c.kind == "response")

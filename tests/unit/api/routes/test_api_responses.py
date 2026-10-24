@@ -39,6 +39,9 @@ async def test_response_publication_retrieval_and_correction(
     )
     assert second.status_code == 201
     correction = second.json()["record"]
+    retried_original = await api_client.post("/api/responses", headers=auth_headers, json=body())
+    assert not retried_original.json()["created"]
+    assert retried_original.json()["record"]["superseded_by"] == correction["id"]
     read = await api_client.get(f"/api/responses/{original['id']}", headers=auth_headers)
     assert read.json()["superseded_by"] == correction["id"]
     assert read.json()["response"] == body()["response"]
