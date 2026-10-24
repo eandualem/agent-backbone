@@ -65,7 +65,8 @@ def test_v2_usage_children_and_completed_transcript(tmp_path):
     assert not before and after
 
 
-async def test_mixed_formats_keep_native_output_and_all_usage(tmp_path, db):
+@pytest.mark.parametrize("legacy_first", [False, True])
+async def test_mixed_formats_keep_native_output_and_all_usage(tmp_path, db, legacy_first):
     path = tmp_path / "opencode.db"
     with sqlite3.connect(path) as conn:
         conn.executescript(
@@ -156,6 +157,16 @@ async def test_mixed_formats_keep_native_output_and_all_usage(tmp_path, db):
         "native": 3,
         "summary": 4,
     }
+    if legacy_first:
+        # Previously collected v1 usage must gain the v2 priority on UPDATE,
+        # not only when the selected native copy is inserted for the first time.
+        legacy = next(event for event in batch.events if event.key == "common").model_copy(
+            update={"input_tokens": 5}
+        )
+        legacy._revision_priority = 0
+        initial = runtime.read_usage(path, 0, {"_session_id": "root"})
+        initial.events = [legacy]
+        await ingest(initial)
     await ingest(batch)
     with pytest.raises(ValueError, match="ambiguous"):
         runtime.transcript_page(path, "root", limit=1)

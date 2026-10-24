@@ -188,7 +188,12 @@ class UsageRepo(Repo):
                 await conn.execute(
                     update(_E)
                     .where(_E.c.session == session["id"], _E.c.event_key == bindparam("_key"))
-                    .values({key: bindparam(key) for key in ("at", "model", "data", "cost")}),
+                    .values(
+                        {
+                            key: bindparam(key)
+                            for key in ("at", "model", "data", "cost", "revision_priority")
+                        }
+                    ),
                     revised,
                 )
         return True

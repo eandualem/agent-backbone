@@ -360,7 +360,8 @@ class OpenCode(Runtime):
                     kind = "type" if v2 else "NULL"
                     queries.append(
                         f"SELECT id,time_updated,data,{int(v2)} AS source,{kind} AS kind "
-                        f"FROM {table} WHERE session_id=? AND time_updated>=?"
+                        f"FROM {table} WHERE session_id=? AND time_updated>=? "
+                        "AND (time_updated>? OR (time_updated=? AND id>?))"
                     )
                 if not queries:
                     raise ValueError("no OpenCode message store")
@@ -369,15 +370,8 @@ class OpenCode(Runtime):
                     "ranked AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY id "
                     "ORDER BY time_updated DESC,source DESC) AS revision FROM versions) "
                     "SELECT id,time_updated,data,source,kind FROM ranked WHERE revision=1 "
-                    "AND time_updated>=? AND (time_updated>? OR (time_updated=? AND id>?)) "
                     "ORDER BY time_updated,id LIMIT 10001",
-                    (
-                        *([state["_session_id"], floor] * len(tables)),
-                        floor,
-                        after_time,
-                        after_time,
-                        after_id,
-                    ),
+                    [state["_session_id"], floor, after_time, after_time, after_id] * len(tables),
                 ).fetchall()
             batch.caught_up = len(rows) <= 10000
             for key, updated, encoded, source, kind in rows[:10000]:
