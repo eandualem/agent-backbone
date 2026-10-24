@@ -190,6 +190,20 @@ _INSTRUCTIONS_API = "tests/unit/api/routes/test_api_instructions.py"
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
+        "responses",
+        "Stored questions, answers and actions with durable topic delivery",
+        "src/agent_backbone/api/routes/responses.py",
+        fallback="Use ordinary replies; they have no separately stored answer record.",
+        implemented=lambda rt: True,
+        claude=_ok("tests/unit/api/routes/test_api_responses.py", _API_BOUNDARY),
+        codex=_ok("tests/unit/api/routes/test_api_responses.py", _API_BOUNDARY),
+        gemini=_ok("tests/unit/api/routes/test_api_responses.py", _API_BOUNDARY),
+        opencode=_ok("tests/unit/api/routes/test_api_responses.py", _API_BOUNDARY),
+        deepcode=_ok("tests/unit/api/routes/test_api_responses.py", _API_BOUNDARY),
+        aider=_ok("tests/unit/api/routes/test_api_responses.py", _API_BOUNDARY),
+        shell=_ok("tests/unit/api/routes/test_api_responses.py", _API_BOUNDARY),
+    ),
+    _row(
         "state-history",
         "Retained observations of reconciled state over the API",
         "src/agent_backbone/api/session_updates.py",

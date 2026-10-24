@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: d55884308c77
+Revision ID: 49e6e8eac8e6
 Revises:
-Create Date: 2026-10-23 18:56:14.103949
+Create Date: 2026-10-24 14:21:25.671946
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "d55884308c77"
+revision: str = "49e6e8eac8e6"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -324,6 +324,8 @@ def upgrade() -> None:
     op.create_table(
         "reports",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("kind", sa.Text(), server_default="report", nullable=False),
+        sa.Column("supersedes_id", sa.Integer(), nullable=True),
         sa.Column("author_id", sa.Text(), nullable=False),
         sa.Column("author_name", sa.Text(), nullable=False),
         sa.Column("request_id", sa.Text(), nullable=False),
@@ -357,9 +359,14 @@ def upgrade() -> None:
         batch_op.create_index("idx_reports_author", ["author_id", "id"], unique=False)
         batch_op.create_index("idx_reports_created", ["created_at"], unique=False)
         batch_op.create_index(
+            "idx_reports_supersedes", ["kind", "supersedes_id", "id"], unique=False
+        )
+        batch_op.create_index(
             "idx_reports_telegram", ["telegram_delivery", "telegram_retry_at", "id"], unique=False
         )
-        batch_op.create_index("uq_reports_request", ["author_id", "request_id"], unique=True)
+        batch_op.create_index(
+            "uq_reports_request", ["author_id", "kind", "request_id"], unique=True
+        )
 
     op.create_table(
         "review_lifecycle",
@@ -639,6 +646,7 @@ def downgrade() -> None:
     with op.batch_alter_table("reports", schema=None) as batch_op:
         batch_op.drop_index("uq_reports_request")
         batch_op.drop_index("idx_reports_telegram")
+        batch_op.drop_index("idx_reports_supersedes")
         batch_op.drop_index("idx_reports_created")
         batch_op.drop_index("idx_reports_author")
         batch_op.drop_index("idx_reports_audio")

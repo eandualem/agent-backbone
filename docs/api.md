@@ -7,6 +7,15 @@ running. Every route except `GET /health` and the webhook requires
 Response examples below show selected fields. Use the running OpenAPI schema
 for complete request and response models.
 
+## Saved responses
+
+[Responses](responses.md) store explicitly supplied questions, answers and actions
+separately from progress reports. `POST /api/responses` publishes idempotently;
+`GET /api/responses` pages retained answers and `GET /api/responses/{id}` reads one.
+Use `GET /api/responses/schema` for bounds and `supersedes_id` for an explicit
+correction to the same author's prior response. Publication queues full text to
+the existing authorized author topic and optional independent audio.
+
 ## Progress reports
 
 `GET /api/reports/schema` exposes the required sections, field and total limits,

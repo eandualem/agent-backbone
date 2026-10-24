@@ -13,12 +13,22 @@ from pathlib import Path
 import httpx
 
 from agent_backbone.config import TelegramConfig, validate_setting
-from agent_backbone.models import ProgressReport
+from agent_backbone.models import AgentResponse, ProgressReport
 
 _MAX_WAV = 32 * 1024 * 1024
 
 
 def spoken_report(record: dict) -> str:
+    if "response" in record:
+        response = AgentResponse.model_validate(record["response"])
+        return "\n".join(
+            [
+                f"{record['agent_name'] or record['author_name']}. Response {record['id']}.",
+                f"Question. {response.question}",
+                f"Answer. {response.answer}",
+                f"Action or decision. {response.action}",
+            ]
+        )
     report = ProgressReport.model_validate(record["report"])
     lines = [f"{record['agent_name'] or record['author_name']}. {report.status}."]
     for name, section in report.sections():

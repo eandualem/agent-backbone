@@ -17,6 +17,7 @@ _FROM_TAG_PATTERN = re.compile(r"^\[from:([A-Za-z0-9][A-Za-z0-9_.-]*)\]")
 # Reporting is a bounded authoring tool. These limits apply at every entry point,
 # not just to how much a UI happens to show.
 REPORT_BODY_BYTES = 16_384
+RESPONSE_BODY_BYTES = 65_536
 REPORT_TEXT_CHARACTERS = 1_500
 REPORT_LINKS = 6
 REPORTS_PER_HOUR = 30
@@ -163,6 +164,38 @@ class PublishReport(BaseModel):
         description="Reuse this key and the same report when retrying a publication.",
     )
     report: ProgressReport
+
+
+class AgentResponse(BaseModel):
+    """An explicitly associated answer, independent of progress reporting."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    question: str = Field(min_length=1, max_length=500)
+    answer: str = Field(min_length=1, max_length=6000)
+    action: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("question", "answer", "action")
+    @classmethod
+    def plain_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("this field cannot be blank")
+        if any(
+            (unicodedata.category(c) in {"Cc", "Cs", "Zl", "Zp"} and c not in "\n\t")
+            or c in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+            for c in value
+        ):
+            raise ValueError("use plain text without control characters")
+        return value.strip()
+
+
+class PublishResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    agent: ReportAgentName
+    request_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_.:-]+$")
+    response: AgentResponse
+    supersedes_id: int | None = Field(default=None, ge=1, le=2**63 - 1)
 
 
 class ReportQuery(BaseModel):

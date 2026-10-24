@@ -50,6 +50,13 @@ An already running agent stays running. Starting from its directory also finds
 its registered name. Choose `--runtime` and `--model` explicitly to change them;
 changing CLI without a model clears the old CLI's model setting.
 
+## Find a saved answer
+
+`backbone responses --agent app` lists an agent's saved questions, answers and
+actions. `backbone responses show ID` reads one in full. Agents publish explicitly
+with `backbone respond --file answer.json` while continuing their work; the full
+answer is also queued to their Telegram topic. See [Responses](docs/responses.md).
+
 ## Read agent progress
 
 ```bash
