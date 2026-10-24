@@ -539,6 +539,7 @@ class UsageEventORM(Base):
     model: Mapped[str] = mapped_column(Text, nullable=False)
     data: Mapped[str] = mapped_column(Text, nullable=False)
     cost: Mapped[str] = mapped_column(Text, nullable=False)
+    revision_priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     __table_args__ = (Index("idx_usage_events_at", "at", "session"),)
 
 

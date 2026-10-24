@@ -519,6 +519,13 @@ async def test_restamp_migrates_the_previous_squash_columns(tmp_path):
     await db.start()
     try:
         async with db.engine.begin() as conn:
+            await conn.execute(text("ALTER TABLE usage_events DROP COLUMN revision_priority"))
+            await conn.execute(
+                text(
+                    "INSERT INTO usage_events (session,event_key,at,model,data,cost) "
+                    "VALUES ('s','m','2026-09-01T00:00:00Z','model','{}','{}')"
+                )
+            )
             for table in ("deliveries", "message_queue"):
                 await conn.execute(text(f"ALTER TABLE {table} RENAME COLUMN source TO flow_name"))
             await conn.execute(
@@ -545,11 +552,14 @@ async def test_restamp_migrates_the_previous_squash_columns(tmp_path):
                     c["name"]
                     for c in await conn.run_sync(lambda sync, t=table: inspect(sync).get_columns(t))
                 }
-                for table in ("deliveries", "message_queue")
+                for table in ("deliveries", "message_queue", "usage_events")
             }
         assert "source" in columns["deliveries"] and "flow_name" not in columns["deliveries"]
         assert "flow_run_id" not in columns["deliveries"]
         assert "source" in columns["message_queue"]
+        assert "revision_priority" in columns["usage_events"]
+        async with db2.engine.connect() as conn:
+            assert await conn.scalar(text("SELECT revision_priority FROM usage_events")) == 1
         (row,) = await db2.deliveries.query(issue_number=1)
         assert row["source"] == "issue-dispatcher"
         # and new writes work

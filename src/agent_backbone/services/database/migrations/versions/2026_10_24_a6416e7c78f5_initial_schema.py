@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: d55884308c77
+Revision ID: a6416e7c78f5
 Revises:
-Create Date: 2026-10-23 18:56:14.103949
+Create Date: 2026-10-24 11:08:17.370494
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "d55884308c77"
+revision: str = "a6416e7c78f5"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -228,10 +228,6 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_events")),
     )
     with op.batch_alter_table("events", schema=None) as batch_op:
-        # Autogenerate skips expression indexes: written by hand (#394).
-        batch_op.create_index(
-            "idx_events_delivery_id_lower", [sa.text("lower(delivery_id)")], unique=False
-        )
         batch_op.create_index("idx_events_received", ["received_at"], unique=False)
         batch_op.create_index("idx_events_repo", ["repo"], unique=False)
         batch_op.create_index("uq_events_delivery_id", ["delivery_id"], unique=True)
@@ -560,6 +556,7 @@ def upgrade() -> None:
         sa.Column("model", sa.Text(), nullable=False),
         sa.Column("data", sa.Text(), nullable=False),
         sa.Column("cost", sa.Text(), nullable=False),
+        sa.Column("revision_priority", sa.Integer(), server_default="1", nullable=False),
         sa.PrimaryKeyConstraint("session", "event_key", name=op.f("pk_usage_events")),
     )
     with op.batch_alter_table("usage_events", schema=None) as batch_op:
@@ -682,7 +679,6 @@ def downgrade() -> None:
         batch_op.drop_index("uq_events_delivery_id")
         batch_op.drop_index("idx_events_repo")
         batch_op.drop_index("idx_events_received")
-        batch_op.drop_index("idx_events_delivery_id_lower")
 
     op.drop_table("events")
     with op.batch_alter_table("event_outbox", schema=None) as batch_op:

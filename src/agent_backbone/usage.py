@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 TOKEN_FIELDS = ("input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens")
 
@@ -30,6 +30,8 @@ class UsageEvent(BaseModel):
     """Disjoint token buckets; reasoning is a subset of output, never added twice."""
 
     model_config = ConfigDict(extra="forbid")
+    _revision_priority: int = PrivateAttr(default=1)
+    """Internal tie order; a fallback copy may have lower priority. Never serialized."""
     key: str = Field(min_length=1, max_length=300)
     at: str
     revision_at: str | None = None

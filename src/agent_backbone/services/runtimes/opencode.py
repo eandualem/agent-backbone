@@ -357,15 +357,9 @@ class OpenCode(Runtime):
                 queries = []
                 for table in tables:
                     v2 = table == "session_message"
-                    data = (
-                        "json_set(data, '$.role', CASE WHEN type='compaction' THEN 'assistant' "
-                        "ELSE type END, '$.modelID', json_extract(data, '$.model.id'), "
-                        "'$.providerID', json_extract(data, '$.model.providerID'))"
-                        if v2
-                        else "data"
-                    )
+                    kind = "type" if v2 else "NULL"
                     queries.append(
-                        f"SELECT id,time_updated,{data} AS data,{int(v2)} AS source "
+                        f"SELECT id,time_updated,data,{int(v2)} AS source,{kind} AS kind "
                         f"FROM {table} WHERE session_id=? AND time_updated>=?"
                     )
                 if not queries:
@@ -374,7 +368,7 @@ class OpenCode(Runtime):
                     "WITH versions AS (" + " UNION ALL ".join(queries) + "), "
                     "ranked AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY id "
                     "ORDER BY time_updated DESC,source DESC) AS revision FROM versions) "
-                    "SELECT id,time_updated,data FROM ranked WHERE revision=1 "
+                    "SELECT id,time_updated,data,source,kind FROM ranked WHERE revision=1 "
                     "AND time_updated>=? AND (time_updated>? OR (time_updated=? AND id>?)) "
                     "ORDER BY time_updated,id LIMIT 10001",
                     (
@@ -386,15 +380,23 @@ class OpenCode(Runtime):
                     ),
                 ).fetchall()
             batch.caught_up = len(rows) <= 10000
-            for key, updated, encoded in rows[:10000]:
+            for key, updated, encoded, source, kind in rows[:10000]:
                 batch.offset = max(batch.offset, updated)
                 state["scan_floor"] = floor
                 state["scan_after"] = (updated, key)
                 data = json.loads(encoded)
                 if not isinstance(data, dict):
                     raise ValueError("invalid message record")
-                if data.get("role") != "assistant" or not data.get("tokens"):
+                role = (
+                    ("assistant" if kind == "compaction" else kind) if source else data.get("role")
+                )
+                if role != "assistant" or not data.get("tokens"):
                     continue
+                if source:
+                    model = data.get("model") or {}
+                    if not isinstance(model, dict):
+                        raise ValueError("invalid model record")
+                    data.update(modelID=model.get("id"), providerID=model.get("providerID"))
                 tokens = data["tokens"]
                 if not isinstance(tokens, dict):
                     raise ValueError("invalid token usage")
@@ -419,6 +421,7 @@ class OpenCode(Runtime):
                     + count(cache, "read")
                     + count(cache, "write"),
                 )
+                event._revision_priority = source
                 batch.events.append(event)
             if batch.caught_up:
                 state.pop("scan_floor", None)

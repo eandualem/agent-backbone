@@ -6,6 +6,7 @@ import sqlite3
 import pytest
 
 from agent_backbone.services.runtimes import RUNTIMES
+from agent_backbone.usage import timestamp
 
 
 def test_v2_usage_children_and_completed_transcript(tmp_path):
@@ -64,7 +65,7 @@ def test_v2_usage_children_and_completed_transcript(tmp_path):
     assert not before and after
 
 
-def test_mixed_formats_keep_native_output_and_all_usage(tmp_path):
+async def test_mixed_formats_keep_native_output_and_all_usage(tmp_path, db):
     path = tmp_path / "opencode.db"
     with sqlite3.connect(path) as conn:
         conn.executescript(
@@ -122,7 +123,25 @@ def test_mixed_formats_keep_native_output_and_all_usage(tmp_path):
                 json.dumps({"time": {"created": 500}, "summary": "summary"}),
             ),
         )
+        for table in ("message", "session_message"):
+            conn.execute(f"UPDATE {table} SET time_updated=2500 WHERE id='common'")
     runtime = RUNTIMES["opencode"]
+    identity = await db.usage.remember("worker", "opencode", "root", at=timestamp(1))
+
+    async def ingest(batch):
+        session = await db.usage.session(identity)
+        assert await db.usage.ingest(
+            session,
+            path=str(path),
+            offset=batch.offset,
+            cursor=batch.state,
+            events=batch.events,
+            coverage="measured",
+            detail="",
+            prices={},
+            observed_at=timestamp(4),
+        )
+
     assert runtime.usage_children(path, "root", {}) == [
         (child, path) for child in ["legacy-child", "native-child", "shared-child"]
     ]
@@ -137,6 +156,7 @@ def test_mixed_formats_keep_native_output_and_all_usage(tmp_path):
         "native": 3,
         "summary": 4,
     }
+    await ingest(batch)
     with pytest.raises(ValueError, match="ambiguous"):
         runtime.transcript_page(path, "root", limit=1)
     for version, last_text in [("opencode-v1", "legacy"), ("opencode-v2", "native")]:
@@ -156,18 +176,50 @@ def test_mixed_formats_keep_native_output_and_all_usage(tmp_path):
         assert [entry.text for entry in forward] == [last_text] and not after
     with sqlite3.connect(path) as conn:
         conn.execute("DELETE FROM session_message WHERE type='assistant'")
-        conn.execute(
-            "UPDATE message SET time_updated=4000, "
-            "data=json_set(data, '$.tokens.input', 12) WHERE id='common'"
-        )
+
     # Native revert must not resurrect legacy copies in the current conversation.
     page, before, after = runtime.transcript_page(
         path, "root", limit=20, transcript_format="opencode-v2"
     )
     assert page == [] and not before and not after
-    revised = runtime.read_usage(path, batch.offset, batch.state)
+    replay = runtime.read_usage(path, batch.offset, batch.state)
+    assert replay.error is None
+    await ingest(replay)
+    stored = {row["key"]: row["input_tokens"] for row in await db.usage.events(session=identity)}
+    assert stored == {"common": 8, "legacy": 2, "native": 3, "summary": 4}
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "UPDATE message SET time_updated=4000, "
+            "data=json_set(data, '$.tokens.input', 12) WHERE id='common'"
+        )
+    revised = runtime.read_usage(path, replay.offset, replay.state)
     assert revised.error is None
+    await ingest(revised)
+    stored = {row["key"]: row["input_tokens"] for row in await db.usage.events(session=identity)}
+    assert stored["common"] == 12
     assert {event.key: event.input_tokens for event in revised.events} == {
         "common": 12,
         "legacy": 2,
     }
+
+
+def test_usage_ranks_raw_copies_before_parsing_and_skips_bad_observations(tmp_path):
+    path = tmp_path / "opencode.db"
+    valid = json.dumps({"role": "assistant", "time": {"created": 2000}, "tokens": {"input": 2}})
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            "CREATE TABLE message (id TEXT, session_id TEXT, time_updated INTEGER, data TEXT);"
+            "CREATE TABLE session_message (id TEXT, session_id TEXT, time_updated INTEGER, "
+            "type TEXT, data TEXT);"
+        )
+        conn.execute("INSERT INTO message VALUES ('common','s',2000,?)", (valid,))
+        conn.executemany(
+            "INSERT INTO session_message VALUES (?, 's', ?, 'assistant', ?)",
+            [("bad", 500, "not json"), ("common", 1000, "older invalid copy")],
+        )
+    runtime = RUNTIMES["opencode"]
+    first = runtime.read_usage(path, 0, {"_session_id": "s"})
+    assert first.error and first.state["partial"] and not first.caught_up
+    second = runtime.read_usage(path, first.offset, first.state)
+    assert second.error is None and second.caught_up and second.state["partial"]
+    assert [(event.key, event.input_tokens) for event in second.events] == [("common", 2)]

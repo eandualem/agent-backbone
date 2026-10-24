@@ -139,12 +139,16 @@ class UsageRepo(Repo):
             original_keys = set(existing)
             changed = {}
             for event in events:
+                priority = event._revision_priority
                 event = UsageEvent.model_validate(event.model_dump())
                 old = existing.get(event.key)
                 selected_prices = prices
                 if old:
                     previous = UsageEvent.model_validate_json(old["data"])
-                    if (event.revision_at or event.at) < (previous.revision_at or previous.at):
+                    if (event.revision_at or event.at, priority) < (
+                        previous.revision_at or previous.at,
+                        old["revision_priority"],
+                    ):
                         continue
                     event = event.model_copy(
                         update={
@@ -165,6 +169,7 @@ class UsageRepo(Repo):
                     "model": event.model,
                     "data": event.model_dump_json(),
                     "cost": json.dumps(cost),
+                    "revision_priority": priority,
                 }
                 if old is None or any(old[key] != value for key, value in values.items()):
                     existing[event.key] = values
