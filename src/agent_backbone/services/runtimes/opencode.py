@@ -39,6 +39,15 @@ def _setting(env: dict[str, str], key: str) -> str:
     return env.get(key) or os.environ.get(key) or ""
 
 
+def _has_session_projection(conn: sqlite3.Connection) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_v2'"
+        ).fetchone()
+        is not None
+    )
+
+
 class OpenCode(Runtime):
     supports_exact_resume = True
     id = "opencode"
@@ -271,6 +280,9 @@ class OpenCode(Runtime):
         if not path.is_file():
             return []
         with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+            if not _has_session_projection(conn):
+                # Let read_usage report the unsupported source without losing the ledger.
+                return [path]
             found = conn.execute("SELECT 1 FROM session_v2 WHERE id=?", (session_id,)).fetchone()
         return [path] if found else []
 
@@ -280,6 +292,8 @@ class OpenCode(Runtime):
         if not path.is_file():
             return []  # Parent and child usage share the same database.
         with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+            if not _has_session_projection(conn):
+                return []
             return [
                 (row[0], path)
                 for row in conn.execute(
@@ -293,6 +307,10 @@ class OpenCode(Runtime):
         try:
             with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
                 conn.execute("BEGIN")
+                if not _has_session_projection(conn):
+                    batch.error = "unsupported OpenCode storage format: session_v2 is required"
+                    batch.caught_up = False
+                    return batch
                 native = conn.execute(
                     "SELECT cost,tokens_input,tokens_output,tokens_reasoning,"
                     "tokens_cache_read,tokens_cache_write,fork_session_id,"
