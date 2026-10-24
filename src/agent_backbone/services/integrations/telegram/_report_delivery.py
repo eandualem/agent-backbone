@@ -45,6 +45,7 @@ async def flush_text(bot: TelegramService) -> None:
                 "group": group,
                 "topic_required": is_response or bool(spec and spec.swarm is None),
                 "audio": bot.config.telegram.report_audio,
+                **({"response_joined_chunks": True} if is_response else {}),
             }
             if not await bot._db.reports.checkpoint_telegram(report_id, lease, parts):
                 return
@@ -57,7 +58,9 @@ async def flush_text(bot: TelegramService) -> None:
             if is_response:
                 if not parts.get("thread"):
                     raise ValueError("response topic is unavailable")
-                chunks = _responses.response_chunks(record)
+                chunks = _responses.response_chunks(
+                    record, joined=parts.get("response_joined_chunks", False)
+                )
                 sent = parts.setdefault("response_messages", [])
                 for text in chunks[len(sent) :]:
                     message = await bot._app.bot.send_message(
