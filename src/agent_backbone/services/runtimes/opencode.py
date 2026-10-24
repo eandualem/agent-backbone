@@ -42,15 +42,16 @@ def _setting(env: dict[str, str], key: str) -> str:
     return env.get(key) or os.environ.get(key) or ""
 
 
-def _session_table(conn: sqlite3.Connection, session_id: str) -> str | None:
-    """A migrated session uses v2; an unmigrated v1 session keeps its old reader."""
-    for table in ("session_v2", "session"):
+def _session_tables(conn: sqlite3.Connection, session_id: str) -> list[str]:
+    """Formats retaining this native conversation, without guessing which is active."""
+    found = []
+    for table in ("session", "session_v2"):
         exists = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
         ).fetchone()
         if exists and conn.execute(f"SELECT 1 FROM {table} WHERE id=?", (session_id,)).fetchone():
-            return table
-    return None
+            found.append(table)
+    return found
 
 
 class OpenCode(Runtime):
@@ -310,7 +311,7 @@ class OpenCode(Runtime):
         if not path.is_file():
             return []
         with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
-            found = _session_table(conn, session_id)
+            found = _session_tables(conn, session_id)
         return [path] if found else []
 
     def usage_children(
@@ -319,37 +320,70 @@ class OpenCode(Runtime):
         if not path.is_file():
             return []  # Parent and child usage share the same database.
         with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
-            table = _session_table(conn, session_id)
-            if table is None:
-                return []
-            return [
-                (row[0], path)
-                for row in conn.execute(f"SELECT id FROM {table} WHERE parent_id=?", (session_id,))
+            tables = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name IN ('session','session_v2')"
+                )
             ]
+            children = {
+                row[0]
+                for table in tables
+                for row in conn.execute(f"SELECT id FROM {table} WHERE parent_id=?", (session_id,))
+            }
+            return [(child, path) for child in sorted(children)]
 
     def read_usage(self, path: Path, offset: int, state: dict):
         state = dict(state)
         batch = UsageBatch(offset, state)
         try:
             with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
-                # Replay the boundary timestamp to catch same-millisecond revisions.
+                tables = [
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' "
+                        "AND name IN ('message','session_message') ORDER BY name"
+                    )
+                ]
+                # The query now reads both stores. Replay once on adoption or when
+                # a migration adds a store, including previously omitted older rows.
+                if state.get("usage_sources") != tables:
+                    state["usage_sources"] = tables
+                    state.pop("scan_after", None)
+                    state["scan_floor"] = 0
                 floor = state.get("scan_floor", max(0, offset - 1000))
                 after_time, after_id = state.get("scan_after", (floor, ""))
-                v2 = _session_table(conn, state["_session_id"]) == "session_v2"
-                table = "session_message" if v2 else "message"
-                data = (
-                    "json_set(data, '$.role', CASE WHEN type='compaction' THEN 'assistant' "
-                    "ELSE type END, '$.modelID', "
-                    "json_extract(data, '$.model.id'), '$.providerID', "
-                    "json_extract(data, '$.model.providerID'))"
-                    if v2
-                    else "data"
-                )
+                queries = []
+                for table in tables:
+                    v2 = table == "session_message"
+                    data = (
+                        "json_set(data, '$.role', CASE WHEN type='compaction' THEN 'assistant' "
+                        "ELSE type END, '$.modelID', json_extract(data, '$.model.id'), "
+                        "'$.providerID', json_extract(data, '$.model.providerID'))"
+                        if v2
+                        else "data"
+                    )
+                    queries.append(
+                        f"SELECT id,time_updated,{data} AS data,{int(v2)} AS source "
+                        f"FROM {table} WHERE session_id=? AND time_updated>=?"
+                    )
+                if not queries:
+                    raise ValueError("no OpenCode message store")
                 rows = conn.execute(
-                    f"SELECT id,time_updated,{data} FROM {table} WHERE session_id=? "
+                    "WITH versions AS (" + " UNION ALL ".join(queries) + "), "
+                    "ranked AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY id "
+                    "ORDER BY time_updated DESC,source DESC) AS revision FROM versions) "
+                    "SELECT id,time_updated,data FROM ranked WHERE revision=1 "
                     "AND time_updated>=? AND (time_updated>? OR (time_updated=? AND id>?)) "
                     "ORDER BY time_updated,id LIMIT 10001",
-                    (state["_session_id"], floor, after_time, after_time, after_id),
+                    (
+                        *([state["_session_id"], floor] * len(tables)),
+                        floor,
+                        after_time,
+                        after_time,
+                        after_id,
+                    ),
                 ).fetchall()
             batch.caught_up = len(rows) <= 10000
             for key, updated, encoded in rows[:10000]:
@@ -407,6 +441,7 @@ class OpenCode(Runtime):
         since: int | None = None,
         before: int | None = None,
         end: int | None = None,
+        transcript_format: str | None = None,
     ) -> tuple[list[TranscriptEntry], bool, bool]:
         """The session's assistant text parts, by position: the part's
         creation time in milliseconds times 1000, plus its order among the
@@ -430,7 +465,19 @@ class OpenCode(Runtime):
         )
         try:
             with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
-                if _session_table(conn, session_id) == "session_v2":
+                tables = _session_tables(conn, session_id)
+                selected = {"opencode-v1": "session", "opencode-v2": "session_v2"}.get(
+                    transcript_format
+                )
+                if transcript_format is not None and selected not in tables:
+                    raise ValueError("recorded OpenCode transcript format is unavailable")
+                if selected is None:
+                    if len(tables) > 1:
+                        raise ValueError(
+                            "OpenCode transcript format is ambiguous until its hook reports"
+                        )
+                    selected = tables[0] if tables else "session"
+                if selected == "session_v2":
                     messages = (
                         "WITH positioned AS (SELECT m.time_created * 1000 + ROW_NUMBER() "
                         "OVER (PARTITION BY m.time_created ORDER BY m.seq, p.key) - 1 AS position, "

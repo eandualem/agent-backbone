@@ -176,6 +176,7 @@ console.log(JSON.stringify({waiting, afterChild, idle, recovered, admitted,
     )
     assert actual["afterChild"]["state"] == "busy"
     assert actual["afterChild"]["session_id"] == "root"
+    assert actual["afterChild"]["transcript_format"] == "opencode-v2"
     assert actual["idle"]["state"] == "idle"
     assert actual["idle"]["model"] == "provider/model"
     assert actual["recovered"]["state"] == "idle"

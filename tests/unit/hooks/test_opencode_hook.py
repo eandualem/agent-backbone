@@ -39,6 +39,7 @@ await hook.event({event: {type: "session.status", properties: {
     )
     state = json.loads((tmp_path / "app.json").read_text())
     assert state["runtime"] == "opencode"
+    assert state["transcript_format"] == "opencode-v1"
     assert state["session_id"] == "opencode-session"
     assert state["launch_id"] == "replacement-launch"
 

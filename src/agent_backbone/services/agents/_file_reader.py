@@ -222,6 +222,12 @@ def read_state_file(
         plan_title=data.get("plan_title"),
         session_id=data.get("session_id") or None,
         runtime=data.get("runtime") or None,
+        transcript_format=(
+            data["transcript_format"]
+            if isinstance(data.get("transcript_format"), str)
+            and _ERROR_NAME.fullmatch(data["transcript_format"])
+            else None
+        ),
         model=data["model"] if isinstance(data.get("model"), str) and data["model"] else None,
         last_message=data.get("last_message") or None,
         event=data.get("event") or None,

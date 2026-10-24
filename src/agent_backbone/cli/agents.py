@@ -695,9 +695,11 @@ async def _agent(args: argparse.Namespace) -> int:
             from dataclasses import asdict
 
             spec = config.agents.get(args.name)
+            state_fields = asdict(snapshot)
+            state_fields.pop("transcript_format")  # Internal reader provenance, not API output.
             _common.print_json(
                 {
-                    **asdict(snapshot),
+                    **state_fields,
                     "name": args.name,
                     "online": online,
                     "known": spec is not None,

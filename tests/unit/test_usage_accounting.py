@@ -472,7 +472,8 @@ def test_missing_cache_duration_is_unpriced_but_tokens_retained():
     assert estimate(event, DEFAULT_PRICES)["usd"] is None
 
 
-def test_opencode_large_history_makes_progress_across_equal_timestamps(tmp_path):
+@pytest.mark.parametrize("migrated", [False, True])
+def test_opencode_large_history_makes_progress_across_equal_timestamps(tmp_path, migrated):
     import sqlite3
 
     path = tmp_path / "opencode.db"
@@ -485,8 +486,18 @@ def test_opencode_large_history_makes_progress_across_equal_timestamps(tmp_path)
             "INSERT INTO message VALUES (?,?,?,?)",
             [(f"m{i:05}", "s", 1789207200000, encoded) for i in range(10002)],
         )
+        if migrated:
+            c.execute(
+                "CREATE TABLE session_message(id TEXT,session_id TEXT,type TEXT, "
+                "time_updated INTEGER,data TEXT)"
+            )
+            c.execute(
+                "INSERT INTO session_message SELECT id,session_id,'assistant',time_updated,"
+                "json_set(data,'$.tokens.input',2) FROM message"
+            )
     first = RUNTIMES["opencode"].read_usage(path, 0, {"_session_id": "s"})
     assert first.error is None and not first.caught_up and len(first.events) == 10000
+    assert first.events[0].input_tokens == (2 if migrated else 1)
     second = RUNTIMES["opencode"].read_usage(path, first.offset, first.state)
     assert second.caught_up and len(second.events) == 2
     assert not {e.key for e in first.events} & {e.key for e in second.events}

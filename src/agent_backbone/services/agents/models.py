@@ -83,6 +83,8 @@ class StateSnapshot:
     """The runtime's own session id, when its hook reports one."""
     runtime: str | None = None
     """The runtime whose hook wrote the record (a session id is only good for that runtime)."""
+    transcript_format: str | None = None
+    """Opaque native storage format reported by this conversation's hook."""
     model: str | None = None
     """The model the runtime was observed answering with, when its hook could tell."""
     last_message: str | None = None

@@ -216,6 +216,25 @@ class TestOutputPage:
         assert page.more_before is True and page.more_after is False
         assert page.evidence == [f"transcript {path}"]
 
+        # A migrated copy must not hide this launch's legacy conversation.
+        with sqlite3.connect(path) as conn:
+            conn.execute("CREATE TABLE session_v2 (id TEXT)")
+            conn.execute("INSERT INTO session_v2 VALUES ('s1')")
+        page = await output_page(config, "ike")
+        assert page.source == "screen" and "ambiguous" in page.evidence[-1]
+        write_state_file(
+            config.state_dir,
+            "ike",
+            {
+                "state": "idle",
+                "session_id": "s1",
+                "runtime": "opencode",
+                "transcript_format": "opencode-v1",
+            },
+        )
+        page = await output_page(config, "ike", limit=2)
+        assert page.source == "transcript" and _texts(page.messages) == ["reply 1", "reply 2"]
+
         # A database that cannot be read, found (or not) by the real discovery.
         with sqlite3.connect(path) as conn:
             conn.execute("DROP TABLE part")
@@ -283,7 +302,13 @@ class TestOutputPage:
         files = {"old": tmp_path / "old", "resumed": tmp_path / "resumed"}
         for path in files.values():
             path.write_text("")
-        record = {"state": "idle", "session_id": "old", "runtime": runtime, "ts": 100.0}
+        record = {
+            "state": "idle",
+            "session_id": "old",
+            "runtime": runtime,
+            "ts": 100.0,
+            "transcript_format": "opencode-v1" if runtime == "opencode" else None,
+        }
         write_state_file(config.state_dir, "ike", record)
         # A new launch reached its prompt before its hook reported (Codex
         # reports at its first turn): the previous launch's record remains.
@@ -291,7 +316,7 @@ class TestOutputPage:
         clear_starting_marker(config.state_dir, "ike")
         with (
             patch.object(type(rt), "usage_paths", side_effect=lambda s, env: [files[s]]),
-            patch.object(type(rt), "transcript_page", return_value=([], False, False)),
+            patch.object(type(rt), "transcript_page", return_value=([], False, False)) as reader,
         ):
             page = await output_page(config, "ike")
             assert page.source == "screen" and page.lines == ["❯ hello"]
@@ -303,10 +328,12 @@ class TestOutputPage:
             page = await output_page(config, "ike")
             assert page.source == "transcript"
             assert page.evidence == [f"transcript {files['resumed']}"]
+            assert reader.call_args.kwargs["transcript_format"] is None
             # Stopped, the agent's last recorded conversation is what it said.
             live[0].return_value = False
             page = await output_page(config, "ike")
         assert page.source == "transcript" and page.evidence == [f"transcript {files['old']}"]
+        assert reader.call_args.kwargs["transcript_format"] == record["transcript_format"]
 
     async def test_a_session_id_from_another_runtime_is_not_used(self, config, live):
         write_state_file(

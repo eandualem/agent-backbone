@@ -247,6 +247,7 @@ function record(t, event, state, reason, extra = {}) {
   const now = Date.now() / 1000;
   const out = {
     runtime: "opencode",
+    transcript_format: t.transcriptFormat,
     state,
     reason: reason ?? null,
     issue: current.issue ?? null,
@@ -281,9 +282,10 @@ const reloader = (globalThis[Symbol.for("agent-backbone.skills-reload")] ??= {
   timer: null,
 });
 
-export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
+export const AgentBackbone = async ({ client, directory, worktree, transcriptFormat = "opencode-v1" } = {}) => {
   const t = target();
   if (!t) return {};
+  t.transcriptFormat = transcriptFormat;
   const children = new Map(); // subagent session → its parent; never the agent's own state
   const pending = new Map(); // permission and plan requests waiting for an answer -> who asked
   const held = new Map(); // session whose turn ended while a request waited -> what worked then
