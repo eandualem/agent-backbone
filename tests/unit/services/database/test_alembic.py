@@ -126,11 +126,20 @@ async def test_file_db_runs_migrations(tmp_path):
 
 async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
     """_run_migrations() upgrades a fresh persistent database from the initial revision."""
+    from sqlalchemy import text
+
     url = f"sqlite+aiosqlite:///{tmp_path / 'fresh.db'}"
     db = BackboneDB(url)
     db._engine = build_engine(url)  # migrations alone, without start()'s create_all
     try:
         await db._run_migrations()
+        async with db.engine.connect() as conn:
+            indexes = set(
+                (
+                    await conn.execute(text("SELECT name FROM sqlite_master WHERE type='index'"))
+                ).scalars()
+            )
+        assert _EXPECTED_INDEXES <= indexes
         assert (
             await db.deliveries.record(
                 issue_number=7, target_entity="ike", session_name="ike", outcome="delivered"

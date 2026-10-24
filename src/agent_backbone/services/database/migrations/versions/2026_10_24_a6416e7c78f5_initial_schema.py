@@ -228,6 +228,10 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_events")),
     )
     with op.batch_alter_table("events", schema=None) as batch_op:
+        # Autogenerate skips expression indexes: written by hand (#394).
+        batch_op.create_index(
+            "idx_events_delivery_id_lower", [sa.text("lower(delivery_id)")], unique=False
+        )
         batch_op.create_index("idx_events_received", ["received_at"], unique=False)
         batch_op.create_index("idx_events_repo", ["repo"], unique=False)
         batch_op.create_index("uq_events_delivery_id", ["delivery_id"], unique=True)
@@ -679,6 +683,7 @@ def downgrade() -> None:
         batch_op.drop_index("uq_events_delivery_id")
         batch_op.drop_index("idx_events_repo")
         batch_op.drop_index("idx_events_received")
+        batch_op.drop_index("idx_events_delivery_id_lower")
 
     op.drop_table("events")
     with op.batch_alter_table("event_outbox", schema=None) as batch_op:
