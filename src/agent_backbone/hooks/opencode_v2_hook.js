@@ -53,7 +53,6 @@ export default {
         case "session.execution.succeeded":
           return dispatch("session.idle", data);
         case "session.execution.failed":
-          return dispatch("session.error", data);
         case "session.execution.interrupted":
           return dispatch("session.idle", data);
         case "session.status":

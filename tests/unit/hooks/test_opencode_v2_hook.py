@@ -10,7 +10,8 @@ import pytest
 from agent_backbone.hooks.install import hook_source
 
 
-def test_v2_state_context_and_skill_reload(tmp_path):
+@pytest.mark.parametrize("ending", ["interrupted", "failed"])
+def test_v2_state_context_and_skill_reload(tmp_path, ending):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is needed to exercise the JavaScript plugin")
@@ -107,8 +108,22 @@ const loggingFailure = {...tool(), tool: "shell",
   input: {command: "gh issue comment 1 --repo acme/app --body note"},
   result: {content: "shell result", metadata: {exit: 0}}};
 await callbacks["execute.after"](loggingFailure);
-await emit("session.execution.interrupted", {sessionID: "root", reason: "user"});
+const oldPrompt = state().prompted_at;
+const steers = path.join(offers, process.env.BACKBONE_LAUNCH_ID);
+fs.mkdirSync(steers);
+fs.writeFileSync(path.join(steers, "steer-old.md"), "old turn only");
+fs.writeFileSync(path.join(steers, "steer-old.turn"), JSON.stringify({
+  prompted_at: oldPrompt, session_id: "root"
+}));
+await emit("session.execution.__ENDING__", {sessionID: "root"});
 const idle = state();
+const retired = fs.existsSync(path.join(steers, "steer-old.missed"));
+const now = Date.now;
+Date.now = () => now() + 1000;
+await emit("session.execution.started", {sessionID: "root"});
+Date.now = now;
+const newPrompt = state().prompted_at;
+await emit("session.execution.succeeded", {sessionID: "root"});
 // Make one state write fail, then verify the same subscription recovers.
 const statePath = path.join(dir, "app.json");
 fs.unlinkSync(statePath);
@@ -137,12 +152,18 @@ finishReload();
 await inFlight;
 const afterInFlight = state();
 console.log(JSON.stringify({waiting, afterChild, idle, recovered, admitted,
+  retired, oldPrompt, newPrompt,
   structured: structured.result, fallback: fallback.result,
   loggingFailure: loggingFailure.result, reloaded, stopped, afterInFlight}));
 """
     result = subprocess.run(
-        [node, "--input-type=module", "-e", script, plugin.as_uri()],
-        env={**os.environ, "BACKBONE_AGENT": "app", "BACKBONE_STATE_DIR": str(tmp_path)},
+        [node, "--input-type=module", "-e", script.replace("__ENDING__", ending), plugin.as_uri()],
+        env={
+            **os.environ,
+            "BACKBONE_AGENT": "app",
+            "BACKBONE_STATE_DIR": str(tmp_path),
+            "BACKBONE_LAUNCH_ID": "test-launch",
+        },
         check=True,
         capture_output=True,
         text=True,
@@ -158,6 +179,8 @@ console.log(JSON.stringify({waiting, afterChild, idle, recovered, admitted,
     assert actual["idle"]["state"] == "idle"
     assert actual["idle"]["model"] == "provider/model"
     assert actual["recovered"]["state"] == "idle"
+    assert actual["retired"] is True
+    assert actual["newPrompt"] > actual["oldPrompt"]
     assert actual["admitted"] == [
         {"sessionID": "root", "text": "first offer", "delivery": "steer", "resume": False}
     ]
