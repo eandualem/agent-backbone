@@ -397,11 +397,11 @@ class TestPaneLinePairing:
 
 
 class TestPlanControlCapability:
-    def test_claude_code_codex_and_opencode_have_a_plan_mode_the_backbone_drives(self):
+    def test_only_structured_plan_dialogs_have_control_keys(self):
         from agent_backbone.services.runtimes import RUNTIMES, get_runtime
 
         supported = {name for name in RUNTIMES if get_runtime(name).supports_plan_control}
-        assert supported == {"claude", "codex", "opencode"}
+        assert supported == {"claude", "codex"}
 
     def test_opencode_reports_native_plan_switching_instead_of_structured_approval(self):
         from agent_backbone.services.runtimes import get_runtime

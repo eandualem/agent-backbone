@@ -7,6 +7,7 @@ without the working spinner's "esc interrupt".
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -83,11 +84,7 @@ class OpenCode(Runtime):
     # Escape rejects the tool call wherever the cursor is and ends the turn
     # ("The user rejected permission to use this specific tool call", live, 1.18).
     deny_keys = ("Escape",)
-    # plan_exit's question: "1. Yes" (switch to the build agent and start
-    # implementing), "2. No" (stay with the plan agent); a digit answers at
-    # once, and No ends the turn in the plan agent (live, 1.18.32).
-    plan_approve_keys = ("1",)
-    plan_reject_keys = ("2",)
+    # Current Plan mode has no structured approval dialog or safe approval keys.
     # "--auto  auto-approve permissions that are not explicitly denied"
     # (opencode 1.18 TUI); a `permission` deny in the user's config still
     # holds. OpenCode has no OS sandbox: this is trust on the machine.
@@ -323,14 +320,13 @@ class OpenCode(Runtime):
                     "SELECT COUNT(*),MAX(time_updated) FROM session_message WHERE session_id=?",
                     (state["_session_id"],),
                 ).fetchone()
-                signature = [*native, *version]
+                boundary = hashlib.sha256(json.dumps(rows).encode()).hexdigest()
+                signature = [*native, *version, boundary]
                 # Only compare whole-session evidence after catching up, in the same snapshot.
-                # Cache only matching evidence; a compaction can reconcile within the same
-                # millisecond without advancing the source signature. Never add
-                # aggregate totals to message/ledger counts, which would double count usage.
-                if len(rows) <= 10000 and (
-                    state.get("coverage_detail") or state.get("native_coverage") != signature
-                ):
+                # Include the replayed message contents: compaction can finish within the
+                # same millisecond without advancing timestamps or the native aggregate.
+                # Stable histories, including mismatches, need no repeated full summation.
+                if len(rows) <= 10000 and state.get("native_coverage") != signature:
                     paths = (
                         "cost",
                         "tokens.input",
@@ -356,8 +352,32 @@ class OpenCode(Runtime):
                             "native session totals do not match current message history; "
                             "historical usage attribution is incomplete"
                         )
+                        # The ledger retains removed requests. A context reminder must use
+                        # the latest surviving measured request, not a removed ledger row.
+                        state["current_context_tokens"] = None
+                        current = conn.execute(
+                            "SELECT data FROM session_message WHERE session_id=? "
+                            f"AND type IN ('assistant','compaction') {fork_filter}"
+                            "ORDER BY time_created DESC,id DESC LIMIT 20",
+                            (state["_session_id"], *fork_params),
+                        )
+                        for (encoded,) in current:
+                            try:
+                                tokens = json.loads(encoded).get("tokens") or {}
+                                cache = tokens.get("cache") or {}
+                                context = (
+                                    count(tokens, "input")
+                                    + count(cache, "read")
+                                    + count(cache, "write")
+                                )
+                            except (ValueError, TypeError, AttributeError):
+                                break  # The normal reader still handles malformed records.
+                            if context:
+                                state["current_context_tokens"] = context
+                                break
                     else:
                         state.pop("coverage_detail", None)
+                        state.pop("current_context_tokens", None)
                     state["native_coverage"] = signature
             batch.caught_up = len(rows) <= 10000
             for key, updated, encoded, kind in rows[:10000]:

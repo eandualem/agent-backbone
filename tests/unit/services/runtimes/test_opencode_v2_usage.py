@@ -68,7 +68,9 @@ def test_v2_usage_children_and_completed_transcript(tmp_path):
 
 
 @pytest.mark.parametrize("total", [5, 9])
-def test_native_totals_expose_missing_attribution_without_adding_usage(tmp_path, total):
+def test_native_totals_expose_missing_attribution_without_adding_usage(
+    tmp_path, monkeypatch, total
+):
     path = tmp_path / "opencode.db"
     with sqlite3.connect(path) as conn:
         opencode_session_table(conn)
@@ -95,6 +97,15 @@ def test_native_totals_expose_missing_attribution_without_adding_usage(tmp_path,
                 "INSERT INTO session_message VALUES (?, 's', ?, ?, ?, ?)",
                 (key, kind, created, created, json.dumps(data)),
             )
+    queries = []
+    real_connect = sqlite3.connect
+
+    def connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        conn.set_trace_callback(queries.append)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
     runtime = RUNTIMES["opencode"]
     batch = runtime.read_usage(path, 0, {"_session_id": "s"})
     assert batch.error is None and batch.caught_up
@@ -102,12 +113,19 @@ def test_native_totals_expose_missing_attribution_without_adding_usage(tmp_path,
     assert bool(batch.state.get("coverage_detail")) is (total != 5)
     if total != 5:
         assert "attribution is incomplete" in batch.state["coverage_detail"]
+        assert batch.state["current_context_tokens"] == 5
+    # Both complete and permanently mismatched histories avoid repeated full sums.
+    queries.clear()
+    unchanged = runtime.read_usage(path, batch.offset, batch.state)
+    assert unchanged.state == batch.state
+    assert not any("SUM(" in query for query in queries)
     # Native undo removes visible messages without refunding incurred usage.
     with sqlite3.connect(path) as conn:
         conn.execute("DELETE FROM session_message WHERE id='reply'")
     after = runtime.read_usage(path, batch.offset, batch.state)
     assert after.error is None and after.caught_up and after.state["coverage_detail"]
     assert after.events == []  # No invented request or duplicated ledger amount.
+    assert after.state["current_context_tokens"] is None  # Removed usage is not current context.
 
     # UsageRecorded precedes Compaction.Ended: tokens can arrive in the same
     # millisecond, without changing the native session or maximum message timestamp.

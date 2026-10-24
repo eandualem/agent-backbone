@@ -74,7 +74,9 @@ compares those sources after catching up and marks mismatches as `partial`, with
 explanation. It retains measured message values and previously collected ledger
 entries; it does not add overlapping aggregate totals or invent model/date details.
 This describes incomplete current source evidence, even when the retained ledger
-already contains some of the removed history.
+already contains some of the removed history. Historical accounting gaps do not
+suppress context reminders when the current message records contain a readable
+context measurement; removed ledger records are not used for that measurement.
 
 ## Context-size note
 

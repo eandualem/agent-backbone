@@ -275,7 +275,8 @@ def test_opencode_reasoning_and_cache_are_counted_once(tmp_path):
         opencode_session_table(conn)
         conn.execute("INSERT INTO session_v2(id) VALUES ('s'),('other')")
         conn.execute(
-            "CREATE TABLE session_message(id TEXT, session_id TEXT, time_updated INTEGER, "
+            "CREATE TABLE session_message(id TEXT, session_id TEXT, "
+            "time_created INTEGER DEFAULT 0, time_updated INTEGER, "
             "data TEXT, type TEXT DEFAULT 'assistant')"
         )
         conn.execute(
@@ -487,7 +488,8 @@ def test_opencode_large_history_makes_progress_across_equal_timestamps(tmp_path)
         opencode_session_table(c)
         c.execute("INSERT INTO session_v2(id) VALUES ('s')")
         c.execute(
-            "CREATE TABLE session_message(id TEXT,session_id TEXT,time_updated INTEGER,"
+            "CREATE TABLE session_message(id TEXT,session_id TEXT,time_created INTEGER DEFAULT 0,"
+            "time_updated INTEGER,"
             "data TEXT,type TEXT DEFAULT 'assistant')"
         )
         c.executemany(
@@ -548,7 +550,8 @@ def test_opencode_malformed_observation_keeps_coverage_partial_after_recovery(tm
         opencode_session_table(c)
         c.execute("INSERT INTO session_v2(id) VALUES ('s')")
         c.execute(
-            "CREATE TABLE session_message(id TEXT,session_id TEXT,time_updated INTEGER,"
+            "CREATE TABLE session_message(id TEXT,session_id TEXT,time_created INTEGER DEFAULT 0,"
+            "time_updated INTEGER,"
             "data TEXT,type TEXT DEFAULT 'assistant')"
         )
         c.executemany(
@@ -615,7 +618,8 @@ def test_opencode_invalid_structured_tokens_return_partial_batch(tmp_path, token
         opencode_session_table(c)
         c.execute("INSERT INTO session_v2(id) VALUES ('s')")
         c.execute(
-            "CREATE TABLE session_message(id TEXT,session_id TEXT,time_updated INTEGER,"
+            "CREATE TABLE session_message(id TEXT,session_id TEXT,time_created INTEGER DEFAULT 0,"
+            "time_updated INTEGER,"
             "data TEXT,type TEXT DEFAULT 'assistant')"
         )
         c.execute(

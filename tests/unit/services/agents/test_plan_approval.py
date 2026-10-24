@@ -1,11 +1,11 @@
 """A plan presented for approval waits for a decision, and is approved or
-rejected with the runtime's own keys, on every required runtime (#278).
+rejected with the runtime's own keys where supported (#278).
 
 Claude Code's hook sees its ``ExitPlanMode`` call. Codex's ``Stop`` hook reads
 the turn's ``<proposed_plan>`` from its rollout, and Codex asks "Implement this
-plan?" in a dialog of its own. OpenCode's plugin sees ``plan_exit`` ask whether
-to build (with ``OPENCODE_EXPERIMENTAL_PLAN_MODE``). The screens are trimmed
-live captures (Claude Code 2.1.284, codex-cli 0.157.1, OpenCode 1.18.32).
+plan?" in a dialog of its own. The screens are trimmed live captures.
+Historical OpenCode plan records remain readable, but current native Plan mode
+has no structured approval dialog: approve/reject must send no keys.
 """
 
 import json
@@ -110,7 +110,7 @@ ANSWERED = {"claude": CLAUDE_REJECTED, "codex": CODEX_STILL_PLANNING}
 KEYS = {
     "claude": {"approve": ("1",), "reject": ("Escape",)},
     "codex": {"approve": ("1",), "reject": ("3",)},
-    "opencode": {"approve": ("1",), "reject": ("2",)},
+    "opencode": {"approve": (), "reject": ()},
 }
 
 RUNTIMES = tuple(KEYS)
@@ -175,7 +175,12 @@ async def test_the_decision_is_sent_with_the_runtimes_own_keys(runtime, action):
         patch("agent_backbone.services.runtimes.base.send_keys", send_keys),
     ):
         outcome, _ = await plan_control("desk", action, runtime=runtime, settle_seconds=0)
-    assert outcome == {"approve": "approved", "reject": "rejected"}[action]
+    expected = (
+        "unsupported"
+        if runtime == "opencode"
+        else {"approve": "approved", "reject": "rejected"}[action]
+    )
+    assert outcome == expected
     assert tuple(sent) == KEYS[runtime][action]
 
 
