@@ -3,7 +3,10 @@
 import json
 import sqlite3
 
+import pytest
+
 from agent_backbone.services.runtimes import RUNTIMES
+from tests.support import opencode_session_table
 
 
 def test_v2_usage_children_and_completed_transcript(tmp_path):
@@ -23,12 +26,14 @@ def test_v2_usage_children_and_completed_transcript(tmp_path):
         ],
     }
     with sqlite3.connect(path) as conn:
+        opencode_session_table(conn)
         conn.executescript(
-            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT);"
             "CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, "
             "seq INTEGER, time_created INTEGER, time_updated INTEGER, data TEXT);"
         )
-        conn.executemany("INSERT INTO session_v2 VALUES (?,?)", [("root", None), ("child", "root")])
+        conn.executemany(
+            "INSERT INTO session_v2(id,parent_id) VALUES (?,?)", [("root", None), ("child", "root")]
+        )
         for key, session, kind, seq, data in [
             ("answer", "root", "assistant", 2, message),
             ("summary", "root", "compaction", 3, message),
@@ -60,3 +65,80 @@ def test_v2_usage_children_and_completed_transcript(tmp_path):
     earlier, before, after = runtime.transcript_page(path, "root", limit=1, before=entries[0].start)
     assert [entry.text for entry in earlier] == ["First paragraph."]
     assert not before and after
+
+
+@pytest.mark.parametrize("total", [5, 9])
+def test_native_totals_expose_missing_attribution_without_adding_usage(
+    tmp_path, monkeypatch, total
+):
+    path = tmp_path / "opencode.db"
+    with sqlite3.connect(path) as conn:
+        opencode_session_table(conn)
+        conn.execute(
+            "INSERT INTO session_v2(id,tokens_input,fork_session_id,time_created) "
+            "VALUES ('s',?,'parent',1000)",
+            (total,),
+        )
+        conn.execute(
+            "CREATE TABLE session_message(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,"
+            "time_created INTEGER,time_updated INTEGER,data TEXT)"
+        )
+        for key, created, kind, data in [
+            ("inherited", 500, "assistant", {"tokens": {"input": 100}}),
+            ("summary", 1500, "compaction", {"summary": "migrated summary"}),
+            (
+                "reply",
+                2000,
+                "assistant",
+                {"model": {"id": "model"}, "time": {"created": 2000}, "tokens": {"input": 5}},
+            ),
+        ]:
+            conn.execute(
+                "INSERT INTO session_message VALUES (?, 's', ?, ?, ?, ?)",
+                (key, kind, created, created, json.dumps(data)),
+            )
+    queries = []
+    real_connect = sqlite3.connect
+
+    def connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        conn.set_trace_callback(queries.append)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    runtime = RUNTIMES["opencode"]
+    batch = runtime.read_usage(path, 0, {"_session_id": "s"})
+    assert batch.error is None and batch.caught_up
+    assert [(e.key, e.input_tokens) for e in batch.events] == [("reply", 5)]
+    assert bool(batch.state.get("coverage_detail")) is (total != 5)
+    if total != 5:
+        assert "attribution is incomplete" in batch.state["coverage_detail"]
+        assert batch.state["current_context_tokens"] == 5
+    # Both complete and permanently mismatched histories avoid repeated full sums.
+    queries.clear()
+    unchanged = runtime.read_usage(path, batch.offset, batch.state)
+    assert unchanged.state == batch.state
+    assert not any("SUM(" in query for query in queries)
+    # Native undo removes visible messages without refunding incurred usage.
+    with sqlite3.connect(path) as conn:
+        conn.execute("DELETE FROM session_message WHERE id='reply'")
+    after = runtime.read_usage(path, batch.offset, batch.state)
+    assert after.error is None and after.caught_up and after.state["coverage_detail"]
+    assert after.events == []  # No invented request or duplicated ledger amount.
+    assert after.state["current_context_tokens"] is None  # Removed usage is not current context.
+
+    # UsageRecorded precedes Compaction.Ended: tokens can arrive in the same
+    # millisecond, without changing the native session or maximum message timestamp.
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "UPDATE session_message SET data=?,time_updated=1500 WHERE id='summary'",
+            (json.dumps({"time": {"created": 1500}, "tokens": {"input": total}}),),
+        )
+    reconciled = runtime.read_usage(path, after.offset, after.state)
+    assert reconciled.error is None and reconciled.caught_up
+    assert not reconciled.state.get("coverage_detail")
+    assert not reconciled.state.get("partial")
+    assert [(e.key, e.input_tokens) for e in reconciled.events] == [("summary", total)]
+    # A prior malformed record remains partial even if aggregate totals agree.
+    damaged = runtime.read_usage(path, after.offset, {**after.state, "partial": True})
+    assert damaged.state["partial"] and not damaged.state.get("coverage_detail")

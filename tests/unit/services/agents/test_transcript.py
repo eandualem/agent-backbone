@@ -218,10 +218,13 @@ class TestOutputPage:
 
         # A database that cannot be read, found (or not) by the real discovery.
         with sqlite3.connect(path) as conn:
-            conn.execute("DROP TABLE part")
+            conn.execute("DROP TABLE session_message")
         page = await output_page(config, "ike")
         assert page.source == "screen"
-        assert page.evidence[-1] == "transcript unreadable: OpenCode database: no such table: part"
+        assert (
+            page.evidence[-1]
+            == "transcript unreadable: OpenCode database: no such table: session_message"
+        )
         path.write_text("not a database")
         page = await output_page(config, "ike")
         assert page.source == "screen"

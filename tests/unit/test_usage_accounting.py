@@ -14,6 +14,7 @@ from agent_backbone.services.agents import collect_usage, usage_view
 from agent_backbone.services.runtimes import RUNTIMES, read_usage_jsonl
 from agent_backbone.usage import DEFAULT_PRICES, UsageEvent, estimate, timestamp
 from tests.conftest import make_config
+from tests.support import opencode_session_table
 
 _USAGE = "agent_backbone.services.agents.usage"
 T = "2026-09-12T10:00:00Z"
@@ -271,11 +272,15 @@ def test_opencode_reasoning_and_cache_are_counted_once(tmp_path):
 
     path = tmp_path / "opencode.db"
     with sqlite3.connect(path) as conn:
+        opencode_session_table(conn)
+        conn.execute("INSERT INTO session_v2(id) VALUES ('s'),('other')")
         conn.execute(
-            "CREATE TABLE message(id TEXT, session_id TEXT, time_updated INTEGER, data TEXT)"
+            "CREATE TABLE session_message(id TEXT, session_id TEXT, "
+            "time_created INTEGER DEFAULT 0, time_updated INTEGER, "
+            "data TEXT, type TEXT DEFAULT 'assistant')"
         )
         conn.execute(
-            "INSERT INTO message VALUES (?,?,?,?)",
+            "INSERT INTO session_message(id,session_id,time_updated,data) VALUES (?,?,?,?)",
             (
                 "m",
                 "s",
@@ -283,7 +288,7 @@ def test_opencode_reasoning_and_cache_are_counted_once(tmp_path):
                 json.dumps(
                     {
                         "role": "assistant",
-                        "modelID": "example",
+                        "model": {"id": "example"},
                         "time": {"created": 1789207200000},
                         "tokens": {
                             "total": 10867,
@@ -472,7 +477,7 @@ def test_missing_cache_duration_is_unpriced_but_tokens_retained():
     assert estimate(event, DEFAULT_PRICES)["usd"] is None
 
 
-def test_opencode_large_history_makes_progress_across_equal_timestamps(tmp_path):
+def test_opencode_large_history_makes_progress_across_equal_timestamps(tmp_path, monkeypatch):
     import sqlite3
 
     path = tmp_path / "opencode.db"
@@ -480,9 +485,15 @@ def test_opencode_large_history_makes_progress_across_equal_timestamps(tmp_path)
         {"role": "assistant", "time": {"created": 1789207200000}, "tokens": {"input": 1}}
     )
     with sqlite3.connect(path) as c:
-        c.execute("CREATE TABLE message(id TEXT,session_id TEXT,time_updated INTEGER,data TEXT)")
+        opencode_session_table(c)
+        c.execute("INSERT INTO session_v2(id,tokens_input) VALUES ('s',260001)")
+        c.execute(
+            "CREATE TABLE session_message(id TEXT,session_id TEXT,time_created INTEGER DEFAULT 0,"
+            "time_updated INTEGER,"
+            "data TEXT,type TEXT DEFAULT 'assistant')"
+        )
         c.executemany(
-            "INSERT INTO message VALUES (?,?,?,?)",
+            "INSERT INTO session_message(id,session_id,time_updated,data) VALUES (?,?,?,?)",
             [(f"m{i:05}", "s", 1789207200000, encoded) for i in range(10002)],
         )
     first = RUNTIMES["opencode"].read_usage(path, 0, {"_session_id": "s"})
@@ -490,6 +501,30 @@ def test_opencode_large_history_makes_progress_across_equal_timestamps(tmp_path)
     second = RUNTIMES["opencode"].read_usage(path, first.offset, first.state)
     assert second.caught_up and len(second.events) == 2
     assert not {e.key for e in first.events} & {e.key for e in second.events}
+
+    assert second.state["coverage_detail"]
+    # A revision on an earlier page leaves the final page and all timestamps unchanged.
+    revised = json.loads(encoded)
+    revised["tokens"]["input"] = 250_000
+    with sqlite3.connect(path) as c:
+        c.execute("UPDATE session_message SET data=? WHERE id='m00000'", (json.dumps(revised),))
+    third = RUNTIMES["opencode"].read_usage(path, second.offset, second.state)
+    assert third.events[0].input_tokens == 250_000 and not third.caught_up
+    fourth = RUNTIMES["opencode"].read_usage(path, third.offset, third.state)
+    assert fourth.caught_up and not fourth.state.get("coverage_detail")
+    queries = []
+    real_connect = sqlite3.connect
+
+    def connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        conn.set_trace_callback(queries.append)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    fifth = RUNTIMES["opencode"].read_usage(path, fourth.offset, fourth.state)
+    sixth = RUNTIMES["opencode"].read_usage(path, fifth.offset, fifth.state)
+    assert sixth.caught_up and sixth.state == fourth.state
+    assert not any("SUM(" in query for query in queries)
 
 
 def test_codex_missing_observations_keep_tokens_but_do_not_price_gap(tmp_path):
@@ -536,9 +571,15 @@ def test_opencode_malformed_observation_keeps_coverage_partial_after_recovery(tm
         )
 
     with sqlite3.connect(path) as c:
-        c.execute("CREATE TABLE message(id TEXT,session_id TEXT,time_updated INTEGER,data TEXT)")
+        opencode_session_table(c)
+        c.execute("INSERT INTO session_v2(id) VALUES ('s')")
+        c.execute(
+            "CREATE TABLE session_message(id TEXT,session_id TEXT,time_created INTEGER DEFAULT 0,"
+            "time_updated INTEGER,"
+            "data TEXT,type TEXT DEFAULT 'assistant')"
+        )
         c.executemany(
-            "INSERT INTO message VALUES (?,?,?,?)",
+            "INSERT INTO session_message(id,session_id,time_updated,data) VALUES (?,?,?,?)",
             [(str(i), "s", 1789207200000, message(n)) for i, n in enumerate([1, -1, 2])],
         )
     first = RUNTIMES["opencode"].read_usage(path, 0, {"_session_id": "s"})
@@ -598,9 +639,15 @@ def test_opencode_invalid_structured_tokens_return_partial_batch(tmp_path, token
 
     path = tmp_path / "opencode.db"
     with sqlite3.connect(path) as c:
-        c.execute("CREATE TABLE message(id TEXT,session_id TEXT,time_updated INTEGER,data TEXT)")
+        opencode_session_table(c)
+        c.execute("INSERT INTO session_v2(id) VALUES ('s')")
         c.execute(
-            "INSERT INTO message VALUES (?,?,?,?)",
+            "CREATE TABLE session_message(id TEXT,session_id TEXT,time_created INTEGER DEFAULT 0,"
+            "time_updated INTEGER,"
+            "data TEXT,type TEXT DEFAULT 'assistant')"
+        )
+        c.execute(
+            "INSERT INTO session_message(id,session_id,time_updated,data) VALUES (?,?,?,?)",
             ("m", "s", 1789207200000, json.dumps({"role": "assistant", "tokens": tokens})),
         )
     batch = RUNTIMES["opencode"].read_usage(path, 0, {"_session_id": "s"})

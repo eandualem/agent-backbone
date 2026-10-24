@@ -214,7 +214,11 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                     "unavailable"
                     if batch.error and not batch.offset
                     else "partial"
-                    if batch.error or batch.state.get("partial")
+                    if (
+                        batch.error
+                        or batch.state.get("partial")
+                        or batch.state.get("coverage_detail")
+                    )
                     else "catching_up"
                     if not batch.caught_up
                     else "measured"
@@ -227,7 +231,11 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                     "usage_source",
                     "source_read_error" if batch.error else None,
                 )
-                detail = batch.error or ("source read incomplete" if not batch.caught_up else "")
+                detail = (
+                    batch.error
+                    or ("source read incomplete" if not batch.caught_up else "")
+                    or batch.state.get("coverage_detail", "")
+                )
                 if (
                     not batch.events
                     and session["source_path"] == str(path)

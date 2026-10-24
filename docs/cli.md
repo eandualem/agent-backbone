@@ -169,10 +169,8 @@ start` lists them for the agent it starts, with the agent's own environment
 applied. Both also name a CLI's own memory across sessions while its
 settings leave it on, such as Claude Code's auto-memory, with the setting
 that turns it off where there is one; Backbone does not change it. It names each
-OpenCode 1.x agent whose environment (its `env`, then the shell) lacks
-`OPENCODE_EXPERIMENTAL_PLAN_MODE`: without it the plan agent asks for no
-approval. OpenCode v2 has no structured plan-approval dialog, so its remote
-plan control remains unavailable. It names each running
+OpenCode agent: its current CLI has no structured plan-approval dialog, so
+remote plan control remains unavailable. It names each running
 agent whose pane is in tmux copy mode with no client viewing it: messages wait
 until someone attaches to its session and presses `q`. These are notes, not
 failures. `doctor` resolves `CODEX_HOME`,
@@ -277,9 +275,9 @@ Claude Code. With OpenCode 2.1.4 or newer (`@opencode/cli`), use two colons:
 `provider/model::high`. A model with a literal tag can also select an effort,
 for example `provider/model:tag::high`. Backbone checks that the model offers
 the requested variant before creating or changing the native session, then
-verifies the selection before opening the TUI. Older OpenCode versions refuse
-explicit effort selection; their ordinary model strings still work unchanged.
-OpenCode v2 launches with a private native server (`--standalone`). Its native
+verifies the selection before opening the TUI. Backbone supports the current OpenCode CLI (2.1.4 or newer); older versions
+are refused at launch instead of using a compatibility path.
+OpenCode launches with a private native server (`--standalone`). Its native
 startup still applies OpenCode database migrations, including legacy-session migration.
 Selection waits for migration completion. A readiness timeout leaves the migration
 running; inspect the agent before retrying. A fresh launch with an explicit model

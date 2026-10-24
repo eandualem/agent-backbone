@@ -279,7 +279,7 @@ class TestDoctor:
     def test_names_each_opencode_agent_whose_plans_ask_for_no_approval(
         self, tmp_path, monkeypatch, capsys
     ):
-        """#278: OpenCode asks to approve a plan only with its experimental flag."""
+        """Current OpenCode switches agents without a structured approval dialog."""
         for flag in ("OPENCODE_EXPERIMENTAL_PLAN_MODE", "OPENCODE_EXPERIMENTAL"):
             monkeypatch.delenv(flag, raising=False)
         assert _run(["init"]) == 0
@@ -302,10 +302,8 @@ class TestDoctor:
         with patch("agent_backbone.cli.setup.shutil.which", return_value="/usr/bin/tmux"):
             _run(["doctor"])
         out = " ".join(capsys.readouterr().out.split())  # a long note wraps
-        assert (
-            "'builder': plan approval is unavailable until OPENCODE_EXPERIMENTAL_PLAN_MODE" in out
-        )
-        assert "'planner': plan approval" not in out
+        assert "'builder': plan approval is unavailable on OpenCode" in out
+        assert "'planner': plan approval is unavailable on OpenCode" in out
 
 
 class TestAgentCommands:

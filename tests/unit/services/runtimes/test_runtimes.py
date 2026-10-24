@@ -397,29 +397,16 @@ class TestPaneLinePairing:
 
 
 class TestPlanControlCapability:
-    def test_claude_code_codex_and_opencode_have_a_plan_mode_the_backbone_drives(self):
+    def test_only_structured_plan_dialogs_have_control_keys(self):
         from agent_backbone.services.runtimes import RUNTIMES, get_runtime
 
         supported = {name for name in RUNTIMES if get_runtime(name).supports_plan_control}
-        assert supported == {"claude", "codex", "opencode"}
+        assert supported == {"claude", "codex"}
 
-    @pytest.mark.parametrize(
-        ("env", "asks"),
-        [
-            ({}, False),
-            ({"OPENCODE_EXPERIMENTAL_PLAN_MODE": "1"}, True),
-            ({"OPENCODE_EXPERIMENTAL_PLAN_MODE": "TRUE"}, False),  # read case-sensitively
-            ({"OPENCODE_EXPERIMENTAL": "true"}, True),  # the flag's fallback
-            ({"OPENCODE_EXPERIMENTAL": "true", "OPENCODE_EXPERIMENTAL_PLAN_MODE": "0"}, False),
-        ],
-    )
-    def test_opencode_asks_to_approve_a_plan_only_with_its_flag(self, monkeypatch, env, asks):
+    def test_opencode_reports_native_plan_switching_instead_of_structured_approval(self):
         from agent_backbone.services.runtimes import get_runtime
 
-        for flag in ("OPENCODE_EXPERIMENTAL_PLAN_MODE", "OPENCODE_EXPERIMENTAL"):
-            monkeypatch.delenv(flag, raising=False)
-        needs = get_runtime("opencode").plan_approval_needs(env)
-        assert (needs is None) is asks
+        assert "switch between Plan and Build" in get_runtime("opencode").plan_approval_needs({})
         assert get_runtime("claude").plan_approval_needs({}) is None
 
     async def test_unsupported_runtime_sends_nothing(self):

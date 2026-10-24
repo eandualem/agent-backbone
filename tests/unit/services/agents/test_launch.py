@@ -31,7 +31,7 @@ _BASE = "agent_backbone.services.runtimes.base"
 @pytest.fixture(autouse=True)
 def opencode_version(monkeypatch):
     # These starts use mocked executables; choose the legacy launch contract.
-    monkeypatch.setattr(type(RUNTIMES["opencode"]), "installed_version", lambda self: "1.18.35")
+    monkeypatch.setattr(type(RUNTIMES["opencode"]), "installed_version", lambda self: "2.1.4")
 
 
 def _codex_sandbox(*, linux: bool):
@@ -395,7 +395,7 @@ class TestDenyAgent:
         assert [c.args for c in keys.await_args_list] == [("ike", "Escape")]
         assert evidence == ["sent Escape to claude; plan dialog cleared"]
 
-    @pytest.mark.parametrize("runtime", ["gemini", "deepcode", "aider", "shell"])
+    @pytest.mark.parametrize("runtime", ["opencode", "gemini", "deepcode", "aider", "shell"])
     async def test_other_runtimes_get_no_keys_at_all(self, runtime):
         with (
             patch(f"{_MOD}.session_exists", return_value=True),
@@ -1220,7 +1220,11 @@ class TestLaunchEnvFromRuntime:
         ):
             assert (await start_agent(spec, config, wait=False)).ok
         command = start.await_args.kwargs["command"]
-        assert command[command.index("--model") + 1] == spec.model
+        if runtime == "opencode":
+            selected = next(arg for arg in command if arg.startswith('{"model"'))
+            assert json.loads(selected)["model"] == spec.model
+        else:
+            assert command[command.index("--model") + 1] == spec.model
         env.assert_called_once_with(spec.model, None)  # the tag is no effort
 
     async def test_runtime_environment_reaches_the_session(self, tmp_path):
@@ -1512,7 +1516,11 @@ class TestResumeOnlyTheLastLaunchesSession:
     async def test_the_last_launches_session_is_resumed(self, tmp_path, runtime):
         config, spec = self._setup(tmp_path, runtime, reported_by_last_launch=True)
         command, evidence = await self._start(config, spec, resume=True)
-        assert "old-sess" in command
+        if runtime == "opencode":
+            selected = next(arg for arg in command if arg.startswith('{"model"'))
+            assert json.loads(selected)["resume"] == "old-sess"
+        else:
+            assert "old-sess" in command
         assert any("resuming the session the last launch reported" in line for line in evidence)
 
 
@@ -1540,7 +1548,12 @@ async def test_a_launch_that_resumed_by_id_holds_that_conversation_before_report
         await start_agent(spec, config, resume=True, wait=False)  # resumes sess-1 by id
         clear_starting_marker(config.state_dir, "ike")  # stopped before its hook wrote
         result = await start_agent(spec, config, resume=True, wait=False)
-    assert "sess-1" in start.await_args.kwargs["command"]
+    command = start.await_args.kwargs["command"]
+    if runtime == "opencode":
+        selected = next(arg for arg in command if arg.startswith('{"model"'))
+        assert json.loads(selected)["resume"] == "sess-1"
+    else:
+        assert "sess-1" in command
     opened = "resuming the session the last launch opened: sess-1"
     assert any(opened in line for line in result.evidence)
 

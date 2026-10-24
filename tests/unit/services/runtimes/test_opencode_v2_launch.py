@@ -113,7 +113,7 @@ def test_v2_command_uses_selected_session_and_keeps_resume_brief_suppressed(
         state_dir=tmp_path / "state",
         unattended=True,
     )
-    assert command[2] == "--v2"
+    assert command[2] == str(tmp_path / "hooks/opencode-v2")
     plugin = tmp_path / "hooks/opencode-v2/index.js"
     assert plugin.exists()
     selection = next(arg for arg in command if arg.startswith('{"model"'))
@@ -128,11 +128,13 @@ def test_v2_command_uses_selected_session_and_keeps_resume_brief_suppressed(
     assert ("--prompt" in native) is (not resume)
 
 
-def test_legacy_version_refuses_explicit_effort(monkeypatch):
+@pytest.mark.parametrize("version", ["1.19.4", "2.1.3"])
+def test_older_versions_are_refused_instead_of_using_a_compatibility_launcher(monkeypatch, version):
     runtime = RUNTIMES["opencode"]
-    monkeypatch.setattr(type(runtime), "installed_version", lambda self: "1.19.4")
-    with pytest.raises(RuntimeError, match="requires @opencode/cli 2.1.4"):
-        runtime.check_effort("high")
+    monkeypatch.setattr(type(runtime), "installed_version", lambda self: version)
+    monkeypatch.setattr(type(runtime), "available", lambda self: True)
+    with pytest.raises(RuntimeError, match="requires current @opencode/cli"):
+        runtime.build_command()
 
 
 def test_exact_resume_cannot_silently_create_a_missing_session(monkeypatch):
@@ -152,7 +154,7 @@ def test_v2_does_not_claim_legacy_flag_enables_plan_approval(monkeypatch):
     runtime = RUNTIMES["opencode"]
     monkeypatch.setattr(type(runtime), "installed_version", lambda self: "2.1.4")
     reason = runtime.plan_approval_needs({"OPENCODE_EXPERIMENTAL_PLAN_MODE": "1"})
-    assert "unavailable on OpenCode v2" in reason
+    assert "unavailable on OpenCode" in reason
 
 
 @pytest.mark.parametrize("version", [None, "unrecognized version"])

@@ -57,12 +57,12 @@ version differs.
 | Permission dialog detected and alerted | ✅ (2.1.296) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? markers not verified live | n/a |
 | Permission dialog answered (agent approve) | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
 | Permission dialog refused (agent deny) | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
-| Plan approval answered | ✅ (2.1.284) | ✅ (0.157.1) in Plan mode (`/plan`) | ❌ | ❌ #278 v1 requires OPENCODE_EXPERIMENTAL_PLAN_MODE (off by default); v2 requires switching agents in the native session, not structured plan approval | ❌ | ❌ | n/a |
+| Plan approval answered | ✅ (2.1.284) | ✅ (0.157.1) in Plan mode (`/plan`) | ❌ | ❌ #278 requires switching agents in the native session, not structured plan approval | ❌ | ❌ | n/a |
 | Alert when an automatic safety check refuses an action | ✅ (2.1.282) | ✅ (0.160.0) its automatic reviewer (`agents.auto_review`) | ❌ | ✅ (2.1.4) 2.1.4+ typed policy denials; native simulated fixture, working-agent check pending | ❌ | ❌ | n/a |
 | Browser tab group named after the agent | ✅ (version not recorded) with `backbone chrome install` | ❌ #270 | ❌ | ❌ #270 | ❌ | ❌ | n/a |
 | Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ resumes the directory's latest session | ❌ | n/a |
 | Fleet snapshot resumes the saved session exactly | ✅ | ✅ | ✅ | ✅ | ❌ reported as exact_resume_unsupported | ❌ reported as exact_resume_unsupported | n/a |
-| Reasoning effort chosen with the model (`model:effort`, OpenCode `model::effort`) | ✅ | ✅ | ? whether the CLI has an effort setting is not checked | ✅ requires @opencode/cli 2.1.4+; model::effort; older versions refuse it | ✅ low, high or max, through DEEPCODE_REASONING_EFFORT | ? whether the CLI has an effort setting is not checked | n/a |
+| Reasoning effort chosen with the model (`model:effort`, OpenCode `model::effort`) | ✅ | ✅ | ? whether the CLI has an effort setting is not checked | ✅ requires current @opencode/cli (2.1.4+); model::effort | ✅ low, high or max, through DEEPCODE_REASONING_EFFORT | ? whether the CLI has an effort setting is not checked | n/a |
 | No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
 | Writes bounded while unattended | ❌ #285 | ✅ OS sandbox; on Linux, git add and commit fail inside it, so swarms refuse unattended Codex members there (#437) | ❌ | ❌ #285 | ❌ | ❌ | n/a |
 | Automatic permission review (agents.auto_review) | ? #293 auto mode; equivalence not verified | ✅ `--approve-for-me` | ❌ | ❌ #293 | ❌ | ❌ | n/a |
