@@ -88,6 +88,7 @@ class OpenCode(Runtime):
         r"^(?:error:\s*)?you exceeded your current quota\b",
         r"^(?:error:\s*)?(?:rate limit (?:reached|exceeded)|resource_exhausted)\b",
         r"^(?:error:\s*)?selected model is at capacity\b",
+        r"^(?:error:\s*)?you[’']ve reached your (?:\d+-hour )?usage limit\b",
     )
     # "△ Permission required … Allow once  Allow always  Reject … enter confirm"
     # with "Allow once" preselected (live capture, 1.18).
@@ -120,6 +121,33 @@ class OpenCode(Runtime):
         end = edge
         while end and clean[end - 1].startswith("┃"):
             end -= 1
+        # v2.1.4 draws a red, unboxed error immediately before the turn footer.
+        latest = end
+        while latest and not clean[latest - 1]:
+            latest -= 1
+        if latest and re.fullmatch(
+            r".+ · .+ · (?:\d+ms|\d+\.\d+s|\d+m \d+s|\d+h \d+m|\d+d \d+h)",
+            clean[latest - 1],
+        ):
+            latest -= 1
+            while latest and not clean[latest - 1]:
+                latest -= 1
+            # capture-pane preserves SGR state across wrapped rows.
+            red_prefixes = []
+            color = ""
+            for raw in lines[:latest]:
+                prefix = re.match(r"(?:\s|\x1b\[[0-9;]*m)*[^\s\x1b]+", raw)
+                red_prefixes.append(bool(prefix and _error_foreground(color + prefix[0])))
+                styles = "".join(re.findall(r"\x1b\[[0-9;]*m", raw))
+                color = "\x1b[31m" if _error_foreground(color + styles + "x") else ""
+            start = latest
+            while start and clean[start - 1] and red_prefixes[start - 1]:
+                start -= 1
+            text = " ".join(clean[start:latest])
+            if any(
+                re.match(pattern, text, re.IGNORECASE) for pattern in self.provider_error_patterns
+            ):
+                return text[:500]
         block: list[str] = []
         for raw, text in reversed(list(zip(lines[:end], clean[:end], strict=True))):
             if text.startswith("┃"):
