@@ -325,9 +325,12 @@ class OpenCode(Runtime):
                 ).fetchone()
                 signature = [*native, *version]
                 # Only compare whole-session evidence after catching up, in the same snapshot.
-                # Cache a successful comparison until the native session changes; never add
+                # Cache only matching evidence; a compaction can reconcile within the same
+                # millisecond without advancing the source signature. Never add
                 # aggregate totals to message/ledger counts, which would double count usage.
-                if len(rows) <= 10000 and state.get("native_coverage") != signature:
+                if len(rows) <= 10000 and (
+                    state.get("coverage_detail") or state.get("native_coverage") != signature
+                ):
                     paths = (
                         "cost",
                         "tokens.input",

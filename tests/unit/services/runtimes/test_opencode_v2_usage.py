@@ -109,10 +109,11 @@ def test_native_totals_expose_missing_attribution_without_adding_usage(tmp_path,
     assert after.error is None and after.caught_up and after.state["coverage_detail"]
     assert after.events == []  # No invented request or duplicated ledger amount.
 
-    # UsageRecorded precedes Compaction.Ended: later message tokens can reconcile.
+    # UsageRecorded precedes Compaction.Ended: tokens can arrive in the same
+    # millisecond, without changing the native session or maximum message timestamp.
     with sqlite3.connect(path) as conn:
         conn.execute(
-            "UPDATE session_message SET data=?,time_updated=3000 WHERE id='summary'",
+            "UPDATE session_message SET data=?,time_updated=1500 WHERE id='summary'",
             (json.dumps({"time": {"created": 1500}, "tokens": {"input": total}}),),
         )
     reconciled = runtime.read_usage(path, after.offset, after.state)
