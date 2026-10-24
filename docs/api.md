@@ -732,14 +732,14 @@ agent — `POST /api/plans/{name}/approve` and `/reject {"feedback"}`.
 
 Approve and reject send the agent's **runtime's own** plan keys
 (`Runtime.plan_approve_keys` / `plan_reject_keys`: Claude Code, Codex in
-Plan mode, and OpenCode's plan agent when `OPENCODE_EXPERIMENTAL_PLAN_MODE` is
-set in the agent's environment). A runtime without a plan mode the backbone
+Plan mode). OpenCode uses native Plan/Build switching and has no approval keys.
+A runtime without a plan mode the backbone
 can drive answers **409** and nothing is typed. Claude Code and Codex ask in a
 dialog of their own: their keys go in only while it is on screen (otherwise
 **409**, not waiting), and then wait a moment for it to go. Rejection
 feedback is sent *after* the plan is declined, as an ordinary
 `direct_message` (enveloped, queued if the agent is busy); the reply's
-`feedback` field is its outcome. All three runtimes stay in plan mode after a
+`feedback` field is its outcome. Both supported runtimes stay in plan mode after a
 rejection, so the feedback asks for a revised plan.
 
 ## Status

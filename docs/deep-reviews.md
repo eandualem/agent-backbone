@@ -13,6 +13,12 @@ the pinned changes, not the implementing conversation checking itself. A
 different model family or CLI is not required. Name the model exactly; if no
 permitted reviewer can run, report that rather than substituting another one.
 
+The implementing agent needs shell access to launch the reviewer and permission
+to use its required files and network. An OpenCode implementing agent uses the
+Codex reviewer command below. The [capability table](runtime-capabilities.md)
+records whether a completed review has been observed from each caller runtime;
+documenting the command alone does not establish that receipt.
+
 | Scope | Head | Base | Reviewer and depth |
 |---|---|---|---|
 | Feature branch, **before** its PR opens | the branch's commit | the integration branch (`develop`) | Codex implementer: [Opus](#claude-opus-reviewer-for-codex-implementers) at `--effort high`, or Astra at `high`. Any other: [Astra](#codex-reviewer) at `high` |

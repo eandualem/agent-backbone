@@ -460,3 +460,41 @@ async def test_a_newer_record_is_read_against_a_new_screen(tmp_path):
     with patch("agent_backbone.services.agents._inference.capture_pane", turn_ends_meanwhile):
         snapshot = await get_agent_state(tmp_path, "desk", runtime_hint="codex")
     assert snapshot.state == AgentState.IDLE
+
+
+# Native OpenCode 2.1.4: quota failure from a real provider, with a neutral footer.
+_OC_V2_ERROR = "Error: You've reached your 5-hour usage limit. Your quota will reset when"
+_OC_V2_INPUT = f"\n  {_OC_BLUE}┃\n  {_OC_BLUE}┃ Build · Model · high\n  {_OC_BLUE}╹{'▀' * 60}\n"
+_OC_V2_FAILURE = (
+    f"     {_OC_RED}{_OC_V2_ERROR}{_OC_WHITE}\n"
+    f"     {_OC_RED}the current 5-hour window ends.{_OC_WHITE}\n\n"
+    f"     {_OC_GREY}Build · Model · 2.5s{_OC_WHITE}\n" + _OC_V2_INPUT
+)
+
+
+@pytest.mark.parametrize("duration", ["250ms", "2.5s", "1m 2s", "1h 2m", "1d 2h"])
+async def test_opencode_v2_live_quota_overrides_idle_and_clears_after_reply(tmp_path, duration):
+    _record("opencode", tmp_path, failed=True)
+    screen = _OC_V2_FAILURE.replace("2.5s", duration)
+    failed = await get_agent_state(tmp_path, "desk", runtime_hint="opencode", pane_content=screen)
+    assert failed.state == AgentState.BLOCKED and failed.reason == "provider"
+    assert "5-hour usage limit" in failed.detail
+    for pane in (
+        screen.replace(_OC_RED, _OC_TEXT),
+        screen.replace(_OC_RED, _OC_TEXT, 1).replace("quota", _OC_RED + "quota" + _OC_WHITE, 1),
+        screen.replace(_OC_V2_INPUT, "\nCompleted successfully.\n" + _OC_V2_INPUT),
+    ):
+        recovered = await get_agent_state(
+            tmp_path, "desk", runtime_hint="opencode", pane_content=pane
+        )
+        assert recovered.state == AgentState.IDLE
+
+
+def test_opencode_v2_wrapped_error_keeps_foreground_between_rows():
+    # tmux capture-pane -e keeps SGR state across soft-wrapped terminal rows.
+    screen = (
+        f"{_OC_RED}Error: You've reached your 5-hour\n"
+        "usage limit. Try later.\x1b[39m\n\nBuild · Model · 2.5s\n" + _OC_V2_INPUT
+    )
+    assert RUNTIMES["opencode"].provider_failure(screen) is not None
+    assert RUNTIMES["opencode"].provider_failure(screen.replace(_OC_RED, _OC_TEXT)) is None

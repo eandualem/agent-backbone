@@ -1,20 +1,22 @@
-"""OpenCode. Markers verified live against opencode 1.18.
+"""OpenCode current native integration (2.1.4+).
 
-The "Ask anything..." placeholder disappears after the first message, but
-the bottom bar ("ctrl+p commands") is always visible, so idle is that bar
-without the working spinner's "esc interrupt".
+The current TUI shows an "Ask anything…" placeholder and a location footer;
+its working spinner shows "esc interrupt".
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
-import logging
+import math
 import os
 import re
 import sqlite3
 from pathlib import Path
 
+from agent_backbone.fs import atomic_write_text
 from agent_backbone.hooks import install as hooks
+from agent_backbone.services.runtimes._opencode_v2_launch import failure_path
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes._usage import UsageBatch, count
 from agent_backbone.services.runtimes.base import (
@@ -28,11 +30,8 @@ from agent_backbone.services.runtimes.base import (
 )
 from agent_backbone.usage import UsageEvent, timestamp
 
-log = logging.getLogger(__name__)
-
 # OpenCode's boolean flags, as it reads them (1.18: case-sensitive).
 _TRUE = ("true", "yes", "on", "1", "y")
-_FALSE = ("false", "no", "off", "0", "n")
 
 
 def _setting(env: dict[str, str], key: str) -> str:
@@ -47,6 +46,7 @@ class OpenCode(Runtime):
     # 1.18.32; the first skill found under a name wins.
     skill_read_dirs = (".claude/skills", ".agents/skills", ".opencode/skills", ".opencode/skill")
     display_name = "OpenCode"
+    refusal_check = "OpenCode's permission policy"
     aliases = ("open-code", "open_code")
     binary = "opencode"
     brief_mode = "initial_prompt"
@@ -56,15 +56,25 @@ class OpenCode(Runtime):
         {"observed-model", "project-instructions", "request-diagnostics", "interrupted-turn"}
     )
     model_tags = True
+    efforts = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
-    runtime_markers = ("opencode", "ask anything...", "tab agents")
-    placeholder_fragments = ("ask anything...", "ctrl+p commands")
+    def split_model(self, spec):
+        if not spec or "::" not in spec:
+            return spec or None, None
+        model, effort = spec.rsplit("::", 1)
+        if not effort.strip():
+            raise ValueError("OpenCode model::effort requires an effort after '::'")
+        return model or None, effort.strip().lower()
+
+    runtime_markers = ("opencode", "ask anything…", "ask anything...", "tab agents")
+    placeholder_fragments = ("ask anything…", "ask anything...", "ctrl+p commands")
     status_fragments = ("tab agents", "ctrl+p commands")
     busy_markers = ("esc interrupt",)
     provider_error_patterns = (
         r"^(?:error:\s*)?you exceeded your current quota\b",
         r"^(?:error:\s*)?(?:rate limit (?:reached|exceeded)|resource_exhausted)\b",
         r"^(?:error:\s*)?selected model is at capacity\b",
+        r"^(?:error:\s*)?you[’']ve reached your (?:\d+-hour )?usage limit\b",
     )
     # "△ Permission required … Allow once  Allow always  Reject … enter confirm"
     # with "Allow once" preselected (live capture, 1.18).
@@ -73,11 +83,7 @@ class OpenCode(Runtime):
     # Escape rejects the tool call wherever the cursor is and ends the turn
     # ("The user rejected permission to use this specific tool call", live, 1.18).
     deny_keys = ("Escape",)
-    # plan_exit's question: "1. Yes" (switch to the build agent and start
-    # implementing), "2. No" (stay with the plan agent); a digit answers at
-    # once, and No ends the turn in the plan agent (live, 1.18.32).
-    plan_approve_keys = ("1",)
-    plan_reject_keys = ("2",)
+    # Current Plan mode has no structured approval dialog or safe approval keys.
     # "--auto  auto-approve permissions that are not explicitly denied"
     # (opencode 1.18 TUI); a `permission` deny in the user's config still
     # holds. OpenCode has no OS sandbox: this is trust on the machine.
@@ -97,6 +103,33 @@ class OpenCode(Runtime):
         end = edge
         while end and clean[end - 1].startswith("┃"):
             end -= 1
+        # v2.1.4 draws a red, unboxed error immediately before the turn footer.
+        latest = end
+        while latest and not clean[latest - 1]:
+            latest -= 1
+        if latest and re.fullmatch(
+            r".+ · .+ · (?:\d+ms|\d+\.\d+s|\d+m \d+s|\d+h \d+m|\d+d \d+h)",
+            clean[latest - 1],
+        ):
+            latest -= 1
+            while latest and not clean[latest - 1]:
+                latest -= 1
+            # capture-pane preserves SGR state across wrapped rows.
+            red_prefixes = []
+            color = ""
+            for raw in lines[:latest]:
+                prefix = re.match(r"(?:\s|\x1b\[[0-9;]*m)*[^\s\x1b]+", raw)
+                red_prefixes.append(bool(prefix and _error_foreground(color + prefix[0])))
+                styles = "".join(re.findall(r"\x1b\[[0-9;]*m", raw))
+                color = "\x1b[31m" if _error_foreground(color + styles + "x") else ""
+            start = latest
+            while start and clean[start - 1] and red_prefixes[start - 1]:
+                start -= 1
+            text = " ".join(clean[start:latest])
+            if any(
+                re.match(pattern, text, re.IGNORECASE) for pattern in self.provider_error_patterns
+            ):
+                return text[:500]
         block: list[str] = []
         for raw, text in reversed(list(zip(lines[:end], clean[:end], strict=True))):
             if text.startswith("┃"):
@@ -116,22 +149,69 @@ class OpenCode(Runtime):
     def hook_settings(self, data_dir, state_dir, *, python=None):
         raise RuntimeError("OpenCode state comes from a plugin, not a command hook")
 
+    def check_effort(self, effort):
+        super().check_effort(effort)
+        if effort and self._version() < (2, 1, 4):
+            raise RuntimeError("OpenCode effort selection requires @opencode/cli 2.1.4 or newer")
+
+    def _version(self) -> tuple[int, ...]:
+        version = self.installed_version() or ""
+        match = re.match(r"(\d+)\.(\d+)\.(\d+)", version)
+        return tuple(map(int, match.groups())) if match else ()
+
     def build_command(self, **kwargs):
+        if not self.available():
+            raise RuntimeError(f"Runtime '{self.id}' binary not found: {self.binary}")
+        version = self._version()
+        if not version:
+            raise RuntimeError("Could not determine the OpenCode version; launch refused")
+        if version < (2, 1, 4):
+            raise RuntimeError(
+                "OpenCode integration requires current @opencode/cli (2.1.4 or newer)"
+            )
+        model, effort = self.split_model(kwargs.get("model"))
+        if effort and not model:
+            raise RuntimeError("OpenCode effort selection requires a provider/model")
+        Runtime.check_effort(self, effort)
+        resume = kwargs.get("resume", False)
+        selection = {"model": model, "effort": effort, "resume": resume}
+        kwargs = {**kwargs, "model": None, "resume": False}
+        if resume:
+            kwargs["brief_file"] = None
         command = super().build_command(**kwargs)
+        if command is None:
+            return command
+        command = [
+            hooks.default_python(),
+            str(Path(__file__).with_name("_opencode_v2_launch.py")),
+            json.dumps(selection),
+            command[0],
+            "--standalone",
+            *command[1:],
+        ]
         data_dir, state_dir = kwargs.get("data_dir"), kwargs.get("state_dir")
-        if command is None or data_dir is None or state_dir is None:
+        if data_dir is None or state_dir is None:
             return command
         try:
-            plugin = hooks.install_hook_files(Path(data_dir)) / self.hook_script
+            plugin = hooks.install_hook_files(Path(data_dir)) / "opencode-v2"
+            plugin.mkdir(exist_ok=True)
+            atomic_write_text(
+                plugin / "index.js", hooks.hook_source("opencode_v2_hook.js").read_text()
+            )
         except OSError as exc:
-            log.warning("Could not install OpenCode launch hooks: %s", exc)
-            return command
+            raise RuntimeError("Could not install OpenCode launch hooks") from exc
         return [
             hooks.default_python(),
             str(Path(__file__).with_name("_opencode_launch.py")),
             str(plugin),
             *command,
         ]
+
+    def startup_error(self, state_dir, agent, launch_id):
+        try:
+            return failure_path(Path(state_dir), agent, launch_id).read_text()[:1000] or None
+        except OSError:
+            return None
 
     def user_skill_dirs(self, env):
         home = agent_home(env)
@@ -144,8 +224,7 @@ class OpenCode(Runtime):
         ]
 
     def reload_skills(self, state_dir, session):
-        # 1.18.35 reads skills only at start; the plugin (opencode_hook.js)
-        # restarts the instance between turns, keeping the conversation.
+        # The native plugin reloads skills between turns, keeping the conversation.
         marker = Path(state_dir) / f"{session}.skills-reload"
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.touch()
@@ -165,16 +244,9 @@ class OpenCode(Runtime):
         return [first] if first is not None and has_text(first) else []
 
     def plan_approval_needs(self, env):
-        # plan_exit, the step that asks to approve a plan, exists only with
-        # this flag, which falls back to OPENCODE_EXPERIMENTAL (1.18.32).
-        flag = _setting(env, "OPENCODE_EXPERIMENTAL_PLAN_MODE")
-        if flag not in (*_TRUE, *_FALSE):
-            flag = _setting(env, "OPENCODE_EXPERIMENTAL")
-        if flag in _TRUE:
-            return None
         return (
-            "plan approval is unavailable until OPENCODE_EXPERIMENTAL_PLAN_MODE=1 is set "
-            "in its environment: without it OpenCode's plan agent asks for no approval"
+            "plan approval is unavailable on OpenCode: "
+            "switch between Plan and Build in the native session"
         )
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
@@ -199,7 +271,7 @@ class OpenCode(Runtime):
         if not path.is_file():
             return []
         with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
-            found = conn.execute("SELECT 1 FROM session WHERE id=?", (session_id,)).fetchone()
+            found = conn.execute("SELECT 1 FROM session_v2 WHERE id=?", (session_id,)).fetchone()
         return [path] if found else []
 
     def usage_children(
@@ -210,7 +282,9 @@ class OpenCode(Runtime):
         with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
             return [
                 (row[0], path)
-                for row in conn.execute("SELECT id FROM session WHERE parent_id=?", (session_id,))
+                for row in conn.execute(
+                    "SELECT id FROM session_v2 WHERE parent_id=?", (session_id,)
+                )
             ]
 
     def read_usage(self, path: Path, offset: int, state: dict):
@@ -218,25 +292,111 @@ class OpenCode(Runtime):
         batch = UsageBatch(offset, state)
         try:
             with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+                conn.execute("BEGIN")
+                native = conn.execute(
+                    "SELECT cost,tokens_input,tokens_output,tokens_reasoning,"
+                    "tokens_cache_read,tokens_cache_write,fork_session_id,"
+                    "time_created,time_updated "
+                    "FROM session_v2 WHERE id=?",
+                    (state["_session_id"],),
+                ).fetchone()
+                if native is None:
+                    raise ValueError("native session is unavailable")
+                # A fork copies context with new message IDs but starts its own usage at zero.
+                fork_filter = "AND time_created>=? " if native[6] is not None else ""
+                fork_params = (native[7],) if fork_filter else ()
                 # Replay the boundary timestamp to catch same-millisecond revisions.
                 floor = state.get("scan_floor", max(0, offset - 1000))
                 after_time, after_id = state.get("scan_after", (floor, ""))
                 rows = conn.execute(
-                    "SELECT id,time_updated,data FROM message WHERE session_id=? "
-                    "AND time_updated>=? AND (time_updated>? OR (time_updated=? AND id>?)) "
+                    "SELECT id,time_updated,data,type FROM session_message WHERE session_id=? "
+                    f"{fork_filter}AND time_updated>=? "
+                    "AND (time_updated>? OR (time_updated=? AND id>?)) "
                     "ORDER BY time_updated,id LIMIT 10001",
-                    (state["_session_id"], floor, after_time, after_time, after_id),
+                    (state["_session_id"], *fork_params, floor, after_time, after_time, after_id),
                 ).fetchall()
+                version = conn.execute(
+                    "SELECT COUNT(*),MAX(time_updated) FROM session_message WHERE session_id=?",
+                    (state["_session_id"],),
+                ).fetchone()
+                boundary = hashlib.sha256(
+                    (state.get("native_scan", "") + json.dumps(rows[:10000])).encode()
+                ).hexdigest()
+                if len(rows) > 10000:
+                    state["native_scan"] = boundary
+                else:
+                    state.pop("native_scan", None)
+                signature = [*native, *version, boundary]
+                # Only compare whole-session evidence after catching up, in the same snapshot.
+                # Include every replay page, not just the last: compaction can finish within the
+                # same millisecond without advancing timestamps or the native aggregate.
+                # Stable histories, including mismatches, need no repeated full summation.
+                if len(rows) <= 10000 and state.get("native_coverage") != signature:
+                    paths = (
+                        "cost",
+                        "tokens.input",
+                        "tokens.output",
+                        "tokens.reasoning",
+                        "tokens.cache.read",
+                        "tokens.cache.write",
+                    )
+                    sums = ",".join(
+                        "COALESCE(SUM(CASE WHEN json_valid(data) THEN "
+                        f"json_extract(data, '$.{path}') ELSE 0 END),0)"
+                        for path in paths
+                    )
+                    visible = conn.execute(
+                        f"SELECT {sums} FROM session_message WHERE session_id=? "
+                        f"AND type IN ('assistant','compaction') {fork_filter}",
+                        (state["_session_id"], *fork_params),
+                    ).fetchone()
+                    if native[1:6] != visible[1:6] or not math.isclose(
+                        native[0], visible[0], rel_tol=1e-9, abs_tol=1e-9
+                    ):
+                        state["coverage_detail"] = (
+                            "native session totals do not match current message history; "
+                            "historical usage attribution is incomplete"
+                        )
+                        # The ledger retains removed requests. A context reminder must use
+                        # the latest surviving measured request, not a removed ledger row.
+                        state["current_context_tokens"] = None
+                        current = conn.execute(
+                            "SELECT data FROM session_message WHERE session_id=? "
+                            f"AND type IN ('assistant','compaction') {fork_filter}"
+                            "ORDER BY time_created DESC,id DESC LIMIT 20",
+                            (state["_session_id"], *fork_params),
+                        )
+                        for (encoded,) in current:
+                            try:
+                                tokens = json.loads(encoded).get("tokens") or {}
+                                cache = tokens.get("cache") or {}
+                                context = (
+                                    count(tokens, "input")
+                                    + count(cache, "read")
+                                    + count(cache, "write")
+                                )
+                            except (ValueError, TypeError, AttributeError):
+                                break  # The normal reader still handles malformed records.
+                            if context:
+                                state["current_context_tokens"] = context
+                                break
+                    else:
+                        state.pop("coverage_detail", None)
+                        state.pop("current_context_tokens", None)
+                    state["native_coverage"] = signature
             batch.caught_up = len(rows) <= 10000
-            for key, updated, encoded in rows[:10000]:
+            for key, updated, encoded, kind in rows[:10000]:
                 batch.offset = max(batch.offset, updated)
                 state["scan_floor"] = floor
                 state["scan_after"] = (updated, key)
                 data = json.loads(encoded)
                 if not isinstance(data, dict):
                     raise ValueError("invalid message record")
-                if data.get("role") != "assistant" or not data.get("tokens"):
+                if kind not in ("assistant", "compaction") or not data.get("tokens"):
                     continue
+                model = data.get("model") or {}
+                if not isinstance(model, dict):
+                    raise ValueError("invalid model record")
                 tokens = data["tokens"]
                 if not isinstance(tokens, dict):
                     raise ValueError("invalid token usage")
@@ -248,8 +408,8 @@ class OpenCode(Runtime):
                     key=key,
                     at=timestamp(data["time"]["created"] / 1000),
                     revision_at=timestamp(updated / 1000),
-                    model=data.get("modelID") or "unknown",
-                    provider=data.get("providerID") or "unknown",
+                    model=model.get("id") or "unknown",
+                    provider=model.get("providerID") or "unknown",
                     reported_cost_usd=data.get("cost"),
                     input_tokens=count(tokens, "input"),
                     output_tokens=count(tokens, "output") + count(tokens, "reasoning"),
@@ -284,25 +444,20 @@ class OpenCode(Runtime):
         before: int | None = None,
         end: int | None = None,
     ) -> tuple[list[TranscriptEntry], bool, bool]:
-        """The session's assistant text parts, by position: the part's
-        creation time in milliseconds times 1000, plus its order among the
-        session's parts created in that millisecond. A position only grows;
-        a rowid does not, since SQLite gives the rowids of the parts an undo
-        deletes to the next ones. A streaming part is stored empty until it
-        ends (``time.end``, set on an interrupted one too); the compaction
-        summary is bookkeeping, not a message. Child sessions are not this
-        session."""
+        """Completed assistant text in the current native conversation, by position."""
         messages = (
-            "WITH positioned AS (SELECT rowid AS row, time_created * 1000 + ROW_NUMBER() "
-            "OVER (PARTITION BY time_created ORDER BY rowid) - 1 AS position "
-            "FROM part WHERE session_id = ?), "
-            "messages AS (SELECT q.position, p.data FROM positioned q "
-            "JOIN part p ON p.rowid = q.row JOIN message m ON m.id = p.message_id "
-            "WHERE json_extract(p.data, '$.type') = 'text' "
-            "AND json_extract(p.data, '$.time.end') IS NOT NULL "
-            "AND trim(json_extract(p.data, '$.text'), ' ' || char(9, 10, 13)) != '' "
-            "AND json_extract(m.data, '$.role') = 'assistant' "
-            "AND json_extract(m.data, '$.summary') IS NOT 1) "
+            "WITH positioned AS (SELECT m.time_created * 1000 + ROW_NUMBER() "
+            "OVER (PARTITION BY m.time_created ORDER BY m.seq, p.key) - 1 AS position, "
+            "json_object('text', json_extract(p.value, '$.text'), 'time', "
+            "json_object('end', coalesce(json_extract(m.data, '$.time.streamed'), "
+            "json_extract(m.data, '$.time.completed')))) AS data "
+            "FROM session_message m, json_each(m.data, '$.content') p "
+            "WHERE m.session_id=? AND m.type='assistant' "
+            "AND coalesce(json_extract(m.data, '$.time.streamed'), "
+            "json_extract(m.data, '$.time.completed')) IS NOT NULL "
+            "AND json_extract(p.value, '$.type')='text'), "
+            "messages AS (SELECT position, data FROM positioned "
+            "WHERE trim(json_extract(data, '$.text'), ' ' || char(9, 10, 13)) != '') "
         )
         try:
             with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:

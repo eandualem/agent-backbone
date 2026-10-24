@@ -10,6 +10,11 @@ import os
 import sys
 from pathlib import Path
 
+if __package__:
+    from ._opencode_v2_launch import record_failure
+else:
+    from _opencode_v2_launch import record_failure
+
 
 def merge_config(raw: str | None, plugin: str) -> str | None:
     """Return merged JSON, or None to preserve an unsupported config verbatim."""
@@ -17,24 +22,30 @@ def merge_config(raw: str | None, plugin: str) -> str | None:
         content = json.loads(raw or "{}")
     except ValueError:
         return None
-    if not isinstance(content, dict) or not isinstance(content.get("plugin", []), list):
+    key = "plugins"
+    if not isinstance(content, dict) or not isinstance(content.get(key, []), list):
         return None
-    plugins = content.setdefault("plugin", [])
+    plugins = content.setdefault(key, [])
     if plugin not in plugins:
         plugins.append(plugin)
     return json.dumps(content)
 
 
 def main() -> None:
-    plugin, *command = sys.argv[1:]
-    content = merge_config(os.environ.get("OPENCODE_CONFIG_CONTENT"), Path(plugin).as_uri())
+    args = sys.argv[1:]
+    plugin, *command = args
+    content = merge_config(
+        os.environ.get("OPENCODE_CONFIG_CONTENT"),
+        str(Path(plugin).resolve()),
+    )
     if content is None:
-        print(
-            "Skipping OpenCode hook injection: preserving unsupported inline configuration",
-            file=sys.stderr,
+        error = (
+            "Cannot inject OpenCode hooks into unsupported inline configuration; "
+            "use a JSON object with a plugins list"
         )
-    else:
-        os.environ["OPENCODE_CONFIG_CONTENT"] = content
+        record_failure(error)
+        raise SystemExit(error)
+    os.environ["OPENCODE_CONFIG_CONTENT"] = content
     os.execv(command[0], command)
 
 

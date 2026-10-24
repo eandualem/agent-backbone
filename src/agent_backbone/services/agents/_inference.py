@@ -287,6 +287,21 @@ async def _get_agent_state(
     state is verified against the terminal. Every snapshot carries the
     evidence it was built from.
     """
+    launch = read_launch_marker(state_dir, session)
+    runtime = get_runtime(runtime_hint)
+    if (
+        launch
+        and (since is None or launch[0] >= since)
+        and (error := runtime.startup_error(state_dir, session, launch[1]))
+    ):
+        return StateSnapshot(
+            state=AgentState.UNKNOWN,
+            source="launch",
+            runtime=runtime.id,
+            timestamp=launch[0],
+            detail=error,
+            evidence=[error],
+        )
     push = read_state_file(state_dir, session, current_launch=True)
     # Readiness observes this launch only. Its bookkeeping marker must not
     # mask the actual prompt; ordinary state reads still honor the marker.

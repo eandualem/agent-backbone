@@ -603,8 +603,22 @@ or `cwd` override when provided, rather than attributing a command to the parent
 conversation directory. Explicit GitHub repository arguments still take precedence.
 OpenCode's launch wrapper merges the state plugin into the environment actually
 inherited by the new process, preserving inline provider settings and permission
-denies. Unsupported inline JSON/JSONC is preserved unchanged and hook injection
-is skipped; terminal state detection remains available.
+denies. OpenCode 2.1.4+ uses a local plugin directory in `plugins` and requires a
+mergeable inline JSON object. Its adapter translates native session and tool events
+into the same state and context-offer protocol, reloads skills through `skill.reload`,
+and reads usage and assistant text from the v2 session tables. Text becomes available
+after streaming finishes, even while a tool awaits permission or completion. Terminal
+execution events clear cancelled permission requests and retire that turn’s steers.
+An unexpected event-subscription failure writes a warning without event or error contents;
+normal plugin teardown stays quiet. Explicit
+model and effort selection uses the native catalog and session APIs before the TUI
+starts, with exact selection readback. Resume validates the model against the saved
+session’s directory. These metadata calls share one private native
+server and wait for its legacy-history migration to complete before selecting a
+session. They do not submit prompts. A failed selection is retained with the launch
+for `agent inspect` and startup errors, including when the terminal closes.
+The readiness wait may time out while native migration continues; Backbone does
+not terminate that migration to meet the readiness deadline.
 
 
 For automatic upgrades, `backbone up` requests Uvicorn’s graceful exit directly

@@ -191,3 +191,32 @@ async def test_repeated_visibility_and_a_second_model_keep_distinct_metadata(db,
     records = await db.diagnostics.query(operation_id="one-start", category="runtime")
     assert len(records) == 2
     assert {row["model"]: row["occurrences"] for row in records} == {"example-a": 2, "example-b": 1}
+
+
+async def test_native_launch_refusal_survives_closed_terminal_and_is_launch_scoped(
+    tmp_path, monkeypatch
+):
+    from agent_backbone.services.agents import (
+        get_agent_state,
+        wait_until_ready,
+        write_starting_marker,
+    )
+    from agent_backbone.services.runtimes._opencode_v2_launch import record_failure
+
+    write_starting_marker(tmp_path, "app", 100, launch_id="attempt-one")
+    monkeypatch.setenv("BACKBONE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("BACKBONE_AGENT", "app")
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", "attempt-one")
+    error = "OpenCode model provider/model has no variant 'high'"
+    record_failure(error)
+    # No-wait launches retain the same evidence for later inspect/state reads.
+    snapshot = await get_agent_state(tmp_path, "app", runtime_hint="opencode", pane_content="")
+    assert snapshot.source == "launch" and snapshot.detail == error
+    with patch(f"{_LAUNCH}.session_exists", AsyncMock(return_value=False)):
+        ready, evidence = await wait_until_ready(
+            "app", state_dir=tmp_path, runtime="opencode", since=100
+        )
+    assert ready == "exited" and error in evidence
+    write_starting_marker(tmp_path, "app", 101, launch_id="attempt-two")
+    snapshot = await get_agent_state(tmp_path, "app", runtime_hint="opencode", pane_content="")
+    assert error not in snapshot.evidence and snapshot.detail != error

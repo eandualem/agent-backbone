@@ -1,37 +1,8 @@
-// OpenCode plugin: push agent state to the agent-backbone state directory.
-//
-// Wired at launch through OPENCODE_CONFIG_CONTENT ({"plugin": ["file://…"]}),
-// which OpenCode merges on top of the user's own configuration, so nothing
-// in ~/.config/opencode or the repository is touched. Verified against
-// OpenCode 1.18 in its TUI: `session.status` carries {type: "busy" | "idle"},
-// `session.idle` ends a turn, `permission.asked` / `permission.replied`
-// bracket a permission dialog. (`opencode run` exits before plugin handlers
-// finish; the backbone only starts the TUI.) With OPENCODE_EXPERIMENTAL_PLAN_MODE
-// the plan agent ends a plan with `plan_exit`, which asks "Plan at <file> is
-// complete. Would you like to switch to the build agent…?" (`question.asked`,
-// answered by `question.replied` / `question.rejected`; 1.18.32).
-//
-// Writes the same <state_dir>/<agent>.json the Python hooks write. Only the
-// root session counts: sessions with a parentID are OpenCode's own subagents.
-// The running model is the one a completed reply names (`message.updated`,
-// provider/model as `--model` takes it), never a request's: title generation
-// asks the small model. The same replies feed the diagnostics log, since
-// OpenCode's screen shows neither an error's status nor a model switch:
-// `request_error` is the last reply's error name and HTTP status (never the
-// provider's message), `model_changed` the model a reply last switched to.
-// A reply the user stopped (MessageAbortedError) counts as neither.
-//
-// What the backbone offers a working agent (a steer, a high-priority batch;
-// <state_dir>/context/, see backbone_state.py) is taken after each tool call
-// and joins the running turn as a user message, OpenCode's own path for
-// input typed while it works: the turn's next step reads it (verified live
-// against OpenCode 1.18).
-//
-// OpenCode reads skills only when its instance starts. When the backbone
-// changes a running agent's skill links it leaves <state_dir>/<agent>.skills-reload;
-// between turns the plugin restarts the instance (client.instance.dispose(),
-// verified on 1.18.35: the session and its history stay, skills are read
-// again). Never during a turn: disposing aborts it.
+// Shared state, diagnostics and offered-context handling for the current OpenCode
+// plugin. opencode_v2_hook.js maps native API events and tools into this internal
+// protocol. The launcher installs both files without changing user configuration.
+// Only root sessions own agent state; native subagents share their parent's turn.
+// Skill reloads happen between turns, and offered context joins the running turn.
 
 import fs from "node:fs";
 import { createHash } from "node:crypto";
@@ -408,7 +379,9 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
   };
 
   let reloading = false;
-  reloader.check = async () => {
+  let disposed = false;
+  const checkReload = async () => {
+    if (disposed) return;
     const marker = path.join(t.dir, `${t.agent}.skills-reload`);
     let changedAt;
     try {
@@ -442,12 +415,17 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
       reloading = false;
     }
   };
+  reloader.check = checkReload;
   if (!reloader.timer) {
     reloader.timer = setInterval(() => reloader.check?.(), SKILLS_RELOAD_POLL_MS);
     reloader.timer.unref?.();
   }
 
   return {
+    dispose() {
+      disposed = true;
+      if (reloader.check === checkReload) reloader.check = null;
+    },
     "chat.params": async (input) => {
       // The user message this request answers drives the turn.
       const message = input?.message;
@@ -464,6 +442,12 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
     event: async ({ event }) => {
       const p = props(event);
       switch (event.type) {
+        case "permission.denied":
+          appendAction(t, {
+            ts: Date.now() / 1000, action: "permission_denied", runtime: "opencode",
+            kind: "policy", category: "", summary: p.summary, tool_use_id: p.callID,
+          });
+          return;
         case "session.created": {
           const info = p.info ?? {};
           if (info.parentID) children.set(info.id, info.parentID);
@@ -488,6 +472,14 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
               ...(starts ? { prompted_at: Date.now() / 1000 } : {}),
             });
           } else if (type === "idle") idle(event.type, p.sessionID);
+          return;
+        }
+        case "session.execution.ended": {
+          if (isChild(p.sessionID)) return;
+          // Native execution cancellation withdraws requests without replies.
+          for (const [id, by] of pending) if (by === p.sessionID) pending.delete(id);
+          held.delete(p.sessionID);
+          endTurn(event.type, p.sessionID);
           return;
         }
         case "session.idle": {
@@ -532,7 +524,7 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
         }
         case "permission.replied": {
           if (isChild(p.sessionID)) return;
-          pending.delete(p.requestID ?? p.id ?? "?");
+          if (!pending.delete(p.requestID ?? p.id ?? "?")) return;
           resume(event.type, p.sessionID);
           return;
         }

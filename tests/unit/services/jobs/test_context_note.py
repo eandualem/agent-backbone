@@ -37,7 +37,9 @@ def _states(runtime="claude", session="s"):
     return {"desk": snapshot}
 
 
-async def _request(db, tokens, runtime="claude", session="s", coverage="measured", detail=""):
+async def _request(
+    db, tokens, runtime="claude", session="s", coverage="measured", detail="", cursor=None
+):
     """One recorded request of the conversation, with its context size."""
     identity = await db.usage.remember("desk", runtime, session, at=T)
     row = await db.usage.session(identity)
@@ -46,7 +48,7 @@ async def _request(db, tokens, runtime="claude", session="s", coverage="measured
         row,
         path="/x",
         offset=row["offset"] + 1,
-        cursor={},
+        cursor=cursor or {},
         events=[event.model_copy(update={"context_tokens": tokens})],
         coverage=coverage,
         detail=detail,
@@ -238,3 +240,39 @@ async def test_a_failed_request_with_no_tokens_is_not_a_compaction(tmp_path, db)
     await _request(db, 0, runtime="opencode")  # a failed request records all-zero counters
     assert await note_context_size(config, db, _states("opencode")) == []
     assert len(_offered(config)) == 1  # the note is still there
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_historical_usage_warning_keeps_current_context_reminders(tmp_path, db, runtime):
+    config = _config(tmp_path, runtime=runtime)
+    warning = "historical usage attribution is incomplete"
+    cursor = {"coverage_detail": warning, "current_context_tokens": None}
+    await _request(
+        db,
+        400_000,
+        runtime=runtime,
+        coverage="partial",
+        detail="source read incomplete",
+        cursor=cursor,
+    )
+    assert await note_context_size(config, db, _states(runtime)) == []
+    await _request(
+        db,
+        400_000,
+        runtime=runtime,
+        coverage="partial",
+        detail=warning,
+        cursor=cursor,
+    )
+    assert await note_context_size(config, db, _states(runtime)) == []
+    cursor["current_context_tokens"] = 250_000
+    await _request(
+        db,
+        400_000,
+        runtime=runtime,
+        coverage="partial",
+        detail=warning,
+        cursor=cursor,
+    )
+    assert await note_context_size(config, db, _states(runtime)) == ["desk"]
+    assert "250k tokens" in _offered(config)[0]

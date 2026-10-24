@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -12,6 +13,7 @@ from agent_backbone.services.agents._file_reader import write_starting_marker
 from agent_backbone.services.agents.fleet import resume_fleet, save_counts, save_fleet
 from agent_backbone.services.agents.launch import start_agent
 from agent_backbone.services.agents.models import AgentState
+from agent_backbone.services.runtimes import RUNTIMES
 
 _FLEET = "agent_backbone.services.agents.fleet"
 _LAUNCH = "agent_backbone.services.agents.launch"
@@ -35,6 +37,12 @@ async def _store(db, tmp_path, *specs: tuple[str, str]) -> AgentStore:
         project.mkdir(exist_ok=True)
         await store.register(spec=AgentSpec(name=name, dir=str(project), runtime=runtime))
     return store
+
+
+@pytest.fixture(autouse=True)
+def opencode_version(monkeypatch):
+    # These starts use mocked executables; choose the legacy launch contract.
+    monkeypatch.setattr(type(RUNTIMES["opencode"]), "installed_version", lambda self: "2.1.4")
 
 
 def _states(**states: str):
@@ -221,7 +229,11 @@ class TestResume:
         run, commands = await _resume(store, db, snapshot)
         (agent,) = run["agents"]
         assert agent["outcome"] == "resumed_known_session"
-        assert "sess-1" in commands["app"] and "newer-sess" not in commands["app"]
+        if runtime == "opencode":
+            selected = next(arg for arg in commands["app"] if arg.startswith('{"model"'))
+            assert json.loads(selected)["resume"] == "sess-1"
+        else:
+            assert "sess-1" in commands["app"] and "newer-sess" not in commands["app"]
         assert "--last" not in commands["app"] and "--continue" not in commands["app"]
         assert (await db.fleet.get(snapshot["id"]))["resumes"][0]["agents"] == run["agents"]
 

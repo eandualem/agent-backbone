@@ -19,8 +19,8 @@ def _transcript(runtime, root, session_id):
     path.parent.mkdir(parents=True, exist_ok=True)
     if runtime == "opencode":
         with sqlite3.connect(path) as conn:
-            conn.execute("CREATE TABLE session (id TEXT PRIMARY KEY)")
-            conn.execute("INSERT INTO session VALUES (?)", (session_id,))
+            conn.execute("CREATE TABLE session_v2 (id TEXT PRIMARY KEY)")
+            conn.execute("INSERT INTO session_v2 VALUES (?)", (session_id,))
     else:
         path.write_text("{}\n")
     return path

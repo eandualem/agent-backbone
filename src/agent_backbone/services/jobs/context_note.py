@@ -110,10 +110,16 @@ async def _note(
     identity = usage_id(snapshot.runtime, snapshot.session_id)
     session = await db.usage.find(identity)
     # A source still being read may end in a smaller context (a compaction);
-    # ``detail`` names an incomplete read or an error, also on a partial record.
-    if session is None or session["coverage"] == "catching_up" or session["detail"]:
+    # A historical accounting warning does not make the latest context unreadable.
+    if session is None or session["coverage"] == "catching_up":
         return False
-    tokens = await db.usage.latest_context_tokens(identity)
+    if session["detail"] and session["detail"] != session["cursor"].get("coverage_detail"):
+        return False
+    tokens = (
+        session["cursor"].get("current_context_tokens")
+        if session["detail"]
+        else await db.usage.latest_context_tokens(identity)
+    )
     if tokens is None:
         return False
     if tokens < session["context_noted"]:

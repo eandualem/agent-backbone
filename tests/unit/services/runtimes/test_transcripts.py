@@ -141,7 +141,7 @@ def _opencode_text(body, ended=1790071205000):
 
 
 def test_opencode_keeps_completed_assistant_text_complete_by_position(tmp_path):
-    base = 1790071200000  # each part below is created a millisecond after the one before
+    base = 1790071200000  # each native message is created a millisecond after the previous
     assistant = {"role": "assistant"}
     path = opencode_db(
         tmp_path / "opencode.db",
@@ -152,7 +152,7 @@ def test_opencode_keeps_completed_assistant_text_complete_by_position(tmp_path):
                 assistant,
                 [
                     {"type": "step-start"},
-                    {**_opencode_text("Looking at it now."), "_created": base + 2},  # same ms
+                    _opencode_text("Looking at it now."),
                     {"type": "tool", "tool": "bash", "state": {"output": "3 passed"}},
                     {"type": "step-finish"},
                 ],
@@ -173,8 +173,8 @@ def test_opencode_keeps_completed_assistant_text_complete_by_position(tmp_path):
     )
     entries, more_before, more_after = get_runtime("opencode").transcript_page(path, "s", limit=10)
     assert [(e.time, e.role, e.start, e.end) for e in entries] == [
-        ("10:00:05", "assistant", (base + 2) * 1000 + 1, (base + 2) * 1000 + 2),
-        ("10:00:12", "assistant", (base + 6) * 1000, (base + 6) * 1000 + 1),
+        ("10:00:05", "assistant", (base + 2) * 1000, (base + 2) * 1000 + 1),
+        ("10:00:12", "assistant", (base + 3) * 1000, (base + 3) * 1000 + 1),
     ]
     assert entries[0].text == "Looking at it now."
     assert entries[1].text == LONG  # never shortened
@@ -192,14 +192,20 @@ def test_opencode_positions_survive_an_undo_that_frees_rowids(tmp_path):
     # Undo deletes the last message; SQLite gives its rowid to the next reply.
     conn = sqlite3.connect(path)
     with conn:
-        conn.execute("DELETE FROM part WHERE message_id = 'msg_1'")
-        conn.execute("DELETE FROM message WHERE id = 'msg_1'")
-        conn.execute("INSERT INTO message VALUES ('msg_2', 's', 0, 0, ?)", (json.dumps(assistant),))
+        conn.execute("DELETE FROM session_message WHERE id = 'msg_1'")
         conn.execute(
-            "INSERT INTO part VALUES ('prt_2_0', 'msg_2', 's', 1790071300000, 0, ?)",
-            (json.dumps(_opencode_text("after the undo")),),
+            "INSERT INTO session_message VALUES ('msg_2', 's', 'assistant', 2, "
+            "1790071300000, 1790071300000, ?)",
+            (
+                json.dumps(
+                    {
+                        "content": [_opencode_text("after the undo")],
+                        "time": {"completed": 1790071301000},
+                    }
+                ),
+            ),
         )
-        assert conn.execute("SELECT rowid FROM part WHERE id = 'prt_2_0'").fetchone() == (2,)
+        assert conn.execute("SELECT rowid FROM session_message WHERE id='msg_2'").fetchone() == (2,)
     conn.close()
     later, more_before, more_after = rt.transcript_page(path, "s", limit=10, since=seen[-1].end)
     assert [e.text for e in later] == ["after the undo"]
@@ -251,3 +257,20 @@ def test_other_runtimes_keep_no_readable_transcript():
         rt = get_runtime(runtime)
         assert rt.transcript_supported is False
         assert rt.transcript_entries([{"type": "assistant", "message": {"content": "x"}}]) == []
+
+
+def test_opencode_streamed_text_is_visible_before_tool_settlement(tmp_path):
+    path = opencode_db(
+        tmp_path / "opencode.db",
+        [
+            ("s", {"role": "assistant"}, [{"type": "text", "text": "Finished explanation"}]),
+            ("s", {"role": "assistant"}, [{"type": "text", "text": "Still streaming"}]),
+        ],
+    )
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "UPDATE session_message SET data=json_set(data, '$.time.streamed', ?) WHERE seq=0",
+            (1790071205000,),
+        )
+    entries, _, _ = get_runtime("opencode").transcript_page(path, "s", limit=10)
+    assert [(e.text, e.time) for e in entries] == [("Finished explanation", "10:00:05")]

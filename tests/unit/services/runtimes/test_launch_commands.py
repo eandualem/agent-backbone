@@ -24,6 +24,12 @@ _NEVER_ASK = ["-a", "never", "-s", "workspace-write"]
 _NO_FEEDBACK = ["--disallowedTools", "SendFeedback"]  # Claude Code, unless the agent opts in
 
 
+@pytest.fixture(autouse=True)
+def opencode_version(monkeypatch):
+    # Launch tests use fake executable paths, never the installed native CLI.
+    monkeypatch.setattr(type(RUNTIMES["opencode"]), "installed_version", lambda self: "2.1.4")
+
+
 def _resolve(binary: str):
     return patch(f"{_BASE}.resolve_command", return_value=binary)
 
@@ -66,7 +72,11 @@ class TestBuildCommand:
     def test_tagged_model_is_passed_verbatim(self, runtime, model):
         with _resolve(f"/bin/{runtime}"):
             command = RUNTIMES[runtime].build_command(model=model)
-        assert command == [f"/bin/{runtime}", "--model", model]
+        if runtime == "opencode":
+            assert json.loads(command[2])["model"] == model
+            assert command[3:] == ["/bin/opencode", "--standalone"]
+        else:
+            assert command == [f"/bin/{runtime}", "--model", model]
 
     def test_claude_command_includes_settings(self, tmp_path):
         with _resolve("/usr/bin/claude"):
@@ -237,10 +247,10 @@ class TestBuildCommand:
             command = RUNTIMES["opencode"].build_command(
                 model="opencode/big-pickle", brief_file=brief
             )
-        assert command == [
+        assert json.loads(command[2])["model"] == "opencode/big-pickle"
+        assert command[3:] == [
             "/bin/opencode",
-            "--model",
-            "opencode/big-pickle",
+            "--standalone",
             "--prompt",
             "You are agent z.",
         ]
@@ -250,7 +260,8 @@ class TestBuildCommand:
         brief.write_text("You are agent z.")
         with _resolve("/bin/opencode"):
             command = RUNTIMES["opencode"].build_command(resume=True, brief_file=brief)
-        assert command == ["/bin/opencode", "--continue"]
+        assert json.loads(command[2])["resume"] is True
+        assert command[3:] == ["/bin/opencode", "--standalone"]
 
     def test_aider_ignores_the_brief_at_launch(self, tmp_path):
         brief = tmp_path / "brief.md"
@@ -546,14 +557,19 @@ class TestUnattended:
             codex = RUNTIMES["codex"].build_command(writable_dirs=("/a", "/b"))
         assert codex[1:5] == ["--add-dir", "/a", "--add-dir", "/b"]
         with _resolve("/bin/opencode"):
-            assert RUNTIMES["opencode"].build_command(writable_dirs=("/a",)) == ["/bin/opencode"]
+            assert RUNTIMES["opencode"].build_command(writable_dirs=("/a",))[3:] == [
+                "/bin/opencode",
+                "--standalone",
+            ]
         assert not RUNTIMES["opencode"].sandboxed
 
     def test_opencode_gemini_and_claude_have_their_own_switch(self):
         with _resolve("/bin/opencode"):
-            assert RUNTIMES["opencode"].build_command(
+            command = RUNTIMES["opencode"].build_command(
                 model="google/gemini-3.8-flash", unattended=True
-            ) == ["/bin/opencode", "--auto", "--model", "google/gemini-3.8-flash"]
+            )
+            assert command[3:] == ["/bin/opencode", "--standalone", "--auto"]
+            assert json.loads(command[2])["model"] == "google/gemini-3.8-flash"
         with _resolve("/bin/gemini"):
             assert RUNTIMES["gemini"].build_command(unattended=True) == [
                 "/bin/gemini",
@@ -595,3 +611,26 @@ def test_drafted_feedback_is_disallowed_unless_the_agent_opts_in(runtime, env, f
         command = RUNTIMES[runtime].build_command(env=env)
     assert (" ".join(_NO_FEEDBACK) in " ".join(command)) is flag
     assert command.count("--disallowedTools") == int(flag)  # one flag, never two
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+@pytest.mark.parametrize("resume", [False, "saved-session"])
+def test_required_runtimes_keep_explicit_model_and_effort_on_launch(monkeypatch, runtime, resume):
+    adapter = RUNTIMES[runtime]
+    monkeypatch.setattr(type(adapter), "installed_version", lambda self: "2.1.4")
+    model = "provider/model::high" if runtime == "opencode" else "model:high"
+    with _resolve(f"/bin/{runtime}"), _codex_on_macos():
+        command = adapter.build_command(model=model, resume=resume)
+    if runtime == "opencode":
+        selected = json.loads(command[2])
+        assert (selected["model"], selected["effort"], selected["resume"]) == (
+            "provider/model",
+            "high",
+            resume,
+        )
+    else:
+        assert command[command.index("--model") + 1] == "model"
+        if runtime == "claude":
+            assert command[command.index("--effort") + 1] == "high"
+        else:
+            assert "model_reasoning_effort=high" in command

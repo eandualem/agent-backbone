@@ -444,6 +444,10 @@ class Runtime:
         """Extra CLI args that wire the runtime's state hooks to the backbone."""
         return []
 
+    def startup_error(self, state_dir: Path, agent: str, launch_id: str) -> str | None:
+        """A launcher failure retained after its terminal exits, if available."""
+        return None
+
     def hook_launch_env(
         self,
         data_dir: Path | str | None,

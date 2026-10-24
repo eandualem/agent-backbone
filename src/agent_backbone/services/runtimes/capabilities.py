@@ -53,13 +53,10 @@ REQUIRED_BASELINE: frozenset[tuple[str, str, int]] = frozenset(
         ("browser-group-name", "codex", 270),
         ("bounded-unattended", "claude", 285),
         ("auto-review", "claude", 293),
-        ("deep-review", "codex", 288),
         ("brief-after-resume", "opencode", 273),
         ("brief-after-compaction", "opencode", 291),
         ("plan-approval", "opencode", 278),
-        ("refusal-alert", "opencode", 279),
         ("browser-group-name", "opencode", 270),
-        ("reasoning-effort", "opencode", 296),
         ("bounded-unattended", "opencode", 285),
         ("auto-review", "opencode", 293),
         ("message-authority", "opencode", 294),
@@ -495,13 +492,11 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok(_PLAN, verified_on="2.1.284"),
         codex=_ok(_PLAN, "in Plan mode (`/plan`)", verified_on="0.157.1"),
         gemini=_gap(),
-        # Implemented, but OpenCode asks for no approval unless its own
-        # off-by-default flag is set, and such a flag is not support. Revisit
-        # when an OpenCode release enables plan mode by default or drops the flag.
+        # V1's off-by-default flag is not declared support. V2's Plan agent
+        # waits for the user to switch agents instead of presenting plan_exit.
         opencode=_gap(
             278,
-            "works when OPENCODE_EXPERIMENTAL_PLAN_MODE is set in the agent's environment "
-            "(off by default; `doctor` names each agent without it)",
+            "requires switching agents in the native session, not structured plan approval",
         ),
         deepcode=_gap(),
         aider=_gap(),
@@ -521,7 +516,11 @@ CAPABILITIES: tuple[Capability, ...] = (
             verified_on="0.160.0",
         ),
         gemini=_gap(),
-        opencode=_gap(279),
+        opencode=_ok(
+            "tests/unit/services/jobs/test_denial_alerts.py",
+            "2.1.4+ typed policy denials; native simulated fixture, working-agent check pending",
+            verified_on="2.1.4",
+        ),
         deepcode=_gap(),
         aider=_gap(),
         shell=_na(_NO_MODEL),
@@ -574,7 +573,7 @@ CAPABILITIES: tuple[Capability, ...] = (
     ),
     _row(
         "reasoning-effort",
-        "Reasoning effort chosen with the model (`model:effort`)",
+        "Reasoning effort chosen with the model (`model:effort`, OpenCode `model::effort`)",
         "src/agent_backbone/services/runtimes/base.py",
         fallback=(
             "Set the effort in the CLI's own settings, or run the agent on Claude Code or Codex."
@@ -583,7 +582,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok(_LAUNCH),
         codex=_ok(_LAUNCH),
         gemini=_unverified(note="whether the CLI has an effort setting is not checked"),
-        opencode=_gap(296, "the CLI has one; Backbone refuses the effort"),
+        opencode=_ok(_LAUNCH, note="requires current @opencode/cli (2.1.4+); model::effort"),
         deepcode=_ok(_LAUNCH, note="low, high or max, through DEEPCODE_REASONING_EFFORT"),
         aider=_unverified(note="whether the CLI has an effort setting is not checked"),
         shell=_na(_NO_MODEL),
@@ -927,9 +926,9 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Run the review with Claude Code or Codex as the reviewer.",
         implemented=_declared("deep-review"),
         claude=_ok("docs/deep-reviews.md"),
-        codex=_unverified(288, "a Claude reviewer launched from Codex's sandbox is not measured"),
+        codex=_ok("docs/deep-reviews.md", "completed Opus and Astra reviews launched from Codex"),
         gemini=_gap(),
-        opencode=_gap(288),
+        opencode=_unverified(288, "caller workflow documented; completed caller receipt pending"),
         deepcode=_gap(),
         aider=_gap(),
         shell=_na(_NO_MODEL),
