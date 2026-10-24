@@ -4,6 +4,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from sqlalchemy import text
 
 from agent_backbone.models import PublishResponse
@@ -82,3 +83,57 @@ async def test_response_waits_for_author_topic_without_general_fallback(config, 
     await bot.flush_reports()
     bot._app.bot.send_message.assert_not_awaited()
     assert (await db.reports.get(record["id"], kind="response"))["telegram_delivery"] == "pending"
+
+
+@pytest.mark.parametrize("sequence", ["👩‍💻", "🇪🇹", "👍🏽", "e\u0301"])
+def test_response_chunks_keep_joined_characters(sequence):
+    prefix = "a" * (3500 - len(sequence[0].encode("utf-16-le")) // 2)
+    with patch(
+        "agent_backbone.services.integrations.telegram._responses.response_text",
+        return_value=prefix + sequence + "tail",
+    ):
+        chunks = response_chunks({"id": 1})
+    assert chunks == [prefix, "Response 1 (continued)\n" + sequence + "tail"]
+
+
+def test_oversized_combining_sequence_remains_bounded_and_complete():
+    original = "a" + "\u0301" * 5000
+    with patch(
+        "agent_backbone.services.integrations.telegram._responses.response_text",
+        return_value=original,
+    ):
+        chunks = response_chunks({"id": 1})
+    assert all(len(chunk.encode("utf-16-le")) // 2 <= 4096 for chunk in chunks)
+    assert chunks[0] + "".join(chunk.split("\n", 1)[1] for chunk in chunks[1:]) == original
+
+
+async def test_started_response_keeps_original_chunk_boundaries(config, db):
+    await author(db)
+    request = body(agent="writer")
+    request["response"]["answer"] = "👩‍💻" * 1900
+    record, _ = await db.reports.publish(PublishResponse.model_validate(request))
+    old_chunks = response_chunks(record, joined=False)
+    assert old_chunks != response_chunks(record)
+    claim = await db.reports.claim_telegram()
+    bot = configured_bot(config, db)
+    # Before this change, the first message was sent and checkpointed without a format marker.
+    parts = {
+        "group": bot._effective_group_chat_id(),
+        "thread": 77,
+        "topic_required": True,
+        "audio": False,
+        "response_messages": [41],
+        "topic": 41,
+    }
+    await db.reports.checkpoint_telegram(record["id"], claim["lease"], parts)
+    await db.reports.finish_telegram(record["id"], claim["lease"], message_id=None, attempts=0)
+    async with db.engine.begin() as conn:
+        await conn.execute(text("UPDATE reports SET telegram_retry_at = ''"))
+    bot._app.bot.send_message.side_effect = [
+        SimpleNamespace(message_id=42 + n) for n in range(len(old_chunks) - 1)
+    ]
+    await bot.flush_reports()
+    assert [call.kwargs["text"] for call in bot._app.bot.send_message.await_args_list] == (
+        old_chunks[1:]
+    )
+    assert (await db.reports.get(record["id"], kind="response"))["telegram_delivery"] == "sent"

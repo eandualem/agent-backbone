@@ -78,7 +78,9 @@ discovered topic in the allowlisted agents group. It never falls back to General
 or a private chat. If the topic is unavailable, delivery remains pending.
 Headers use the original publication name so a rename cannot shift chunk boundaries.
 Long answers are split into continuation messages carrying the response ID;
-each successful chunk is checkpointed before continuing. A retry sends the
+joined emoji, flags and combining marks stay together unless a sequence itself
+exceeds the message size budget. Deliveries already in progress retain their
+original chunk boundaries. Each successful chunk is checkpointed before continuing. A retry sends the
 remaining chunks. A crash after Telegram accepts a chunk but before its receipt
 is saved can still duplicate that chunk. The response ID identifies it.
 
