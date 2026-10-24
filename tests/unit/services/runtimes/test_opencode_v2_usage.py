@@ -99,12 +99,27 @@ def test_native_totals_expose_missing_attribution_without_adding_usage(tmp_path,
     batch = runtime.read_usage(path, 0, {"_session_id": "s"})
     assert batch.error is None and batch.caught_up
     assert [(e.key, e.input_tokens) for e in batch.events] == [("reply", 5)]
-    assert bool(batch.state.get("partial")) is (total != 5)
+    assert bool(batch.state.get("coverage_detail")) is (total != 5)
     if total != 5:
         assert "attribution is incomplete" in batch.state["coverage_detail"]
     # Native undo removes visible messages without refunding incurred usage.
     with sqlite3.connect(path) as conn:
         conn.execute("DELETE FROM session_message WHERE id='reply'")
     after = runtime.read_usage(path, batch.offset, batch.state)
-    assert after.error is None and after.caught_up and after.state["partial"]
+    assert after.error is None and after.caught_up and after.state["coverage_detail"]
     assert after.events == []  # No invented request or duplicated ledger amount.
+
+    # UsageRecorded precedes Compaction.Ended: later message tokens can reconcile.
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "UPDATE session_message SET data=?,time_updated=3000 WHERE id='summary'",
+            (json.dumps({"time": {"created": 1500}, "tokens": {"input": total}}),),
+        )
+    reconciled = runtime.read_usage(path, after.offset, after.state)
+    assert reconciled.error is None and reconciled.caught_up
+    assert not reconciled.state.get("coverage_detail")
+    assert not reconciled.state.get("partial")
+    assert [(e.key, e.input_tokens) for e in reconciled.events] == [("summary", total)]
+    # A prior malformed record remains partial even if aggregate totals agree.
+    damaged = runtime.read_usage(path, after.offset, {**after.state, "partial": True})
+    assert damaged.state["partial"] and not damaged.state.get("coverage_detail")

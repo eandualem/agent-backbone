@@ -214,7 +214,11 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                     "unavailable"
                     if batch.error and not batch.offset
                     else "partial"
-                    if batch.error or batch.state.get("partial")
+                    if (
+                        batch.error
+                        or batch.state.get("partial")
+                        or batch.state.get("coverage_detail")
+                    )
                     else "catching_up"
                     if not batch.caught_up
                     else "measured"

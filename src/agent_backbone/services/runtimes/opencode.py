@@ -327,11 +327,7 @@ class OpenCode(Runtime):
                 # Only compare whole-session evidence after catching up, in the same snapshot.
                 # Cache a successful comparison until the native session changes; never add
                 # aggregate totals to message/ledger counts, which would double count usage.
-                if (
-                    len(rows) <= 10000
-                    and not state.get("partial")
-                    and state.get("native_coverage") != signature
-                ):
+                if len(rows) <= 10000 and state.get("native_coverage") != signature:
                     paths = (
                         "cost",
                         "tokens.input",
@@ -353,11 +349,12 @@ class OpenCode(Runtime):
                     if native[1:6] != visible[1:6] or not math.isclose(
                         native[0], visible[0], rel_tol=1e-9, abs_tol=1e-9
                     ):
-                        state["partial"] = True
                         state["coverage_detail"] = (
                             "native session totals do not match current message history; "
                             "historical usage attribution is incomplete"
                         )
+                    else:
+                        state.pop("coverage_detail", None)
                     state["native_coverage"] = signature
             batch.caught_up = len(rows) <= 10000
             for key, updated, encoded, kind in rows[:10000]:

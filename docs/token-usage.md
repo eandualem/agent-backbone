@@ -58,14 +58,6 @@ Coverage describes retained source evidence, not an independent provider audit:
 - `partial`: malformed, reset, replaced or otherwise incomplete source evidence.
 - `unavailable`: no identified readable source; this does not mean zero usage.
 
-OpenCode's current session total can include migrated summaries, title generation
-or reverted work that is no longer attributable from its message records. Backbone
-compares those sources after catching up and marks mismatches as `partial`, with an
-explanation. It retains measured message values and previously collected ledger
-entries; it does not add overlapping aggregate totals or invent model/date details.
-This describes incomplete current source evidence, even when the retained ledger
-already contains some of the removed history.
-
 Missing/deleted records cannot be recovered. When a conversation's source file
 is gone, Backbone searches for it once, then records it as `source file is gone`
 and stops searching for that parent; the usage already collected stays. Readable
@@ -75,6 +67,14 @@ if it returns to the same path, and searched for again when the conversation is
 launched again (resumed). Tokens may be incomplete for
 interrupted requests, unrecorded descendants, or runtime versions that omit
 usage. `unpriced` is separate: token counts remain available without a price.
+
+OpenCode's current session total can include migrated summaries, title generation
+or reverted work that is no longer attributable from its message records. Backbone
+compares those sources after catching up and marks mismatches as `partial`, with an
+explanation. It retains measured message values and previously collected ledger
+entries; it does not add overlapping aggregate totals or invent model/date details.
+This describes incomplete current source evidence, even when the retained ledger
+already contains some of the removed history.
 
 ## Context-size note
 
