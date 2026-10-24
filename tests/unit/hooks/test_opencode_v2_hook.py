@@ -10,7 +10,7 @@ import pytest
 from agent_backbone.hooks.install import hook_source
 
 
-@pytest.mark.parametrize("ending", ["interrupted", "failed"])
+@pytest.mark.parametrize("ending", ["interrupted", "failed", "succeeded"])
 def test_v2_state_context_and_skill_reload(tmp_path, ending):
     node = shutil.which("node")
     if node is None:
@@ -115,7 +115,9 @@ fs.writeFileSync(path.join(steers, "steer-old.md"), "old turn only");
 fs.writeFileSync(path.join(steers, "steer-old.turn"), JSON.stringify({
   prompted_at: oldPrompt, session_id: "root"
 }));
+await emit("permission.asked", {sessionID: "root", id: "per_cancelled"});
 await emit("session.execution.__ENDING__", {sessionID: "root"});
+await emit("permission.replied", {sessionID: "root", requestID: "per_cancelled"});
 const idle = state();
 const retired = fs.existsSync(path.join(steers, "steer-old.missed"));
 const now = Date.now;

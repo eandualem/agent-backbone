@@ -515,3 +515,15 @@ class TestChoiceDialogs:
         rt = RUNTIMES["codex"]
         assert len(rt.dialog_summary(_CODEX_PERMISSION, limit=1)) <= 1
         assert rt.dialog_summary(_CODEX_PERMISSION, limit=0) == ""
+
+
+def test_current_opencode_idle_resume_placeholder():
+    runtime = get_runtime("opencode")
+    pane = (
+        '┃ Ask anything… "Find a bug"\n┃ Build  Model  Provider  high\n'
+        "╹▀▀▀▀▀▀▀▀\n  ~/project:develop"
+    )
+    assert runtime.matches(pane)
+    assert runtime.detect_idle(pane)
+    assert not runtime.prompt_has_pending_input(pane)
+    assert not runtime.detect_idle(pane + "\nesc interrupt")

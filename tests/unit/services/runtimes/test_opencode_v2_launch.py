@@ -21,7 +21,7 @@ def test_explicit_effort_preserves_literal_model_tags():
 @pytest.mark.parametrize("resume", [False, True])
 def test_native_selection_is_verified_before_returning_session(monkeypatch, resume):
     target = {"providerID": "provider", "id": "model:high", "variant": "high"}
-    session = {"id": "ses_example", "model": target}
+    session = {"id": "ses_example", "model": target, "location": {"directory": "/moved"}}
     catalog = {"data": [{**target, "variants": [{"id": "high"}]}]}
     operations = []
 
@@ -30,7 +30,10 @@ def test_native_selection_is_verified_before_returning_session(monkeypatch, resu
         assert "timeout" not in kwargs
         operation = command[4]
         if operation == "model.list":
-            assert any(arg.startswith("location[directory]=") for arg in command)
+            assert (
+                f"location[directory]={'/moved' if resume else _opencode_v2_launch.os.getcwd()}"
+                in command
+            )
         operations.append(operation)
         if operation in ("session.create", "session.switchModel"):
             assert json.loads(command[command.index("--data") + 1])["model"] == target
@@ -50,7 +53,7 @@ def test_native_selection_is_verified_before_returning_session(monkeypatch, resu
         == "ses_example"
     )
     assert operations == (
-        ["model.list", "session.get", "session.switchModel", "session.get"]
+        ["session.get", "model.list", "session.switchModel", "session.get"]
         if resume
         else ["model.list", "session.create", "session.get"]
     )

@@ -51,10 +51,9 @@ export default {
         case "session.execution.started":
           return dispatch("session.status", { sessionID: data.sessionID, status: { type: "busy" } });
         case "session.execution.succeeded":
-          return dispatch("session.idle", data);
         case "session.execution.failed":
         case "session.execution.interrupted":
-          return dispatch("session.idle", data);
+          return dispatch("session.execution.ended", data);
         case "session.status":
         case "session.idle":
         case "permission.asked":

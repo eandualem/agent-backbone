@@ -474,6 +474,14 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
           } else if (type === "idle") idle(event.type, p.sessionID);
           return;
         }
+        case "session.execution.ended": {
+          if (isChild(p.sessionID)) return;
+          // Native execution cancellation withdraws requests without replies.
+          for (const [id, by] of pending) if (by === p.sessionID) pending.delete(id);
+          held.delete(p.sessionID);
+          endTurn(event.type, p.sessionID);
+          return;
+        }
         case "session.idle": {
           if (isChild(p.sessionID)) return;
           idle(event.type, p.sessionID);
@@ -516,7 +524,7 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
         }
         case "permission.replied": {
           if (isChild(p.sessionID)) return;
-          pending.delete(p.requestID ?? p.id ?? "?");
+          if (!pending.delete(p.requestID ?? p.id ?? "?")) return;
           resume(event.type, p.sessionID);
           return;
         }

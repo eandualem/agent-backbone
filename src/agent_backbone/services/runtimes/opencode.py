@@ -1,8 +1,7 @@
 """OpenCode current native integration (2.1.4+).
 
-The "Ask anything..." placeholder disappears after the first message, but
-the bottom bar ("ctrl+p commands") is always visible, so idle is that bar
-without the working spinner's "esc interrupt".
+The current TUI shows an "Ask anything…" placeholder and a location footer;
+its working spinner shows "esc interrupt".
 """
 
 from __future__ import annotations
@@ -67,8 +66,8 @@ class OpenCode(Runtime):
             raise ValueError("OpenCode model::effort requires an effort after '::'")
         return model or None, effort.strip().lower()
 
-    runtime_markers = ("opencode", "ask anything...", "tab agents")
-    placeholder_fragments = ("ask anything...", "ctrl+p commands")
+    runtime_markers = ("opencode", "ask anything…", "ask anything...", "tab agents")
+    placeholder_fragments = ("ask anything…", "ask anything...", "ctrl+p commands")
     status_fragments = ("tab agents", "ctrl+p commands")
     busy_markers = ("esc interrupt",)
     provider_error_patterns = (
@@ -450,10 +449,12 @@ class OpenCode(Runtime):
             "WITH positioned AS (SELECT m.time_created * 1000 + ROW_NUMBER() "
             "OVER (PARTITION BY m.time_created ORDER BY m.seq, p.key) - 1 AS position, "
             "json_object('text', json_extract(p.value, '$.text'), 'time', "
-            "json_object('end', json_extract(m.data, '$.time.completed'))) AS data "
+            "json_object('end', coalesce(json_extract(m.data, '$.time.streamed'), "
+            "json_extract(m.data, '$.time.completed')))) AS data "
             "FROM session_message m, json_each(m.data, '$.content') p "
             "WHERE m.session_id=? AND m.type='assistant' "
-            "AND json_extract(m.data, '$.time.completed') IS NOT NULL "
+            "AND coalesce(json_extract(m.data, '$.time.streamed'), "
+            "json_extract(m.data, '$.time.completed')) IS NOT NULL "
             "AND json_extract(p.value, '$.type')='text'), "
             "messages AS (SELECT position, data FROM positioned "
             "WHERE trim(json_extract(data, '$.text'), ' ' || char(9, 10, 13)) != '') "

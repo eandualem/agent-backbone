@@ -25,11 +25,18 @@ from urllib.parse import urlsplit
 
 
 def api(
-    binary: str, operation: str, *, server: str, env: dict, body=None, session_id: str | None = None
+    binary: str,
+    operation: str,
+    *,
+    server: str,
+    env: dict,
+    body=None,
+    session_id: str | None = None,
+    directory: str | None = None,
 ):
     command = [binary, "api", "--server", server, operation]
     if operation == "model.list":
-        command.extend(["--param", f"location[directory]={os.getcwd()}"])
+        command.extend(["--param", f"location[directory]={directory or os.getcwd()}"])
     if operation == "session.list":
         command.extend(["--param", f"directory={os.getcwd()}"])
     if operation == "session.list":
@@ -156,7 +163,18 @@ def prepare_session(
     provider, separator, model_id = model.partition("/")
     if not separator or not provider or not model_id:
         raise RuntimeError("OpenCode requires a model in provider/model format")
-    catalog = request("model.list")
+    fresh = session_id is None
+    directory = os.getcwd()
+    if not fresh:
+        current = request("session.get", session_id=session_id)
+        existing = current.get("data") if isinstance(current, dict) else None
+        if not isinstance(existing, dict) or existing.get("id") != session_id:
+            raise RuntimeError("OpenCode did not identify the requested session")
+        location = existing.get("location")
+        directory = location.get("directory") if isinstance(location, dict) else None
+        if not isinstance(directory, str) or not directory:
+            raise RuntimeError("OpenCode did not identify the session directory")
+    catalog = request("model.list", directory=directory)
     entries = catalog.get("data") if isinstance(catalog, dict) else None
     if not isinstance(entries, list):
         raise RuntimeError("OpenCode returned an invalid model catalog")
@@ -182,7 +200,6 @@ def prepare_session(
     target = {"providerID": provider, "id": model_id}
     if effort is not None:
         target["variant"] = effort
-    fresh = session_id is None
     if fresh:
         created = request(
             "session.create",
@@ -193,10 +210,6 @@ def prepare_session(
         if not isinstance(session_id, str) or not session_id:
             raise RuntimeError("OpenCode did not return the new session ID")
     else:
-        current = request("session.get", session_id=session_id)
-        existing = current.get("data") if isinstance(current, dict) else None
-        if not isinstance(existing, dict) or existing.get("id") != session_id:
-            raise RuntimeError("OpenCode did not identify the requested session")
         request("session.switchModel", body={"model": target}, session_id=session_id)
     try:
         result = request("session.get", session_id=session_id)

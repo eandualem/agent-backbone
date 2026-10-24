@@ -257,3 +257,20 @@ def test_other_runtimes_keep_no_readable_transcript():
         rt = get_runtime(runtime)
         assert rt.transcript_supported is False
         assert rt.transcript_entries([{"type": "assistant", "message": {"content": "x"}}]) == []
+
+
+def test_opencode_streamed_text_is_visible_before_tool_settlement(tmp_path):
+    path = opencode_db(
+        tmp_path / "opencode.db",
+        [
+            ("s", {"role": "assistant"}, [{"type": "text", "text": "Finished explanation"}]),
+            ("s", {"role": "assistant"}, [{"type": "text", "text": "Still streaming"}]),
+        ],
+    )
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "UPDATE session_message SET data=json_set(data, '$.time.streamed', ?) WHERE seq=0",
+            (1790071205000,),
+        )
+    entries, _, _ = get_runtime("opencode").transcript_page(path, "s", limit=10)
+    assert [(e.text, e.time) for e in entries] == [("Finished explanation", "10:00:05")]
