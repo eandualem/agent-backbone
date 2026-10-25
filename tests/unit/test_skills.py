@@ -824,7 +824,7 @@ def test_materialization_refuses_redirected_ancestor(tmp_path, runtime):
     (repo / first).symlink_to(outside, target_is_directory=True)
     manifest = manifest_path(tmp_path / "data", "worker")
     result = materialize(store, repo, dirs, read_store(store), manifest)
-    assert not result.ok and "outside" in result.conflicts[0]
+    assert not result.ok and "outside" in result.broken[0]
     assert list(outside.iterdir()) == [] and not manifest.exists()
 
 

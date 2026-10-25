@@ -695,7 +695,7 @@ def materialize(
             for skill in selected:
                 contained_path(repo_dir, Path(directory) / skill.name, follow_leaf=False)
     except ValueError as exc:
-        result.conflicts.append(str(exc))
+        result.broken.append(str(exc))
         return result
     old_git: Path | None = None
     if previous and old_repo is not None and not _same_file(old_repo, repo_dir):

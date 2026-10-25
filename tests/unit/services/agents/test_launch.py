@@ -1412,6 +1412,24 @@ class TestSkillsAtLaunch:
         )
         assert str(store) in result.evidence[0]
 
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    async def test_redirected_skill_directory_prevents_launch(self, tmp_path, runtime):
+        self._store(tmp_path, tags="all")
+        config = bootstrap_config(tmp_path / "data")
+        project, outside = tmp_path / "project", tmp_path / "outside"
+        project.mkdir()
+        outside.mkdir()
+        from agent_backbone.services.runtimes import RUNTIMES
+
+        directory = Path(RUNTIMES[runtime].skill_dirs[0]).parts[0]
+        (project / directory).symlink_to(outside, target_is_directory=True)
+        spec = AgentSpec(name="worker", dir=str(project), runtime=runtime)
+        result, start = await self._start(spec, config)
+        assert not result.ok
+        start.assert_not_awaited()
+        assert "outside" in result.evidence[0]
+        assert not list(outside.iterdir())
+
     async def test_an_untagged_agent_gets_no_links_and_no_noise(self, tmp_path):
         self._store(tmp_path)
         config = bootstrap_config(tmp_path / "data")
