@@ -25,7 +25,8 @@ class AcknowledgementRepo(Repo):
                        VALUES (:repo, :issue_number, :target_entity, :acknowledged_at)
                        ON CONFLICT(repo, issue_number, target_entity) DO UPDATE SET
                          acknowledged_at = excluded.acknowledged_at
-                       WHERE :not_cleared_since IS NULL OR acknowledgments.cleared_at IS NULL
+                       WHERE CAST(:not_cleared_since AS TEXT) IS NULL
+                          OR acknowledgments.cleared_at IS NULL
                           OR acknowledgments.cleared_at <= :not_cleared_since"""
                 ),
                 {
