@@ -416,3 +416,71 @@ async def test_drained_notification_is_held_when_receiver_becomes_unidentified(c
     assert (await queue_row(db, receipt.id))["status"] == "checkpoint"
     assert [row["id"] for row in await db.queue.checkpoint("worker")] == [receipt.id]
     assert await db.queue.dequeue("worker") == []
+
+
+@pytest.mark.parametrize("leased", [False, True])
+async def test_inbox_hold_survives_failure_recording_delivery(config, db, leased):
+    receipt = None
+    if leased:
+        receipt = await db.queue.enqueue(
+            session_name="worker", message="held text", delivery_kind="comment"
+        )
+        await db.queue.dequeue("worker")
+    with (
+        patch(f"{_DELIVERY}.get_session_intelligence", return_value=profile()),
+        patch(f"{_DELIVERY}.send_message", return_value=None),
+        patch(f"{_DELIVERY}._record", side_effect=RuntimeError("interrupted")),
+        pytest.raises(RuntimeError, match="interrupted"),
+    ):
+        await safe_deliver(
+            "worker",
+            "held text",
+            config,
+            db=db,
+            delivery_kind="comment",
+            requeue=not leased,
+            queue_id=receipt.id if receipt else None,
+        )
+    assert await db.queue.dequeue("worker") == []
+    inbox = await db.queue.checkpoint("worker")
+    assert [row["message"] for row in inbox] == ["held text"]
+
+
+@pytest.mark.parametrize("priority", [False, True])
+async def test_replayed_subscription_retains_held_and_fresh_lines(config, db, priority):
+    from agent_backbone.hooks.backbone_state import take_context
+    from agent_backbone.models import SUBSCRIPTION_KIND
+
+    with (
+        patch(f"{_DELIVERY}.get_session_intelligence", return_value=profile()),
+        patch(f"{_DELIVERY}.send_message", return_value=None),
+    ):
+        await safe_deliver(
+            "worker",
+            "events\nheld event",
+            config,
+            db=db,
+            delivery_kind=SUBSCRIPTION_KIND,
+            priority=priority,
+        )
+    with (
+        patch(f"{_DELIVERY}.get_session_intelligence", return_value=profile()),
+        patch(f"{_DELIVERY}.send_message", return_value=True) as send,
+    ):
+        report = await safe_deliver(
+            "worker",
+            "events\nheld event\nfresh event",
+            config,
+            db=db,
+            delivery_kind=SUBSCRIPTION_KIND,
+            priority=priority,
+        )
+    send.assert_not_awaited()
+    assert report.held_for_inbox and report.outcome == "awaiting_ack"
+    assert take_context(config.state_dir, "worker") == []
+    assert await db.queue.dequeue("worker") == []
+    inbox = await db.queue.checkpoint("worker")
+    assert {line for row in inbox for line in row["message"].splitlines()[1:]} == {
+        "held event",
+        "fresh event",
+    }

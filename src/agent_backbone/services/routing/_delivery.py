@@ -21,7 +21,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Collection
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import wraps
 from typing import TYPE_CHECKING, TypeVar
 from weakref import WeakValueDictionary
@@ -366,6 +366,7 @@ async def _enqueue(
                 source_key=source_key,
                 operation_id=operation_id,
                 **({"uncertain": True} if uncertain else {}),
+                **({"held_for_inbox": True} if held_for_inbox else {}),
                 **({"priority": 1} if priority else {}),
             )
     except Exception as exc:
@@ -445,6 +446,7 @@ async def safe_deliver(
         if any(row["outcome"] in SUCCESS_OUTCOMES and _in_session(row, since) for row in rows):
             return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED, operation_id=operation_id)
 
+    held_subscription = False
     if db is not None and requeue:
         held = await db.queue.held_receipt(
             session_name,
@@ -456,14 +458,17 @@ async def safe_deliver(
             kind,
         )
         if held is not None:
-            return DeliveryReport(
-                DeliveryOutcome.AWAITING_ACK,
-                "already_queued",
-                held["status"] == "uncertain",
-                held["operation_id"],
-                queue_id=held["id"],
-                held_for_inbox=held["status"] == "checkpoint",
-            )
+            if kind == SUBSCRIPTION_KIND:
+                held_subscription = True
+            else:
+                return DeliveryReport(
+                    DeliveryOutcome.AWAITING_ACK,
+                    "already_queued",
+                    held["status"] == "uncertain",
+                    held["operation_id"],
+                    queue_id=held["id"],
+                    held_for_inbox=held["status"] == "checkpoint",
+                )
 
     # 1. Issue queue gate
     if kind == "issue" and trackable_issue:
@@ -576,6 +581,8 @@ async def safe_deliver(
             )
         elif uncertain and db is not None and queue_id is not None:
             await db.queue.hold_uncertain(queue_id)
+        elif held_for_inbox and db is not None and queue_id is not None:
+            await db.queue.hold_for_inbox(queue_id)
         for taken_id, taken_text, taken_operation in receipt.context_taken:
             await record_hook_delivery(taken_id, taken_text, taken_operation)
         if receipt.status == "already_delivered":
@@ -673,6 +680,7 @@ async def safe_deliver(
             operation_id=trace,
             delivery_id=delivery_id,
             queue_id=stored_queue_id,
+            held_for_inbox=held_for_inbox,
         )
 
     async def record_exception(code: str, stage: str, exc: Exception) -> None:
@@ -732,6 +740,11 @@ async def safe_deliver(
             await record_exception("submission_unconfirmed", "submission", exc)
             raise
 
+    if held_subscription:
+        # A replay can mix held and fresh events. Retain all of them before
+        # any paste or hook offer, and settle any previously taken offers.
+        return await finish(DeliveryOutcome.AWAITING_ACK, queue=True, held_for_inbox=True)
+
     # 3. Readiness
     try:
         profile = await get_session_intelligence(session_name, config, idle_since=idle_since)
@@ -774,15 +787,7 @@ async def safe_deliver(
     # 4. Paste + submit
     sent = await submit()
     if sent is None:
-        report = await finish(DeliveryOutcome.AWAITING_ACK, queue=True, held_for_inbox=True)
-        if (
-            db is not None
-            and report.queue_id is not None
-            and report.outcome != DeliveryOutcome.ALREADY_DELIVERED
-        ):
-            await db.queue.hold_for_inbox(report.queue_id)
-            report = replace(report, held_for_inbox=True)
-        return report
+        return await finish(DeliveryOutcome.AWAITING_ACK, queue=True, held_for_inbox=True)
     if sent:
         return await finish(DeliveryOutcome.DELIVERED, queue=False)
     report = await finish(DeliveryOutcome.DELIVERY_FAILED, queue=True)

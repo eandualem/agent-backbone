@@ -130,6 +130,7 @@ class QueueRepo(Repo):
         source_key: str | None = None,
         operation_id: str | None = None,
         uncertain: bool = False,
+        held_for_inbox: bool = False,
         priority: int = 0,
     ) -> EnqueueResult:
         """Store a message for later delivery.
@@ -149,7 +150,11 @@ class QueueRepo(Repo):
                 "delivery_kind": delivery_kind,
                 "source": source,
                 "enqueued_at": now_iso(),
-                "initial_status": "uncertain" if uncertain else "pending",
+                "initial_status": "uncertain"
+                if uncertain
+                else "checkpoint"
+                if held_for_inbox
+                else "pending",
                 "sender": sender,
                 "dedup_key": dedup_key_for(message, sender, source_key),
                 "priority": priority,
@@ -190,7 +195,8 @@ class QueueRepo(Repo):
                         "UPDATE message_queue SET operation_id = "
                         "COALESCE(operation_id, :operation_id), "
                         "status = CASE WHEN :initial_status = 'uncertain' "
-                        "THEN 'uncertain' ELSE status END "
+                        "THEN 'uncertain' WHEN :initial_status = 'checkpoint' "
+                        "AND status != 'uncertain' THEN 'checkpoint' ELSE status END "
                         f"WHERE {key} AND "
                         "status IN ('pending', 'in_progress', 'checkpoint', 'uncertain') "
                         "RETURNING id, operation_id"
@@ -886,6 +892,20 @@ class QueueRepo(Repo):
         kind: str,
     ) -> dict | None:
         async with self._tx() as conn:
+            if kind == SUBSCRIPTION_KIND:
+                held = await conn.execute(
+                    text(
+                        "SELECT id,operation_id,status,message FROM message_queue "
+                        "WHERE session_name=:session AND delivery_kind=:kind "
+                        "AND status IN ('checkpoint','uncertain') ORDER BY id DESC"
+                    ),
+                    {"session": session, "kind": kind},
+                )
+                lines = set(message.split("\n")[1:])
+                for row in held.mappings():
+                    if lines.intersection(row["message"].split("\n")[1:]):
+                        return dict(row)
+                return None
             result = await conn.execute(
                 text(
                     "SELECT id,operation_id,status FROM message_queue WHERE session_name=:session "
