@@ -79,6 +79,7 @@ def private_listener(data_dir: Path, location: str):
         ):
             raise ValueError("refusing to replace an unsafe socket path")
         with socket.socket(socket.AF_UNIX) as probe:
+            probe.settimeout(1.0)
             try:
                 probe.connect(str(path))
             except ConnectionRefusedError:
@@ -91,6 +92,7 @@ def private_listener(data_dir: Path, location: str):
         connection.bind(str(path))
         path.chmod(0o600)
         identity = path.lstat().st_ino
+        connection.listen(128)
         connection.set_inheritable(True)
         yield connection
     finally:

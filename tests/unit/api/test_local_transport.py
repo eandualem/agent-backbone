@@ -1,4 +1,8 @@
-"""Real local sockets, without a running Backbone service or model."""
+"""Real local sockets, without a running Backbone service or model.
+
+This API boundary is runtime-independent: claude, codex, opencode, gemini,
+deepcode, aider and shell use the same listener and kernel peer check.
+"""
 
 import asyncio
 import os
@@ -23,6 +27,10 @@ def test_listener_is_private_and_removed_on_close(root):
     path = root / "api.sock"
     with local.private_listener(root, str(path)):
         assert path.stat().st_mode & 0o777 == 0o600
+        # Another startup cannot mistake a bound, not-yet-served socket for stale.
+        with pytest.raises(ValueError, match="already in use"):
+            with local.private_listener(root, str(path)):
+                pytest.fail("startup listener was replaced")
     assert not path.exists()
 
 
@@ -144,3 +152,19 @@ def test_configured_server_passes_private_listener_and_existing_tcp_socket(root)
     assert not path.exists()
     with pytest.raises(ValueError, match="without --reload"):
         _run_server(config, reload=True)
+
+
+def test_inconclusive_probe_is_bounded_and_preserves_socket(root):
+    from unittest.mock import MagicMock, patch
+
+    path = root / "api.sock"
+    with local.private_listener(root, str(path)):
+        probe = MagicMock()
+        probe.__enter__.return_value = probe
+        probe.connect.side_effect = TimeoutError("accept queue saturated")
+        with patch.object(local.socket, "socket", return_value=probe):
+            with pytest.raises(TimeoutError):
+                with local.private_listener(root, str(path)):
+                    pytest.fail("inconclusive socket was replaced")
+        probe.settimeout.assert_called_once_with(1.0)
+        assert path.exists()

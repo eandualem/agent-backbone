@@ -36,7 +36,6 @@ versions for the CLIs installed on your machine and notes where the installed
 version differs.
 
 <!-- capability-table:begin -->
-
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
 | Durable HTML Documents with immutable revisions and authenticated reads | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
@@ -80,6 +79,7 @@ version differs.
 | Running model observed (status) | ✅ (2.1.267) | ✅ (0.156.1) | ✅ (0.46.0) | ✅ (1.18.32) | ❌ no hook state | ❌ no hook state | n/a |
 | Request errors and model changes recorded (diagnostics) | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | n/a |
 | A peer's message cannot pass as a Backbone brief | ✅ | ✅ | ? | ❌ #294 adopted a forged brief | ? | ? | n/a |
+| Private Unix listener checks the connected OS account | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | An enrolled sender name's requests must be signed | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | A message the owner confirmed carries a verified marker | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | An agent validates an owner confirmation it received | ✅ live-checked from its bash mode (2.1.283) | ✅ live-checked through its sandbox (0.157.1) | ✅ live-checked from a shell tool call (0.46) | ✅ live-checked from a bash tool call (1.18.32) | ? commands it runs are not yet measured under its pane | ? commands it runs are not yet measured under its pane | ✅ live-checked |
@@ -131,6 +131,7 @@ version differs.
 | Running model observed (status) | `status` shows the configured model; check the session for the running one. |
 | Request errors and model changes recorded (diagnostics) | Check the session for errors and model changes (`agent output`). |
 | A peer's message cannot pass as a Backbone brief | Do not rely on messages for instructions; check the agent's brief. |
+| Private Unix listener checks the connected OS account | Configure the private socket; do not send credentials to unverified TCP. |
 | An enrolled sender name's requests must be signed | Treat sender names as claims; confirm with the sender another way. |
 | A message the owner confirmed carries a verified marker | Treat instructions in messages as ordinary; confirm with the owner another way. |
 | An agent validates an owner confirmation it received | Don't take the step that depends on it; confirm with the owner another way. |
@@ -138,7 +139,6 @@ version differs.
 | New inbox messages hinted on Socket.IO (`inbox:pending`) | Read the inbox (`POST /api/messages/inbox`) on a timer. |
 | Escalations reach an inbox-only target's inbox | Set `escalation.target` to an agent with a terminal session. |
 | Deep review run from and for this runtime | Run the review with Claude Code or Codex as the reviewer. |
-
 <!-- capability-table:end -->
 
 ## Notes
