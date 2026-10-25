@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import fcntl
 import os
 import socket
 import stat
@@ -89,6 +90,28 @@ def private_listener(data_dir: Path, location: str):
     parent = path.parent.stat()
     if parent.st_uid != os.geteuid() or stat.S_IMODE(parent.st_mode) != 0o700:
         raise ValueError("the socket parent must be owned by this account with mode 0700")
+    lock = path.with_name(path.name + ".lock")
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        owner = os.fstat(fd)
+        if (
+            not stat.S_ISREG(owner.st_mode)
+            or owner.st_uid != os.geteuid()
+            or stat.S_IMODE(owner.st_mode) != 0o600
+        ):
+            raise ValueError("the socket lock must be an owned regular file with mode 0600")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError("the local socket is already in use") from None
+        with _bound_listener(path) as connection:
+            yield connection
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def _bound_listener(path: Path):
     if path.exists() or path.is_symlink():
         previous = path.lstat()
         if (

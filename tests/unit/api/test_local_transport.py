@@ -160,7 +160,10 @@ def test_inconclusive_probe_is_bounded_and_preserves_socket(root):
     from unittest.mock import MagicMock, patch
 
     path = root / "api.sock"
-    with local.private_listener(root, str(path)):
+    with socket.socket(socket.AF_UNIX) as existing:
+        existing.bind(str(path))
+        path.chmod(0o600)
+        existing.listen(1)
         probe = MagicMock()
         probe.__enter__.return_value = probe
         probe.connect.side_effect = TimeoutError("accept queue saturated")
@@ -230,3 +233,38 @@ async def test_unix_validation_uses_kernel_pid_and_preserves_agent_identity(
         finally:
             server.close()
             await server.wait_closed()
+
+
+async def test_concurrent_starts_cannot_replace_the_live_socket(root):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, Event
+
+    path = root / "race.sock"
+    with socket.socket(socket.AF_UNIX) as stale:
+        stale.bind(str(path))
+        path.chmod(0o600)
+    start, attempted = Barrier(2), Barrier(2)
+    release = Event()
+
+    def launch():
+        start.wait(timeout=3)
+        try:
+            with local.private_listener(root, str(path)):
+                attempted.wait(timeout=3)
+                release.wait(timeout=3)
+                return "listening"
+        except ValueError as exc:
+            assert "already in use" in str(exc)
+            attempted.wait(timeout=3)
+            with socket.socket(socket.AF_UNIX) as probe:
+                probe.connect(str(path))
+            release.set()
+            return "refused"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, second = pool.submit(launch), pool.submit(launch)
+        assert sorted([first.result(timeout=5), second.result(timeout=5)]) == [
+            "listening",
+            "refused",
+        ]
+    assert not path.exists()
