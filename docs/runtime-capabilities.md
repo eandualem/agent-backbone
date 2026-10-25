@@ -39,6 +39,7 @@ version differs.
 
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
+| Durable HTML Documents with immutable revisions and authenticated reads | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | Stored questions, answers and actions with durable topic delivery | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py |
 | Retained observations of reconciled state over the API | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | Configured instruction sources and text over the API | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ source preview only; no instruction injection |
@@ -89,6 +90,7 @@ version differs.
 
 | Capability | Fallback where it is unavailable |
 |---|---|
+| Durable HTML Documents with immutable revisions and authenticated reads | Keep authored HTML locally until a Backbone with Documents is available. |
 | Stored questions, answers and actions with durable topic delivery | Use ordinary replies; they have no separately stored answer record. |
 | Retained observations of reconciled state over the API | Read current state and delivery records; earlier states cannot be reconstructed. |
 | Configured instruction sources and text over the API | Read the preview with `backbone instructions preview NAME --json`. |

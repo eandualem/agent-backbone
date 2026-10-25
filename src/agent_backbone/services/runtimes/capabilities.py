@@ -193,6 +193,20 @@ _RESPONSE_DELIVERY = (
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
+        "documents",
+        "Durable HTML Documents with immutable revisions and authenticated reads",
+        "src/agent_backbone/api/routes/documents.py",
+        fallback="Keep authored HTML locally until a Backbone with Documents is available.",
+        implemented=lambda rt: True,
+        claude=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
+        codex=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
+        gemini=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
+        opencode=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
+        deepcode=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
+        aider=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
+        shell=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
+    ),
+    _row(
         "responses",
         "Stored questions, answers and actions with durable topic delivery",
         "src/agent_backbone/api/routes/responses.py",

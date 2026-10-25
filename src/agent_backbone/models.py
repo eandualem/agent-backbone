@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from enum import StrEnum
@@ -196,6 +197,47 @@ class PublishResponse(BaseModel):
     request_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_.:-]+$")
     response: AgentResponse
     supersedes_id: int | None = Field(default=None, ge=1, le=2**63 - 1)
+
+
+DOCUMENT_HTML_BYTES = 4_194_304
+DOCUMENT_METADATA_BYTES = 8_192
+DOCUMENT_WIRE_BYTES = 6 * DOCUMENT_HTML_BYTES + DOCUMENT_METADATA_BYTES
+DOCUMENT_STORAGE_BYTES = 1_073_741_824
+DOCUMENTS_PER_AUTHOR_HOUR = 30
+DOCUMENTS_PER_HOUR = 120
+
+
+class PublishDocument(BaseModel):
+    """Exact HTML with a bounded publication envelope; no HTML normalization."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    author: ReportAgentName
+    request_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+    title: str = Field(min_length=1, max_length=240)
+    html: str = Field(min_length=1)
+    supersedes_id: int | None = Field(default=None, ge=1, le=2**63 - 1)
+
+    @field_validator("title")
+    @classmethod
+    def title_text(cls, value: str) -> str:
+        _report_text(value)
+        return value
+
+    @model_validator(mode="after")
+    def byte_limits(self) -> PublishDocument:
+        try:
+            size = len(self.html.encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise ValueError("HTML must contain valid UTF-8 text") from exc
+        if size > DOCUMENT_HTML_BYTES:
+            raise ValueError(f"HTML exceeds {DOCUMENT_HTML_BYTES} UTF-8 bytes")
+        if self.metadata_bytes() > DOCUMENT_METADATA_BYTES:
+            raise ValueError(f"metadata exceeds {DOCUMENT_METADATA_BYTES} JSON bytes")
+        return self
+
+    def metadata_bytes(self) -> int:
+        return len(json.dumps(self.model_dump() | {"html": ""}, ensure_ascii=True).encode())
 
 
 class ReportQuery(BaseModel):
