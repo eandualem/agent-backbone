@@ -236,7 +236,22 @@ async def _read_config() -> BackboneConfig:
 
     from agent_backbone.config import agents_from_rows, build_config
 
-    boot = bootstrap_config()
+    boot = await read_client_config()
+    if agent_credential(boot.api_key):
+        settings_result, agents_result = await asyncio.gather(
+            api(boot, "GET", "/api/config"), api(boot, "GET", "/api/config/agents")
+        )
+        if (
+            not settings_result
+            or settings_result[0] != 200
+            or not agents_result
+            or agents_result[0] != 200
+        ):
+            raise ValueError("Agent discovery requires the running Backbone API")
+        settings = {key: item["value"] for key, item in settings_result[1].items()}
+        return build_config(
+            boot.data_dir, settings=settings, agents=agents_from_rows(agents_result[1])
+        )
     url = make_url(boot.database_url)
     queries = (
         "SELECT key, value FROM settings",
@@ -311,5 +326,5 @@ async def read_config() -> BackboneConfig:
         return await asyncio.wait_for(_read_config(), timeout=5)
     except Exception as exc:
         raise ValueError(
-            "Could not read existing configuration; check database availability and schema"
+            "Could not read existing configuration; check API or database availability and schema"
         ) from exc
