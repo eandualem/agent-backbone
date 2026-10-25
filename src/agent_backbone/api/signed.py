@@ -25,7 +25,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Match
 
 from agent_backbone import signing
-from agent_backbone.api.auth import api_key_valid
+from agent_backbone.api.auth import credential_role
 from agent_backbone.models import DOCUMENT_WIRE_BYTES
 
 log = logging.getLogger(__name__)
@@ -192,7 +192,10 @@ def _authorized(config, headers: Headers) -> bool:
     if not config.api_key:
         return config.security.allow_unauthenticated
     auth = headers.get("authorization", "")
-    return api_key_valid(auth[7:] if auth.startswith("Bearer ") else None, config.api_key)
+    return (
+        credential_role(auth[7:] if auth.startswith("Bearer ") else None, config.api_key)
+        is not None
+    )
 
 
 async def _read(receive, limit: int = MAX_BODY_BYTES) -> tuple[bytes, bool | None]:

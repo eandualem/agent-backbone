@@ -9,6 +9,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from agent_backbone.api.auth import require_operator
 from agent_backbone.api.deps import (
     get_agent_store,
     get_config,
@@ -103,7 +104,9 @@ class AgentTagsView(AgentConfigView):
     """Evidence lines from bringing a running session's skill links in line now."""
 
 
-@router.post("/agents/{name}/tags", response_model=AgentTagsView)
+@router.post(
+    "/agents/{name}/tags", response_model=AgentTagsView, dependencies=[Depends(require_operator)]
+)
 async def tag_agent(
     name: str, body: AgentTagsRequest, store: AgentStore = Depends(get_agent_store)
 ):
@@ -117,7 +120,11 @@ async def tag_agent(
     return AgentTagsView(**AgentConfigView.from_spec(spec).model_dump(), relinked=relinked)
 
 
-@router.post("/agents/{name}/rename", response_model=AgentConfigView)
+@router.post(
+    "/agents/{name}/rename",
+    response_model=AgentConfigView,
+    dependencies=[Depends(require_operator)],
+)
 async def rename_agent(
     name: str, body: AgentRenameRequest, store: AgentStore = Depends(get_agent_store)
 ):
@@ -274,6 +281,16 @@ async def list_runtimes():
 async def _start(
     request: Request, req: StartRequest, store: AgentStore, feed: SessionFeed
 ) -> AgentStartResponse:
+    if request.state.credential_role == "agent":
+        if (
+            req.directory is not None
+            or req.runtime is not None
+            or req.model is not None
+            or req.tags
+            or req.inbox_only
+        ):
+            await require_operator(request)
+        registered_agent_or_404(request.app.state.config, req.name or "")
     try:
         spec = await resolve_agent(store, req)
     except KeyError as exc:
@@ -361,6 +378,7 @@ async def stop_agent(
 
 @router.post("/agents/{session}/restart", response_model=AgentTransitionView)
 async def restart_agent(
+    request: Request,
     session: str,
     body: AgentRestartRequest | None = None,
     config: BackboneConfig = Depends(get_config),
@@ -371,6 +389,8 @@ async def restart_agent(
     so a caller asking for its own session cannot lose the start."""
     spec = registered_agent_or_404(config, session)
     body = body or AgentRestartRequest()
+    if body.runtime is not None or body.model is not None:
+        await require_operator(request)
     try:
         req = TransitionRequest(
             runtime=body.runtime,
@@ -501,6 +521,7 @@ async def deny_agent_prompt(
 
 @router.patch("/agents/{name}", response_model=AgentConfigView)
 async def update_agent(
+    request: Request,
     name: str,
     body: AgentUpdateRequest,
     store: AgentStore = Depends(get_agent_store),
@@ -508,6 +529,8 @@ async def update_agent(
     """Change an agent's recorded settings (dir, runtime, model, repo, tags,
     env, description, always_on, unattended)."""
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    if set(changes) - {"description", "repo"}:
+        await require_operator(request)
     try:
         spec = await store.update(name, **changes)
     except KeyError:
@@ -641,7 +664,7 @@ async def get_agent_output(
     )
 
 
-@router.post("/agents/{session}/state")
+@router.post("/agents/{session}/state", dependencies=[Depends(require_operator)])
 async def post_agent_state(
     session: str,
     body: StateUpdateRequest,

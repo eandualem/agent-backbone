@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from agent_backbone.api.auth import require_operator
 from agent_backbone.api.deps import get_agent_store, get_config
 from agent_backbone.config import SETTINGS_DEFAULTS, SETTINGS_HELP, BackboneConfig
 from agent_backbone.services.agents import AgentStore
@@ -39,7 +40,7 @@ async def get_setting(key: str, config: BackboneConfig = Depends(get_config)):
     return {"key": key, "value": config.settings.get(key, SETTINGS_DEFAULTS[key])}
 
 
-@router.put("/config/{key}")
+@router.put("/config/{key}", dependencies=[Depends(require_operator)])
 async def set_setting(key: str, body: SettingValue, store: AgentStore = Depends(get_agent_store)):
     try:
         new_config = await store.set_setting(key, body.value)
@@ -50,7 +51,7 @@ async def set_setting(key: str, body: SettingValue, store: AgentStore = Depends(
     return {"key": key, "value": new_config.settings[key]}
 
 
-@router.delete("/config/{key}")
+@router.delete("/config/{key}", dependencies=[Depends(require_operator)])
 async def unset_setting(key: str, store: AgentStore = Depends(get_agent_store)):
     if key not in SETTINGS_DEFAULTS:
         raise HTTPException(status_code=404, detail=f"unknown setting {key!r}")

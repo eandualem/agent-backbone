@@ -4,6 +4,15 @@ Base URL `http://127.0.0.1:7120`. Interactive OpenAPI docs at `/docs` while
 running. Every route except `GET /health` and the webhook requires
 `Authorization: Bearer <BACKBONE_API_KEY>`.
 
+The operator key authorizes administration. Launchers give agents a derived
+collaboration key for reads, messaging and starting/stopping/restarting known
+peers with saved settings. Changes to settings, runtime/model/workspace,
+environment, tags, shared skills or policies require an operator key and return
+403 for an agent key. New registrations, owner enrollment and externally pushed
+state also require an operator key. Fleet snapshot resume also requires an operator key because it restores saved
+models. Upgrade restart holds require the operator. This does not isolate same-user processes;
+see [the trust boundary](security.md).
+
 Response examples below show selected fields. Use the running OpenAPI schema
 for complete request and response models.
 

@@ -21,6 +21,7 @@ backbone picks it up on its next refresh.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -904,6 +905,25 @@ def env_file_keys(env_path: Path | str) -> tuple[str, ...]:
     return tuple(dotenv_values(env_path).keys())
 
 
+AGENT_KEY_PREFIX = "backbone-agent-v1:"
+
+
+def agent_api_key(operator_key: str) -> str:
+    """Derive the collaboration credential without handing out the operator key."""
+    if not operator_key or operator_key.startswith(AGENT_KEY_PREFIX):
+        return operator_key
+    return (
+        AGENT_KEY_PREFIX
+        + hmac.digest(
+            operator_key.encode(), b"agent-backbone collaboration credential v1", "sha256"
+        ).hex()
+    )
+
+
+def agent_credential(key: str) -> bool:
+    return key.startswith(AGENT_KEY_PREFIX)
+
+
 def load_secrets(data_dir: Path) -> dict[str, str]:
     """``<data_dir>/.env`` merged **under** the process environment.
 
@@ -918,6 +938,9 @@ def load_secrets(data_dir: Path) -> dict[str, str]:
     — a stray ``.env`` in the current working directory must not inject
     secrets or security flags.
     """
+    if agent_credential(os.environ.get("BACKBONE_API_KEY", "")):
+        # Agent CLI invocations never import the operator's .env secrets.
+        return dict(os.environ)
     merged = {key: value for key, value in dotenv_values(data_dir / ".env").items() if value}
     merged.update(os.environ)
     return merged

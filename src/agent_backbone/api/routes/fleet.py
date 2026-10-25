@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from agent_backbone.api.auth import require_operator
 from agent_backbone.api.deps import get_agent_store, get_config, get_db, get_feed
 from agent_backbone.api.models import (
     FleetResumeRequest,
@@ -74,7 +75,11 @@ async def get_snapshot(snapshot_id: str, db: BackboneDB = Depends(get_db)):
     return _view(await _snapshot(db, snapshot_id))
 
 
-@router.post("/snapshots/{snapshot_id}/resume", response_model=FleetResumeRun)
+@router.post(
+    "/snapshots/{snapshot_id}/resume",
+    response_model=FleetResumeRun,
+    dependencies=[Depends(require_operator)],
+)
 async def resume_snapshot(
     snapshot_id: str,
     body: FleetResumeRequest | None = None,

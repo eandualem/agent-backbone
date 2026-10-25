@@ -19,7 +19,7 @@ from pathlib import Path
 
 import socketio
 
-from agent_backbone.api.auth import api_key_valid
+from agent_backbone.api.auth import credential_role
 from agent_backbone.api.session_updates import SESSIONS_NAMESPACE
 from agent_backbone.services.terminal import (
     PtyManager,
@@ -84,7 +84,7 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
         if not config.api_key:
             return config.security.allow_unauthenticated
         raw = auth.get("api_key") if isinstance(auth, dict) else None
-        return api_key_valid(raw if isinstance(raw, str) else None, config.api_key)
+        return credential_role(raw if isinstance(raw, str) else None, config.api_key) is not None
 
     async def on_connect(self, sid: str, environ: dict, auth: dict | None = None) -> bool:
         if not self._auth_valid(auth):

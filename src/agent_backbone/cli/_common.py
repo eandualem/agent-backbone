@@ -9,7 +9,13 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from agent_backbone.config import BackboneConfig, bootstrap_config, build_config, validate_setting
+from agent_backbone.config import (
+    BackboneConfig,
+    agent_credential,
+    bootstrap_config,
+    build_config,
+    validate_setting,
+)
 
 log = logging.getLogger(__name__)
 
@@ -129,6 +135,10 @@ class Direct:
         self.config = config
 
     async def __aenter__(self) -> Direct:
+        if agent_credential(self._boot.api_key):
+            raise ValueError(
+                "Agent credentials require the running API; direct database fallback is disabled"
+            )
         from agent_backbone.services.agents import AgentStore
         from agent_backbone.services.database import BackboneDB
 

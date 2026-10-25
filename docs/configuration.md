@@ -215,9 +215,10 @@ Recorded per agent (`backbone agent list`, `GET /api/config/agents`):
 
 Exported into every session the backbone starts: `BACKBONE_RUNTIME`,
 `BACKBONE_AGENT`, `BACKBONE_STATE_DIR` (an agent's `env` cannot override
-these reserved keys). That is the whole contract — the backbone's own
-secrets are stripped from the session, including anything you added to
-`.env` yourself. See
+these reserved keys), and a reserved derived `BACKBONE_API_KEY` for collaboration.
+The operator key and service secrets are stripped, including anything you added
+to `.env` yourself. Agent CLI calls use the inherited collaboration key without
+loading operator secrets; administrative commands require an operator terminal. See
 [What an agent session inherits](security.md#what-an-agent-session-inherits).
 
 A Claude Code agent starts with drafted feedback off: Claude can't draft
