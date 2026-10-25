@@ -290,9 +290,10 @@ See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
 See [message checkpoints](cli.md#cooperative-message-checkpoints) for safe mid-turn
 coordination, acknowledgement and retention.
 
-For the optional source-checkout PostgreSQL service, set
-`BACKBONE_POSTGRES_PASSWORD` in the environment used by `docker compose` before
-`make db-up`. The port binds to `127.0.0.1:5435`. Configure
+For the optional source-checkout PostgreSQL service, keep
+`BACKBONE_POSTGRES_PASSWORD` available to every `docker compose` command, including
+`make db-up` and `make db-down`. Set it in the source checkout’s `.env` file or
+export it in each shell. The port binds to `127.0.0.1:5435`. Configure
 `BACKBONE_DATABASE_URL` separately with that password, URL-encoded when needed.
 Changing the variable does not rotate credentials in an existing database volume;
 use PostgreSQL's password-change procedure for an existing installation.
