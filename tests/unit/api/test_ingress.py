@@ -62,7 +62,8 @@ async def test_keyless_host_and_origin_guard(config, transport, host, origin, al
         assert send.call_args_list[0].args[0].get("status", 403) == 403
 
 
-async def test_document_limit_and_body_replay(config):
+@pytest.mark.parametrize("prefix", ["", "/bb"])
+async def test_document_limit_and_body_replay(config, prefix):
     seen = []
 
     async def app(scope, receive, send):
@@ -71,7 +72,7 @@ async def test_document_limit_and_body_replay(config):
     body = b"x" * (MAX_BODY_BYTES + 1)
     guard = IngressMiddleware(app, SimpleNamespace(state=SimpleNamespace(config=config)))
     await guard(
-        {"type": "http", "path": "/api/documents", "headers": []},
+        {"type": "http", "path": prefix + "/api/documents", "root_path": prefix, "headers": []},
         AsyncMock(return_value={"type": "http.request", "body": body}),
         AsyncMock(),
     )

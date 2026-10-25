@@ -44,11 +44,11 @@ class IngressMiddleware:
                 )(scope, receive, send)
         if scope["type"] == "websocket":
             return await self.app(scope, receive, send)
-        limit = (
-            DOCUMENT_WIRE_BYTES
-            if scope.get("path", "").rstrip("/") == "/api/documents"
-            else MAX_BODY_BYTES
-        )
+        path = scope.get("path", "")
+        prefix = scope.get("root_path", "").rstrip("/")
+        if prefix and path.startswith(prefix + "/"):
+            path = path[len(prefix) :]
+        limit = DOCUMENT_WIRE_BYTES if path.rstrip("/") == "/api/documents" else MAX_BODY_BYTES
         try:
             declared = int(headers.get("content-length", "0"))
         except ValueError:
