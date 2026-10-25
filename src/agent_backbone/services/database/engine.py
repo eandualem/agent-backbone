@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -23,18 +24,30 @@ def is_sqlite(url: str) -> bool:
 
 
 def is_memory(url: str) -> bool:
-    return ":memory:" in url
+    parsed = make_url(url)
+    return parsed.database in {None, "", ":memory:", "file::memory:"} or (
+        parsed.query.get("uri", "").lower() == "true" and parsed.query.get("mode") == "memory"
+    )
 
 
 def build_engine(url: str) -> AsyncEngine:
     """Create an async engine with dialect-appropriate pool settings."""
     if is_sqlite(url):
         if not is_memory(url):
-            db_file = make_url(url).database
-            if db_file:
-                path = Path(db_file).expanduser()
+            parsed = make_url(url)
+            db_file = parsed.database
+            uri = parsed.query.get("uri", "").lower() == "true"
+            if uri and db_file and db_file.startswith("file:"):
+                location = urlsplit(db_file)
+                db_file = unquote(location.path) if location.netloc in {"", "localhost"} else None
+            readonly = uri and (
+                parsed.query.get("mode") == "ro" or parsed.query.get("immutable") == "1"
+            )
+            if db_file and not readonly:
+                path = Path(db_file)
                 path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+                create = 0 if uri and parsed.query.get("mode") in {"ro", "rw"} else os.O_CREAT
+                fd = os.open(path, os.O_RDWR | create | os.O_NOFOLLOW, 0o600)
                 try:
                     os.fchmod(fd, 0o600)
                 finally:

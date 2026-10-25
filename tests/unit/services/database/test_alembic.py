@@ -828,3 +828,24 @@ async def test_sqlite_file_is_private_before_connection(tmp_path, existing):
             assert (await connection.execute(text("SELECT 1"))).scalar_one() == 1
     finally:
         await engine.dispose()
+
+
+@pytest.mark.parametrize("memory", [True, False])
+async def test_sqlite_uri_permissions_target_the_actual_database(tmp_path, monkeypatch, memory):
+    from sqlalchemy import text
+
+    from agent_backbone.services.database.engine import build_engine
+
+    monkeypatch.chdir(tmp_path)
+    mode = "mode=memory&cache=shared&" if memory else ""
+    engine = build_engine(f"sqlite+aiosqlite:///file:shared%20db?{mode}uri=true")
+    try:
+        async with engine.connect() as connection:
+            assert (await connection.execute(text("SELECT 1"))).scalar() == 1
+    finally:
+        await engine.dispose()
+    assert not (tmp_path / "file:shared%20db").exists()
+    if memory:
+        assert list(tmp_path.iterdir()) == []
+    else:
+        assert (tmp_path / "shared db").stat().st_mode & 0o777 == 0o600
