@@ -451,27 +451,66 @@ class TestDenyAgent:
 class TestStartAgentScrubsSecrets:
     """A started agent inherits the launch contract and nothing else (issue #81)."""
 
-    async def test_secrets_are_scrubbed_from_the_session(self, tmp_path):
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    async def test_secrets_are_scrubbed_from_the_session(self, tmp_path, runtime):
         data_dir = tmp_path / "data"
         data_dir.mkdir()
-        (data_dir / ".env").write_text("BACKBONE_API_KEY=k\nMY_OWN_SECRET=s\n")
+        (data_dir / ".env").write_text("BACKBONE_API_KEY=k\nMY_OWN_SECRET=s\nBACKBONE_PORT=8234\n")
         project = tmp_path / "project"
         project.mkdir()
-        spec = AgentSpec(name="ike", dir=str(project), runtime="shell")
+        spec = AgentSpec(name="worker", dir=str(project), runtime=runtime)
 
         config = bootstrap_config(data_dir)
         with (
             patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
             patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
         ):
-            assert (await start_agent(spec, config, wait=False)).ok is True
+            with patch(f"{_BASE}.resolve_command", return_value="/usr/bin/cli"):
+                assert (await start_agent(spec, config, wait=False)).ok is True
 
         scrub = start.await_args.kwargs["scrub"]
         assert "BACKBONE_API_KEY" in scrub
         assert "GITHUB_TOKEN" in scrub  # a known name, even absent from .env
         assert "MY_OWN_SECRET" in scrub  # whatever the user put in .env
         # The launch contract itself is untouched.
-        assert start.await_args.kwargs["environment"]["BACKBONE_AGENT"] == "ike"
+        from agent_backbone.config import agent_api_key
+
+        exported = start.await_args.kwargs["environment"]
+        assert exported["BACKBONE_AGENT"] == "worker"
+        assert exported["BACKBONE_API_KEY"] == agent_api_key("k")
+        assert exported["BACKBONE_API_KEY"] != "k"
+        assert exported["BACKBONE_PORT"] == "8234"
+        assert exported["BACKBONE_HOST"] == config.backbone.host
+
+        # Exercise an actual shell child after the runtime's default secret-name
+        # filtering, not merely the tmux launch arguments.
+        import fnmatch
+        import os
+        import subprocess
+        import sys
+
+        child_env = {k: v for k, v in os.environ.items() if not k.startswith("BACKBONE_")}
+        child_env.update(exported)
+        child_env = {
+            k: v
+            for k, v in child_env.items()
+            if not any(
+                fnmatch.fnmatch(k.upper(), pattern) for pattern in ("*KEY*", "*TOKEN*", "*SECRET*")
+            )
+        }
+        script = (
+            "from agent_backbone.config import bootstrap_config,agent_api_key; "
+            "from pathlib import Path; import sys; "
+            "assert bootstrap_config(Path(sys.argv[1])).api_key == agent_api_key('k')"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(data_dir)],
+            env=child_env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
 
     @pytest.mark.parametrize("runtime", sorted(RUNTIMES))
     async def test_env_values_are_on_no_command_line(self, tmp_path, runtime):

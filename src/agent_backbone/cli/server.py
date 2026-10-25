@@ -190,10 +190,18 @@ def cmd_down(args: argparse.Namespace) -> int:
 async def _config_cmd(args: argparse.Namespace) -> int:
     sub = args.config_command
     boot = await _common.read_client_config()
+    remote = _common.is_agent_client(boot.api_key) and sub in {"list", "get"}
+    if remote:
+        response = await _common.api(boot, "GET", "/api/config")
+        if not response or response[0] != 200:
+            print("Configuration reads require the running Backbone API")
+            return 1
+        stored = {key: item["value"] for key, item in response[1].items()}
 
     if sub == "list":
-        async with _common.Direct(boot) as direct:
-            stored = await direct.db.settings.all()
+        if not remote:
+            async with _common.Direct(boot) as direct:
+                stored = await direct.db.settings.all()
         print_table(
             "Configuration",
             ("Setting", "Value", "Source"),
@@ -201,7 +209,7 @@ async def _config_cmd(args: argparse.Namespace) -> int:
                 (
                     key,
                     json.dumps(stored.get(key, SETTINGS_DEFAULTS[key])),
-                    "explicit" if key in stored else "default",
+                    "API" if remote else "explicit" if key in stored else "default",
                 )
                 for key in sorted(SETTINGS_DEFAULTS)
             ],
@@ -210,8 +218,9 @@ async def _config_cmd(args: argparse.Namespace) -> int:
         return 0
 
     if sub == "get":
-        async with _common.Direct(boot) as direct:
-            stored = await direct.db.settings.all()
+        if not remote:
+            async with _common.Direct(boot) as direct:
+                stored = await direct.db.settings.all()
         if args.key not in SETTINGS_DEFAULTS:
             print(f"unknown setting '{args.key}'")
             return 1

@@ -16,6 +16,7 @@ def test_publish_validate_retry_and_export(tmp_path, capsys, monkeypatch):
         assert json.loads(capsys.readouterr().out) == {"valid": True}
         api.assert_not_called()
     monkeypatch.setenv("BACKBONE_AGENT", "writer")
+    monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
     receipt = {"created": True, "record": {"id": 5}}
     with patch("agent_backbone.cli._common.api", AsyncMock(return_value=(201, receipt))) as api:
         keys = []

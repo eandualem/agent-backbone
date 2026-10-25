@@ -37,6 +37,7 @@ def test_schema_and_example_are_available_without_service(capsys):
 
 def test_publish_from_stdin_uses_agent_identity_and_stable_retry_key(monkeypatch, capsys):
     monkeypatch.setenv("BACKBONE_AGENT", "writer")
+    monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
     receipt = {"created": True, "record": {"id": 9, "agent_name": "writer"}}
     api = AsyncMock(return_value=(201, receipt))
     with patch("agent_backbone.cli._common.api", api):

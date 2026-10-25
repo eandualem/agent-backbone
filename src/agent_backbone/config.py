@@ -21,6 +21,7 @@ backbone picks it up on its next refresh.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -59,6 +60,7 @@ SUBSCRIPTION_PRIORITIES: tuple[str, ...] = ("normal", "high")
 
 SECRET_ENV_KEYS: tuple[str, ...] = (
     "BACKBONE_API_KEY",
+    "BACKBONE_AGENT_CREDENTIAL",
     "GITHUB_TOKEN",
     "GITHUB_WEBHOOK_SECRET",
     "GITHUB_APP_ID",
@@ -904,6 +906,25 @@ def env_file_keys(env_path: Path | str) -> tuple[str, ...]:
     return tuple(dotenv_values(env_path).keys())
 
 
+AGENT_KEY_PREFIX = "backbone-agent-v1:"
+
+
+def agent_api_key(operator_key: str) -> str:
+    """Derive the collaboration credential without handing out the operator key."""
+    if not operator_key or operator_key.startswith(AGENT_KEY_PREFIX):
+        return operator_key
+    return (
+        AGENT_KEY_PREFIX
+        + hmac.digest(
+            operator_key.encode(), b"agent-backbone collaboration credential v1", "sha256"
+        ).hex()
+    )
+
+
+def agent_credential(key: str) -> bool:
+    return key.startswith(AGENT_KEY_PREFIX)
+
+
 def load_secrets(data_dir: Path) -> dict[str, str]:
     """``<data_dir>/.env`` merged **under** the process environment.
 
@@ -918,6 +939,27 @@ def load_secrets(data_dir: Path) -> dict[str, str]:
     — a stray ``.env`` in the current working directory must not inject
     secrets or security flags.
     """
+    environment = dict(os.environ)
+    collaboration = environment.get("BACKBONE_AGENT_CREDENTIAL", "")
+    if collaboration:
+        if not agent_credential(collaboration):
+            raise ValueError(
+                "Invalid agent collaboration credential; operator fallback is disabled"
+            )
+        environment["BACKBONE_API_KEY"] = collaboration
+    if (
+        environment.get("BACKBONE_AGENT")
+        and not environment.get("BACKBONE_API_KEY")
+        and "BACKBONE_AGENT_CREDENTIAL" not in environment
+    ):
+        raise ValueError("Agent credential is missing; operator fallback is disabled")
+    if (
+        "BACKBONE_AGENT_CREDENTIAL" in environment
+        or environment.get("BACKBONE_AGENT")
+        or agent_credential(environment.get("BACKBONE_API_KEY", ""))
+    ):
+        # Never recover operator secrets after a runtime filters key variables.
+        return environment
     merged = {key: value for key, value in dotenv_values(data_dir / ".env").items() if value}
     merged.update(os.environ)
     return merged

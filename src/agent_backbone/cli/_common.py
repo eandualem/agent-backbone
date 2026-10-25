@@ -5,11 +5,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
 
-from agent_backbone.config import BackboneConfig, bootstrap_config, build_config, validate_setting
+from agent_backbone.config import (
+    BackboneConfig,
+    agent_credential,
+    bootstrap_config,
+    build_config,
+    validate_setting,
+)
 
 log = logging.getLogger(__name__)
 
@@ -119,6 +126,11 @@ async def api_up(config: BackboneConfig) -> bool:
     return result is not None
 
 
+def is_agent_client(key: str) -> bool:
+    """Launch identity remains meaningful when development authentication is off."""
+    return agent_credential(key) or "BACKBONE_AGENT_CREDENTIAL" in os.environ
+
+
 class Direct:
     """Direct database access for when the backbone is not running."""
 
@@ -129,6 +141,10 @@ class Direct:
         self.config = config
 
     async def __aenter__(self) -> Direct:
+        if is_agent_client(self._boot.api_key):
+            raise ValueError(
+                "Agent credentials require the running API; direct database fallback is disabled"
+            )
         from agent_backbone.services.agents import AgentStore
         from agent_backbone.services.database import BackboneDB
 
@@ -171,6 +187,16 @@ async def read_client_config() -> BackboneConfig:
     from sqlalchemy.ext.asyncio import create_async_engine
 
     boot = bootstrap_config()
+    if is_agent_client(boot.api_key):
+        # The launcher exports the effective address without loading operator secrets.
+        from dataclasses import replace
+
+        return replace(
+            boot,
+            backbone=replace(
+                boot.backbone, host=os.environ.get("BACKBONE_HOST", boot.backbone.host)
+            ),
+        )
     try:
         url = make_url(boot.database_url)
         if url.get_backend_name() == "sqlite":
@@ -215,7 +241,22 @@ async def _read_config() -> BackboneConfig:
 
     from agent_backbone.config import agents_from_rows, build_config
 
-    boot = bootstrap_config()
+    boot = await read_client_config()
+    if is_agent_client(boot.api_key):
+        settings_result, agents_result = await asyncio.gather(
+            api(boot, "GET", "/api/config"), api(boot, "GET", "/api/config/agents")
+        )
+        if (
+            not settings_result
+            or settings_result[0] != 200
+            or not agents_result
+            or agents_result[0] != 200
+        ):
+            raise ValueError("Agent discovery requires the running Backbone API")
+        settings = {key: item["value"] for key, item in settings_result[1].items()}
+        return build_config(
+            boot.data_dir, settings=settings, agents=agents_from_rows(agents_result[1])
+        )
     url = make_url(boot.database_url)
     queries = (
         "SELECT key, value FROM settings",
@@ -290,5 +331,5 @@ async def read_config() -> BackboneConfig:
         return await asyncio.wait_for(_read_config(), timeout=5)
     except Exception as exc:
         raise ValueError(
-            "Could not read existing configuration; check database availability and schema"
+            "Could not read existing configuration; check API or database availability and schema"
         ) from exc

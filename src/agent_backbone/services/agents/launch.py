@@ -82,6 +82,10 @@ def launch_environment(
     if state_dir:
         env[STATE_DIR_ENV_KEY] = str(state_dir)
     reserved = {
+        "BACKBONE_API_KEY",
+        "BACKBONE_AGENT_CREDENTIAL",
+        "BACKBONE_HOST",
+        "BACKBONE_PORT",
         RUNTIME_ENV_KEY,
         AGENT_ENV_KEY,
         STATE_DIR_ENV_KEY,
@@ -395,6 +399,14 @@ async def _start_agent(
         },
         operation_id=operation_id,
     )
+    from agent_backbone.config import agent_api_key
+
+    environment["BACKBONE_API_KEY"] = agent_api_key(config.api_key)
+    # Runtimes may strip *KEY*, *TOKEN* and *SECRET* from tool environments.
+    # This alias carries only the collaboration credential through that filter.
+    environment["BACKBONE_AGENT_CREDENTIAL"] = environment["BACKBONE_API_KEY"]
+    environment["BACKBONE_HOST"] = config.backbone.host
+    environment["BACKBONE_PORT"] = str(config.backbone.port)
     # `starting` lives in its own marker file, written before the launch: a
     # hook write newer than the marker outranks it, ``wait_until_ready``
     # clears it when the prompt shows, and ``get_agent_state`` stops

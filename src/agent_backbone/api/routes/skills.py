@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from agent_backbone.api.auth import require_operator
 from agent_backbone.api.deps import get_config, registered_agent_or_404
 from agent_backbone.api.models import (
     SkillAddRequest,
@@ -96,7 +97,7 @@ async def _changed(skill, config, failure: str | None) -> SkillChangeView:
     )
 
 
-@router.post("/skills", response_model=SkillChangeView)
+@router.post("/skills", response_model=SkillChangeView, dependencies=[Depends(require_operator)])
 async def add_to_store(body: SkillAddRequest, config=Depends(get_config)):
     """Move a skill directory into the store and tag it (a move, never a copy)."""
     store = _store_or_400(config)
@@ -127,7 +128,9 @@ async def add_to_store(body: SkillAddRequest, config=Depends(get_config)):
     return await _changed(skill, config, failure)
 
 
-@router.put("/skills/{name}/tags", response_model=SkillChangeView)
+@router.put(
+    "/skills/{name}/tags", response_model=SkillChangeView, dependencies=[Depends(require_operator)]
+)
 async def set_tags(name: str, body: SkillTagsRequest, config=Depends(get_config)):
     """Replace a store skill's tags."""
     store = _store_or_400(config)

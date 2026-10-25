@@ -8,15 +8,22 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   drives tmux sessions that run as your OS user. There is no isolation
   between agents: every agent can read every other agent's files, and any
   agent can call the API if you give it the key.
-- **One key, full admin.** `BACKBONE_API_KEY` guards every authenticated
-  route (everything except `/health`, the HMAC-checked webhook, and the
-  generated API description at `/docs`, `/redoc` and `/openapi.json`) with the
-  same weight: change settings, register/start/stop/forget agents, send
-  messages, read and stream every registered agent's terminal. There is no
-  scoped or read-only credential yet. When `docs/getting-started.md` says
-  "give the key to an agent so it can message others", that agent can then
-  do everything you can do through the API — hand it out deliberately, to
-  agents whose instructions you control.
+- **Separate operator and collaboration credentials.** The `.env`
+  `BACKBONE_API_KEY` is the operator credential. New launches receive a derived
+  agent credential in that variable instead. It allows discovery, messages,
+  terminal reads and peer lifecycle using saved settings. Settings, new agent
+  registrations, runtime/model/directory/environment changes, tags, shared
+  skills and policies, owner enrollment and externally pushed state require
+  the operator credential. Swarms may use stored runtime defaults; member
+  runtime/model overrides, forgetting an agent and fleet snapshot restoration require the operator.
+  `backbone doctor` also requires an operator terminal because it opens and checks
+  the database directly; an agent can use `backbone status` for API-backed health.
+  Agent credentials use the
+  running API and cannot use the CLI's direct database fallback.
+  This is an API authority boundary, not OS isolation: an unrestricted process
+  running as the same OS user can still read `.env`, modify the database or
+  use tmux directly. Existing processes are not restarted or stripped of
+  previously obtained credentials by an upgrade.
 - **Reach is limited to registered agents.** The API captures, streams and
   types into *registered* agents only (`GET /api/sessions/{name}/terminal`,
   the `/terminal` namespace, `POST /messages`, plan control). Other tmux
@@ -49,8 +56,8 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   so they can be exported into its session, and `agent set` warns about
   entries that look like secrets. Credentials stay in each tool's own
   credential store.
-- **Agents do not hold the backbone's keys.** An agent session gets the
-  launch contract and nothing else; see below.
+- **Agents receive a collaboration credential.** Launchers strip the operator
+  key and other service secrets, then export the derived agent key; see below.
 
 ## Unattended agents and writable directories
 
@@ -112,17 +119,20 @@ whatever you configured on the agent with `agent set env=`:
 
 | Variable | Why |
 |---|---|
+| `BACKBONE_API_KEY` | derived collaboration credential, never the operator key |
 | `BACKBONE_AGENT` | the agent's name — its `from:` identity for `backbone tell` |
 | `BACKBONE_RUNTIME` | which runtime is in the pane |
 | `BACKBONE_STATE_DIR` | where the shipped hooks write state |
 | `BACKBONE_LAUNCH_ID` | this launch, so a late hook from an earlier launch is ignored |
 | `BACKBONE_OPERATION_ID` | the start operation that launched it, when there is one |
 
-It does **not** get the backbone's secrets. `BACKBONE_API_KEY`,
+It does **not** get the backbone's operator key or service secrets. The inherited
+`BACKBONE_API_KEY`,
 `GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`,
 `GITHUB_APP_PRIVATE_KEY_PATH`, `TELEGRAM_TOKEN`, `BACKBONE_DATABASE_URL`
 (a PostgreSQL URL carries the password) and **every other key assigned in
-`<data_dir>/.env`** are stripped from the session. Check it
+`<data_dir>/.env`** are stripped from the session. The derived collaboration
+key is then supplied separately. Check it
 yourself in any agent's pane:
 
 ```bash
@@ -156,14 +166,12 @@ else you exported (an `ANTHROPIC_API_KEY`, a `GITHUB_OAUTH_TOKEN` of your
 own) reaches the agent as it always did; that is your environment, not
 the backbone's.
 
-An agent's own `env` still wins over the strip, but it holds settings,
-not credentials: its values are stored in plain text in the database. An
-agent that calls the HTTP API directly, rather than through the CLI, reads
-the key from `<data_dir>/.env` as the CLI does (`backbone secrets path`
-prints where it is). Handing it the key is the deliberate act described
-under "One key, full admin" above. Tools such as `gh`, `claude` and `codex`
-keep their sign-in in their own credential store, which a session uses
-without any variable.
+An agent's own `env` holds settings, not credentials: its values are stored in
+plain text in the database. It cannot override the reserved `BACKBONE_API_KEY`.
+An agent uses its inherited key for direct HTTP calls and the CLI; the CLI does
+not load `.env` when an agent credential is present. Operator commands run from
+an operator terminal with the original `.env` key. Tools such as `gh`, `claude`
+and `codex` use their own credential stores.
 Note that `BACKBONE_DATA_DIR` is *not* stripped: it is not a secret, and
 agents need it to find the same backbone you are running.
 
@@ -181,7 +189,7 @@ agents need it to find the same backbone you are running.
 | Unattended swarm members | On for members on a sandboxed runtime only (Codex, `-a never` inside its workspace-write sandbox: worktree, temp, network); members without a sandbox keep asking | `swarm.unattended_members = false` |
 | Terminal streaming | Read-only, registered agents only; the Socket.IO `/terminal` namespace has no input event | — |
 | Agent output (`agent output`, `GET /api/sessions/{name}/output`) | Read-only, registered agents only; reads the agent's user-facing messages, complete, from the runtime's own transcript for Claude Code, Codex, Gemini CLI and OpenCode (including messages that scrolled off or never showed on screen), a bounded page at a time with explicit offsets to read further; tool activity and thinking are not exposed; else the visible screen | — |
-| Steering (`tell --steer`, `POST /api/steer`) | Text reaches a working agent mid-turn as hook context on Claude Code and Codex, or as a user message in the running turn on OpenCode, with a provenance envelope; no keystrokes, so it cannot overwrite a draft or answer a dialog; refused (nothing queued) when the agent is not working or the runtime has no hook context. Same credential as `tell`: the API key, all-or-nothing | — |
+| Steering (`tell --steer`, `POST /api/steer`) | Text reaches a working agent mid-turn as hook context on Claude Code and Codex, or as a user message in the running turn on OpenCode, with a provenance envelope; no keystrokes, so it cannot overwrite a draft or answer a dialog; refused (nothing queued) when the agent is not working or the runtime has no hook context. Same collaboration or operator credential as `tell` | — |
 | Secrets | Backbone secrets live only in `<data_dir>/.env` (mode 0600) or the environment — never in the database. Per-agent `env` is for settings: its values are stored in plain text in the database, and `agent set` warns about entries that look like secrets | — |
 | Secrets in agent sessions | Stripped: an agent inherits `BACKBONE_AGENT`/`BACKBONE_RUNTIME`/`BACKBONE_STATE_DIR` and its own `env`, never the backbone's `.env` | an agent that calls the API reads the key from `<data_dir>/.env`; other credentials stay in each tool's own store |
 | Hook script | Standard library only, runs as your user, writes only under `<data_dir>/state` | — |

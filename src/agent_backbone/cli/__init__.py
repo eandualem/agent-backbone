@@ -36,6 +36,7 @@ import sys
 from pathlib import Path
 
 from agent_backbone import __version__
+from agent_backbone.cli._common import is_agent_client
 from agent_backbone.cli.agents import (
     cmd_agent,
     cmd_chrome,
@@ -60,7 +61,7 @@ from agent_backbone.cli.status import add_status_options, cmd_status
 from agent_backbone.cli.swarms import cmd_docs, cmd_help, cmd_swarm
 from agent_backbone.cli.upgrade import cmd_upgrade
 from agent_backbone.cli.usage import cmd_usage
-from agent_backbone.config import RUNTIMES
+from agent_backbone.config import RUNTIMES, bootstrap_config
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -589,6 +590,31 @@ def main(argv: list[str] | None = None) -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
+    try:
+        client_key = bootstrap_config().api_key
+    except ValueError as exc:
+        parser.exit(1, f"{exc}\n")
+    if is_agent_client(client_key):
+        sub = vars(args)
+        administrative = (
+            args.command in {"init", "up", "down", "hooks", "doctor"}
+            or (args.command == "service" and sub.get("service_command") != "status")
+            or (args.command == "secrets" and sub.get("secrets_command") in {"set", "unset"})
+            or (args.command == "upgrade" and not sub.get("check"))
+            or (args.command == "skills" and sub.get("skills_command") in {"add", "tag"})
+            or (
+                args.command in {"templates", "instructions"}
+                and (
+                    sub.get("instructions_command") in {"init", "edit"}
+                    or (
+                        sub.get("instructions_command") == "use"
+                        and (sub.get("policies") or sub.get("clear"))
+                    )
+                )
+            )
+        )
+        if administrative:
+            parser.exit(1, "This operation requires an operator credential.\n")
     sys.exit(args.func(args))
 
 

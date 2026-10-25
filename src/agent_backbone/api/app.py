@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 
 from agent_backbone import __version__
 from agent_backbone.base import LifecycleManager
-from agent_backbone.config import BackboneConfig, bootstrap_config
+from agent_backbone.config import BackboneConfig, agent_credential, bootstrap_config
 from agent_backbone.hooks.backbone_state import batch_receipts, prune_context_receipts
 
 log = logging.getLogger(__name__)
@@ -356,6 +356,8 @@ async def lifespan(app: FastAPI):
 def create_app(config: BackboneConfig | None = None):
     """Build and return the ASGI application (Socket.IO wrapping FastAPI)."""
     config = config or bootstrap_config()
+    if agent_credential(config.api_key):
+        raise ValueError("The server requires an operator credential, not an agent credential")
     app = FastAPI(
         title="agent-backbone",
         description="Local control plane for terminal AI agents",
