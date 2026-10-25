@@ -1,4 +1,4 @@
-"""Only a completed GitHub command acknowledges work; intent just suppresses echoes."""
+"""Only an exact successful GitHub publication receipt acknowledges work."""
 
 from __future__ import annotations
 
@@ -78,10 +78,29 @@ def test_intent_and_failed_completion_do_not_acknowledge(hook, response, tmp_pat
 @pytest.mark.parametrize(
     "hook,response",
     [
-        (claude_hook, {"stdout": "created", "stderr": "", "interrupted": False}),
-        (codex_hook, {"exit_code": 0}),
-        (codex_hook, {"metadata": {"exit_code": 0}, "output": "created"}),
-        (codex_hook, "Wall time: 0.1 seconds\nProcess exited with code 0\nFinal output:\ncreated"),
+        (
+            claude_hook,
+            {
+                "stdout": "https://github.com/acme/app/issues/5#issuecomment-123",
+                "stderr": "",
+                "interrupted": False,
+            },
+        ),
+        (
+            codex_hook,
+            {"exit_code": 0, "output": "https://github.com/acme/app/issues/5#issuecomment-123"},
+        ),
+        (
+            codex_hook,
+            {
+                "metadata": {"exit_code": 0},
+                "output": "https://github.com/acme/app/issues/5#issuecomment-123",
+            },
+        ),
+        (
+            codex_hook,
+            "Wall time: 0.1 seconds\nProcess exited with code 0\nFinal output:\nhttps://github.com/acme/app/issues/5#issuecomment-123",
+        ),
     ],
 )
 def test_successful_completion_acknowledges_in_both_runtimes(hook, response, tmp_path):
@@ -226,3 +245,97 @@ def test_gh_default_remote_does_not_acknowledge_origin(monkeypatch, tmp_path):
     assert "repo" not in action
     bb.append_action(tmp_path, "ike", {**action, "phase": "succeeded"})
     assert not has_commented_on_issue(42, "ike", tmp_path / "actions.jsonl", repo="acme/origin")
+
+
+@pytest.mark.parametrize("hook", [claude_hook, codex_hook])
+@pytest.mark.parametrize(
+    "output", ["created", "https://github.com/other/repo/issues/5#issuecomment-123"]
+)
+def test_success_without_a_matching_publication_receipt_cannot_acknowledge(hook, output, tmp_path):
+    _, actions = hook.derive(
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": COMMAND},
+            "tool_response": {"exit_code": 0, "stdout": output},
+        },
+        None,
+    )
+    for action in actions:
+        bb.append_action(tmp_path, "app", action)
+    assert not has_commented_on_issue(5, "app", tmp_path / "actions.jsonl", repo="acme/app")
+
+
+def test_exact_comment_identity_not_nearby_intent_or_forged_tag(tmp_path):
+    bb.append_action(
+        tmp_path,
+        "app",
+        {
+            "action": "comment",
+            "issue": 5,
+            "repo": "acme/app",
+            "phase": "succeeded",
+            "comment_id": 123,
+        },
+    )
+    log = tmp_path / "actions.jsonl"
+    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=123) == "app"
+    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=124) is None
+    assert find_outgoing_comment(5, log, repo="other/repo", comment_id=123) is None
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode", "gemini"])
+def test_exact_publication_receipt_contract(runtime, tmp_path):
+    import json
+    import os
+    import shutil
+    import subprocess
+
+    from agent_backbone.hooks import gemini_hook
+    from agent_backbone.hooks.install import hook_source
+
+    url = "https://github.com/acme/app/issues/5#issuecomment-123"
+    if runtime == "opencode":
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("Node is required to exercise the shipped plugin")
+        plugin = tmp_path / "hook.mjs"
+        shutil.copyfile(hook_source("opencode_hook.js"), plugin)
+        shutil.copyfile(hook_source("backbone_state.py"), tmp_path / "backbone_state.py")
+        script = """
+const { AgentBackbone } = await import(process.argv[1]);
+const hooks = await AgentBackbone();
+await hooks["tool.execute.after"](
+  {tool: "bash", args: {command: process.argv[2]}},
+  {metadata: {exit: 0}, content: [{type: "text", text: process.argv[3]}]}
+);
+"""
+        subprocess.run(
+            [node, "--input-type=module", "-e", script, plugin.as_uri(), COMMAND, url],
+            env={**os.environ, "BACKBONE_AGENT": "app", "BACKBONE_STATE_DIR": str(tmp_path)},
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    else:
+        hook = {"claude": claude_hook, "codex": codex_hook, "gemini": gemini_hook}[runtime]
+        response = {"exit_code": 0, "stdout": url}
+        if runtime == "gemini":
+            response = {"llmContent": "Output: " + url, "display": {"name": "Shell"}}
+        _, actions = hook.derive(
+            {
+                "hook_event_name": "AfterTool" if runtime == "gemini" else "PostToolUse",
+                "tool_name": "run_shell_command" if runtime == "gemini" else "Bash",
+                "tool_input": {"command": COMMAND},
+                "tool_response": response,
+            },
+            None,
+        )
+        for action in actions:
+            bb.append_action(tmp_path, "app", action)
+    log = tmp_path / "actions.jsonl"
+    assert json.loads(log.read_text().splitlines()[-1])["comment_id"] == 123
+    assert has_commented_on_issue(5, "app", log, repo="acme/app")
+    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=123) == "app"
+    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=124) is None

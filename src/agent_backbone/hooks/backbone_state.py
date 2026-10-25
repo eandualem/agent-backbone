@@ -386,9 +386,57 @@ def shell_actions(command: str | list[str], cwd: str | None, now: float) -> list
     return actions
 
 
+def _comment_receipts(actions: list[dict], response: object, *, shell: bool) -> list[dict]:
+    """Bind comment actions to the concrete publication URL returned by the tool."""
+    if isinstance(response, str):
+        try:
+            decoded = json.loads(response)
+        except ValueError:
+            decoded = response
+    else:
+        decoded = response
+    outputs = [decoded] if isinstance(decoded, str) else []
+    if isinstance(decoded, dict):
+        outputs.append(decoded.get("html_url"))
+        if shell:
+            outputs += [decoded.get(key) for key in ("stdout", "output")]
+            content = decoded.get("llmContent")
+            if isinstance(content, str) and content.startswith("Output: "):
+                outputs.append(content.removeprefix("Output: "))
+        structured = decoded.get("structuredContent")
+        if isinstance(structured, dict):
+            outputs.append(structured.get("html_url"))
+        for item in decoded.get("content", []):
+            if isinstance(item, dict) and item.get("type") == "text":
+                if shell:
+                    outputs.append(item.get("text"))
+                try:
+                    result = json.loads(item.get("text", ""))
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(result, dict):
+                    outputs.append(result.get("html_url"))
+    receipts = {}
+    for output in outputs:
+        if not isinstance(output, str):
+            continue
+        for repo, issue, comment in re.findall(
+            r"(?m)^https://github\.com/([^/\s]+/[^/\s]+)/(?:issues|pull)/(\d+)"
+            r"#issuecomment-(\d+)\s*$",
+            output,
+        ):
+            receipts.setdefault((repo.casefold(), int(issue)), set()).add(int(comment))
+    for action in actions:
+        if action.get("action") == "comment" and action.get("phase") == "succeeded":
+            ids = receipts.get(((action.get("repo") or "").casefold(), action.get("issue")), set())
+            if len(ids) == 1:
+                action["comment_id"] = next(iter(ids))
+    return actions
+
+
 def action_records(payload: dict, now: float, *, phase: str) -> list[dict]:
-    """Stamp intent or confirmed success separately so only success acknowledges."""
-    return [
+    """Only an exact successful publication receipt can acknowledge a comment."""
+    actions = [
         {**action, "phase": phase}
         for action in tool_actions(
             payload.get("tool_name", "") or "",
@@ -397,6 +445,12 @@ def action_records(payload: dict, now: float, *, phase: str) -> list[dict]:
             now,
         )
     ]
+    return _comment_receipts(
+        actions,
+        payload.get("tool_response"),
+        shell=payload.get("tool_name")
+        in {"Bash", "shell", "shell_command", "exec_command", "run_shell_command"},
+    )
 
 
 def response_succeeded(response: object) -> bool:
@@ -1233,11 +1287,15 @@ if __name__ == "__main__" and sys.argv[1:] == ["--shell-actions"]:
         raise ValueError("unknown action phase")
     print(
         json.dumps(
-            [
-                {**action, "phase": phase}
-                for action in shell_actions(
-                    request.get("command", ""), request.get("cwd"), time.time()
-                )
-            ]
+            action_records(
+                {
+                    "tool_name": "Bash",
+                    "tool_input": {"command": request.get("command", "")},
+                    "cwd": request.get("cwd"),
+                    "tool_response": request.get("response"),
+                },
+                time.time(),
+                phase=phase,
+            )
         )
     )

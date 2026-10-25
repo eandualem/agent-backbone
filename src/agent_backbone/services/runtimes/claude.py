@@ -121,6 +121,7 @@ class ClaudeCode(Runtime):
     brief_refresh = "hook_context"
     declared_capabilities = frozenset(
         {
+            "comment-receipts",
             "trust",
             "brief-after-compaction",
             "project-instructions",

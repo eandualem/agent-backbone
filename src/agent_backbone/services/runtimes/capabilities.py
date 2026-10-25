@@ -193,6 +193,37 @@ _RESPONSE_DELIVERY = (
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
+        "comment-receipts",
+        "GitHub comment acknowledgements bound to exact publication receipts",
+        "src/agent_backbone/hooks/backbone_state.py",
+        fallback="A GitHub prefix alone cannot acknowledge work; keep the notification visible.",
+        implemented=_declared("comment-receipts"),
+        cli_dependent=True,
+        claude=_ok(
+            "tests/unit/hooks/test_command_acknowledgement.py",
+            "Payload tests; live check pending.",
+            verified_on="2.1.310",
+        ),
+        codex=_ok(
+            "tests/unit/hooks/test_command_acknowledgement.py",
+            "Payload tests; live check pending.",
+            verified_on="0.160.0",
+        ),
+        opencode=_ok(
+            "tests/unit/hooks/test_command_acknowledgement.py",
+            "Plugin tests; live check pending.",
+            verified_on="1.19.4",
+        ),
+        gemini=_ok(
+            "tests/unit/hooks/test_command_acknowledgement.py",
+            "Payload tests; live check pending.",
+            verified_on="0.46.0",
+        ),
+        deepcode=_gap(note="no publication receipt hook"),
+        aider=_gap(note="no publication receipt hook"),
+        shell=_na("a plain shell has no agent tool-completion hook"),
+    ),
+    _row(
         "documents",
         "Durable HTML Documents with immutable revisions and authenticated reads",
         "src/agent_backbone/api/routes/documents.py",

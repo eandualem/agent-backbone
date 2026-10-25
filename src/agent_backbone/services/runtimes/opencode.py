@@ -63,6 +63,7 @@ class OpenCode(Runtime):
     # idle and session.idle (live, 1.18.32): its plugin reports it.
     declared_capabilities = frozenset(
         {
+            "comment-receipts",
             "observed-model",
             "project-instructions",
             "request-diagnostics",

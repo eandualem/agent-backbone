@@ -494,6 +494,7 @@ def _action_entry(session="ike", action="comment", issue=42, ts=None):
         "session": session,
         "action": action,
         "phase": "succeeded",
+        "comment_id": 123,
         "issue": issue,
     }
 
@@ -570,6 +571,7 @@ class TestRotateActionLog:
                         "action": "comment",
                         "issue": i,
                         "phase": "succeeded",
+                        "comment_id": i + 1,
                     }
                 )
                 + "\n"

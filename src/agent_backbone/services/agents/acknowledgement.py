@@ -58,6 +58,7 @@ def find_outgoing_comment(
     *,
     repo: str = "",
     include_intent: bool = True,
+    comment_id: int | None = None,
 ) -> str | None:
     """Session that recently commented on an issue according to the hook action log.
 
@@ -70,9 +71,17 @@ def find_outgoing_comment(
             continue
         if not include_intent and entry.get("phase") != "succeeded":
             continue
+        if comment_id is not None and (
+            type(comment_id) is not int
+            or comment_id <= 0
+            or type(entry.get("comment_id")) is not int
+            or entry.get("comment_id") != comment_id
+            or entry.get("phase") != "succeeded"
+        ):
+            continue
         if not _repo_matches(entry, repo):
             continue
-        if now - float(entry.get("ts", 0)) <= recency_seconds:
+        if comment_id is not None or now - float(entry.get("ts", 0)) <= recency_seconds:
             return entry.get("session")
     return None
 
@@ -138,6 +147,8 @@ def has_commented_on_issue(
         if (
             entry.get("action") == "comment"
             and entry.get("phase") == "succeeded"
+            and type(entry.get("comment_id")) is int
+            and entry["comment_id"] > 0
             and entry.get("issue") == issue_number
             and entry.get("session") == session
             and _repo_matches(entry, repo)

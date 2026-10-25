@@ -107,8 +107,16 @@ reject = true;
 fs.writeFileSync(path.join(offers, "2.md"), "fallback offer");
 const fallback = {...tool(), result: {output: {found: 3}}};
 await callbacks["execute.after"](fallback);
+await callbacks["execute.after"]({...tool(), tool: "shell",
+  input: {command: "gh issue comment 1 --repo acme/app --body note"},
+  result: {content: "https://github.com/acme/app/issues/1#issuecomment-123", metadata: {exit: 0}}
+});
+const actionLog = path.join(dir, "actions.jsonl");
+const receipt = JSON.parse(fs.readFileSync(actionLog, "utf8").trim().split("\n").at(-1));
+if (receipt.comment_id !== 123) throw new Error("native comment receipt was lost");
+fs.unlinkSync(actionLog);
+fs.mkdirSync(actionLog);
 fs.writeFileSync(path.join(offers, "3.md"), "offer before logging failure");
-fs.mkdirSync(path.join(dir, "actions.jsonl"));
 const loggingFailure = {...tool(), tool: "shell",
   input: {command: "gh issue comment 1 --repo acme/app --body note"},
   result: {content: "shell result", metadata: {exit: 0}}};

@@ -244,17 +244,18 @@ for Claude Code and Codex.
 
 The hooks parse actual `gh issue comment`, `gh pr comment` and `gh pr create`
 commands into `<data_dir>/state/actions.jsonl`, with repository and branch
-metadata. Claude, Codex and OpenCode record **intent** before execution to suppress a fast
-self-notification. Only a **successful completion** acknowledges work; a failed
-command or a quoted example cannot remove an issue from the agent's queue.
-Legacy action records without completion evidence no longer acknowledge work.
+metadata. Claude, Codex and OpenCode record **intent** before execution, but only a
+**successful completion with the exact returned comment URL** acknowledges a comment.
+The repository, issue and comment ID must match before a GitHub notification can be
+attributed to the agent. Intent, a body prefix, or success without a publication
+receipt cannot acknowledge a comment or suppress its notification.
 Comment hooks honor an explicit repository and `GH_REPO`. If `gh repo set-default`
 makes local attribution ambiguous, the hook leaves the action unscoped and waits
-for repository-specific GitHub confirmation.
+for an unambiguous publication receipt.
 
 Direct commands, argv lists and `&&` chains are supported. Ambiguous shell
 control flow, expansion, background execution and unknown completion output
-are left to GitHub confirmation through the agent's `[from:NAME]` comment.
+cannot acknowledge a comment automatically; a `[from:NAME]` prefix is not proof of authorship.
 Claude's [completion hook](https://code.claude.com/docs/en/hooks#posttooluse)
 is distinct from its failure hook; Codex's
 [completion hook](https://learn.chatgpt.com/docs/hooks#posttooluse) also fires
@@ -452,9 +453,9 @@ not been acknowledged; a fresh conversation (not a resumed one) is offered that
 issue again, and so is a saved conversation resumed by id other than the last
 launch's (a fleet resume).
 **Acknowledgement** = the agent commented on the issue (or opened a pull
-request that closes it): detected from the hook action log, a
-`[from:<agent>]` comment prefix, or GitHub comments on
-the next poll.
+request that closes it): detected from successful local hook evidence. Comment
+acknowledgements require an exact publication receipt; prefixes in GitHub text do
+not establish identity.
 
 An agent's **queue** is the union of `for:<agent>` issues in every
 repository it owns or watches plus, if it is the sole owner of its
@@ -472,8 +473,8 @@ acknowledgement is recorded; the targets' acknowledgements are cleared.
 ### A review is submitted on a pull request
 
 Audience as for a comment (the pull request's `for:` targets, its `from:`
-opener and the sole owner), minus the reviewer when it is an agent
-(`[from:X]` in the review body). One message per review — verdict,
+opener and the sole owner). Review body prefixes do not exclude recipients.
+One message per review — verdict,
 summary preview, reviewed commit and current head, link — not one per inline comment: every inline comment
 belongs to a review, and the agent reads them on GitHub. A review on a
 closed pull request notifies nobody. Reviews arrive through webhooks; configured reviewer accounts are also polled.
