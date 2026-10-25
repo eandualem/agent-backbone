@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -805,3 +806,75 @@ def test_an_agents_own_manifest_is_not_counted_as_anothers_under_another_spellin
     result = materialize(store, repo, (), [], alias)
     assert result.removed == [".claude/skills/tidy"]
     assert not (repo / ".claude/skills/tidy").is_symlink()
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+def test_materialization_refuses_redirected_ancestor(tmp_path, runtime):
+    store, repo, outside = tmp_path / "store", tmp_path / "repo", tmp_path / "outside"
+    make_skill(store, "tidy")
+    repo.mkdir()
+    outside.mkdir()
+    dirs = RUNTIMES[runtime].skill_dirs
+    first = Path(dirs[0]).parts[0]
+    (repo / first).symlink_to(outside, target_is_directory=True)
+    manifest = manifest_path(tmp_path / "data", "worker")
+    result = materialize(store, repo, dirs, read_store(store), manifest)
+    assert not result.ok and "outside" in result.conflicts[0]
+    assert list(outside.iterdir()) == [] and not manifest.exists()
+
+
+def test_previous_manifest_cannot_remove_a_link_through_redirected_parent(tmp_path):
+    store, old, new, outside = (tmp_path / n for n in ("store", "old", "new", "outside"))
+    make_skill(store, "tidy")
+    old.mkdir()
+    new.mkdir()
+    outside.mkdir()
+    (outside / "tidy").symlink_to(store / "tidy", target_is_directory=True)
+    (old / ".agents").symlink_to(outside, target_is_directory=True)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps({"repo": str(old), "store": str(store), "links": [".agents/tidy"]})
+    )
+    result = materialize(store, new, (), [], manifest)
+    assert not result.ok
+    assert (outside / "tidy").is_symlink()
+
+
+def test_import_revalidates_the_object_moved_to_private_staging(tmp_path, monkeypatch):
+    source = make_skill(tmp_path / "input", "tidy")
+    outside = make_skill(tmp_path / "outside", "tidy", body="# Preserve this\n")
+    original = (outside / "SKILL.md").read_bytes()
+    move = skills.shutil.move
+
+    def switched(src, dst):
+        source.rename(source.with_name("original"))
+        source.symlink_to(outside, target_is_directory=True)
+        return move(src, dst)
+
+    monkeypatch.setattr(skills.shutil, "move", switched)
+    store = tmp_path / "store"
+    with pytest.raises(OSError, match="source changed"):
+        add_skill(store, source, tags=("all",))
+    assert not (store / "tidy").exists()
+    assert (outside / "SKILL.md").read_bytes() == original
+
+
+def test_anchored_import_rejects_a_leaf_swapped_after_validation(tmp_path, monkeypatch):
+    root = tmp_path / "project"
+    source = make_skill(root, "tidy")
+    outside = make_skill(tmp_path / "elsewhere", "tidy", body="# Untouched\n")
+    original = (outside / "SKILL.md").read_bytes()
+    rename = skills.os.rename
+
+    def switched(src, dst, **kwargs):
+        if kwargs.get("src_dir_fd") is not None:
+            rename(source, source.with_name("saved"))
+            source.symlink_to(outside, target_is_directory=True)
+        return rename(src, dst, **kwargs)
+
+    monkeypatch.setattr(skills.os, "rename", switched)
+    store = tmp_path / "store"
+    with pytest.raises(OSError, match="source changed"):
+        add_skill(store, source, source_root=root)
+    assert (outside / "SKILL.md").read_bytes() == original
+    assert not (store / "tidy").exists()

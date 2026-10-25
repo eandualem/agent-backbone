@@ -352,7 +352,7 @@ async def lifespan(app: FastAPI):
         log.info("agent-backbone shutting down")
 
 
-def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
+def create_app(config: BackboneConfig | None = None):
     """Build and return the ASGI application (Socket.IO wrapping FastAPI)."""
     config = config or bootstrap_config()
     app = FastAPI(
@@ -469,4 +469,6 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     sio = create_sio(cors_origins=cors_origins or [])
     sio.fastapi_app = app
     app.state.sio = sio
-    return socketio.ASGIApp(sio, app)
+    from agent_backbone.api.ingress import IngressMiddleware
+
+    return IngressMiddleware(socketio.ASGIApp(sio, app), app)

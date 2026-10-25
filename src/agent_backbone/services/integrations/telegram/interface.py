@@ -229,7 +229,8 @@ class TelegramService(Integration):
         """Readable sender name for the [via:telegram from:X] envelope."""
         user = getattr(update, "effective_user", None)
         if user:
-            return (user.first_name or user.username or "unknown").lower()
+            name = (user.first_name or user.username or "unknown").lower()
+            return "".join(c if c.isalnum() or c in "._-" else "_" for c in name)[:64]
         return "unknown"
 
     @staticmethod
@@ -246,8 +247,21 @@ class TelegramService(Integration):
             return "telegram:unknown"
         return f"telegram:{user_id}"
 
+    def _can_control(self, update: Update) -> bool:
+        """A stable allowlisted user in an allowed chat, never an anonymous sender."""
+        chat = update.effective_chat
+        user = update.effective_user
+        return bool(
+            chat
+            and self._is_authorized(chat.id)
+            and user
+            and type(user.id) is int
+            and user.id in self.config.telegram.allowed_user_ids
+            and not getattr(update.effective_message, "sender_chat", None)
+        )
+
     def _is_authorized(self, chat_id: int) -> bool:
-        """Only chats on the allowlist may control the backbone."""
+        """Only chats on the destination allowlist may use the bot."""
         return chat_id in self.config.telegram.allowed_chat_ids
 
     # -- Command handler thin wrappers (delegate to _commands module) --

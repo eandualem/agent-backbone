@@ -123,6 +123,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "diagnostics.pressure_swap_percent": 50,
     "diagnostics.pressure_free_percent": 10,
     "telegram.allowed_chat_ids": [],
+    "telegram.allowed_user_ids": [],
     "telegram.notification_chat_id": None,
     "telegram.group_chat_id": None,
     "telegram.auto_topics": True,
@@ -243,7 +244,10 @@ SETTINGS_HELP: dict[str, str] = {
         "Delivery, event, completed queue, diagnostic and report-history retention in days; "
         "each author's latest report is kept"
     ),
-    "telegram.allowed_chat_ids": "Chat ids allowed to control the backbone (JSON list) — required",
+    "telegram.allowed_chat_ids": "Allowed Telegram chat destinations (JSON list) — required",
+    "telegram.allowed_user_ids": (
+        "User ids allowed to send instructions and approve actions (JSON list)"
+    ),
     "telegram.notification_chat_id": "Where alerts are sent",
     "telegram.group_chat_id": "Forum group where each agent gets a topic (learned if unset)",
     "telegram.report_audio": (
@@ -277,7 +281,7 @@ _SETTING_CHOICES: dict[str, tuple[str, ...]] = {
     "github.intake": ("auto", "webhook", "poll", "off"),
     "agents.default_runtime": RUNTIMES,
 }
-_INT_LIST_SETTINGS = frozenset({"telegram.allowed_chat_ids"})
+_INT_LIST_SETTINGS = frozenset({"telegram.allowed_chat_ids", "telegram.allowed_user_ids"})
 # Scheduler job periods: a zero or negative value would make Scheduler.add()
 # raise on the next startup, so reject it at write time.
 _POSITIVE_SETTINGS = frozenset(
@@ -729,6 +733,7 @@ class TelegramConfig:
     """``telegram.*``"""
 
     allowed_chat_ids: tuple[int, ...] = ()
+    allowed_user_ids: tuple[int, ...] = ()
     topic_routes: dict[int, str] = field(default_factory=dict)
     group_chat_id: int | None = None
     notification_chat_id: int | None = None
@@ -1046,6 +1051,7 @@ def build_config(
         database_url_override=env.get("BACKBONE_DATABASE_URL", ""),
         telegram=TelegramConfig(
             allowed_chat_ids=tuple(int(x) for x in s["telegram.allowed_chat_ids"]),
+            allowed_user_ids=tuple(int(x) for x in s["telegram.allowed_user_ids"]),
             topic_routes={int(k): str(v) for k, v in s["telegram.topic_routes"].items()},
             group_chat_id=_opt_int(s["telegram.group_chat_id"]),
             notification_chat_id=_opt_int(s["telegram.notification_chat_id"]),

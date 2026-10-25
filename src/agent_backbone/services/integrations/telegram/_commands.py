@@ -33,7 +33,7 @@ from agent_backbone.services.integrations.telegram._routing import _delivery_rep
 from agent_backbone.services.integrations.telegram._topic_discovery import (
     process_message_for_discovery,
 )
-from agent_backbone.services.routing import revocation_guard, safe_deliver
+from agent_backbone.services.routing import quote_envelope_lines, revocation_guard, safe_deliver
 from agent_backbone.services.terminal import list_sessions, session_exists
 
 log = logging.getLogger(__name__)
@@ -129,7 +129,7 @@ async def cmd_start_agent(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Start a configured agent: /start <agent_name>"""
-    if not _authorized(bot, update):
+    if not bot._can_control(update):
         return
 
     if not context.args:
@@ -167,7 +167,7 @@ async def cmd_stop_agent(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Stop an agent session: /stop <agent_name>"""
-    if not _authorized(bot, update):
+    if not bot._can_control(update):
         return
 
     if not context.args:
@@ -194,7 +194,7 @@ async def cmd_tell(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Send a message to an agent: /tell <agent> <message>"""
-    if not _authorized(bot, update):
+    if not bot._can_control(update):
         return
 
     if not context.args or len(context.args) < 2:
@@ -207,7 +207,7 @@ async def cmd_tell(
         return
     raw_message = " ".join(context.args[1:])
     sender = bot._sender_id(update)
-    message = f"[via:telegram from:{bot._sender_tag(update)}] {raw_message}"
+    message = f"[via:telegram from:{bot._sender_tag(update)}] {quote_envelope_lines(raw_message)}"
     report = await safe_deliver(
         agent, message, bot.config, db=bot._db, delivery_kind="direct_message", sender=sender
     )
@@ -365,8 +365,8 @@ async def on_callback(
     query = getattr(update, "callback_query", None)
     if query is None:
         return
-    if not _authorized(bot, update):
-        await query.answer("Not allowed from this chat.")
+    if not bot._can_control(update):
+        await query.answer("This user or chat is not allowed to control agents.")
         return
     parts = (query.data or "").split(":", 2)
     action, agent, ref = [*parts, "", ""][:3]
@@ -431,7 +431,7 @@ async def cmd_approve(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Approve an agent's plan with its runtime's own keys: /approve <agent>"""
-    if not _authorized(bot, update):
+    if not bot._can_control(update):
         return
 
     if not bot.config.security.allow_remote_plan_control:
@@ -513,7 +513,7 @@ async def cmd_approve_key(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Apply a pending key change: /approve_key <digest copied from the app>"""
-    if not _authorized(bot, update) or bot._db is None:
+    if not bot._can_control(update) or bot._db is None:
         return
     owner = await _owner_or_refuse(bot, update)
     if owner is None:
@@ -547,7 +547,7 @@ async def cmd_approve_owner(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Hand key approvals to another user: /approve_owner <user id>"""
-    if not _authorized(bot, update) or bot._db is None:
+    if not bot._can_control(update) or bot._db is None:
         return
     owner = await _owner_or_refuse(bot, update)
     if owner is None:

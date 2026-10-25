@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -43,12 +44,16 @@ def _tmux_quote(arg: str) -> str:
 
 
 _LOAD_AND_EXEC = (
-    "import json, os, sys\n"
+    "import hashlib, hmac, json, os, sys\n"
     "path = sys.argv[1]\n"
-    "with open(path) as fh:\n"
-    "    os.environ.update(json.load(fh))\n"
+    "fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)\n"
+    "with os.fdopen(fd, 'rb') as fh:\n"
+    "    payload = fh.read(int(sys.argv[3]) + 1)\n"
+    "if not hmac.compare_digest(hashlib.sha256(payload).hexdigest(), sys.argv[2]):\n"
+    "    raise RuntimeError('launch environment changed before use')\n"
     "os.unlink(path)\n"
-    "os.execvp(sys.argv[2], sys.argv[2:])\n"
+    "os.environ.update(json.loads(payload))\n"
+    "os.execvp(sys.argv[4], sys.argv[4:])\n"
 )
 """Run by ``python -I -c`` with the environment file first: read it, remove it, exec.
 
@@ -125,14 +130,24 @@ async def start_session(
     launch = list(command) if command else _default_shell()
     env_file = None
     if environment:
+        payload = json.dumps(environment).encode()
         fd, env_file = tempfile.mkstemp(prefix="backbone-env-", suffix=".json")
         try:
-            with os.fdopen(fd, "w") as fh:
-                json.dump(environment, fh)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(payload)
         except BaseException:
             _remove(env_file)
             raise
-        launch = [sys.executable, "-I", "-c", _LOAD_AND_EXEC, env_file, *launch]
+        launch = [
+            sys.executable,
+            "-I",
+            "-c",
+            _LOAD_AND_EXEC,
+            env_file,
+            hashlib.sha256(payload).hexdigest(),
+            str(len(payload)),
+            *launch,
+        ]
     if environment or removals:
         args.append("env")
         args.extend(f"-u{key}" for key in removals)

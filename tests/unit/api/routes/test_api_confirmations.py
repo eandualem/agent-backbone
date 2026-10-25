@@ -283,8 +283,9 @@ async def _signed_query(db, key, params, epoch=1):
 
 
 @pytest.mark.parametrize("leased", [False, True])
+@pytest.mark.parametrize("rotated", [False, True])
 async def test_a_reset_revokes_what_the_old_key_confirmed(
-    api_client, auth_headers, api_app, key, drain, leased
+    api_client, auth_headers, api_app, key, drain, leased, rotated
 ):
     db = api_app.state.db
     confirmation = _confirmation()
@@ -296,8 +297,16 @@ async def test_a_reset_revokes_what_the_old_key_confirmed(
                 text("UPDATE message_queue SET status = 'in_progress' WHERE id = :i"),
                 {"i": queue_id},
             )
+    if rotated:
+        await db.signing.rotate(
+            sender_key=SENDER,
+            old_epoch=1,
+            new_public_key=signing.b64url_encode(b"r" * 32),
+            new_fingerprint=signing.fingerprint(b"r" * 32),
+        )
+    epoch = 2 if rotated else 1
     replacement = Ed25519PrivateKey.generate()
-    view = await _transition(api_client, auth_headers, db, replacement, "replace", 1)
+    view = await _transition(api_client, auth_headers, db, replacement, "replace", epoch)
     assert (await db.signing.apply_transition(_digest(view.json()), now=NOW, by="t"))[
         0
     ] == "applied"
@@ -308,7 +317,7 @@ async def test_a_reset_revokes_what_the_old_key_confirmed(
     assert row.status == "expired" and row.delivered_at is not None  # retention removes it
     assert not await db.queue.still_leased(queue_id)  # the drain won't deliver its copy
     # The sender reconciles it with the new key: the feed says it was revoked.
-    signed = await _signed_query(db, replacement, [], epoch=2)
+    signed = await _signed_query(db, replacement, [], epoch=epoch + 1)
     resp = await api_client.get("/api/signing/receipts", headers={**auth_headers, **signed})
     (public,) = resp.json()["receipts"]
     assert public["status"] == "revoked" and public["revoked_at"] is not None

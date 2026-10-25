@@ -182,3 +182,15 @@ link and ask the CLI to list its skills.
 
 Retagging a shared skill requires its valid skill name and a direct, non-symlink
 directory in the store; parent paths and links outside the store are refused.
+
+Skill materialization rejects paths whose existing parent directories redirect
+outside the selected checkout, including cleanup in a previous checkout and
+runtime mirror destinations. It leaves repository-owned skills intact. This
+pathname validation does not isolate writes from concurrent filesystem changes
+made by another process running as the same OS user.
+
+API imports anchor the source to open directories in a registered checkout and
+reject symlink ancestors or a source replaced during the move. They require the
+store and source on the same filesystem; for a cross-filesystem move, use the
+operator's local `backbone skills add --local` command. Failed imports preserve
+any recovery data and report its location.

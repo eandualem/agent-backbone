@@ -37,11 +37,11 @@ import os
 import re
 import shutil
 import tempfile
-from contextlib import asynccontextmanager, suppress
+from contextlib import ExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from agent_backbone.fs import atomic_write_text
+from agent_backbone.fs import atomic_write_text, contained_path
 
 log = logging.getLogger(__name__)
 
@@ -282,6 +282,7 @@ def add_skill(
     name: str | None = None,
     tags: tuple[str, ...] = (),
     replace: bool = False,
+    source_root: Path | None = None,
 ) -> Skill:
     """Move a skill directory into the store and tag it.
 
@@ -289,9 +290,50 @@ def add_skill(
     store holds the only instance. ``name`` renames on the way in (the
     frontmatter ``name`` is rewritten to match, as the spec requires).
     """
+    if source_root is None:
+        return _add_skill(store, source, name=name, tags=tags, replace=replace)
+    # Anchor every lookup to open directories, never follow a swapped ancestor.
+    root = Path(source_root).resolve()
+    source = Path(source).expanduser().absolute()
+    relative = source.relative_to(root)
+    if not relative.parts or ".." in relative.parts:
+        raise ValueError("the skill must be inside its registered directory")
+    with ExitStack() as opened:
+        parent_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        opened.callback(os.close, parent_fd)
+        for part in relative.parts[:-1]:
+            parent_fd = os.open(
+                part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd
+            )
+            opened.callback(os.close, parent_fd)
+        source_fd = os.open(
+            relative.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd
+        )
+        opened.callback(os.close, source_fd)
+        return _add_skill(
+            store,
+            source,
+            name=name,
+            tags=tags,
+            replace=replace,
+            parent_fd=parent_fd,
+            source_fd=source_fd,
+        )
+
+
+def _add_skill(
+    store: Path,
+    source: Path,
+    *,
+    name: str | None,
+    tags: tuple[str, ...],
+    replace: bool,
+    parent_fd: int | None = None,
+    source_fd: int | None = None,
+) -> Skill:
     store = Path(store)
-    source = Path(source).expanduser().resolve()
-    if not source.is_dir() or not (source / "SKILL.md").is_file():
+    source = Path(source).expanduser().resolve() if source_fd is None else source
+    if source_fd is None and (not source.is_dir() or not (source / "SKILL.md").is_file()):
         raise ValueError(f"{source} is not a skill directory (no SKILL.md)")
     if store.exists() and store.resolve() in source.parents:
         raise ValueError(f"{source} is already in the store")
@@ -307,7 +349,13 @@ def add_skill(
         tags = parse_skill(target).tags
     # Everything that can be checked before touching the filesystem is
     # checked here: a rejected skill leaves the source where it was.
-    draft = parse_skill(source)
+    if source_fd is None:
+        original = (source / "SKILL.md").read_text(encoding="utf-8")
+    else:
+        fd = os.open("SKILL.md", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=source_fd)
+        with os.fdopen(fd, encoding="utf-8") as file:
+            original = file.read()
+    draft = _parse_skill_text(source.name, source, original)
     # The name is rewritten on the way in, so a mismatched or invalid one is
     # tolerated only when the caller renames; everything else is refused now.
     renaming = name is not None
@@ -317,9 +365,7 @@ def add_skill(
     )
     if not tolerated:
         raise ValueError(f"{source.name}: {draft.error}")
-    edited = _edit_frontmatter(
-        (source / "SKILL.md").read_text(encoding="utf-8"), tags, name=target_name
-    )
+    edited = _edit_frontmatter(original, tags, name=target_name)
     skill = _parse_skill_text(target_name, target, edited)
     if not skill.valid:
         raise ValueError(f"{target_name}: {skill.error}")
@@ -333,7 +379,22 @@ def add_skill(
     try:
         # Cross-device move can fail after copying, while removing the source.
         # Keep that complete copy in staging and the existing store entry intact.
-        shutil.move(str(source), str(staged))
+        if parent_fd is None:
+            shutil.move(str(source), str(staged))
+        else:
+            # Cross-device API imports fail closed; copying by pathname would
+            # lose the source identity. The local operator path still supports it.
+            os.rename(source.name, staged, src_dir_fd=parent_fd)
+            before, after = os.fstat(source_fd), staged.lstat()
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                raise ValueError("skill source changed while moving into the store")
+        # The source pathname may have changed after validation. Validate the
+        # private staged object before replacing any store entry or editing it.
+        if staged.is_symlink() or not staged.is_dir():
+            raise ValueError("skill source changed while moving into the store")
+        staged_file = staged / "SKILL.md"
+        if staged_file.is_symlink() or staged_file.read_text(encoding="utf-8") != original:
+            raise ValueError("SKILL.md changed while moving into the store")
         if target.exists() or target.is_symlink():
             target.rename(displaced)
         try:
@@ -347,7 +408,10 @@ def add_skill(
                     incoming = staged
                 if displaced.exists() or displaced.is_symlink():
                     displaced.rename(target)
-                shutil.move(str(staged), str(source))
+                if parent_fd is None:
+                    shutil.move(str(staged), str(source))
+                else:
+                    os.rename(staged, source.name, dst_dir_fd=parent_fd)
                 incoming = source
             except BaseException as rollback_error:
                 exc.add_note(f"Skill rollback failed: {rollback_error}")
@@ -613,10 +677,22 @@ def materialize(
         )
 
     old_repo = _manifest_path(manifest, "repo")
+    # Validate destinations and cleanup paths before any repository writes.
+    try:
+        for directory in (*dirs, *read, *sources):
+            contained_path(repo_dir, directory)
+        for rel in previous:
+            contained_path(old_repo or repo_dir, rel, follow_leaf=False)
+        for directory in dirs:
+            for skill in selected:
+                contained_path(repo_dir, Path(directory) / skill.name, follow_leaf=False)
+    except ValueError as exc:
+        result.conflicts.append(str(exc))
+        return result
     old_git: Path | None = None
     if previous and old_repo is not None and not _same_file(old_repo, repo_dir):
         for rel in sorted(previous - _links_of_others(manifest, old_repo)):
-            link = old_repo / rel
+            link = contained_path(old_repo, rel, follow_leaf=False)
             if ours(link, old_repo):
                 link.unlink()
         old_git = _common_git_dir(old_repo)
@@ -644,13 +720,13 @@ def materialize(
             wanted[rel] = os.path.relpath(repo_dir / places[0] / name, repo_dir / directory)
             result.mirrored[rel] = f"{places[0]}/{name}"
     for rel in sorted(previous - set(wanted) - shared):
-        link = repo_dir / rel
+        link = contained_path(repo_dir, rel, follow_leaf=False)
         if ours(link, repo_dir):
             link.unlink()
             result.removed.append(rel)
     kept: list[str] = []
     for rel, target in sorted(wanted.items()):
-        link = repo_dir / rel
+        link = contained_path(repo_dir, rel, follow_leaf=False)
         if link.is_symlink():
             # A link recorded here, by this agent or another, is the backbone's.
             recorded = rel in previous or rel in shared
