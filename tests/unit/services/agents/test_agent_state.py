@@ -595,11 +595,11 @@ class TestRotateActionLog:
     def test_missing_log_is_noop(self, tmp_path):
         assert rotate_action_log(tmp_path / "nope.jsonl") == 0
 
-    def test_lookup_reads_only_the_tail(self, tmp_path):
-        """A large log is not read whole: an old entry beyond the tail is invisible."""
+    def test_acknowledgment_uses_all_retained_receipts(self, tmp_path):
+        """Old exact publication receipts still acknowledge the issue."""
         path = self._log(tmp_path, 20000)
         assert has_commented_on_issue(19999, "ike", path) is True
-        assert has_commented_on_issue(0, "ike", path) is False
+        assert has_commented_on_issue(0, "ike", path) is True
 
 
 class TestStartingMarker:

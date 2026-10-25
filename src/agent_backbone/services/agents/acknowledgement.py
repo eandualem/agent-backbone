@@ -163,7 +163,7 @@ def has_commented_on_issue(
     repo: str = "",
 ) -> bool:
     """Whether a session has ever commented on this issue (per action log)."""
-    for entry in _read_tail(action_log, max_lines):
+    for entry in _read_receipts(action_log):
         if (
             entry.get("action") == "comment"
             and entry.get("phase") == "succeeded"

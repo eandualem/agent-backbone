@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from datetime import datetime
@@ -47,11 +48,12 @@ log = logging.getLogger(__name__)
 SOURCE = "issue-dispatcher"
 
 
-def _resolve_commenter_entity(event: IssueEvent, config: BackboneConfig) -> str | None:
+async def _resolve_commenter_entity(event: IssueEvent, config: BackboneConfig) -> str | None:
     """Attribute only the exact comment recorded by a successful local publication."""
     if event.comment is None:
         return None
-    return find_outgoing_comment(
+    return await asyncio.to_thread(
+        find_outgoing_comment,
         event.issue.number,
         action_log=config.action_log_path,
         repo=event.issue.repo_full_name,
@@ -173,7 +175,7 @@ async def _dispatch_comment(
     event: IssueEvent, config: BackboneConfig, db: BackboneDB, result: DispatchResult
 ) -> None:
     repo = event.issue.repo_full_name
-    commenter = _resolve_commenter_entity(event, config)
+    commenter = await _resolve_commenter_entity(event, config)
     audience = comment_audience(event.issue, commenter, config)
     # A swarm's coordinator is a party to the swarm's own issue — it is not
     # an owner (members never are), so it would otherwise hear nothing.

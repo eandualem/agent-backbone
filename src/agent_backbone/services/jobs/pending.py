@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -45,7 +46,9 @@ async def deliver_pending_issues(
         try:
             if await is_acknowledged(db, repo, issue_number, name, name):
                 return True
-            if has_commented_on_issue(issue_number, name, config.action_log_path, repo=repo):
+            if await asyncio.to_thread(
+                has_commented_on_issue, issue_number, name, config.action_log_path, repo=repo
+            ):
                 await db.acks.record(issue_number, name, repo=repo)
                 return True
         except Exception:

@@ -369,4 +369,23 @@ def test_delayed_event_finds_exact_receipt_beyond_recent_tail(tmp_path):
     log = tmp_path / "actions.jsonl"
     log.write_text(json.dumps(receipt) + "\n" + (json.dumps({"noise": "x" * 1024}) + "\n") * 100)
     assert find_outgoing_comment(5, log, repo="acme/app", comment_id=123) == "worker"
+    assert has_commented_on_issue(5, "worker", log, repo="acme/app")
     assert find_outgoing_comment(5, log, repo="acme/app", comment_id=124) is None
+
+
+@pytest.mark.parametrize("hook", [claude_hook, codex_hook])
+def test_chained_comments_keep_each_exact_publication_receipt(hook):
+    _, actions = hook.derive(
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": COMMAND + " && " + COMMAND},
+            "tool_response": {
+                "exit_code": 0,
+                "stdout": "https://github.com/acme/app/issues/5#issuecomment-123\n"
+                "https://github.com/acme/app/issues/5#issuecomment-124",
+            },
+        },
+        None,
+    )
+    assert [action["comment_id"] for action in actions] == [123, 124]
