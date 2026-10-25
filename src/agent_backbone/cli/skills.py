@@ -11,6 +11,7 @@ from pathlib import Path
 
 from agent_backbone.cli import _common
 from agent_backbone.cli.presentation import note, print_record, print_table
+from agent_backbone.config import agent_credential
 from agent_backbone.services.agents import skills_preview
 from agent_backbone.services.agents.operations import relink_skills
 from agent_backbone.skills import (
@@ -292,6 +293,16 @@ async def _skills(args: argparse.Namespace) -> int:
         _print_relinked(relinked)
         _print_warnings(warnings)
         return 0
+
+    async def preview(spec):
+        if not agent_credential(config.api_key):
+            return skills_preview(spec, config)
+        response = await _common.api(config, "GET", f"/api/skills/preview/{spec.name}")
+        if not response or response[0] != 200:
+            detail = response[1] if response else "API unreachable"
+            raise ValueError(f"could not preview skills: {detail}")
+        return response[1]
+
     specs = [config.agents.get(args.agent)] if args.agent else list(config.agents)
     if any(spec is None for spec in specs):
         raise ValueError(f"unknown agent '{args.agent}'")
@@ -299,7 +310,7 @@ async def _skills(args: argparse.Namespace) -> int:
         errors = [f"{entry.name}: {entry.error}" for entry in read_store(store) if not entry.valid]
         summaries = []
         for spec in specs:
-            view = skills_preview(spec, config)
+            view = await preview(spec)
             broken = [
                 f"{spec.name}: {skill['name']} {directory} {state}"
                 for skill in view["skills"]
@@ -314,7 +325,7 @@ async def _skills(args: argparse.Namespace) -> int:
         if not errors:
             print("Skills valid.")
         return 1 if errors else 0
-    view = skills_preview(specs[0], config)
+    view = await preview(specs[0])
     if args.json:
         _common.print_json(view)
     else:

@@ -589,7 +589,7 @@ async def unsubscribe(
     return AgentConfigView.from_spec(spec)
 
 
-@router.delete("/agents/{name}")
+@router.delete("/agents/{name}", dependencies=[Depends(require_operator)])
 async def forget_agent(name: str, store: AgentStore = Depends(get_agent_store)):
     """Forget an agent (its session must be stopped first)."""
     try:

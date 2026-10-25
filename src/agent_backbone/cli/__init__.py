@@ -592,7 +592,7 @@ def main(argv: list[str] | None = None) -> None:
     if agent_credential(bootstrap_config().api_key):
         sub = vars(args)
         administrative = (
-            args.command in {"init", "up", "down", "hooks"}
+            args.command in {"init", "up", "down", "hooks", "doctor"}
             or (args.command == "service" and sub.get("service_command") != "status")
             or (args.command == "secrets" and sub.get("secrets_command") in {"set", "unset"})
             or (args.command == "upgrade" and not sub.get("check"))

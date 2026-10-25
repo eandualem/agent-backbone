@@ -36,6 +36,7 @@ def test_derived_key_cannot_authenticate_as_operator(config, tmp_path, monkeypat
         ("PUT", "/api/config/agents.default_runtime", {"value": "shell"}),
         ("POST", "/api/skills", {"path": "/tmp/skill", "tags": []}),
         ("POST", "/api/signing/owner", {"telegram_user_id": 123}),
+        ("DELETE", "/api/agents/worker", None),
     ],
 )
 async def test_agent_key_cannot_change_administrative_settings(

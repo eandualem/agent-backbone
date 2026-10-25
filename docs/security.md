@@ -15,7 +15,9 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   registrations, runtime/model/directory/environment changes, tags, shared
   skills and policies, owner enrollment and externally pushed state require
   the operator credential. Swarms may use stored runtime defaults; member
-  runtime/model overrides and fleet snapshot restoration require the operator.
+  runtime/model overrides, forgetting an agent and fleet snapshot restoration require the operator.
+  `backbone doctor` also requires an operator terminal because it opens and checks
+  the database directly; an agent can use `backbone status` for API-backed health.
   Agent credentials use the
   running API and cannot use the CLI's direct database fallback.
   This is an API authority boundary, not OS isolation: an unrestricted process

@@ -15,6 +15,7 @@ from agent_backbone.config import agent_api_key
         ["skills", "add", "/tmp/skill", "--local"],
         ["secrets", "set", "BACKBONE_API_KEY", "replacement"],
         ["up"],
+        ["doctor"],
     ],
 )
 def test_agent_cli_refuses_local_administration_before_dispatch(monkeypatch, argv):
@@ -91,3 +92,29 @@ async def test_scoped_configuration_reads_use_api(config, command, capsys):
         assert await _config_cmd(Namespace(config_command=command, key="backbone.port")) == 0
     assert "8234" in capsys.readouterr().out
     direct.assert_not_called()
+
+
+async def test_scoped_skill_preview_uses_server_environment(config, capsys):
+    from argparse import Namespace
+    from unittest.mock import AsyncMock
+
+    from agent_backbone.cli import _common, skills
+
+    scoped = replace(config, api_key=agent_api_key("operator"))
+    spec = next(iter(scoped.agents))
+    expected = {"agent": spec.name, "directories": ["server-selected"], "skills": []}
+    with (
+        patch.object(_common, "read_config", AsyncMock(return_value=scoped)),
+        patch.object(_common, "api", AsyncMock(return_value=(200, expected))) as api,
+        patch.object(skills, "skills_preview") as local,
+    ):
+        # The store setting normally comes from the API configuration snapshot.
+        scoped = replace(scoped, skills=replace(scoped.skills, store="/tmp/skills"))
+        _common.read_config.return_value = scoped
+        assert (
+            await skills._skills(Namespace(skills_command="preview", agent=spec.name, json=True))
+            == 0
+        )
+    api.assert_awaited_once_with(scoped, "GET", f"/api/skills/preview/{spec.name}")
+    local.assert_not_called()
+    assert "server-selected" in capsys.readouterr().out
