@@ -301,3 +301,8 @@ runs with read-only repository access; a separate job creates the source tag
 before a publication job receives the PyPI token. Existing tags stop publication
 for operator inspection. A failed publication can leave the source tag present;
 resolve that state explicitly before retrying. No release runs on pushes or merges.
+
+
+Acknowledgment resets are retained per repository, issue and agent. A retained
+publication receipt can restore an acknowledgment only if it was written after
+the latest reset; a newer reset racing with restoration prevents that restore.

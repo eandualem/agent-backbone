@@ -725,3 +725,12 @@ class TestAgentAlwaysOn:
         assert by_name["free"]["unattended"] is True
         agents = agents_from_rows(rows)
         assert agents.get("free").unattended and not agents.get("asks").unattended
+
+
+async def test_acknowledgment_restore_rechecks_a_concurrent_reset(db):
+    original = await db.acks.cleared_at(42, "app", repo="acme/app")
+    await db.acks.clear(42, "app", repo="acme/app")
+    assert not await db.acks.record(42, "app", repo="acme/app", not_cleared_since=original)
+    assert not await db.acks.exists(42, "app", repo="acme/app")
+    current = await db.acks.cleared_at(42, "app", repo="acme/app")
+    assert await db.acks.record(42, "app", repo="acme/app", not_cleared_since=current)

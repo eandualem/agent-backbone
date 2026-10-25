@@ -856,3 +856,31 @@ async def test_queue_drain_does_not_wait_for_usage_collection(config, db):
     ):
         await monitor_agents(config, db, None)
     assert order == ["drain", "usage"]
+
+
+async def test_old_publication_receipt_cannot_restore_a_cleared_acknowledgment(config, db):
+    import json
+
+    receipt = {
+        "ts": time.time() - 60,
+        "session": "ike",
+        "action": "comment",
+        "phase": "succeeded",
+        "issue": 7,
+        "repo": _REPO,
+        "comment_id": 123,
+    }
+    config.action_log_path.parent.mkdir(parents=True, exist_ok=True)
+    config.action_log_path.write_text(json.dumps(receipt) + "\n" + "{}\n" * 250)
+    await db.acks.record(7, "ike", repo=_REPO)
+    await db.acks.clear(7, "ike", repo=_REPO)
+    gh = AsyncMock()
+    gh.list_issues.return_value = [_issue(7), _issue(8)]
+    with patch(f"{_PEND}.safe_deliver", return_value=DeliveryReport(DeliveryOutcome.DELIVERED)):
+        assert (await deliver_pending_issues(config, _IDLE, db, gh))["ike"] == "delivered_#7"
+        assert not await db.acks.exists(7, "ike", repo=_REPO)
+        receipt.update(ts=time.time(), comment_id=124)
+        with config.action_log_path.open("a") as log:
+            log.write(json.dumps(receipt) + "\n")
+        assert (await deliver_pending_issues(config, _IDLE, db, gh))["ike"] == "delivered_#8"
+        assert await db.acks.exists(7, "ike", repo=_REPO)

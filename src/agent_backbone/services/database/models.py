@@ -420,6 +420,7 @@ class AcknowledgmentORM(Base):
     issue_number: Mapped[int] = mapped_column(Integer, primary_key=True)
     target_entity: Mapped[str] = mapped_column(Text, primary_key=True)
     acknowledged_at: Mapped[str] = mapped_column(Text, nullable=False)
+    cleared_at: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class MessageQueueORM(Base):

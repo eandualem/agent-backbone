@@ -161,8 +161,9 @@ def has_commented_on_issue(
     max_lines: int = 200,
     *,
     repo: str = "",
+    since: float | None = None,
 ) -> bool:
-    """Whether a session has ever commented on this issue (per action log)."""
+    """Whether a retained receipt was published after the latest acknowledgment reset."""
     for entry in _read_receipts(action_log):
         if (
             entry.get("action") == "comment"
@@ -172,6 +173,9 @@ def has_commented_on_issue(
             and entry.get("issue") == issue_number
             and entry.get("session") == session
             and _repo_matches(entry, repo)
+            and (
+                since is None or (isinstance(entry.get("ts"), (int, float)) and entry["ts"] > since)
+            )
         ):
             return True
     return False

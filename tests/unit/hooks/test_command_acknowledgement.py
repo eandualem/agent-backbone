@@ -392,3 +392,16 @@ def test_chained_comments_keep_each_exact_publication_receipt(hook, second_id):
         None,
     )
     assert [action["comment_id"] for action in actions] == [123, second_id]
+
+
+@pytest.mark.parametrize("content", [None, 12])
+def test_malformed_content_does_not_drop_other_publication_fields(content):
+    from agent_backbone.hooks.backbone_state import _comment_receipts
+
+    actions = [{"action": "comment", "phase": "succeeded", "repo": "acme/app", "issue": 5}]
+    result = _comment_receipts(
+        actions,
+        {"content": content, "html_url": "https://github.com/acme/app/issues/5#issuecomment-123"},
+        shell=False,
+    )
+    assert result[0]["comment_id"] == 123

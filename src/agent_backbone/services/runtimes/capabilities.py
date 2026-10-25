@@ -212,7 +212,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         opencode=_ok(
             "tests/unit/hooks/test_command_acknowledgement.py",
             "Plugin tests; live check pending.",
-            verified_on="1.19.4",
+            verified_on="2.1.4",
         ),
         gemini=_ok(
             "tests/unit/hooks/test_command_acknowledgement.py",

@@ -406,7 +406,8 @@ def _comment_receipts(actions: list[dict], response: object, *, shell: bool) -> 
         structured = decoded.get("structuredContent")
         if isinstance(structured, dict):
             outputs.append(structured.get("html_url"))
-        for item in decoded.get("content", []):
+        content_items = decoded.get("content")
+        for item in content_items if isinstance(content_items, list) else []:
             if isinstance(item, dict) and item.get("type") == "text":
                 if shell:
                     outputs.append(item.get("text"))

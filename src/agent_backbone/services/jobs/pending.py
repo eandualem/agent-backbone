@@ -46,11 +46,19 @@ async def deliver_pending_issues(
         try:
             if await is_acknowledged(db, repo, issue_number, name, name):
                 return True
+            cleared = await db.acks.cleared_at(issue_number, name, repo=repo)
+            since = datetime.fromisoformat(cleared).timestamp() if cleared else None
             if await asyncio.to_thread(
-                has_commented_on_issue, issue_number, name, config.action_log_path, repo=repo
+                has_commented_on_issue,
+                issue_number,
+                name,
+                config.action_log_path,
+                repo=repo,
+                since=since,
             ):
-                await db.acks.record(issue_number, name, repo=repo)
-                return True
+                return await db.acks.record(
+                    issue_number, name, repo=repo, not_cleared_since=cleared
+                )
         except Exception:
             log.exception(
                 "Failed to check acknowledgment for %s#%d (non-fatal)", repo, issue_number
