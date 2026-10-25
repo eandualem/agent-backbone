@@ -118,3 +118,22 @@ async def test_scoped_skill_preview_uses_server_environment(config, capsys):
     api.assert_awaited_once_with(scoped, "GET", f"/api/skills/preview/{spec.name}")
     local.assert_not_called()
     assert "server-selected" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("credential", [None, "invalid-credential"])
+def test_missing_or_invalid_agent_credential_never_reads_operator_file(
+    tmp_path, monkeypatch, credential
+):
+    from agent_backbone.config import load_secrets
+
+    (tmp_path / ".env").write_text("BACKBONE_API_KEY=operator-secret\n")
+    monkeypatch.setenv("BACKBONE_AGENT", "app")
+    monkeypatch.delenv("BACKBONE_API_KEY", raising=False)
+    if credential is None:
+        monkeypatch.delenv("BACKBONE_AGENT_CREDENTIAL", raising=False)
+    else:
+        monkeypatch.setenv("BACKBONE_AGENT_CREDENTIAL", credential)
+    with patch("agent_backbone.config.dotenv_values") as read:
+        with pytest.raises(ValueError, match="fallback is disabled"):
+            load_secrets(tmp_path)
+    read.assert_not_called()

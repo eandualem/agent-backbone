@@ -482,6 +482,36 @@ class TestStartAgentScrubsSecrets:
         assert exported["BACKBONE_PORT"] == "8234"
         assert exported["BACKBONE_HOST"] == config.backbone.host
 
+        # Exercise an actual shell child after the runtime's default secret-name
+        # filtering, not merely the tmux launch arguments.
+        import fnmatch
+        import os
+        import subprocess
+        import sys
+
+        child_env = {k: v for k, v in os.environ.items() if not k.startswith("BACKBONE_")}
+        child_env.update(exported)
+        child_env = {
+            k: v
+            for k, v in child_env.items()
+            if not any(
+                fnmatch.fnmatch(k.upper(), pattern) for pattern in ("*KEY*", "*TOKEN*", "*SECRET*")
+            )
+        }
+        script = (
+            "from agent_backbone.config import bootstrap_config,agent_api_key; "
+            "from pathlib import Path; import sys; "
+            "assert bootstrap_config(Path(sys.argv[1])).api_key == agent_api_key('k')"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(data_dir)],
+            env=child_env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+
     @pytest.mark.parametrize("runtime", sorted(RUNTIMES))
     async def test_env_values_are_on_no_command_line(self, tmp_path, runtime):
         """The agent's own env reaches its session, never a process argument (#289)."""

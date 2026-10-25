@@ -782,6 +782,7 @@ class TestAgentCommands:
         ]
 
         monkeypatch.setenv("BACKBONE_AGENT", "desk")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         assert _run(["agent", "subscribe", "gmail", "from:example.com"]) == 0
         assert "#2 gmail normal: from:example.com" in capsys.readouterr().out
         assert _run(["agent", "unsubscribe", "1"]) == 0
@@ -810,6 +811,7 @@ class TestAgentCommands:
         capsys.readouterr()
 
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         assert _run(["agent", "watch", "acme/app", "acme/web"]) == 0
         out = capsys.readouterr().out
         assert "orch: now watching acme/app" in out and "acme/web" in out
@@ -842,6 +844,7 @@ class TestTell:
 
     def test_sender_defaults_to_backbone_agent(self, monkeypatch):
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         args = cli.build_parser().parse_args(["tell", "x", "hi"])
         assert args.sender == "orch"
 
@@ -967,6 +970,7 @@ class TestReply:
 
     def test_negative_200_is_a_nonzero_error(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_AGENT", "ike")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         assert _run(["init"]) == 0
         capsys.readouterr()
         client = self._client(
@@ -979,6 +983,7 @@ class TestReply:
 
     def test_posted_reply_is_zero(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_AGENT", "ike")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         assert _run(["init"]) == 0
         capsys.readouterr()
         client = self._client(
@@ -1032,6 +1037,7 @@ class TestAgentApproveParser:
         from agent_backbone.cli import build_parser
 
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         ns = build_parser().parse_args(["agent", "approve", "scout"])
         assert ns.agent_command == "approve" and ns.name == "scout" and ns.sender == "orch"
         ns = build_parser().parse_args(["agent", "approve", "scout", "--from", "elias"])
@@ -1041,6 +1047,7 @@ class TestAgentApproveParser:
         from agent_backbone.cli import build_parser
 
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         ns = build_parser().parse_args(["agent", "deny", "scout"])
         assert ns.agent_command == "deny" and ns.name == "scout" and ns.sender == "orch"
 
@@ -1206,6 +1213,7 @@ class TestAlwaysOnStart:
 class TestCheckpointInbox:
     def test_claim_and_ack_use_agent_identity(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_AGENT", "worker")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         with patch(
             "agent_backbone.cli._common.api", AsyncMock(return_value=(200, {"messages": []}))
         ) as api:
@@ -1273,6 +1281,7 @@ class TestMessageValidate:
 class TestAgentRestart:
     def test_parses_options_and_posts_the_transition(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         accepted = {
             "id": 7,
             "session": "orch",
@@ -1399,6 +1408,7 @@ class TestAgentRestart:
 class TestAgentOutput:
     def test_prints_complete_messages_and_both_directions(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         long = "word " * 500
         data = {
             "session": "orch",
@@ -1449,6 +1459,7 @@ class TestAgentOutput:
 class TestTellSteer:
     def test_steer_posts_to_the_steer_endpoint(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         data = {
             "ok": True,
             "session": "app",

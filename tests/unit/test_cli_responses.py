@@ -13,6 +13,7 @@ def test_example_validation_and_publication_retry_key(monkeypatch, capsys):
     example = json.loads(capsys.readouterr().out)
     AgentResponse.model_validate(example)
     monkeypatch.setenv("BACKBONE_AGENT", "writer")
+    monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
     receipt = {"created": True, "record": {"id": 9, "telegram_delivery": "pending"}}
     with patch("agent_backbone.cli._common.api", AsyncMock(return_value=(201, receipt))) as api:
         keys = []

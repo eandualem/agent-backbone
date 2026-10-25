@@ -60,6 +60,7 @@ SUBSCRIPTION_PRIORITIES: tuple[str, ...] = ("normal", "high")
 
 SECRET_ENV_KEYS: tuple[str, ...] = (
     "BACKBONE_API_KEY",
+    "BACKBONE_AGENT_CREDENTIAL",
     "GITHUB_TOKEN",
     "GITHUB_WEBHOOK_SECRET",
     "GITHUB_APP_ID",
@@ -938,9 +939,23 @@ def load_secrets(data_dir: Path) -> dict[str, str]:
     — a stray ``.env`` in the current working directory must not inject
     secrets or security flags.
     """
-    if agent_credential(os.environ.get("BACKBONE_API_KEY", "")):
-        # Agent CLI invocations never import the operator's .env secrets.
-        return dict(os.environ)
+    environment = dict(os.environ)
+    collaboration = environment.get("BACKBONE_AGENT_CREDENTIAL", "")
+    if collaboration:
+        if not agent_credential(collaboration):
+            raise ValueError(
+                "Invalid agent collaboration credential; operator fallback is disabled"
+            )
+        environment["BACKBONE_API_KEY"] = collaboration
+    if environment.get("BACKBONE_AGENT") and not environment.get("BACKBONE_API_KEY"):
+        raise ValueError("Agent credential is missing; operator fallback is disabled")
+    if (
+        collaboration
+        or environment.get("BACKBONE_AGENT")
+        or agent_credential(environment.get("BACKBONE_API_KEY", ""))
+    ):
+        # Never recover operator secrets after a runtime filters key variables.
+        return environment
     merged = {key: value for key, value in dotenv_values(data_dir / ".env").items() if value}
     merged.update(os.environ)
     return merged

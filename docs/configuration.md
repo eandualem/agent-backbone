@@ -300,3 +300,8 @@ export it in each shell. The port binds to `127.0.0.1:5435`. Configure
 `BACKBONE_DATABASE_URL` separately with that password, URL-encoded when needed.
 Changing the variable does not rotate credentials in an existing database volume;
 use PostgreSQL's password-change procedure for an existing installation.
+
+Agent launches also export `BACKBONE_AGENT_CREDENTIAL`, an alias for the scoped
+collaboration credential that survives runtime filtering of `*KEY*`, `*TOKEN*`
+and `*SECRET*` variable names. It never contains the operator key. Agent CLI
+calls with missing credentials refuse instead of importing the operator `.env`.

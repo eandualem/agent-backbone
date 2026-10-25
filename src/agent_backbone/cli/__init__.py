@@ -589,7 +589,11 @@ def main(argv: list[str] | None = None) -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
-    if agent_credential(bootstrap_config().api_key):
+    try:
+        client_key = bootstrap_config().api_key
+    except ValueError as exc:
+        parser.exit(1, f"{exc}\n")
+    if agent_credential(client_key):
         sub = vars(args)
         administrative = (
             args.command in {"init", "up", "down", "hooks", "doctor"}
