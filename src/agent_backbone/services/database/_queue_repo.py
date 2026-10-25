@@ -924,7 +924,8 @@ class QueueRepo(Repo):
             result = await conn.execute(
                 text(
                     "SELECT 1 FROM message_queue WHERE session_name=:session AND source=:brief "
-                    "AND status IN ('pending', 'in_progress') AND id != :id "
+                    "AND status IN ('pending', 'in_progress', 'checkpoint', 'uncertain') "
+                    "AND id != :id "
                     # A brief is never held behind another (a restart may queue a second).
                     "AND NOT EXISTS "
                     "(SELECT 1 FROM message_queue WHERE id = :id AND source = :brief) LIMIT 1"
