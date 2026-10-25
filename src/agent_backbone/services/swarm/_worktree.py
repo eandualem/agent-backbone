@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from agent_backbone.fs import contained_path
 from agent_backbone.git import run_git
 
 log = logging.getLogger(__name__)
@@ -57,9 +58,16 @@ async def create_worktree(repo_dir: Path, swarm: str) -> tuple[Path, str]:
     message when the worktree or branch cannot be created.
     """
     branch = f"swarm/{swarm}"
-    worktree = repo_dir / SWARM_SUBDIR / swarm
+    try:
+        worktree = contained_path(repo_dir, Path(SWARM_SUBDIR) / swarm)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     await _exclude_swarm_dir(repo_dir)
     worktree.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        contained_path(repo_dir, Path(SWARM_SUBDIR) / swarm)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     rc, _, err = await run_git(repo_dir, "worktree", "add", str(worktree), "-b", branch)
     if rc != 0 and "already exists" in err:
         # A previous swarm with this name left its branch behind (branches
@@ -95,6 +103,13 @@ async def remove_worktree(repo_dir: Path, worktree: Path) -> bool:
     and blocks the name; ``worktree prune`` clears that registration, so the
     result is the same: git no longer lists it.
     """
+    try:
+        relative = worktree.absolute().relative_to(repo_dir.absolute())
+        relative.relative_to(SWARM_SUBDIR)
+        worktree = contained_path(repo_dir, relative)
+    except ValueError:
+        log.warning("Refused swarm worktree removal outside its repository")
+        return False
     rc, _, err = await run_git(repo_dir, "worktree", "remove", "--force", str(worktree))
     if rc == 0:
         log.info("Removed swarm worktree %s", worktree)

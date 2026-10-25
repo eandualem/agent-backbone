@@ -144,7 +144,9 @@ Two mechanisms, because either alone leaves a hole:
    every user, or in the pane's start command. Because tmux sets `TERM`,
    `SHELL` and `PATH` over the session environment when it starts the pane,
    the launched process reads the values again from a private file in the
-   temporary directory (mode 0600, removed once read). This catches what mechanism 1 cannot: variables *you*
+   temporary directory (mode 0600, removed once read). The loader refuses symlinks
+   and checks the file against the launch-time content digest before applying it.
+   This catches what mechanism 1 cannot: variables *you*
    exported in the shell you ran `backbone up` from, and a long-lived tmux
    server that was polluted by an older backbone before you upgraded.
 
@@ -173,7 +175,7 @@ agents need it to find the same backbone you are running.
 | Bind address | `127.0.0.1` | `backbone.host` — put TLS and auth in front before exposing |
 | CORS | Off | `backbone.cors_origins` |
 | Webhook | Rejected unless `GITHUB_WEBHOOK_SECRET` is set and the HMAC matches | — |
-| Telegram | Bot does not start without `telegram.allowed_chat_ids`; unlisted chats are ignored | — |
+| Telegram | Bot requires allowed chats; instructions, lifecycle commands and approval buttons additionally require a numeric ID in `telegram.allowed_user_ids` | Empty user lists refuse control; group membership is insufficient |
 | Remote plan approve/reject | Off (they act on a waiting agent) — bounded: the runtime's own plan keys, sent only while its plan dialog is on screen, refused for runtimes without a plan mode; a rejection's feedback goes through `safe_deliver` as a recorded message | `security.allow_remote_plan_control = true` |
 | Remote permission approval (`agent approve`, the Telegram **Allow** / **Deny** buttons) | On — bounded: the runtime's affirmative or refusing key only (Deny: Escape, verified for Claude Code, Codex, Gemini CLI, OpenCode and Deep Code, refused elsewhere), only while its dialog is on screen, only to a registered agent, every answer recorded as an `approval` / `denial` event with who asked (a Telegram button records `telegram:<user id>`, and is bound to the prompt it was raised for — a stale button answers nothing) | `security.allow_remote_approval = false` |
 | Unattended swarm members | On for members on a sandboxed runtime only (Codex, `-a never` inside its workspace-write sandbox: worktree, temp, network); members without a sandbox keep asking | `swarm.unattended_members = false` |
@@ -252,3 +254,17 @@ there is no per-agent credential store yet.
 4. Your webhook secret is not an example one.
 5. `security.allow_remote_plan_control` is only on if you are comfortable
    with Telegram-approved plans running unattended.
+
+HTTP requests are limited to 1 MiB before parsing, including webhooks and
+Socket.IO polling; document publication uses its larger documented wire limit.
+Socket.IO also limits each incoming message to 1 MiB. In explicitly
+unauthenticated mode, requests must use a local or configured bind hostname,
+and browser origins must match that host or an explicitly configured CORS origin.
+Socket.IO checks same-origin requests when no CORS origins are configured.
+
+Telegram message bodies use the same provenance-line quoting as peer messages;
+display names cannot insert brackets or line breaks into the envelope. A display
+name remains a label, not proof of identity or owner confirmation.
+
+Fleet snapshot `created_by` and resume `resumed_by` values are caller-supplied
+claims, not authenticated identities. CLI views label them as claimed actors.

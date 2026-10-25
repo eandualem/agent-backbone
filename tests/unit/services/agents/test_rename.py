@@ -400,3 +400,19 @@ async def test_failed_rename_restores_launch_state(store):
     assert not (state_dir / "desk.launch").exists()
     assert not (state_dir / "launches" / "desk").exists()
     assert not (state_dir / "desk.json").exists()
+
+
+async def test_forget_preserves_manifest_after_containment_refusal(db, store, tmp_path):
+    from agent_backbone.skills import manifest_path
+
+    await db.settings.set("skills.store", str(tmp_path / "skill-store"))
+    await store.refresh()
+    outside = tmp_path.parent / (tmp_path.name + "-outside")
+    outside.mkdir()
+    (tmp_path / ".agents").symlink_to(outside, target_is_directory=True)
+    manifest = manifest_path(store.config.data_dir, "api")
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(f'{{"repo": "{tmp_path}", "links": [".agents/skills/tidy"]}}')
+    assert await store.forget("api")
+    assert manifest.exists()
+    assert list(outside.iterdir()) == []

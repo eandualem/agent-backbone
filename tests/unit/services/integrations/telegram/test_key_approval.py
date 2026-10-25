@@ -17,7 +17,13 @@ PUB = signing.b64url_encode(b"k" * 32)
 
 def _bot(config, db) -> TelegramService:
     return TelegramService(
-        replace(config, telegram=TelegramConfig(allowed_chat_ids=(ALLOWED_CHAT,))), db=db
+        replace(
+            config,
+            telegram=TelegramConfig(
+                allowed_chat_ids=(ALLOWED_CHAT,), allowed_user_ids=(OWNER, 5151, 9)
+            ),
+        ),
+        db=db,
     )
 
 
@@ -25,6 +31,7 @@ def _update(user_id: int = OWNER, chat_id: int = ALLOWED_CHAT):
     update = MagicMock()
     update.effective_chat.id = chat_id
     update.effective_user.id = user_id
+    update.effective_message.sender_chat = None
     update.message.reply_text = AsyncMock()
     return update
 

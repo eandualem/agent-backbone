@@ -743,7 +743,9 @@ class FleetResumeAgent(BaseModel):
 class FleetResumeRun(BaseModel):
     snapshot_id: int
     resumed_at: str
-    resumed_by: str = ""
+    resumed_by: str = Field(
+        default="", description="Caller-supplied actor claim, not verified identity"
+    )
     agents: list[FleetResumeAgent]
     counts: dict[str, int]
 
@@ -751,7 +753,9 @@ class FleetResumeRun(BaseModel):
 class FleetSnapshotView(BaseModel):
     id: int
     created_at: str
-    created_by: str = ""
+    created_by: str = Field(
+        default="", description="Caller-supplied actor claim, not verified identity"
+    )
     note: str | None = None
     stop: bool
     force: bool = False
@@ -763,7 +767,9 @@ class FleetSnapshotView(BaseModel):
 class FleetSnapshotSummary(BaseModel):
     id: int
     created_at: str
-    created_by: str = ""
+    created_by: str = Field(
+        default="", description="Caller-supplied actor claim, not verified identity"
+    )
     note: str | None = None
     stop: bool
     counts: dict[str, int]

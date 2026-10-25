@@ -52,7 +52,7 @@ def _print_snapshot(data: dict) -> None:
         f"Fleet snapshot {data['id']}",
         [
             ("Saved", data.get("created_at")),
-            ("By", data.get("created_by") or "-"),
+            ("Claimed actor", data.get("created_by") or "-"),
             ("Note", data.get("note") or "-"),
             ("Agents", f"{counts.get('saved', 0)} saved, {counts.get('resumable', 0)} resumable"),
         ],
@@ -136,7 +136,7 @@ async def _fleet(args: argparse.Namespace) -> int:
     elif sub == "list":
         print_table(
             "Fleet snapshots",
-            ("Snapshot", "Saved", "By", "Agents", "Last resume"),
+            ("Snapshot", "Saved", "Claimed actor", "Agents", "Last resume"),
             [
                 (
                     item["id"],

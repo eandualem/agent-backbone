@@ -298,3 +298,28 @@ async def test_retag_rejects_a_symlinked_skill_file_before_reading_it(
     )
     assert response.status_code == 422
     assert (skill / "SKILL.md").is_symlink() and outside.read_bytes() == before
+
+
+async def test_import_rejects_ancestor_swapped_after_authorization(
+    api_client, auth_headers, store, tmp_path, monkeypatch
+):
+    from agent_backbone.api.routes import skills as routes
+
+    parent = tmp_path / "project" / "incoming"
+    source = _skill(parent, "mine")
+    outside = _skill(tmp_path / "elsewhere", "mine")
+    original = (outside / "SKILL.md").read_bytes()
+    add = routes.add_skill
+
+    def switched(*args, **kwargs):
+        parent.rename(parent.with_name("saved"))
+        parent.symlink_to(outside.parent, target_is_directory=True)
+        return add(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "add_skill", switched)
+    response = await api_client.post(
+        "/api/skills", headers=auth_headers, json={"path": str(source), "tags": ["all"]}
+    )
+    assert response.status_code == 422
+    assert (outside / "SKILL.md").read_bytes() == original
+    assert not (store / "mine").exists()

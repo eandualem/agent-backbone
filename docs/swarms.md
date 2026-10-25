@@ -253,3 +253,8 @@ Swarm participants never publish human-facing progress reports or send status
 updates directly to Telegram. Members report to the coordinator; the coordinator
 summarizes for the initiating repository agent, which owns the owner-facing
 report. This is enforced at report publication and pending text/audio delivery.
+
+Worktree creation and removal refuse paths redirected outside the initiating
+repository by existing parent symlinks. Validation precedes creation and Git
+exclude updates, and removal checks the destination again. These pathname checks
+do not provide isolation against a concurrent same-user directory replacement.

@@ -56,7 +56,8 @@ def create_sio(cors_origins: list[str]) -> socketio.AsyncServer:
     """Create and configure the Socket.IO async server."""
     sio = socketio.AsyncServer(
         async_mode="asgi",
-        cors_allowed_origins=cors_origins,
+        cors_allowed_origins=cors_origins or None,
+        max_http_buffer_size=1_048_576,
     )
     sio.register_namespace(SessionsNamespace(SESSIONS_NAMESPACE))
     sio.register_namespace(TerminalNamespace("/terminal"))

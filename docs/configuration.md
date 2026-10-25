@@ -157,7 +157,8 @@ See [Slow jobs and memory pressure](diagnostics.md#slow-jobs-and-memory-pressure
 
 | Key | Default | Meaning |
 |---|---|---|
-| `telegram.allowed_chat_ids` | `[]` | **Required to enable the bot.** Chat ids (users or groups) allowed to issue commands |
+| `telegram.allowed_chat_ids` | `[]` | **Required to enable the bot.** Allowed chat destinations |
+| `telegram.allowed_user_ids` | `[]` | Numeric Telegram user IDs allowed to send instructions, manage agents and answer approval buttons; empty refuses control |
 | `telegram.notification_chat_id` | — | Where plan-waiting and dead-session alerts go |
 | `telegram.group_chat_id` | — | Forum group where each agent gets a topic (learned from the first message in the group if omitted) |
 | `telegram.auto_topics` | `true` | Create a forum topic per registered agent in that group (swarm members excepted: a `swarm:<name>` tag means no topic), close it when the agent is forgotten, reopen it if it returns. Needs the bot as an administrator with *Manage Topics*. `false` to manage topics yourself |

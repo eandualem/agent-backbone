@@ -8,6 +8,22 @@ import time
 from pathlib import Path
 
 
+def contained_path(root: Path, relative: str | Path, *, follow_leaf: bool = True) -> Path:
+    """Reject traversal and existing symlink redirects outside a chosen root.
+
+    This is a pathname check, not isolation from concurrent same-user renames.
+    A symlink being created or removed is checked with ``follow_leaf=False``.
+    """
+    relative = Path(relative)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("path must stay inside its repository")
+    path = root / relative
+    checked = path if follow_leaf else path.parent
+    if not checked.resolve().is_relative_to(root.resolve()):
+        raise ValueError("path redirects outside its repository")
+    return path
+
+
 def atomic_write_text(path: Path, text: str) -> None:
     """Write through a unique sibling temp file and rename.
 

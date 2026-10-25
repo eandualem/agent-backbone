@@ -22,6 +22,7 @@ approve a plan, get told when an agent is stuck or died.
 
 ```bash
 backbone config set telegram.allowed_chat_ids '[123456789]'
+backbone config set telegram.allowed_user_ids '[123456789]'
 backbone config set telegram.notification_chat_id 123456789
 ```
 
@@ -165,3 +166,10 @@ Telegram limits each button's [callback data](https://core.telegram.org/bots/api
 to 64 bytes. If an agent name makes a button too large, the full alert is sent
 without its button row and directs you to the agent's terminal. Prompt identities
 are never shortened; buttons that fit retain the same stale-prompt protection.
+
+Control requires both an allowed chat and an explicitly allowed numeric user ID.
+Existing installations start with an empty user allowlist: instructions, lifecycle
+commands and approval buttons are refused until `telegram.allowed_user_ids` is set.
+Group membership, display names, anonymous administrators and channel identities
+do not grant control. Read-only commands and outgoing reports keep their chat rules.
+Signing-key approvals additionally retain their existing owner-account check.
