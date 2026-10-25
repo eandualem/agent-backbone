@@ -860,3 +860,10 @@ so it can be the `escalation.target`.
 Up to 20 tokens per acknowledgement; stale or mismatched tokens return 409, unknown session 404.
 The existing shared API key is required. Session names are self-asserted, as with
 ordinary messaging; this is not a per-agent authentication boundary.
+
+## Documents
+
+`POST /api/documents` publishes immutable HTML revisions. `GET /api/documents`
+returns paged latest-per-document metadata; `GET /api/documents/{revision_id}`
+returns exact content through authenticated JSON. See [Documents](documents.md)
+for the response fields, signed publication, byte limits, retries and retention.

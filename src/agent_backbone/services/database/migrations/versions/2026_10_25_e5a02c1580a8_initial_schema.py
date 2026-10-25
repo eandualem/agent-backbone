@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 49e6e8eac8e6
+Revision ID: e5a02c1580a8
 Revises:
-Create Date: 2026-10-24 14:21:25.671946
+Create Date: 2026-10-25 12:41:01.945971
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "49e6e8eac8e6"
+revision: str = "e5a02c1580a8"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -199,6 +199,39 @@ def upgrade() -> None:
             ["operation_id", "category", "code", "observation_key"],
             unique=True,
         )
+
+    op.create_table(
+        "document_storage",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("used_bytes", sa.BigInteger(), nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_document_storage")),
+    )
+    op.create_table(
+        "documents",
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            autoincrement=True,
+            nullable=False,
+        ),
+        sa.Column("document_id", sa.Text(), nullable=False),
+        sa.Column("author_id", sa.Text(), nullable=False),
+        sa.Column("author_name", sa.Text(), nullable=False),
+        sa.Column("request_id", sa.Text(), nullable=False),
+        sa.Column("title", sa.Text(), nullable=False),
+        sa.Column("html", sa.LargeBinary(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("content_bytes", sa.Integer(), nullable=False),
+        sa.Column("content_sha256", sa.Text(), nullable=False),
+        sa.Column("supersedes_id", sa.BigInteger(), nullable=True),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_documents")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("documents", schema=None) as batch_op:
+        batch_op.create_index("idx_documents_created", ["created_at", "author_id"], unique=False)
+        batch_op.create_index("idx_documents_root", ["document_id", "id"], unique=False)
+        batch_op.create_index("uq_documents_predecessor", ["supersedes_id"], unique=True)
+        batch_op.create_index("uq_documents_request", ["author_id", "request_id"], unique=True)
 
     op.create_table(
         "event_outbox",
@@ -687,16 +720,24 @@ def downgrade() -> None:
     op.drop_table("issue_dependencies")
     op.drop_table("fleet_snapshots")
     with op.batch_alter_table("events", schema=None) as batch_op:
+        batch_op.drop_index("idx_events_delivery_id_lower")
         batch_op.drop_index("uq_events_delivery_id")
         batch_op.drop_index("idx_events_repo")
         batch_op.drop_index("idx_events_received")
-        batch_op.drop_index("idx_events_delivery_id_lower")
 
     op.drop_table("events")
     with op.batch_alter_table("event_outbox", schema=None) as batch_op:
         batch_op.drop_index("idx_outbox_pending")
 
     op.drop_table("event_outbox")
+    with op.batch_alter_table("documents", schema=None) as batch_op:
+        batch_op.drop_index("uq_documents_request")
+        batch_op.drop_index("uq_documents_predecessor")
+        batch_op.drop_index("idx_documents_root")
+        batch_op.drop_index("idx_documents_created")
+
+    op.drop_table("documents")
+    op.drop_table("document_storage")
     with op.batch_alter_table("diagnostics", schema=None) as batch_op:
         batch_op.drop_index("uq_diagnostics_observation")
         batch_op.drop_index("idx_diagnostics_last_seen")

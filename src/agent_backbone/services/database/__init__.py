@@ -1,6 +1,11 @@
 """Database service — engine lifecycle, ORM models and the persistence API."""
 
 from agent_backbone.services.database._diagnostics_repo import diagnostic_details
+from agent_backbone.services.database._documents_repo import (
+    DocumentCapacity,
+    DocumentConflict,
+    DocumentRateLimit,
+)
 from agent_backbone.services.database._reports_repo import (
     ReportConflict,
     ReportForbidden,
@@ -16,6 +21,9 @@ __all__ = [
     "RECEIPT_RETENTION_DAYS",
     "BackboneDB",
     "Base",
+    "DocumentCapacity",
+    "DocumentConflict",
+    "DocumentRateLimit",
     "ReportConflict",
     "ReportForbidden",
     "ReportRateLimit",

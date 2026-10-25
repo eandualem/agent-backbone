@@ -26,6 +26,7 @@ from starlette.routing import Match
 
 from agent_backbone import signing
 from agent_backbone.api.auth import api_key_valid
+from agent_backbone.models import DOCUMENT_WIRE_BYTES
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ SENDER_ROUTES: tuple[SenderRoute, ...] = (
     SenderRoute("POST", "/api/integrations/reply", "body", "session"),
     SenderRoute("POST", "/api/reports", "body", "agent"),
     SenderRoute("POST", "/api/responses", "body", "agent"),
+    SenderRoute("POST", "/api/documents", "body", "author"),
     SenderRoute("POST", "/api/swarms", "body", "initiator"),
     SenderRoute("POST", "/api/agents/{session}/state", "path", "session"),
     SenderRoute("POST", "/api/skills", "body", "actor"),
@@ -159,7 +161,9 @@ class SignedSenderMiddleware:
         if found is None or config is None or db is None or not _authorized(config, headers):
             return await self.app(scope, receive, send)
 
-        body, complete = await _read(receive)
+        route, path_params = found
+        limit = DOCUMENT_WIRE_BYTES if route.template == "/api/documents" else MAX_BODY_BYTES
+        body, complete = await _read(receive, limit)
         replayed = False
 
         async def replay():
@@ -171,9 +175,8 @@ class SignedSenderMiddleware:
 
         if not complete:
             return await Refusal(
-                413, "malformed_request", f"body exceeds {MAX_BODY_BYTES} bytes"
+                413, "malformed_request", f"body exceeds {limit} bytes"
             ).response()(scope, replay, send)
-        route, path_params = found
         try:
             signed = await check(db, scope, headers, body, route, path_params)
         except Refusal as refusal:
@@ -190,15 +193,16 @@ def _authorized(config, headers: Headers) -> bool:
     return api_key_valid(auth[7:] if auth.startswith("Bearer ") else None, config.api_key)
 
 
-async def _read(receive) -> tuple[bytes, bool]:
+async def _read(receive, limit: int = MAX_BODY_BYTES) -> tuple[bytes, bool]:
     data = bytearray()
     while True:
         message = await receive()
         if message["type"] != "http.request":
             return bytes(data), True
-        data.extend(message.get("body", b""))
-        if len(data) > MAX_BODY_BYTES:
-            return bytes(data), False
+        chunk = message.get("body", b"")
+        if len(data) + len(chunk) > limit:
+            return b"", False
+        data.extend(chunk)
         if not message.get("more_body", False):
             return bytes(data), True
 

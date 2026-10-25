@@ -860,3 +860,12 @@ ordinary pending issue notifications retain their GitHub acknowledgement flow.
 For `--ack`, copy each complete `ack_token` from the inbox response. Numeric row
 IDs alone cannot acknowledge work; tokens prevent stale acknowledgements from
 consuming a different message after queue cleanup.
+
+## Durable Documents
+
+`backbone documents publish --file FILE --title TITLE` retains exact UTF-8 HTML;
+use `--validate` for a local check and `--supersedes ID` for a correction.
+`backbone documents` lists latest revisions, with `--agent`, `--author-id`,
+`--before` and `--limit` filters. `backbone documents show ID --json` returns the
+complete revision; `--output FILE` saves its exact HTML. See
+[Documents](documents.md) for identity, retries and admission limits.

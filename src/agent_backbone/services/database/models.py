@@ -9,7 +9,7 @@ numbers.
 
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Index, Integer, Text, text
+from sqlalchemy import BigInteger, Index, Integer, LargeBinary, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agent_backbone.services.database.base import Base
@@ -100,6 +100,40 @@ class ReportORM(Base):
         Index("idx_reports_audio", "telegram_audio_delivery", "telegram_audio_retry_at", "id"),
         {"sqlite_autoincrement": True},
     )
+
+
+class DocumentORM(Base):
+    """Immutable retained revisions, including their permanent retry receipts."""
+
+    __tablename__ = "documents"
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    document_id: Mapped[str] = mapped_column(Text, nullable=False)
+    author_id: Mapped[str] = mapped_column(Text, nullable=False)
+    author_name: Mapped[str] = mapped_column(Text, nullable=False)
+    request_id: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    html: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    content_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    supersedes_id: Mapped[int | None] = mapped_column(BigInteger)
+    __table_args__ = (
+        Index("uq_documents_request", "author_id", "request_id", unique=True),
+        Index("uq_documents_predecessor", "supersedes_id", unique=True),
+        Index("idx_documents_root", "document_id", "id"),
+        Index("idx_documents_created", "created_at", "author_id"),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class DocumentStorageORM(Base):
+    """One transactional admission counter/lock; never pruned with reports."""
+
+    __tablename__ = "document_storage"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    used_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
 class AgentWatchORM(Base):
