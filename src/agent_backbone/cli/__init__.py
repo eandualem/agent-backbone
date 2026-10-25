@@ -36,6 +36,7 @@ import sys
 from pathlib import Path
 
 from agent_backbone import __version__
+from agent_backbone.cli._common import is_agent_client
 from agent_backbone.cli.agents import (
     cmd_agent,
     cmd_chrome,
@@ -60,7 +61,7 @@ from agent_backbone.cli.status import add_status_options, cmd_status
 from agent_backbone.cli.swarms import cmd_docs, cmd_help, cmd_swarm
 from agent_backbone.cli.upgrade import cmd_upgrade
 from agent_backbone.cli.usage import cmd_usage
-from agent_backbone.config import RUNTIMES, agent_credential, bootstrap_config
+from agent_backbone.config import RUNTIMES, bootstrap_config
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -593,7 +594,7 @@ def main(argv: list[str] | None = None) -> None:
         client_key = bootstrap_config().api_key
     except ValueError as exc:
         parser.exit(1, f"{exc}\n")
-    if agent_credential(client_key):
+    if is_agent_client(client_key):
         sub = vars(args)
         administrative = (
             args.command in {"init", "up", "down", "hooks", "doctor"}

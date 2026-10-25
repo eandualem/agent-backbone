@@ -126,6 +126,11 @@ async def api_up(config: BackboneConfig) -> bool:
     return result is not None
 
 
+def is_agent_client(key: str) -> bool:
+    """Launch identity remains meaningful when development authentication is off."""
+    return agent_credential(key) or "BACKBONE_AGENT_CREDENTIAL" in os.environ
+
+
 class Direct:
     """Direct database access for when the backbone is not running."""
 
@@ -136,7 +141,7 @@ class Direct:
         self.config = config
 
     async def __aenter__(self) -> Direct:
-        if agent_credential(self._boot.api_key):
+        if is_agent_client(self._boot.api_key):
             raise ValueError(
                 "Agent credentials require the running API; direct database fallback is disabled"
             )
@@ -182,7 +187,7 @@ async def read_client_config() -> BackboneConfig:
     from sqlalchemy.ext.asyncio import create_async_engine
 
     boot = bootstrap_config()
-    if agent_credential(boot.api_key):
+    if is_agent_client(boot.api_key):
         # The launcher exports the effective address without loading operator secrets.
         from dataclasses import replace
 
@@ -237,7 +242,7 @@ async def _read_config() -> BackboneConfig:
     from agent_backbone.config import agents_from_rows, build_config
 
     boot = await read_client_config()
-    if agent_credential(boot.api_key):
+    if is_agent_client(boot.api_key):
         settings_result, agents_result = await asyncio.gather(
             api(boot, "GET", "/api/config"), api(boot, "GET", "/api/config/agents")
         )

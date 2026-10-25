@@ -11,7 +11,6 @@ from pathlib import Path
 
 from agent_backbone.cli import _common
 from agent_backbone.cli.presentation import note, print_record, print_table
-from agent_backbone.config import agent_credential
 from agent_backbone.services.agents import skills_preview
 from agent_backbone.services.agents.operations import relink_skills
 from agent_backbone.skills import (
@@ -295,7 +294,7 @@ async def _skills(args: argparse.Namespace) -> int:
         return 0
 
     async def preview(spec):
-        if not agent_credential(config.api_key):
+        if not _common.is_agent_client(config.api_key):
             return skills_preview(spec, config)
         response = await _common.api(config, "GET", f"/api/skills/preview/{spec.name}")
         if not response or response[0] != 200:

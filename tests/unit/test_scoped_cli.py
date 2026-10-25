@@ -48,14 +48,23 @@ async def test_agent_client_uses_exported_address_without_operator_env(tmp_path,
     assert config.api_key == agent_api_key("operator")
 
 
-async def test_scoped_discovery_reads_remote_configuration_without_database(tmp_path, monkeypatch):
+@pytest.mark.parametrize("credential", [agent_api_key("operator"), ""])
+async def test_scoped_discovery_reads_remote_configuration_without_database(
+    tmp_path, monkeypatch, credential
+):
     from agent_backbone.cli import _common
 
     monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("BACKBONE_API_KEY", agent_api_key("operator"))
+    monkeypatch.setenv("BACKBONE_AGENT_CREDENTIAL", credential)
+    monkeypatch.delenv("BACKBONE_API_KEY", raising=False)
+    monkeypatch.setenv("BACKBONE_HOST", "127.0.0.2")
+    monkeypatch.setenv("BACKBONE_PORT", "8234")
     (tmp_path / ".env").write_text("BACKBONE_DATABASE_URL=postgresql+asyncpg://private/server\n")
 
     async def respond(config, method, path):
+        assert config.api_key == credential
+        assert config.backbone.host == "127.0.0.2"
+        assert config.backbone.port == 8234
         return (
             200,
             {"backbone.port": {"value": 8234}}
@@ -151,3 +160,12 @@ def test_explicit_empty_launch_credential_keeps_no_key_client_without_env_fallba
     with patch("agent_backbone.config.dotenv_values") as read:
         assert bootstrap_config(tmp_path).api_key == ""
     read.assert_not_called()
+
+
+async def test_empty_launch_credential_cannot_use_direct_database_fallback(config, monkeypatch):
+    monkeypatch.setenv("BACKBONE_AGENT_CREDENTIAL", "")
+    with patch("agent_backbone.services.database.BackboneDB") as database:
+        with pytest.raises(ValueError, match="direct database fallback is disabled"):
+            async with Direct(replace(config, api_key="")):
+                pytest.fail("agent opened the database")
+    database.assert_not_called()

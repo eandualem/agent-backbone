@@ -17,7 +17,6 @@ from agent_backbone.config import (
     SETTINGS_DEFAULTS,
     SETTINGS_HELP,
     BackboneConfig,
-    agent_credential,
     validate_setting,
 )
 
@@ -191,7 +190,7 @@ def cmd_down(args: argparse.Namespace) -> int:
 async def _config_cmd(args: argparse.Namespace) -> int:
     sub = args.config_command
     boot = await _common.read_client_config()
-    remote = agent_credential(boot.api_key) and sub in {"list", "get"}
+    remote = _common.is_agent_client(boot.api_key) and sub in {"list", "get"}
     if remote:
         response = await _common.api(boot, "GET", "/api/config")
         if not response or response[0] != 200:
