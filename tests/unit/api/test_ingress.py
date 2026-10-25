@@ -77,3 +77,36 @@ async def test_document_limit_and_body_replay(config, prefix):
         AsyncMock(),
     )
     assert seen == [{"type": "http.request", "body": body, "more_body": False}]
+
+
+async def test_disconnect_before_final_body_does_not_dispatch(config):
+    app, send = AsyncMock(), AsyncMock()
+    receive = AsyncMock(
+        side_effect=[
+            {"type": "http.request", "body": b"{}", "more_body": True},
+            {"type": "http.disconnect"},
+        ]
+    )
+    guard = IngressMiddleware(app, SimpleNamespace(state=SimpleNamespace(config=config)))
+    await guard({"type": "http", "headers": []}, receive, send)
+    app.assert_not_called()
+    send.assert_not_called()
+
+
+@pytest.mark.parametrize("declared", [True, False])
+async def test_size_refusal_keeps_configured_cors_headers(config, declared):
+    origin = "https://console.example"
+    config = replace(config, backbone=replace(config.backbone, cors_origins=(origin,)))
+    send = AsyncMock()
+    headers = [(b"origin", origin.encode())]
+    if declared:
+        headers.append((b"content-length", b"999999999"))
+    guard = IngressMiddleware(AsyncMock(), SimpleNamespace(state=SimpleNamespace(config=config)))
+    await guard(
+        {"type": "http", "method": "POST", "headers": headers},
+        AsyncMock(return_value={"type": "http.request", "body": b"x" * (MAX_BODY_BYTES + 1)}),
+        send,
+    )
+    response = send.call_args_list[0].args[0]
+    assert response["status"] == 413
+    assert (b"access-control-allow-origin", origin.encode()) in response["headers"]

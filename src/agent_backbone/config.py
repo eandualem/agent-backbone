@@ -390,7 +390,9 @@ def validate_setting(key: str, value: Any) -> Any:
             )
         return value
     if key in _INT_LIST_SETTINGS:
-        if not isinstance(value, list):
+        if not isinstance(value, list) or (
+            key == "telegram.allowed_user_ids" and any(type(item) is not int for item in value)
+        ):
             raise ValueError(f"{key}: expected a JSON list of integers")
         try:
             return [int(item) for item in value]

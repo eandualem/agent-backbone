@@ -358,7 +358,11 @@ class AgentStore:
             if store is not None and isinstance(repo, str):
                 result = materialize(store, Path(repo), (), [], manifest)
                 if not result.ok:
-                    log.warning("Could not release skill links for %s: %s", name, result.conflicts)
+                    log.warning(
+                        "Could not release skill links for %s: %s",
+                        name,
+                        result.conflicts + result.broken,
+                    )
                     return False
         except (OSError, ValueError, AttributeError) as exc:
             # Kept: it is what a later cleanup of those links goes by.

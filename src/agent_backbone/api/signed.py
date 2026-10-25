@@ -164,6 +164,8 @@ class SignedSenderMiddleware:
         route, path_params = found
         limit = DOCUMENT_WIRE_BYTES if route.template == "/api/documents" else MAX_BODY_BYTES
         body, complete = await _read(receive, limit)
+        if complete is None:
+            return
         replayed = False
 
         async def replay():
@@ -193,12 +195,12 @@ def _authorized(config, headers: Headers) -> bool:
     return api_key_valid(auth[7:] if auth.startswith("Bearer ") else None, config.api_key)
 
 
-async def _read(receive, limit: int = MAX_BODY_BYTES) -> tuple[bytes, bool]:
+async def _read(receive, limit: int = MAX_BODY_BYTES) -> tuple[bytes, bool | None]:
     data = bytearray()
     while True:
         message = await receive()
         if message["type"] != "http.request":
-            return bytes(data), True
+            return b"", None
         chunk = message.get("body", b"")
         if len(data) + len(chunk) > limit:
             return b"", False

@@ -716,3 +716,7 @@ def test_modified_launch_environment_is_refused_before_exec(tmp_path, tamper):
         text=True,
     )
     assert result.returncode != 0 and "executed" not in result.stdout
+    if tamper == "content":
+        assert not path.exists()
+    else:
+        assert path.is_symlink() and target.read_bytes() == original

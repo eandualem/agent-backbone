@@ -5,6 +5,7 @@ from __future__ import annotations
 from urllib.parse import urlsplit
 
 from starlette.datastructures import Headers
+from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from agent_backbone.api.signed import MAX_BODY_BYTES, _read
@@ -54,14 +55,12 @@ class IngressMiddleware:
         except ValueError:
             declared = -1
         if declared < 0 or declared > limit:
-            return await JSONResponse(
-                {"detail": "Request body exceeds the allowed size"}, status_code=413
-            )(scope, receive, send)
+            return await self._too_large(scope, receive, send)
         body, complete = await _read(receive, limit)
+        if complete is None:
+            return
         if not complete:
-            return await JSONResponse(
-                {"detail": "Request body exceeds the allowed size"}, status_code=413
-            )(scope, receive, send)
+            return await self._too_large(scope, receive, send)
         replayed = False
 
         async def replay():
@@ -72,3 +71,18 @@ class IngressMiddleware:
             return await receive()
 
         return await self.app(scope, replay, send)
+
+    async def _too_large(self, scope, receive, send):
+        response = JSONResponse(
+            {"detail": "Request body exceeds the allowed size"}, status_code=413
+        )
+        origins = list(self.other_asgi_app.state.config.backbone.cors_origins)
+        if origins:
+            response = CORSMiddleware(
+                response,
+                allow_origins=origins,
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+        return await response(scope, receive, send)

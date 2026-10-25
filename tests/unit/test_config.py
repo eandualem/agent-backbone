@@ -292,3 +292,10 @@ class TestAgents:
         )
         assert [s.name for s in agents.owners("acme/app")] == ["app"]
         assert agents.watchers("acme/other") == []
+
+
+@pytest.mark.parametrize("value", [[4242.9], [True], ["4242"]])
+def test_telegram_user_allowlist_rejects_non_integer_values(value):
+    with pytest.raises(ValueError, match="list of integers"):
+        validate_setting("telegram.allowed_user_ids", value)
+    assert validate_setting("telegram.allowed_user_ids", [4242]) == [4242]
