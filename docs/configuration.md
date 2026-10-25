@@ -72,6 +72,7 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 |---|---|---|
 | `backbone.host` | `127.0.0.1` | Bind address; IPv6 loopback is `::1` (the CLI adds URL brackets). Keep it local unless you put auth and TLS in front |
 | `backbone.port` | `7120` | API port |
+| `backbone.socket_path` | `""` | Optional absolute Unix socket inside the data directory; empty disables it. Parent must be owned by the service account with mode 0700 |
 | `backbone.session_name` | `backbone` | tmux session used by `backbone up --detach` |
 | `backbone.cors_origins` | `[]` | Browser origins allowed to call the API; empty disables CORS |
 | `backbone.log_max_mb` | `20` | Size in MB at which `backbone up --log-file` (what the macOS service runs) rotates its log; `0` never rotates. Applies at the next start |
