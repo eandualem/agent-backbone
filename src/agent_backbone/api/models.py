@@ -38,7 +38,7 @@ class AgentStartRequest(BaseModel):
     runtime: str | None = None
     model: str | None = None
     resume: bool = False
-    """Continue the saved conversation (the runtime's latest when none is saved); default fresh."""
+    """Continue the saved conversation (refused when no exact ID is saved); default fresh."""
     watch: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     """Added to the agent's tags before it launches (skills and policies follow tags)."""

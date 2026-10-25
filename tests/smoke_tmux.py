@@ -11,8 +11,10 @@ import tempfile
 import uuid
 from pathlib import Path
 
+from agent_backbone.services.runtimes import send_message
 from agent_backbone.services.terminal import (
     capture_pane,
+    foreground_commands,
     paste_message,
     query_format_vars,
     send_keys,
@@ -81,6 +83,19 @@ async def main() -> None:
             server = Path(fields.get("socket_path", "")).resolve()
             if not server.is_relative_to(Path(directory).resolve()):
                 raise RuntimeError(f"refusing to run on a server outside {directory}: {fields!r}")
+            foreground = await foreground_commands(session)
+            if not any(
+                command and "python" in Path(command[0]).name.lower() for command in foreground
+            ):
+                raise RuntimeError(f"foreground process was not identified: {foreground!r}")
+            # Neither a shell adapter nor a stale runtime hint may submit to
+            # this non-model foreground process.
+            for hint in ("shell", "codex", None):
+                if (
+                    await send_message(session, "not-a-model-notification", runtime_hint=hint)
+                    is not None
+                ):
+                    raise RuntimeError("an unidentified receiver accepted a notification")
             if not await paste_message(session, marker):
                 raise RuntimeError("paste_message failed")
             if not await send_keys(session, "Enter"):

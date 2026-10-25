@@ -78,6 +78,7 @@ class DeliveryReport:
     operation_id: str | None = None
     delivery_id: int | None = None
     queue_id: int | None = None
+    held_for_inbox: bool = False
 
     @property
     def queued(self) -> bool:
@@ -92,6 +93,7 @@ class _QueueReceipt:
     operation_id: str | None = None
     error_type: str | None = None
     context_offers: tuple[tuple[int, str], ...] = ()
+    context_taken: tuple[tuple[int, str, str], ...] = ()
 
 
 _session_locks: WeakValueDictionary[tuple[int, str], asyncio.Lock] = WeakValueDictionary()
@@ -153,6 +155,13 @@ def _serialized(fn: Callable[..., Awaitable[_Result]]):
                             queue_id=queue_id,
                         )
                     return await fn(session_name, *args, **kwargs)
+            if (
+                db is not None
+                and queue_id is not None
+                and kwargs.get("requeue") is False
+                and not await db.queue.still_leased(queue_id)
+            ):
+                return DeliveryReport(DeliveryOutcome.AWAITING_ACK, queue_id=queue_id)
             source_key = kwargs.get("source_key") or ""
             if db is not None and source_key.startswith("review-start:"):
                 async with db.events.review_delivery(source_key) as eligible:
@@ -182,6 +191,11 @@ def queue_detail(
         if report.outcome == DeliveryOutcome.UNATTENDED_COPY_MODE
         else report.outcome.value.replace("_", " ")
     )
+    if report.held_for_inbox and report.queued:
+        return (
+            f"Held for {session_name}'s inbox without automatic delivery or expiry. "
+            "Read and acknowledge it with backbone inbox."
+        )
     if report.queue == "stored" and inbox_only:
         return (
             f"Held for {session_name}'s inbox: it is inbox-only and reads its messages with "
@@ -316,6 +330,8 @@ async def _enqueue(
     operation_id: str,
     uncertain: bool = False,
     priority: bool = False,
+    held_for_inbox: bool = False,
+    withdraw_context: Callable[[int], str] | None = None,
 ) -> _QueueReceipt:
     """Store the message; say what happened (``stored`` / ``already_queued`` /
     ``failed``), or None when there is nothing to store it in."""
@@ -332,6 +348,8 @@ async def _enqueue(
                 header=header,
                 lines=body.split("\n") if body else [],
                 priority=int(priority),
+                held_for_inbox=held_for_inbox,
+                withdraw_context=withdraw_context,
                 source=source,
                 operation_id=operation_id,
             )
@@ -348,6 +366,7 @@ async def _enqueue(
                 source_key=source_key,
                 operation_id=operation_id,
                 **({"uncertain": True} if uncertain else {}),
+                **({"held_for_inbox": True} if held_for_inbox else {}),
                 **({"priority": 1} if priority else {}),
             )
     except Exception as exc:
@@ -363,11 +382,19 @@ async def _enqueue(
     if result.status in ("inserted", "appended"):
         log.info("Queued %s for %s (%s) via %s", kind, session_name, repo or "-", source or "?")
         return _QueueReceipt(
-            "stored", queue_id, stored_operation, context_offers=result.context_offers
+            "stored",
+            queue_id,
+            stored_operation,
+            context_offers=result.context_offers,
+            context_taken=result.context_taken,
         )
     log.info("Same %s for %s already queued (from %s)", kind, session_name, sender or "?")
     return _QueueReceipt(
-        "already_queued", queue_id, stored_operation, context_offers=result.context_offers
+        result.status,
+        queue_id,
+        stored_operation,
+        context_offers=result.context_offers,
+        context_taken=result.context_taken,
     )
 
 
@@ -419,6 +446,7 @@ async def safe_deliver(
         if any(row["outcome"] in SUCCESS_OUTCOMES and _in_session(row, since) for row in rows):
             return DeliveryReport(DeliveryOutcome.ALREADY_DELIVERED, operation_id=operation_id)
 
+    held_subscription = False
     if db is not None and requeue:
         held = await db.queue.held_receipt(
             session_name,
@@ -430,13 +458,17 @@ async def safe_deliver(
             kind,
         )
         if held is not None:
-            return DeliveryReport(
-                DeliveryOutcome.AWAITING_ACK,
-                "already_queued",
-                held["status"] == "uncertain",
-                held["operation_id"],
-                queue_id=held["id"],
-            )
+            if kind == SUBSCRIPTION_KIND:
+                held_subscription = True
+            else:
+                return DeliveryReport(
+                    DeliveryOutcome.AWAITING_ACK,
+                    "already_queued",
+                    held["status"] == "uncertain",
+                    held["operation_id"],
+                    queue_id=held["id"],
+                    held_for_inbox=held["status"] == "checkpoint",
+                )
 
     # 1. Issue queue gate
     if kind == "issue" and trackable_issue:
@@ -481,7 +513,51 @@ async def safe_deliver(
 
     profile: SessionProfile | None = None
 
-    async def finish(outcome: DeliveryOutcome, *, queue: bool) -> DeliveryReport:
+    async def record_hook_delivery(
+        batch_id: int, batch_text: str, batch_operation: str
+    ) -> DeliveryReport:
+        delivery_id = await _record(
+            db,
+            claim_id=None,
+            repo=repo,
+            issue_number=None,
+            target_entity=target_entity,
+            session_name=session_name,
+            outcome=DeliveryOutcome.DELIVERED,
+            source="hook-context",
+            kind=kind,
+            preview=batch_text[:500],
+            operation_id=batch_operation,
+        )
+        await db.diagnostics.record(
+            category="delivery",
+            code="submitted",
+            severity="info",
+            operation_id=batch_operation,
+            agent_name=session_name,
+            source="hook-context",
+            runtime="",
+            repo=repo,
+            issue_number=None,
+            delivery_id=delivery_id,
+            queue_id=batch_id,
+            event_id=event_id,
+            details={"delivery_kind": kind, "priority": priority, "requeue": requeue},
+        )
+        # The receipt is the only proof the hook delivered it: settle the
+        # row first, so a failure or restart in between never pastes it.
+        await db.queue.mark_delivered(batch_id)
+        await asyncio.to_thread(clear_context, config.state_dir, session_name, str(batch_id))
+        return DeliveryReport(
+            DeliveryOutcome.DELIVERED,
+            operation_id=batch_operation,
+            delivery_id=delivery_id,
+            queue_id=batch_id,
+        )
+
+    async def finish(
+        outcome: DeliveryOutcome, *, queue: bool, held_for_inbox: bool = False
+    ) -> DeliveryReport:
         receipt = _QueueReceipt()
         if queue and requeue:
             receipt = await _enqueue(
@@ -498,9 +574,23 @@ async def safe_deliver(
                 operation_id=operation_id,
                 uncertain=uncertain,
                 priority=priority,
+                held_for_inbox=held_for_inbox,
+                withdraw_context=lambda row_id: claim_context(
+                    config.state_dir, session_name, str(row_id)
+                ),
             )
         elif uncertain and db is not None and queue_id is not None:
             await db.queue.hold_uncertain(queue_id)
+        elif held_for_inbox and db is not None and queue_id is not None:
+            await db.queue.hold_for_inbox(queue_id)
+        for taken_id, taken_text, taken_operation in receipt.context_taken:
+            await record_hook_delivery(taken_id, taken_text, taken_operation)
+        if receipt.status == "already_delivered":
+            return DeliveryReport(
+                DeliveryOutcome.ALREADY_DELIVERED,
+                operation_id=receipt.operation_id or operation_id,
+                queue_id=receipt.id,
+            )
         trace = receipt.operation_id or operation_id
         stored_queue_id = receipt.id if receipt.id is not None else queue_id
         delivery_id = await _record(
@@ -590,6 +680,7 @@ async def safe_deliver(
             operation_id=trace,
             delivery_id=delivery_id,
             queue_id=stored_queue_id,
+            held_for_inbox=held_for_inbox,
         )
 
     async def record_exception(code: str, stage: str, exc: Exception) -> None:
@@ -612,7 +703,7 @@ async def safe_deliver(
 
     uncertain = False
 
-    async def submit() -> bool:
+    async def submit() -> bool | None:
         nonlocal uncertain
         confirmed = (
             db is not None
@@ -648,6 +739,11 @@ async def safe_deliver(
         except Exception as exc:
             await record_exception("submission_unconfirmed", "submission", exc)
             raise
+
+    if held_subscription:
+        # A replay can mix held and fresh events. Retain all of them before
+        # any paste or hook offer, and settle any previously taken offers.
+        return await finish(DeliveryOutcome.AWAITING_ACK, queue=True, held_for_inbox=True)
 
     # 3. Readiness
     try:
@@ -686,47 +782,13 @@ async def safe_deliver(
             claim_context, config.state_dir, session_name, str(queue_id)
         )
         if claim == "taken":
-            delivery_id = await _record(
-                db,
-                claim_id=None,
-                repo=repo,
-                issue_number=None,
-                target_entity=target_entity,
-                session_name=session_name,
-                outcome=DeliveryOutcome.DELIVERED,
-                source="hook-context",
-                kind=kind,
-                preview=preview,
-                operation_id=operation_id,
-            )
-            await db.diagnostics.record(
-                category="delivery",
-                code="submitted",
-                severity="info",
-                operation_id=operation_id,
-                agent_name=session_name,
-                source="hook-context",
-                runtime="",
-                repo=repo,
-                issue_number=None,
-                delivery_id=delivery_id,
-                queue_id=queue_id,
-                event_id=event_id,
-                details={"delivery_kind": kind, "priority": priority, "requeue": requeue},
-            )
-            # The receipt is the only proof the hook delivered it: settle the
-            # row first, so a failure or restart in between never pastes it.
-            await db.queue.mark_delivered(queue_id)
-            await asyncio.to_thread(clear_context, config.state_dir, session_name, str(queue_id))
-            return DeliveryReport(
-                DeliveryOutcome.DELIVERED,
-                operation_id=operation_id,
-                delivery_id=delivery_id,
-                queue_id=queue_id,
-            )
+            return await record_hook_delivery(queue_id, message, operation_id)
 
     # 4. Paste + submit
-    if await submit():
+    sent = await submit()
+    if sent is None:
+        return await finish(DeliveryOutcome.AWAITING_ACK, queue=True, held_for_inbox=True)
+    if sent:
         return await finish(DeliveryOutcome.DELIVERED, queue=False)
     report = await finish(DeliveryOutcome.DELIVERY_FAILED, queue=True)
     if uncertain:

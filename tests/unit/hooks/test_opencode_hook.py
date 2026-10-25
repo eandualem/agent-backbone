@@ -18,6 +18,7 @@ def test_state_records_identify_the_runtime_and_session(tmp_path):
     plugin = tmp_path / "hook.mjs"
     plugin.write_text(hook_source("opencode_hook.js").read_text())
     script = """
+process.umask(0);
 const { AgentBackbone } = await import(process.argv[1]);
 const hook = await AgentBackbone();
 await hook.event({event: {type: "session.status", properties: {
@@ -41,6 +42,8 @@ await hook.event({event: {type: "session.status", properties: {
     assert state["runtime"] == "opencode"
     assert state["session_id"] == "opencode-session"
     assert state["launch_id"] == "replacement-launch"
+    assert tmp_path.stat().st_mode & 0o777 == 0o700
+    assert all(p.stat().st_mode & 0o777 == 0o600 for p in tmp_path.rglob("*.json"))
 
 
 def test_the_running_model_comes_from_a_completed_opencode_reply(tmp_path):

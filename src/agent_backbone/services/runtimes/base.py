@@ -39,8 +39,10 @@ from agent_backbone.services.runtimes._pane import (
 )
 from agent_backbone.services.terminal import (
     capture_pane,
+    foreground_commands,
     paste_message,
     press_submit,
+    query_format_vars,
     send_keys,
 )
 
@@ -1086,6 +1088,29 @@ class Runtime:
     async def reject_plan(self, session_name: str) -> int:
         """Decline the plan so feedback can follow as a message; see ``approve_plan``."""
         return await self._send_all(session_name, self.plan_reject_keys)
+
+    async def accepts_notifications(self, session_name: str) -> bool:
+        """Require the actual foreground executable, not a stale runtime hint."""
+        if self.binary is None:
+            return False
+        current = await query_format_vars(session_name, "command=#{pane_current_command}")
+        if current.get("command") == self.binary:
+            return True
+        launcher = resolve_command(self.binary)
+        if launcher is None:
+            return False
+        expected = Path(launcher).resolve()
+        for command in await foreground_commands(session_name):
+            if not command:
+                continue
+            executable = Path(command[0]).name
+            # A script launcher is valid only when it is the installed CLI's
+            # exact entry point; an arbitrary Node/Python process is not a model.
+            if len(command) > 1 and re.fullmatch(r"node|bun|python(?:\d+(?:\.\d+)*)?", executable):
+                script = Path(command[1])
+                if script.is_absolute() and script.resolve() == expected:
+                    return True
+        return False
 
     async def deliver_message(self, session_name: str, message: str) -> bool:
         """Paste a message and submit it according to runtime-specific rules."""

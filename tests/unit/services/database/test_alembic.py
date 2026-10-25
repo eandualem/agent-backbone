@@ -804,3 +804,51 @@ async def test_populated_report_upgrade_preserves_history_and_separates_retry_ke
         ] == "Yes."
         retried, created = await db.reports.publish(publication())
         assert not created and retried["id"] == old["id"]
+
+
+@pytest.mark.parametrize("existing", [False, True])
+async def test_sqlite_file_is_private_before_connection(tmp_path, existing):
+    import os
+
+    from sqlalchemy import text
+
+    target = tmp_path / "private" / "backbone.db"
+    if existing:
+        target.parent.mkdir()
+        target.touch(mode=0o666)
+        target.chmod(0o666)
+    old = os.umask(0)
+    try:
+        engine = build_engine(f"sqlite+aiosqlite:///{target}")
+    finally:
+        os.umask(old)
+    try:
+        assert target.stat().st_mode & 0o777 == 0o600
+        async with engine.connect() as connection:
+            assert (await connection.execute(text("SELECT 1"))).scalar_one() == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize("memory", [True, False])
+@pytest.mark.parametrize("uri", ["true", "1", "yes", "on"])
+async def test_sqlite_uri_permissions_target_the_actual_database(
+    tmp_path, monkeypatch, memory, uri
+):
+    from sqlalchemy import text
+
+    from agent_backbone.services.database.engine import build_engine
+
+    monkeypatch.chdir(tmp_path)
+    mode = "mode=memory&cache=shared&" if memory else ""
+    engine = build_engine(f"sqlite+aiosqlite:///file:shared%20db?{mode}uri={uri}")
+    try:
+        async with engine.connect() as connection:
+            assert (await connection.execute(text("SELECT 1"))).scalar() == 1
+    finally:
+        await engine.dispose()
+    assert not (tmp_path / "file:shared%20db").exists()
+    if memory:
+        assert list(tmp_path.iterdir()) == []
+    else:
+        assert (tmp_path / "shared db").stat().st_mode & 0o777 == 0o600

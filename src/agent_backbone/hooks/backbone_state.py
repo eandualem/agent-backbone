@@ -770,22 +770,35 @@ def launch_state_path(state_dir: Path, agent: str, launch_id: object) -> Path | 
     return state_dir / "launches" / agent / f"{identity}.json"
 
 
+def _private_directory(path: Path) -> None:
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.chmod(0o700)
+
+
+def _private_write(path: Path, text: str, *, append: bool = False) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_APPEND if append else os.O_TRUNC)
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, "a" if append else "w", encoding="utf-8") as file:
+        os.fchmod(file.fileno(), 0o600)
+        file.write(text)
+
+
 def write_state(state_dir: Path, agent: str, record: dict) -> None:
-    state_dir.mkdir(parents=True, exist_ok=True)
+    _private_directory(state_dir)
     plan_text = record.pop("plan_text", None)
     if plan_text is not None:
         plans_dir = state_dir / "plans"
-        plans_dir.mkdir(parents=True, exist_ok=True)
+        _private_directory(plans_dir)
         plan_path = plans_dir / f"{agent}.md"
-        plan_path.write_text(plan_text)
+        _private_write(plan_path, plan_text)
         record["plan_file"] = str(plan_path)
     targets = [state_dir / f"{agent}.json"]
     if scoped := launch_state_path(state_dir, agent, record.get("launch_id")):
         targets.insert(0, scoped)
     for target in targets:
-        target.parent.mkdir(parents=True, exist_ok=True)
+        _private_directory(target.parent)
         tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(record))
+        _private_write(tmp, json.dumps(record))
         os.replace(tmp, target)
 
 
@@ -801,7 +814,8 @@ def remember_usage_session(state_dir: Path, agent: str, record: dict) -> None:
         f"{agent}\0{runtime}\0{session_id}\0{launch or chr(45)}".encode()
     ).hexdigest()
     directory = state_dir / "usage-sessions"
-    directory.mkdir(parents=True, exist_ok=True)
+    _private_directory(state_dir)
+    _private_directory(directory)
     target = directory / (identity + ".json")
     if target.exists():
         return  # identity is immutable; collection consumes it after the DB commit
@@ -814,14 +828,15 @@ def remember_usage_session(state_dir: Path, agent: str, record: dict) -> None:
     if launch:
         value["launch_id"] = launch
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(value))
+    _private_write(tmp, json.dumps(value))
     os.replace(tmp, target)
 
 
 def append_action(state_dir: Path, agent: str, action: dict) -> None:
-    state_dir.mkdir(parents=True, exist_ok=True)
-    with (state_dir / "actions.jsonl").open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps({**action, "session": agent}) + "\n")
+    _private_directory(state_dir)
+    _private_write(
+        state_dir / "actions.jsonl", json.dumps({**action, "session": agent}) + "\n", append=True
+    )
 
 
 CONTEXT_DIR = "context"
@@ -844,14 +859,15 @@ def offer_context(state_dir: Path, agent: str, key: str, text: str) -> bool:
     Checked before the receipt, against the hook's rename of ``.md`` to
     ``.taken``: an offer the hook takes meanwhile is never written again."""
     directory = _context_dir(state_dir, agent)
-    directory.mkdir(parents=True, exist_ok=True)
+    _private_directory(state_dir)
+    _private_directory(directory)
     target = directory / f"{key}.md"
     if target.exists():
         return True
     if (directory / f"{key}.taken").exists():
         return False
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    tmp.write_text(text, encoding="utf-8")
+    _private_write(tmp, text)
     os.replace(tmp, target)
     return True
 
@@ -1011,15 +1027,16 @@ def offer_steer(
     only within that turn of that conversation. Without them, the session's
     next tool call takes the offer, whichever turn that is."""
     directory = _steer_dir(state_dir, agent, launch_id)
-    directory.mkdir(parents=True, exist_ok=True)
+    _private_directory(state_dir)
+    _private_directory(directory)
     if (directory / f"{key}.taken").exists():
         return False
     marks = {name: value for name, value in (turn or {}).items() if value is not None}
     if marks:
-        (directory / f"{key}.turn").write_text(json.dumps(marks), encoding="utf-8")
+        _private_write(directory / f"{key}.turn", json.dumps(marks))
     target = directory / f"{key}.md"
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    tmp.write_text(text, encoding="utf-8")
+    _private_write(tmp, text)
     os.replace(tmp, target)
     return True
 

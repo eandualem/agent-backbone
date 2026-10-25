@@ -211,7 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="continue the conversation the backbone last saw for this agent "
-        "(the runtime's latest when none is saved); same as `backbone agent resume`",
+        "(refused when no exact ID is saved); same as `backbone agent resume`",
     )
     conversation.add_argument(
         "--fresh",

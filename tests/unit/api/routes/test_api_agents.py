@@ -182,7 +182,14 @@ class TestStartAgent:
         assert kwargs["command"] == ["/usr/bin/claude"]
         assert kwargs["environment"]["BACKBONE_RUNTIME"] == "claude"
 
-    async def test_request_overrides_config(self, api_client, auth_headers, launch):
+    async def test_request_overrides_config(self, api_client, auth_headers, launch, api_app):
+        from agent_backbone.services.agents import write_state_file
+
+        write_state_file(
+            api_app.state.config.state_dir,
+            "ike",
+            {"state": "idle", "ts": time.time(), "runtime": "codex", "session_id": "saved-id"},
+        )
         launch.build_command.return_value = ["/usr/bin/codex", "--model", "x"]
         resp = await api_client.post(
             "/api/agents/ike/start",
@@ -192,7 +199,7 @@ class TestStartAgent:
         assert resp.json()["runtime"] == "codex"
         assert launch.start_session.await_args.kwargs["environment"]["BACKBONE_RUNTIME"] == "codex"
         assert launch.build_command.call_args.kwargs["model"] == "x"
-        assert launch.build_command.call_args.kwargs["resume"] is True
+        assert launch.build_command.call_args.kwargs["resume"] == "saved-id"
 
     async def test_every_runtime_gets_the_trust_setting(self, api_client, auth_headers, launch):
         # `agent start` for codex must pre-trust like the swarm path does, and

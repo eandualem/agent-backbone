@@ -157,7 +157,7 @@ Starting an existing agent reuses its saved CLI and model and begins a **new
 conversation**. Continuing the previous one is your call: `backbone agent resume
 NAME` (or `start --resume`; API `resume: true`) reopens the conversation the
 agent's last launch held (the session id its hook reported, or the one it was
-resumed on), or the runtime's own last conversation when there is none. An id
+resumed on). Without that identity, resume refuses to guess. An id
 left by an earlier launch is not reused. A fresh start says when a previous conversation is available. Starts are
 fresh by default because a resumed agent trusts its own context over whatever
 happened in the checkout since — another CLI, a swarm, the shared memory.
@@ -200,12 +200,12 @@ fresh one:
  "ready": "ready", "evidence": ["resuming the session the last launch reported: 019a… (9h old)"]}
 ```
 
-When the saved session id is used, an evidence line names it. Without that line
-the runtime's own latest conversation was opened. A running agent is left
+When the saved session id is used, an evidence line names it. Without a resumable
+identity, the request returns `ok: false` and does not launch a conversation. A running agent is left
 as it is and returns `already_existed: true`; nothing is resumed. The CLI
 reference's [Resuming a previous conversation](cli.md#resuming-a-previous-conversation)
 lists every case, and `resume_selection` in the start's diagnostic records
-(`fresh`, `known_session` or `runtime_latest`) records the same choice.
+(`fresh`, `known_session` or `unresolved`) records the same choice.
 
 ### `POST /api/agents/{name}/stop`
 
@@ -310,7 +310,7 @@ Everything the backbone knows about one agent, with the evidence:
 `session_id` is the conversation id the agent's hook reported; for a running
 agent, only one reported by the current session. A resume opens it only when
 the agent's runtime still matches the one that reported it and can open a
-session by id. Otherwise the runtime's own latest conversation opens.
+session by id. Otherwise resume is refused; start a fresh conversation with `resume: false`.
 `state_age_seconds` is how long ago the hook last wrote.
 
 ### `GET /api/agents/{name}/state`

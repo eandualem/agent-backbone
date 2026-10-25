@@ -155,3 +155,23 @@ async def test_active_ids_are_the_rows_still_waiting_or_being_delivered(db):
         ids[status] = row.id
     expected = {ids[s] for s in ("pending", "in_progress", "checkpoint", "uncertain")}
     assert await db.queue.active_ids() == expected
+
+
+async def test_inbox_held_brief_blocks_later_work_until_acknowledged(db):
+    brief = await db.queue.enqueue(
+        session_name="app",
+        message="startup instructions",
+        delivery_kind="direct_message",
+        source=BRIEF_SOURCE,
+    )
+    later = await db.queue.enqueue(
+        session_name="app",
+        message="later work",
+        delivery_kind="direct_message",
+    )
+    await db.queue.hold_for_inbox(brief.id)
+    assert await db.queue.has_brief_ahead("app", later.id)
+    assert not await db.queue.has_brief_ahead("app", brief.id)
+    token = f"{brief.id}:{brief.operation_id}"
+    assert await db.queue.acknowledge_checkpoint("app", [token]) == [token]
+    assert not await db.queue.has_brief_ahead("app", later.id)

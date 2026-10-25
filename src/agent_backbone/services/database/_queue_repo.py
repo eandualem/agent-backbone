@@ -57,6 +57,8 @@ class EnqueueResult:
     context_offers: tuple[tuple[int, str], ...] = ()
     """Exact immutable high-batch rows, each offered under its own receipt ID."""
 
+    context_taken: tuple[tuple[int, str, str], ...] = ()
+
     @property
     def stored(self) -> bool:
         """Whether a row for this message now exists in the queue."""
@@ -128,6 +130,7 @@ class QueueRepo(Repo):
         source_key: str | None = None,
         operation_id: str | None = None,
         uncertain: bool = False,
+        held_for_inbox: bool = False,
         priority: int = 0,
     ) -> EnqueueResult:
         """Store a message for later delivery.
@@ -147,7 +150,11 @@ class QueueRepo(Repo):
                 "delivery_kind": delivery_kind,
                 "source": source,
                 "enqueued_at": now_iso(),
-                "initial_status": "uncertain" if uncertain else "pending",
+                "initial_status": "uncertain"
+                if uncertain
+                else "checkpoint"
+                if held_for_inbox
+                else "pending",
                 "sender": sender,
                 "dedup_key": dedup_key_for(message, sender, source_key),
                 "priority": priority,
@@ -188,7 +195,8 @@ class QueueRepo(Repo):
                         "UPDATE message_queue SET operation_id = "
                         "COALESCE(operation_id, :operation_id), "
                         "status = CASE WHEN :initial_status = 'uncertain' "
-                        "THEN 'uncertain' ELSE status END "
+                        "THEN 'uncertain' WHEN :initial_status = 'checkpoint' "
+                        "AND status != 'uncertain' THEN 'checkpoint' ELSE status END "
                         f"WHERE {key} AND "
                         "status IN ('pending', 'in_progress', 'checkpoint', 'uncertain') "
                         "RETURNING id, operation_id"
@@ -260,6 +268,8 @@ class QueueRepo(Repo):
         priority: int,
         source: str = "",
         operation_id: str | None = None,
+        held_for_inbox: bool = False,
+        withdraw_context: Callable[[int], str] | None = None,
     ) -> EnqueueResult:
         """Add subscribed events to the session's open normal batch, or open one.
 
@@ -297,17 +307,47 @@ class QueueRepo(Repo):
                     known.setdefault(line, dict(held_row))
             fresh = [line for line in lines if line not in known]
             holders = {known[line]["id"]: known[line] for line in lines if line in known}
+            taken_rows: list[tuple[int, str, str]] = []
+            if held_for_inbox:
+                if withdraw_context is None:
+                    raise ValueError("inbox holds require hook-offer withdrawal")
+                for row in holders.values():
+                    if row["status"] not in {"pending", "in_progress", "checkpoint"}:
+                        continue
+                    taken = withdraw_context(row["id"]) == "taken"
+                    if taken:
+                        taken_rows.append((row["id"], row["message"], row["operation_id"]))
+                    row["status"] = "delivered" if taken else "checkpoint"
+                    await conn.execute(
+                        text(
+                            "UPDATE message_queue SET status=:status, leased_at=NULL, "
+                            "delivered_at=:delivered WHERE id=:id "
+                            "AND status IN ('pending','in_progress','checkpoint')"
+                        ),
+                        {
+                            "id": row["id"],
+                            "status": "delivered" if taken else "checkpoint",
+                            "delivered": now_iso() if taken else None,
+                        },
+                    )
             # The process may have stopped before a waiting high batch was
             # offered: offer it again under its own id (a taken one never is).
             offers: list[tuple[int, str]] = [
                 (row["id"], row["message"])
                 for row in holders.values()
-                if row["priority"] and row["status"] == "pending"
+                if row["priority"] and row["status"] == "pending" and not held_for_inbox
             ]
             if lines and not fresh:
                 holder = holders[max(holders)]
                 return EnqueueResult(
-                    "already_queued", holder["id"], holder["operation_id"], tuple(offers)
+                    "already_delivered"
+                    if held_for_inbox
+                    and all(row["status"] == "delivered" for row in holders.values())
+                    else "already_queued",
+                    holder["id"],
+                    holder["operation_id"],
+                    tuple(offers),
+                    tuple(taken_rows),
                 )
             rest = list(fresh)
             grown: EnqueueResult | None = None
@@ -326,14 +366,22 @@ class QueueRepo(Repo):
                     if message != row["message"]:
                         result = await conn.execute(
                             text(
-                                "UPDATE message_queue SET message = :message "
+                                "UPDATE message_queue SET message = :message, status = :status "
                                 "WHERE id = :id AND status = 'pending'"
                             ),
-                            {"id": row["id"], "message": message},
+                            {
+                                "id": row["id"],
+                                "message": message,
+                                "status": "checkpoint" if held_for_inbox else "pending",
+                            },
                         )
                         if result.rowcount:
                             grown = EnqueueResult(
-                                "appended", row["id"], row["operation_id"], tuple(offers)
+                                "appended",
+                                row["id"],
+                                row["operation_id"],
+                                tuple(offers),
+                                tuple(taken_rows),
                             )
                         else:
                             rest = list(fresh)  # leased meanwhile: open a new batch
@@ -351,7 +399,7 @@ class QueueRepo(Repo):
                     "delivery_kind": SUBSCRIPTION_KIND,
                     "source": source,
                     "enqueued_at": now_iso(),
-                    "initial_status": "pending",
+                    "initial_status": "checkpoint" if held_for_inbox else "pending",
                     "sender": "",
                     "dedup_key": f"sub:{uuid.uuid4().hex}",
                     "priority": priority,
@@ -360,10 +408,12 @@ class QueueRepo(Repo):
                     text(f"INSERT INTO message_queue {_INSERT_COLUMNS} RETURNING id"), params
                 )
                 row_id = result.scalar_one()
-                if priority:
+                if priority and not held_for_inbox:
                     offers.append((row_id, message))
                 if not rest:
-                    return EnqueueResult("inserted", row_id, params["operation_id"], tuple(offers))
+                    return EnqueueResult(
+                        "inserted", row_id, params["operation_id"], tuple(offers), tuple(taken_rows)
+                    )
                 operation_id = None
 
     async def pending_count(self, session_name: str) -> int:
@@ -700,6 +750,17 @@ class QueueRepo(Repo):
             await self._record_lifecycle(row, "retired_issue_closed", reason="issue_closed")
         return len(rows)
 
+    async def hold_for_inbox(self, message_id: int) -> None:
+        """Retain a data-only notification until it is explicitly acknowledged."""
+        async with self._tx() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE message_queue SET status='checkpoint', leased_at=NULL "
+                    "WHERE id=:id AND status IN ('pending','in_progress')"
+                ),
+                {"id": message_id},
+            )
+
     async def hold_uncertain(self, message_id: int) -> None:
         """An attempted paste may have been accepted. Do not retry it automatically."""
         async with self._tx() as conn:
@@ -831,6 +892,20 @@ class QueueRepo(Repo):
         kind: str,
     ) -> dict | None:
         async with self._tx() as conn:
+            if kind == SUBSCRIPTION_KIND:
+                held = await conn.execute(
+                    text(
+                        "SELECT id,operation_id,status,message FROM message_queue "
+                        "WHERE session_name=:session AND delivery_kind=:kind "
+                        "AND status IN ('checkpoint','uncertain') ORDER BY id DESC"
+                    ),
+                    {"session": session, "kind": kind},
+                )
+                lines = set(message.split("\n")[1:])
+                for row in held.mappings():
+                    if lines.intersection(row["message"].split("\n")[1:]):
+                        return dict(row)
+                return None
             result = await conn.execute(
                 text(
                     "SELECT id,operation_id,status FROM message_queue WHERE session_name=:session "
@@ -913,7 +988,8 @@ class QueueRepo(Repo):
             result = await conn.execute(
                 text(
                     "SELECT 1 FROM message_queue WHERE session_name=:session AND source=:brief "
-                    "AND status IN ('pending', 'in_progress') AND id != :id "
+                    "AND status IN ('pending', 'in_progress', 'checkpoint', 'uncertain') "
+                    "AND id != :id "
                     # A brief is never held behind another (a restart may queue a second).
                     "AND NOT EXISTS "
                     "(SELECT 1 FROM message_queue WHERE id = :id AND source = :brief) LIMIT 1"

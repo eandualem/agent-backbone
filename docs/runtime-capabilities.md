@@ -3,7 +3,7 @@
 Which Backbone capabilities work on which agent CLI. Backbone ships seven
 adapters: `claude` (Claude Code), `codex`, `gemini` (Gemini CLI), `opencode`,
 `deepcode` (Deep Code), `aider`, and `shell`, a plain shell for testing the
-plumbing, not for real use.
+terminal plumbing. Shell notifications stay in the inbox as data.
 
 Claude Code, Codex and OpenCode are the required set: a capability counts as
 working only when it gives the same result in all three, and a gap on one of
@@ -42,7 +42,7 @@ version differs.
 | Stored questions, answers and actions with durable topic delivery | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py |
 | Retained observations of reconciled state over the API | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | Configured instruction sources and text over the API | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ source preview only; no instruction injection |
-| Message delivery into the session | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? not verified live | ✅ plumbing tests only |
+| Message delivery into the session | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? not verified live | n/a |
 | Folder-trust dialog answered at start | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (version not recorded) `--skip-trust` | n/a | n/a | ? not checked | n/a |
 | Brief reaches a fresh session before other work | ✅ | ✅ | ✅ | ✅ | ? | ? not verified live | n/a |
 | Current brief after resume | ✅ (2.1.284) | ✅ (0.157.1) | ❌ | ❌ #273 | ❌ | ❌ | n/a |
@@ -61,7 +61,7 @@ version differs.
 | Plan approval answered | ✅ (2.1.284) | ✅ (0.157.1) in Plan mode (`/plan`) | ❌ | ❌ #278 requires switching agents in the native session, not structured plan approval | ❌ | ❌ | n/a |
 | Alert when an automatic safety check refuses an action | ✅ (2.1.282) | ✅ (0.160.0) its automatic reviewer (`agents.auto_review`) | ❌ | ✅ (2.1.4) 2.1.4+ typed policy denials; native simulated fixture, working-agent check pending | ❌ | ❌ | n/a |
 | Browser tab group named after the agent | ✅ (version not recorded) with `backbone chrome install` | ❌ #270 | ❌ | ❌ #270 | ❌ | ❌ | n/a |
-| Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ resumes the directory's latest session | ❌ | n/a |
+| Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ resume refused: exact session selection unavailable | ❌ | n/a |
 | Fleet snapshot resumes the saved session exactly | ✅ | ✅ | ✅ | ✅ | ❌ reported as exact_resume_unsupported | ❌ reported as exact_resume_unsupported | n/a |
 | Reasoning effort chosen with the model (`model:effort`, OpenCode `model::effort`) | ✅ | ✅ | ? whether the CLI has an effort setting is not checked | ✅ requires current @opencode/cli (2.1.4+); model::effort | ✅ low, high or max, through DEEPCODE_REASONING_EFFORT | ? whether the CLI has an effort setting is not checked | n/a |
 | No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |

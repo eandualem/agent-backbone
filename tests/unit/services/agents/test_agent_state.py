@@ -581,6 +581,7 @@ class TestRotateActionLog:
     def test_keeps_the_newest_entries(self, tmp_path):
         path = self._log(tmp_path, 50)
         assert rotate_action_log(path, keep_lines=10) == 40
+        assert path.stat().st_mode & 0o777 == 0o600
         kept = [json.loads(ln) for ln in path.read_text().splitlines()]
         assert [e["issue"] for e in kept] == list(range(40, 50))
 
