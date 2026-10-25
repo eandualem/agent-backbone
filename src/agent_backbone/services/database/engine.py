@@ -8,8 +8,10 @@ repository modules, which receive connections from it.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 _POSTGRES_POOL_SIZE = 5
@@ -28,8 +30,19 @@ def build_engine(url: str) -> AsyncEngine:
     """Create an async engine with dialect-appropriate pool settings."""
     if is_sqlite(url):
         if not is_memory(url):
-            db_file = url.split("///", 1)[-1]
-            Path(db_file).expanduser().parent.mkdir(parents=True, exist_ok=True)
+            db_file = make_url(url).database
+            if db_file:
+                path = Path(db_file).expanduser()
+                path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+                try:
+                    os.fchmod(fd, 0o600)
+                finally:
+                    os.close(fd)
+                for suffix in ("-wal", "-shm", "-journal"):
+                    companion = Path(str(path) + suffix)
+                    if companion.exists() and not companion.is_symlink():
+                        companion.chmod(0o600)
         return create_async_engine(url)
     return create_async_engine(
         url,

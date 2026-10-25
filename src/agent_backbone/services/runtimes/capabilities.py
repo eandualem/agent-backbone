@@ -253,7 +253,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Message delivery into the session",
         "src/agent_backbone/services/routing/_delivery.py",
         fallback="Check `agent inspect` for the delivery evidence before relying on it.",
-        implemented=lambda rt: True,
+        implemented=lambda rt: bool(rt.binary),
         cli_dependent=True,
         claude=_ok(_B3, verified_on="2.1.284"),
         codex=_ok(_B3, verified_on="0.157.1"),
@@ -261,9 +261,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         opencode=_ok(_B3, verified_on="1.18.32"),
         deepcode=_ok("live: checked during development (Deep Code 0.3.1)", verified_on="0.3.1"),
         aider=_unverified(note="not verified live"),
-        shell=_ok(
-            "tests/unit/services/routing/test_delivery_diagnostics.py", "plumbing tests only"
-        ),
+        shell=_na("no model receiver; notifications stay in the inbox as data"),
     ),
     _row(
         "trust",
@@ -581,7 +579,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok(_LAUNCH),
         gemini=_ok(_LAUNCH),
         opencode=_ok(_LAUNCH),
-        deepcode=_gap(note="resumes the directory's latest session"),
+        deepcode=_gap(note="resume refused: exact session selection unavailable"),
         aider=_gap(),
         shell=_na("a plain shell has no conversation to resume"),
     ),

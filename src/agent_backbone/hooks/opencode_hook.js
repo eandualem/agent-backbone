@@ -146,14 +146,29 @@ function readCurrent(t) {
   }
 }
 
+function privateDirectory(dir) {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(dir, 0o700);
+}
+
+function privateWrite(file, text, append = false) {
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW |
+    (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC);
+  const fd = fs.openSync(file, flags, 0o600);
+  try {
+    fs.fchmodSync(fd, 0o600);
+    fs.writeFileSync(fd, text);
+  } finally { fs.closeSync(fd); }
+}
+
 function writeState(t, record) {
   if (launchID()) record.launch_id = launchID();
-  fs.mkdirSync(t.dir, { recursive: true });
+  privateDirectory(t.dir);
   const files = [launchStatePath(t), path.join(t.dir, `${t.agent}.json`)];
   for (const file of files.filter(Boolean)) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    privateDirectory(path.dirname(file));
     const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(record));
+    privateWrite(tmp, JSON.stringify(record));
     fs.renameSync(tmp, file);
   }
   if (record.session_id) {
@@ -163,10 +178,10 @@ function writeState(t, record) {
         JSON.stringify([t.agent, record.runtime, record.session_id, launch]),
       ).digest("hex");
       const history = path.join(t.dir, "usage-sessions");
-      fs.mkdirSync(history, { recursive: true });
+      privateDirectory(history);
       const saved = path.join(history, `${identity}.json`);
       const temporary = `${saved}.${process.pid}.tmp`;
-      fs.writeFileSync(temporary, JSON.stringify({agent: t.agent, runtime: record.runtime,
+      privateWrite(temporary, JSON.stringify({agent: t.agent, runtime: record.runtime,
         session_id: record.session_id, observed_at: record.ts, launch_id: launch}));
       fs.renameSync(temporary, saved);
     } catch { /* Usage history must not interrupt the agent. */ }
@@ -183,16 +198,16 @@ function savePlan(t, question, root) {
   } catch { /* shown untitled; the question still waits for an answer */ }
   const title = text.split("\n").map((line) => line.trim().replace(/^#+/, "").trim()).find(Boolean);
   const file = path.join(t.dir, "plans", `${t.agent}.md`);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, text);
+  privateDirectory(path.dirname(file));
+  privateWrite(file, text);
   return { plan_file: file, plan_title: (title ?? "Untitled plan").slice(0, 120) };
 }
 
 function appendAction(t, action) {
-  fs.mkdirSync(t.dir, { recursive: true });
-  fs.appendFileSync(
+  privateDirectory(t.dir);
+  privateWrite(
     path.join(t.dir, "actions.jsonl"),
-    JSON.stringify({ ...action, session: t.agent }) + "\n",
+    JSON.stringify({ ...action, session: t.agent }) + "\n", true,
   );
 }
 

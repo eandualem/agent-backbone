@@ -153,6 +153,13 @@ def _serialized(fn: Callable[..., Awaitable[_Result]]):
                             queue_id=queue_id,
                         )
                     return await fn(session_name, *args, **kwargs)
+            if (
+                db is not None
+                and queue_id is not None
+                and kwargs.get("requeue") is False
+                and not await db.queue.still_leased(queue_id)
+            ):
+                return DeliveryReport(DeliveryOutcome.AWAITING_ACK, queue_id=queue_id)
             source_key = kwargs.get("source_key") or ""
             if db is not None and source_key.startswith("review-start:"):
                 async with db.events.review_delivery(source_key) as eligible:
@@ -612,7 +619,7 @@ async def safe_deliver(
 
     uncertain = False
 
-    async def submit() -> bool:
+    async def submit() -> bool | None:
         nonlocal uncertain
         confirmed = (
             db is not None
@@ -726,7 +733,13 @@ async def safe_deliver(
             )
 
     # 4. Paste + submit
-    if await submit():
+    sent = await submit()
+    if sent is None:
+        report = await finish(DeliveryOutcome.AWAITING_ACK, queue=True)
+        if db is not None and report.queue_id is not None:
+            await db.queue.hold_for_inbox(report.queue_id)
+        return report
+    if sent:
         return await finish(DeliveryOutcome.DELIVERED, queue=False)
     report = await finish(DeliveryOutcome.DELIVERY_FAILED, queue=True)
     if uncertain:

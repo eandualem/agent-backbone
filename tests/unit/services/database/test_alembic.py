@@ -804,3 +804,27 @@ async def test_populated_report_upgrade_preserves_history_and_separates_retry_ke
         ] == "Yes."
         retried, created = await db.reports.publish(publication())
         assert not created and retried["id"] == old["id"]
+
+
+@pytest.mark.parametrize("existing", [False, True])
+async def test_sqlite_file_is_private_before_connection(tmp_path, existing):
+    import os
+
+    from sqlalchemy import text
+
+    target = tmp_path / "private" / "backbone.db"
+    if existing:
+        target.parent.mkdir()
+        target.touch(mode=0o666)
+        target.chmod(0o666)
+    old = os.umask(0)
+    try:
+        engine = build_engine(f"sqlite+aiosqlite:///{target}")
+    finally:
+        os.umask(old)
+    try:
+        assert target.stat().st_mode & 0o777 == 0o600
+        async with engine.connect() as connection:
+            assert (await connection.execute(text("SELECT 1"))).scalar_one() == 1
+    finally:
+        await engine.dispose()

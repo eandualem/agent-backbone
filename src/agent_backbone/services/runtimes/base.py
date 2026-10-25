@@ -41,6 +41,7 @@ from agent_backbone.services.terminal import (
     capture_pane,
     paste_message,
     press_submit,
+    query_format_vars,
     send_keys,
 )
 
@@ -1086,6 +1087,13 @@ class Runtime:
     async def reject_plan(self, session_name: str) -> int:
         """Decline the plan so feedback can follow as a message; see ``approve_plan``."""
         return await self._send_all(session_name, self.plan_reject_keys)
+
+    async def accepts_notifications(self, session_name: str) -> bool:
+        """Require the actual foreground executable, not a stale runtime hint."""
+        if self.binary is None:
+            return False
+        current = await query_format_vars(session_name, "command=#{pane_current_command}")
+        return current.get("command") == self.binary
 
     async def deliver_message(self, session_name: str, message: str) -> bool:
         """Paste a message and submit it according to runtime-specific rules."""

@@ -268,3 +268,24 @@ name remains a label, not proof of identity or owner confirmation.
 
 Fleet snapshot `created_by` and resume `resumed_by` values are caller-supplied
 claims, not authenticated identities. CLI views label them as claimed actors.
+
+Notifications are submitted only when the foreground executable matches the
+selected agent runtime. A saved runtime setting or tmux environment variable is
+not proof that a model still occupies the terminal. Plain shells and unidentified
+receivers retain notifications as data in `backbone inbox`, without pasting or
+pressing Enter; these held rows require explicit acknowledgement. A runtime
+running through an unrecognized wrapper is also held rather than guessed.
+
+
+Owned data and hook-state directories are private (0700); hook records, plans,
+action logs and SQLite database files are created with mode 0600 regardless of
+umask. Existing hook files are repaired when rewritten; database file permissions
+are repaired when opened. This protects against other OS users, not an unrestricted
+process running as the same account. Keep backups equally private.
+
+
+The manual release workflow pins action commits and the uv version. Build/test
+runs with read-only repository access; a separate job creates the source tag
+before a publication job receives the PyPI token. Existing tags stop publication
+for operator inspection. A failed publication can leave the source tag present;
+resolve that state explicitly before retrying. No release runs on pushes or merges.

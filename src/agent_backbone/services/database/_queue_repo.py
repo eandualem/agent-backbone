@@ -700,6 +700,17 @@ class QueueRepo(Repo):
             await self._record_lifecycle(row, "retired_issue_closed", reason="issue_closed")
         return len(rows)
 
+    async def hold_for_inbox(self, message_id: int) -> None:
+        """Retain a data-only notification until it is explicitly acknowledged."""
+        async with self._tx() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE message_queue SET status='checkpoint', leased_at=NULL "
+                    "WHERE id=:id AND status IN ('pending','in_progress')"
+                ),
+                {"id": message_id},
+            )
+
     async def hold_uncertain(self, message_id: int) -> None:
         """An attempted paste may have been accepted. Do not retry it automatically."""
         async with self._tx() as conn:

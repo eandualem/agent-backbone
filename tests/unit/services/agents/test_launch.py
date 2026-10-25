@@ -640,16 +640,15 @@ class TestStartAgentBrief:
         assert result.ok is False
         started.assert_not_awaited()
 
-    async def test_a_resumed_conversation_that_never_got_its_brief_is_sent_the_current_one(
-        self, tmp_path
-    ):
+    async def test_an_unsupported_resume_never_queues_a_brief(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
         db = AsyncMock()
         db.queue.retire_pending_briefs.return_value = 1  # the earlier session ended first
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start, _cmd, _trust, _wait:
-            await start_agent(self._spec(tmp_path, "aider"), config, resume=True, db=db)
-        db.queue.enqueue.assert_awaited_once()
+            result = await start_agent(self._spec(tmp_path, "aider"), config, resume=True, db=db)
+        assert not result.ok
+        db.queue.enqueue.assert_not_awaited()
 
     async def test_a_message_brief_is_queued_before_the_session_exists(self, tmp_path):
         """Nothing sent once the session is ready can overtake it."""
@@ -711,7 +710,9 @@ class TestStartAgentBrief:
         db.queue.retire_pending_briefs.return_value = 0
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start, _cmd, _trust, _wait:
-            await start_agent(self._spec(tmp_path, runtime), config, resume=True, db=db)
+            await start_agent(
+                self._spec(tmp_path, runtime), config, resume=True, session_id="saved-id", db=db
+            )
         db.queue.enqueue.assert_not_awaited()
 
     @pytest.mark.parametrize(
@@ -730,7 +731,9 @@ class TestStartAgentBrief:
         db.queue.retire_pending_briefs.return_value = retired
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait:
-            await start_agent(self._spec(tmp_path, runtime), config, resume=True, db=db)
+            await start_agent(
+                self._spec(tmp_path, runtime), config, resume=True, session_id="saved-id", db=db
+            )
         db.queue.enqueue.assert_not_awaited()
         launch_id = started.await_args.kwargs["environment"]["BACKBONE_LAUNCH_ID"]
         (offered,) = take_context(config.state_dir, "ike", launch_id)
@@ -751,7 +754,9 @@ class TestStartAgentBrief:
         db.queue.retire_pending_briefs.return_value = 0
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait, failure:
-            result = await start_agent(self._spec(tmp_path, "claude"), config, resume=True, db=db)
+            result = await start_agent(
+                self._spec(tmp_path, "claude"), config, resume=True, session_id="saved-id", db=db
+            )
         assert result.ok is False
         started.assert_not_awaited()
 
@@ -771,7 +776,9 @@ class TestStartAgentBrief:
             _wait,
             patch.object(RUNTIMES[runtime], "hook_launch_args", return_value=[]),
         ):
-            result = await start_agent(self._spec(tmp_path, runtime), config, resume=True, db=db)
+            result = await start_agent(
+                self._spec(tmp_path, runtime), config, resume=True, session_id="saved-id", db=db
+            )
         assert result.ok is False
         started.assert_not_awaited()
 
@@ -1050,21 +1057,24 @@ class TestResumeBySessionId:
             patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
         ):
             result = await start_agent(spec, config, resume=True, wait=False)
-        assert start.await_args.kwargs["command"][1:3] == ["resume", "--last"]
-        assert any(f"belongs to {previous_runtime}" in line for line in result.evidence)
+        assert not result.ok
+        start.assert_not_awaited()
+        assert any("no resumable session identity" in line for line in result.evidence)
 
-    async def test_without_a_known_session_the_runtimes_own_resume_is_used(self, tmp_path):
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    async def test_without_a_known_session_resume_refuses_to_guess(self, tmp_path, runtime):
         config = bootstrap_config(tmp_path / "data")
         project = tmp_path / "project"
         project.mkdir()
-        spec = AgentSpec(name="ike", dir=str(project), runtime="codex")
+        spec = AgentSpec(name="ike", dir=str(project), runtime=runtime)
         with (
             patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
             patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
             patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
         ):
-            await start_agent(spec, config, resume=True, wait=False)
-        assert start.await_args.kwargs["command"][1:3] == ["resume", "--last"]
+            result = await start_agent(spec, config, resume=True, wait=False)
+        assert not result.ok
+        start.assert_not_awaited()
 
     async def test_a_plain_start_is_fresh_and_points_at_the_saved_conversation(self, tmp_path):
         """Resuming is the owner's call: a saved id is never used unless asked
@@ -1516,17 +1526,14 @@ class TestResumeOnlyTheLastLaunchesSession:
             patch(f"{_BASE}.resolve_command", return_value=f"/usr/bin/{spec.runtime}"),
         ):
             result = await start_agent(spec, config, resume=resume, wait=False)
-        return start.await_args.kwargs["command"], result.evidence
+        return start.await_args.kwargs["command"] if start.await_count else None, result.evidence
 
     @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
     async def test_an_earlier_sessions_id_is_not_resumed(self, tmp_path, runtime):
         config, spec = self._setup(tmp_path, runtime, reported_by_last_launch=False)
         command, evidence = await self._start(config, spec, resume=True)
-        assert "old-sess" not in command
-        assert any(
-            "last launch reported no session id" in line and "earlier session" in line
-            for line in evidence
-        )
+        assert command is None
+        assert any("no resumable session identity" in line for line in evidence)
         _, fresh = await self._start(config, spec, resume=False)
         assert not any("still available" in line for line in fresh)
 
@@ -1635,9 +1642,9 @@ async def test_a_launch_tmux_refused_records_no_conversation(tmp_path):
         failed = await start_agent(spec, config, session_id="X", wait=False)
         result = await start_agent(spec, config, resume=True, wait=False)
     assert not failed.ok
-    command = start.await_args.kwargs["command"]
-    assert "X" not in command and "Y" not in command
-    assert any("is from an earlier session" in line for line in result.evidence)
+    assert not result.ok
+    assert start.await_count == 1
+    assert any("no resumable session identity" in line for line in result.evidence)
 
 
 async def test_a_launch_killed_after_its_hook_reported_stays_the_last_launch(tmp_path):
@@ -1695,7 +1702,7 @@ async def test_a_launch_killed_after_its_hook_reported_stays_the_last_launch(tmp
         ("codex", True, False),
         ("opencode", False, True),
         ("opencode", True, False),
-        ("shell", True, True),  # a plain shell has no conversation to resume
+        ("shell", False, True),  # a plain shell has no conversation to resume
     ],
 )
 async def test_a_fresh_start_is_recorded_before_the_readiness_wait(
@@ -1708,6 +1715,12 @@ async def test_a_fresh_start_is_recorded_before_the_readiness_wait(
     await db.agents.conversation_started("ike", "2026-10-13T19:59:43.000000Z")
     config = bootstrap_config(tmp_path / "data")
     spec = AgentSpec(name="ike", dir=str(tmp_path), runtime=runtime)
+    if resume:
+        write_state_file(
+            config.state_dir,
+            "ike",
+            {"state": "idle", "ts": time.time(), "session_id": "saved-id", "runtime": runtime},
+        )
     seen = {}
 
     async def waiting(*args, **kwargs):

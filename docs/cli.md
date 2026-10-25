@@ -13,7 +13,7 @@ Starting an existing agent reuses its saved CLI and model and begins a **new
 conversation**. Continuing the previous one is your call: `backbone agent resume
 NAME` (or `start --resume`; API `resume: true`) reopens the conversation the
 agent's last launch held (the session id its hook reported, or the one it was
-resumed on), or the runtime's own last conversation when there is none. An id
+resumed on). Without that identity, resume refuses to guess. An id
 left by an earlier launch is not reused. A fresh start says when a previous conversation is available. Starts are
 fresh by default because a resumed agent trusts its own context over whatever
 happened in the checkout since — another CLI, a swarm, the shared memory.
@@ -446,7 +446,7 @@ an orchestrator that should spin up workers runs these commands itself.
 | `--model M` | Passed to the runtime as `--model M` (e.g. `opus`, `sonnet`, or a full model id — whatever that CLI accepts). Use it to run cheaper models per agent. Write it as `M:EFFORT` (e.g. `gpt-6-astra:high`, `opus:max`) to set the reasoning effort too — such a spec is **not** passed verbatim: it is split, and the CLI gets the bare model plus its own effort switch. OpenCode uses `provider/model::EFFORT` on `@opencode/cli` 2.1.4+. A level the runtime or model does not have, or an effort with no model (`:high`), is refused rather than dropped | yes — later bare starts reuse it |
 | `--watch OWNER/REPO` | Also subscribe to a repository (repeatable) | yes |
 | `--tag TAG` | Add a tag before launching (repeatable), so the first session already has the skills and policies it selects. Tags are only added here; `agent untag` removes one | yes |
-| `--resume` | Continue the conversation the backbone last saw for this runtime (the runtime's own last conversation when no ID is saved); same as `agent resume` | no |
+| `--resume` | Continue the conversation the backbone last saw for this runtime (refused when no ID is saved); same as `agent resume` | no |
 | `--fresh` | New conversation, keeping saved CLI and model — the default, spelled out | no |
 | `--always-on` | Instead of names: start every agent marked `always_on` (after a reboot, with `--resume`) | — |
 | `--no-wait` | Return immediately instead of waiting for the prompt | no |
@@ -501,9 +501,9 @@ The conversation is chosen like this. The start's evidence lines show the result
 | Situation | What starts | Evidence line |
 |---|---|---|
 | The agent's last launch reported a session id through its runtime hook, or resumed one by id, and the runtime can open a session by id (Claude Code, Codex, Gemini CLI, OpenCode) | That exact conversation | `resuming the session the last launch reported: ID (AGE old)` (`… opened: …` when it resumed that id and had not reported yet) |
-| The last launch ended before its hook reported an id, and did not resume one, so the id on record is from an earlier session | The runtime's own latest conversation | `the last launch reported no session id; ID (AGE old) is from an earlier session, so using claude's own resume` |
-| The recorded id belongs to another runtime (the agent switched CLI since) | The current runtime's own latest conversation | `last session id belongs to codex; using claude's own resume` |
-| No id recorded, or Deep Code, which cannot open a session by id | The runtime's own latest conversation for the directory | none |
+| The last launch ended before reporting or resuming an id | Nothing | No resumable session identity; start fresh or choose an explicit id |
+| The recorded id belongs to another runtime | Nothing | No resumable session identity for this runtime |
+| No id recorded, or the runtime cannot open a session by id | Nothing | Start fresh or use a runtime supporting exact resume |
 | The agent is already running | Nothing; the session is left as it is | `app: already running` (API: `already_existed: true`) |
 
 Aider has no supported resume: start it fresh (`backbone agent start NAME`, without
@@ -515,7 +515,7 @@ file. `agent inspect` shows the id and `Hook age (seconds)`, how long ago the
 hook last wrote. For a running agent, it shows only an id reported by the
 current session. The start's
 [diagnostics](api.md#get-apidiagnosticsrecords) record the choice as
-`resume_selection`: `fresh`, `known_session` or `runtime_latest`. Read the
+`resume_selection`: `fresh`, `known_session` or `unresolved`. Read the
 start's final record (`ready`, `timeout` or a failure code), not `requested`.
 The `requested` record is written before the choice is made.
 

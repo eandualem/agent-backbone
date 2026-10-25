@@ -295,3 +295,23 @@ async def test_outbox_replay_and_queue_drain_keep_event_correlation(config, db):
     evidence = await db.diagnostics.query(operation_id=failed["operation_id"])
     assert any(row["code"] == "submitted" and row["queue_id"] == queue_id for row in evidence)
     assert (await queue_row(db, queue_id))["operation_id"] == failed["operation_id"]
+
+
+async def test_unidentified_receiver_keeps_notification_as_inbox_data(config, db):
+    with (
+        patch(f"{_DELIVERY}.get_session_intelligence", return_value=profile()),
+        patch(f"{_DELIVERY}.send_message", return_value=None),
+    ):
+        report = await safe_deliver(
+            "ike", "notification data", config, db=db, delivery_kind="comment"
+        )
+    row = await queue_row(db, report.queue_id)
+    assert report.outcome == "awaiting_ack" and row["status"] == "checkpoint"
+    assert await db.queue.dequeue("ike") == []
+    inbox = await db.queue.checkpoint("ike")
+    assert len(inbox) == 1 and inbox[0]["message"] == "notification data"
+    with patch(f"{_DELIVERY}.send_message") as send:
+        await safe_deliver(
+            "ike", "notification data", config, db=db, requeue=False, queue_id=report.queue_id
+        )
+    send.assert_not_awaited()

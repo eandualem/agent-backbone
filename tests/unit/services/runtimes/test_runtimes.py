@@ -527,3 +527,32 @@ def test_current_opencode_idle_resume_placeholder():
     assert runtime.detect_idle(pane)
     assert not runtime.prompt_has_pending_input(pane)
     assert not runtime.detect_idle(pane + "\nesc interrupt")
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+@pytest.mark.parametrize("foreground", ["matching", "zsh", "unidentified", ""])
+async def test_notifications_require_the_actual_foreground_runtime(runtime, foreground):
+    adapter = RUNTIMES[runtime]
+    command = adapter.binary if foreground == "matching" else foreground
+    with (
+        patch("agent_backbone.services.runtimes.capture_pane", return_value="old model banner"),
+        patch(
+            "agent_backbone.services.runtimes.base.query_format_vars",
+            return_value={"command": command},
+        ),
+        patch.object(adapter, "deliver_message", return_value=True) as deliver,
+    ):
+        result = await send_message("app", "untrusted notification", runtime_hint=runtime)
+    assert result is (True if foreground == "matching" else None)
+    assert deliver.await_count == (1 if foreground == "matching" else 0)
+
+
+@pytest.mark.parametrize("runtime", ["shell", "unknown"])
+async def test_shell_and_unknown_receivers_never_receive_notification_pastes(runtime):
+    with (
+        patch("agent_backbone.services.runtimes.capture_pane", return_value="user $"),
+        patch("agent_backbone.services.runtimes.query_environment_var", return_value=None),
+        patch("agent_backbone.services.runtimes.base.paste_message") as paste,
+    ):
+        assert await send_message("app", "touch /tmp/unwanted", runtime_hint=runtime) is None
+    paste.assert_not_awaited()

@@ -257,7 +257,8 @@ async def lifespan(app: FastAPI):
 
     boot: BackboneConfig = getattr(app.state, "config", None) or bootstrap_config()
     data_dir = boot.data_dir
-    data_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    data_dir.chmod(0o700)
     app.state.config = boot
     configure_pty_manager(data_dir)
 

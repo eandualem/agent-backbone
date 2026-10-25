@@ -46,7 +46,8 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     config = bootstrap_config(args.data_dir)
     data_dir = config.data_dir
-    data_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    data_dir.chmod(0o700)
     (data_dir / "state").mkdir(exist_ok=True)
 
     env_path = config.env_path
