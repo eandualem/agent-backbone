@@ -304,5 +304,7 @@ resolve that state explicitly before retrying. No release runs on pushes or merg
 
 
 Acknowledgment resets are retained per repository, issue and agent. A retained
-publication receipt can restore an acknowledgment only if it was written after
-the latest reset; a newer reset racing with restoration prevents that restore.
+publication receipt can restore an acknowledgment if it follows the latest reset,
+or exactly identifies the comment that caused that reset. The latter reconciles a
+webhook arriving before its own completion receipt. A newer reset racing with
+restoration prevents that restore.

@@ -51,32 +51,44 @@ class AcknowledgementRepo(Repo):
             )
             return result.fetchone() is not None
 
-    async def cleared_at(self, issue_number: int, target_entity: str, *, repo: str = "") -> str:
+    async def reset_boundary(
+        self, issue_number: int, target_entity: str, *, repo: str = ""
+    ) -> tuple[str, int | None]:
         async with self._tx() as conn:
-            return (
-                await conn.scalar(
-                    text(
-                        "SELECT cleared_at FROM acknowledgments WHERE repo=:repo "
-                        "AND issue_number=:issue AND target_entity=:target"
-                    ),
-                    {"repo": repo, "issue": issue_number, "target": target_entity},
-                )
-            ) or ""
+            result = await conn.execute(
+                text(
+                    "SELECT cleared_at, cleared_comment_id FROM acknowledgments WHERE repo=:repo "
+                    "AND issue_number=:issue AND target_entity=:target"
+                ),
+                {"repo": repo, "issue": issue_number, "target": target_entity},
+            )
+            row = result.fetchone()
+            return (row[0] or "", row[1]) if row else ("", None)
 
-    async def clear(self, issue_number: int, target_entity: str, *, repo: str = "") -> None:
+    async def clear(
+        self,
+        issue_number: int,
+        target_entity: str,
+        *,
+        repo: str = "",
+        comment_id: int | None = None,
+    ) -> None:
         async with self._tx() as conn:
             await conn.execute(
                 text(
                     "INSERT INTO acknowledgments "
-                    "(repo,issue_number,target_entity,acknowledged_at,cleared_at) "
-                    "VALUES (:repo,:issue_number,:target_entity,'',:now) "
+                    "(repo,issue_number,target_entity,acknowledged_at,"
+                    "cleared_at,cleared_comment_id) "
+                    "VALUES (:repo,:issue_number,:target_entity,'',:now,:comment_id) "
                     "ON CONFLICT(repo,issue_number,target_entity) DO UPDATE SET "
-                    "acknowledged_at='', cleared_at=excluded.cleared_at"
+                    "acknowledged_at='', cleared_at=excluded.cleared_at, "
+                    "cleared_comment_id=excluded.cleared_comment_id"
                 ),
                 {
                     "repo": repo,
                     "issue_number": issue_number,
                     "target_entity": target_entity,
                     "now": now_iso(),
+                    "comment_id": comment_id,
                 },
             )

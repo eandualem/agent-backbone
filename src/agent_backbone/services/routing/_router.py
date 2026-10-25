@@ -200,7 +200,7 @@ async def _dispatch_comment(
             result.skipped.append(target)
             continue
         try:
-            await db.acks.clear(event.issue.number, target, repo=repo)
+            await db.acks.clear(event.issue.number, target, repo=repo, comment_id=event.comment.id)
         except Exception:
             log.exception("Failed to clear acknowledgment (non-fatal)")
         await _deliver(

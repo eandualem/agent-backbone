@@ -162,6 +162,7 @@ def has_commented_on_issue(
     *,
     repo: str = "",
     since: float | None = None,
+    reset_comment_id: int | None = None,
 ) -> bool:
     """Whether a retained receipt was published after the latest acknowledgment reset."""
     for entry in _read_receipts(action_log):
@@ -174,7 +175,9 @@ def has_commented_on_issue(
             and entry.get("session") == session
             and _repo_matches(entry, repo)
             and (
-                since is None or (isinstance(entry.get("ts"), (int, float)) and entry["ts"] > since)
+                since is None
+                or entry["comment_id"] == reset_comment_id
+                or (isinstance(entry.get("ts"), (int, float)) and entry["ts"] > since)
             )
         ):
             return True

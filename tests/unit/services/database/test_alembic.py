@@ -865,8 +865,10 @@ async def test_existing_acknowledgments_gain_reset_tracking(tmp_path):
         await db.acks.record(7, "app", repo="acme/app")
         async with db.engine.begin() as conn:
             await conn.execute(text("ALTER TABLE acknowledgments DROP COLUMN cleared_at"))
+            await conn.execute(text("ALTER TABLE acknowledgments DROP COLUMN cleared_comment_id"))
     async with BackboneDB.connect(url) as db:
         assert await db.acks.exists(7, "app", repo="acme/app")
-        await db.acks.clear(7, "app", repo="acme/app")
-        assert await db.acks.cleared_at(7, "app", repo="acme/app")
+        await db.acks.clear(7, "app", repo="acme/app", comment_id=123)
+        cleared, comment_id = await db.acks.reset_boundary(7, "app", repo="acme/app")
+        assert cleared and comment_id == 123
         assert not await db.acks.exists(7, "app", repo="acme/app")

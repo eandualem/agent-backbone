@@ -587,7 +587,7 @@ class TestCommentRouting:
         with _patch_safe_deliver(DeliveryOutcome.DELIVERED):
             result = await issue_dispatcher(event, config, mock_db)
         assert sorted(result.delivered) == ["ike", "leo"]
-        mock_db.acks.clear.assert_any_call(42, "ike", repo=OTHER_REPO)
+        mock_db.acks.clear.assert_any_call(42, "ike", repo=OTHER_REPO, comment_id=event.comment.id)
 
     async def test_no_from_tag_falls_back_to_action_log(self, config, mock_db):
         event = _comment_event(12, "leo", ["ike"], "Just a plain comment.")

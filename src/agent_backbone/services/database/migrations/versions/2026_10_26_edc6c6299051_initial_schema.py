@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 3cd3158e1fc9
+Revision ID: edc6c6299051
 Revises:
-Create Date: 2026-10-26 01:23:34.718507
+Create Date: 2026-10-26 01:44:54.257530
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "3cd3158e1fc9"
+revision: str = "edc6c6299051"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -26,6 +26,7 @@ def upgrade() -> None:
         sa.Column("target_entity", sa.Text(), nullable=False),
         sa.Column("acknowledged_at", sa.Text(), nullable=False),
         sa.Column("cleared_at", sa.Text(), nullable=True),
+        sa.Column("cleared_comment_id", sa.BigInteger(), nullable=True),
         sa.PrimaryKeyConstraint(
             "repo", "issue_number", "target_entity", name=op.f("pk_acknowledgments")
         ),

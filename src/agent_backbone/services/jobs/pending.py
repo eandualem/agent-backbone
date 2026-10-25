@@ -46,7 +46,7 @@ async def deliver_pending_issues(
         try:
             if await is_acknowledged(db, repo, issue_number, name, name):
                 return True
-            cleared = await db.acks.cleared_at(issue_number, name, repo=repo)
+            cleared, comment_id = await db.acks.reset_boundary(issue_number, name, repo=repo)
             since = datetime.fromisoformat(cleared).timestamp() if cleared else None
             if await asyncio.to_thread(
                 has_commented_on_issue,
@@ -55,6 +55,7 @@ async def deliver_pending_issues(
                 config.action_log_path,
                 repo=repo,
                 since=since,
+                reset_comment_id=comment_id,
             ):
                 return await db.acks.record(
                     issue_number, name, repo=repo, not_cleared_since=cleared

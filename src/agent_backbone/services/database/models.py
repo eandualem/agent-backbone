@@ -421,6 +421,7 @@ class AcknowledgmentORM(Base):
     target_entity: Mapped[str] = mapped_column(Text, primary_key=True)
     acknowledged_at: Mapped[str] = mapped_column(Text, nullable=False)
     cleared_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cleared_comment_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
 class MessageQueueORM(Base):
