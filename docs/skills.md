@@ -179,3 +179,6 @@ Codex sandbox also refuses writes through such a link (measured the same day);
 reads are fine.
 Re-measure after a CLI upgrade: put a skill with an unguessable name behind a
 link and ask the CLI to list its skills.
+
+Retagging a shared skill requires its valid skill name and a direct, non-symlink
+directory in the store; parent paths and links outside the store are refused.

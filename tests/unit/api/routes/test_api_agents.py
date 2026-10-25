@@ -845,3 +845,37 @@ async def test_update_rejects_unknown_fields_atomically(api_app, api_client, aut
     assert response.status_code == 422
     assert any(error["type"] == "extra_forbidden" for error in response.json()["detail"])
     assert await api_app.state.db.agents.list() == before
+
+
+@pytest.mark.parametrize("endpoint", ["inspect", "state"])
+async def test_inspect_refuses_unregistered_session_before_terminal_read(
+    api_client, auth_headers, endpoint
+):
+    with (
+        patch("agent_backbone.api.routes.agents.session_exists") as exists,
+        patch("agent_backbone.api.routes.agents.get_session_intelligence") as intelligence,
+        patch("agent_backbone.api.routes.agents.capture_pane") as capture,
+    ):
+        response = await api_client.get(
+            f"/api/agents/unregistered/{endpoint}", headers=auth_headers
+        )
+    assert response.status_code == 404
+    exists.assert_not_called()
+    intelligence.assert_not_called()
+    capture.assert_not_called()
+
+
+async def test_unregistered_list_entry_contains_no_terminal_or_saved_state(config):
+    from agent_backbone.services.agents import agent_state, build_enriched_agent, write_state_file
+
+    write_state_file(config.state_dir, "unregistered", {"state": "idle", "last_message": "private"})
+    with (
+        patch("agent_backbone.services.agents.queries.agent_state", agent_state),
+        patch("agent_backbone.services.agents._inference.capture_pane") as capture,
+        patch("agent_backbone.services.agents.queries.query_environment_var") as environment,
+    ):
+        view = await build_enriched_agent("unregistered", config, {"unregistered"})
+    assert view.state == "unknown" and view.last_message is None
+    assert not view.configured and view.online
+    capture.assert_not_called()
+    environment.assert_not_called()

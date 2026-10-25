@@ -21,12 +21,14 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   types into *registered* agents only (`GET /api/sessions/{name}/terminal`,
   the `/terminal` namespace, `POST /messages`, plan control). Other tmux
   sessions of the same user are refused with 404, even though the process
-  could reach them. `GET /plans/{name}` and Telegram `/viewplan` read plan
+  could reach them. Unregistered sessions may appear in the session list, but
+  their state and terminal content are not inspected. `GET /plans/{name}` and Telegram `/viewplan` read plan
   text only from `<state_dir>/plans/`, whatever path the state record names.
 - **Approvals are typed for you, decided by you.** `agent approve` answers
   a runtime's permission dialog with its affirmative key. It refuses when
   no dialog is on screen and it records who approved what, but it does not
-  judge the command — whoever holds the key (a person or a coordinator
+  judge the command. Generic permission answers refuse plan dialogs; use the
+  dedicated plan controls for those. Whoever holds the key (a person or a coordinator
   agent) does. Plan approval, which can run a whole plan unattended, stays
   off by default (`security.allow_remote_plan_control`).
 - **Unattended operation depends on the runtime's sandbox.** See

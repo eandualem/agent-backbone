@@ -740,6 +740,8 @@ async def approve_agent(
     tail = [ln.strip() for ln in sanitize_pane_content(pane).splitlines() if ln.strip()][-8:]
     if not rt.detect_active_dialog(pane):
         return "not_waiting", ["terminal shows no active permission prompt:", *tail]
+    if rt.detect_plan_dialog(pane):
+        return "not_permission", ["plan decisions require the dedicated plan controls", *tail]
     if rt.detect_choice_dialog(pane):
         return "not_permission", [
             "the dialog on screen is a choice, not a permission prompt — Enter would pick "
@@ -774,6 +776,8 @@ async def deny_agent(
     tail = [ln.strip() for ln in sanitize_pane_content(pane).splitlines() if ln.strip()][-8:]
     if not rt.detect_active_dialog(pane):
         return "not_waiting", ["terminal shows no active permission prompt:", *tail]
+    if rt.detect_plan_dialog(pane):
+        return "not_permission", ["plan decisions require the dedicated plan controls", *tail]
     if not await rt.deny_prompt(name):
         return "failed", ["tmux refused the keystroke"]
     await asyncio.sleep(settle_seconds)

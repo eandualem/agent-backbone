@@ -289,3 +289,18 @@ async def test_an_opencode_plan_answered_in_the_terminal_is_no_longer_pending(
 
 def test_another_opencode_question_is_not_a_plan(tmp_path):
     assert _opencode(tmp_path, ["busy", "question"])["states"][-1] == AgentState.BUSY.value
+
+
+@pytest.mark.parametrize("runtime", RUNTIMES)
+@pytest.mark.parametrize("answer", ["approve_agent", "deny_agent"])
+async def test_generic_permission_answers_never_answer_plans(runtime, answer):
+    from agent_backbone.services import agents
+
+    with (
+        patch("agent_backbone.services.agents.launch.session_exists", return_value=True),
+        patch("agent_backbone.services.agents.launch.capture_pane", return_value=SCREENS[runtime]),
+        patch("agent_backbone.services.runtimes.base.send_keys") as keys,
+    ):
+        outcome, _ = await getattr(agents, answer)("app", runtime=runtime, settle_seconds=0)
+    assert outcome in {"not_permission", "not_waiting"}
+    keys.assert_not_called()

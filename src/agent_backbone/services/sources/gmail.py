@@ -21,6 +21,7 @@ import email.parser
 import imaplib
 import logging
 import re
+import ssl
 import unicodedata
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -125,7 +126,9 @@ class GmailSource(Source):
     # -- blocking IMAP work, run in a thread --------------------------------
 
     def _poll(self, filters: list[str], since: datetime, config: BackboneConfig):
-        client = imaplib.IMAP4_SSL(IMAP_HOST, timeout=_TIMEOUT)
+        client = imaplib.IMAP4_SSL(
+            IMAP_HOST, ssl_context=ssl.create_default_context(), timeout=_TIMEOUT
+        )
         try:
             client.login(config.gmail_address, config.gmail_app_password)
             client.select(self._all_mail(client), readonly=True)

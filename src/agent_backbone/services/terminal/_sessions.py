@@ -116,7 +116,8 @@ async def start_session(
 
     args = ["new-session", "-d", "-s", session_name]
     if working_dir:
-        args.extend(["-c", working_dir])
+        # tmux expands -c as a format after parsing command quoting.
+        args.extend(["-c", working_dir.replace("#", "##")])
     for key, value in environment.items():
         args.extend(["-e", f"{key}={value}"])
     for key in removals:
