@@ -220,6 +220,8 @@ def _gh_arguments(argv: list[str]) -> tuple[list[str], dict[str, str]] | None:
                 return None
             options[values[key]] = value
         elif arg in flags:
+            if arg == "--edit-last":
+                options["edit-last"] = "true"
             continue
         elif arg.startswith("-"):
             return None
@@ -242,6 +244,8 @@ def comment_action_from_argv(argv: list[str], now: float) -> dict | None:
     if len(operands) != 1 or not operands[0].isdigit():
         return None
     action = {"ts": now, "action": "comment", "issue": int(operands[0])}
+    if options.get("edit-last"):
+        action["edited"] = True
     if options.get("repo"):
         action["repo"] = options["repo"]
     return action
@@ -904,9 +908,20 @@ def remember_usage_session(state_dir: Path, agent: str, record: dict) -> None:
 
 def append_action(state_dir: Path, agent: str, action: dict) -> None:
     _private_directory(state_dir)
-    _private_write(
-        state_dir / "actions.jsonl", json.dumps({**action, "session": agent}) + "\n", append=True
-    )
+    record = json.dumps({**action, "session": agent}) + "\n"
+    if (
+        action.get("action") == "comment"
+        and action.get("phase") == "succeeded"
+        and type(action.get("comment_id")) is int
+        and action["comment_id"] > 0
+    ):
+        receipts = state_dir / "comment-receipts"
+        _private_directory(receipts)
+        target = receipts / (hashlib.sha256(record.encode()).hexdigest() + ".json")
+        temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+        _private_write(temporary, record)
+        os.replace(temporary, target)
+    _private_write(state_dir / "actions.jsonl", record, append=True)
 
 
 CONTEXT_DIR = "context"

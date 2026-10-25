@@ -205,10 +205,17 @@ function savePlan(t, question, root) {
 
 function appendAction(t, action) {
   privateDirectory(t.dir);
-  privateWrite(
-    path.join(t.dir, "actions.jsonl"),
-    JSON.stringify({ ...action, session: t.agent }) + "\n", true,
-  );
+  const record = JSON.stringify({ ...action, session: t.agent }) + "\n";
+  if (action.action === "comment" && action.phase === "succeeded" &&
+      Number.isSafeInteger(action.comment_id) && action.comment_id > 0) {
+    const receipts = path.join(t.dir, "comment-receipts");
+    privateDirectory(receipts);
+    const target = path.join(receipts, createHash("sha256").update(record).digest("hex") + ".json");
+    const temporary = target + `.${process.pid}.tmp`;
+    privateWrite(temporary, record);
+    fs.renameSync(temporary, target);
+  }
+  privateWrite(path.join(t.dir, "actions.jsonl"), record, true);
 }
 
 // sessionID -> the model its last completed reply came from, in this process;
@@ -571,12 +578,14 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
     },
     "tool.execute.after": async (input, output) => {
       if (isChild(input?.sessionID)) return;
-      await handOver(input?.sessionID, output);
-      if (input?.tool !== "bash") return;
-      if (output?.metadata?.exit !== 0 || output?.metadata?.timeout) return;
-      const command = input?.args?.command;
-      if (typeof command !== "string") return;
-      for (const action of await shellActions(command, directory ?? process.cwd(), "succeeded", output)) appendAction(t, action);
+      try {
+        if (input?.tool === "bash" && output?.metadata?.exit === 0 && !output?.metadata?.timeout &&
+            typeof input?.args?.command === "string") {
+          for (const action of await shellActions(input.args.command, directory ?? process.cwd(), "succeeded", output)) appendAction(t, action);
+        }
+      } finally {
+        await handOver(input?.sessionID, output);
+      }
     },
   };
 };

@@ -306,5 +306,10 @@ resolve that state explicitly before retrying. No release runs on pushes or merg
 Acknowledgment resets are retained per repository, issue and agent. A retained
 publication receipt must match or follow the newest resetting comment ID, even
 when webhooks arrive out of order or before their completion receipts. Resets
-without a comment ID use the receipt timestamp. A newer reset racing with
-restoration prevents that restore.
+without a comment ID and edits of existing comments use the receipt completion
+time. A newer reset racing with restoration prevents that restore.
+
+Successful comment receipts are stored as separate private files before the
+rolling action log is appended. They survive action-log rotation and use
+`timing.delivery_retention_days` for retention. Successful comment edits retain
+their completion time, because editing an old comment keeps its original ID.

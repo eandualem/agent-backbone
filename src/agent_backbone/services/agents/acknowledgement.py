@@ -43,8 +43,16 @@ def _read_receipts(action_log: str | Path | None):
     """Stream retained publication evidence, independent of the recent-command tail."""
     if action_log is None:
         return
+    log_path = Path(action_log).expanduser()
+    for path in (log_path.parent / "comment-receipts").glob("*.json"):
+        try:
+            entry = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(entry, dict):
+            yield entry
     try:
-        with Path(action_log).expanduser().open(errors="replace") as file:
+        with log_path.open(errors="replace") as file:
             for line in file:
                 try:
                     entry = json.loads(line)
@@ -86,6 +94,7 @@ def find_outgoing_comment(
     entries = (
         _read_receipts(action_log) if comment_id is not None else _read_tail(action_log, max_lines)
     )
+    latest: tuple[float, str | None] | None = None
     for entry in entries:
         if entry.get("action") != "comment" or entry.get("issue") != issue_number:
             continue
@@ -101,9 +110,13 @@ def find_outgoing_comment(
             continue
         if not _repo_matches(entry, repo):
             continue
-        if comment_id is not None or now - float(entry.get("ts", 0)) <= recency_seconds:
+        if comment_id is not None:
+            timestamp = entry.get("ts", 0)
+            if isinstance(timestamp, (int, float)) and (latest is None or timestamp > latest[0]):
+                latest = timestamp, entry.get("session")
+        elif now - float(entry.get("ts", 0)) <= recency_seconds:
             return entry.get("session")
-    return None
+    return latest[1] if latest else None
 
 
 def find_outgoing_pull_request(
@@ -177,6 +190,11 @@ def has_commented_on_issue(
             and (
                 since is None
                 or (
+                    entry.get("edited") is True
+                    and isinstance(entry.get("ts"), (int, float))
+                    and entry["ts"] > since
+                )
+                or (
                     entry["comment_id"] >= reset_comment_id
                     if reset_comment_id
                     else isinstance(entry.get("ts"), (int, float)) and entry["ts"] > since
@@ -187,15 +205,23 @@ def has_commented_on_issue(
     return False
 
 
-def rotate_action_log(action_log: str | Path, keep_lines: int = 2000) -> int:
+def rotate_action_log(
+    action_log: str | Path, keep_lines: int = 2000, *, receipt_retention_days: int = 30
+) -> int:
     """Keep the newest ``keep_lines`` entries of the action log. Returns lines dropped.
 
-    The hook appends forever; nothing else prunes the file. Runs in the
-    prune job. The rewrite is atomic; a line the hook appends during it is
-    lost, which costs at most one acknowledgement that GitHub confirms on
-    the next poll anyway.
+    Successful comment receipts are immutable separate files, so rotation cannot
+    discard an unprocessed or concurrently appended publication. Those files use
+    the configured delivery retention period.
     """
     log_path = Path(action_log).expanduser()
+    cutoff = time.time() - receipt_retention_days * 86400
+    for path in (log_path.parent / "comment-receipts").glob("*.json"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink(missing_ok=True)
+        except OSError:
+            continue
     try:
         lines = log_path.read_text(errors="replace").splitlines()
     except OSError:

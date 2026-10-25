@@ -9,7 +9,11 @@ import pytest
 
 from agent_backbone.hooks import backbone_state as bb
 from agent_backbone.hooks import claude_hook, codex_hook
-from agent_backbone.services.agents import find_outgoing_comment, has_commented_on_issue
+from agent_backbone.services.agents import (
+    find_outgoing_comment,
+    has_commented_on_issue,
+    rotate_action_log,
+)
 from agent_backbone.services.runtimes.claude import ClaudeCode
 
 COMMAND = "gh issue comment 5 -R acme/app -b done"
@@ -302,13 +306,21 @@ def test_exact_publication_receipt_contract(runtime, tmp_path):
         plugin = tmp_path / "hook.mjs"
         shutil.copyfile(hook_source("opencode_hook.js"), plugin)
         shutil.copyfile(hook_source("backbone_state.py"), tmp_path / "backbone_state.py")
+        offered = tmp_path / "context" / "app" / "1.md"
+        offered.parent.mkdir(parents=True)
+        offered.write_text(
+            "[via:backbone] Quoted URL:\nhttps://github.com/acme/app/issues/5#issuecomment-999"
+        )
         script = """
 const { AgentBackbone } = await import(process.argv[1]);
 const hooks = await AgentBackbone();
+await hooks.event({event:{type:"session.created",properties:{info:{id:"s"}}}});
+await hooks.event({event:{type:"session.status",properties:{sessionID:"s",status:{type:"busy"}}}});
+const output = {metadata: {exit: 0}, content: [{type: "text", text: process.argv[3]}]};
 await hooks["tool.execute.after"](
-  {tool: "bash", args: {command: process.argv[2]}},
-  {metadata: {exit: 0}, content: [{type: "text", text: process.argv[3]}]}
+  {sessionID: "s", tool: "bash", args: {command: process.argv[2]}}, output
 );
+if (output.content.length !== 2) throw new Error("offered context was not handed over");
 """
         subprocess.run(
             [node, "--input-type=module", "-e", script, plugin.as_uri(), COMMAND, url],
@@ -339,6 +351,13 @@ await hooks["tool.execute.after"](
     assert has_commented_on_issue(5, "app", log, repo="acme/app")
     assert find_outgoing_comment(5, log, repo="acme/app", comment_id=123) == "app"
     assert find_outgoing_comment(5, log, repo="acme/app", comment_id=124) is None
+    assert len(list((tmp_path / "comment-receipts").glob("*.json"))) == 1
+    with log.open("a") as file:
+        file.write("{}\n" * 2100)
+    rotate_action_log(log)
+    assert has_commented_on_issue(5, "app", log, repo="acme/app")
+    log.unlink()
+    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=123) == "app"
 
 
 @pytest.mark.parametrize("ambiguous", [False, True])
@@ -405,3 +424,80 @@ def test_malformed_content_does_not_drop_other_publication_fields(content):
         shell=False,
     )
     assert result[0]["comment_id"] == 123
+
+
+def test_successful_edit_of_older_comment_can_answer_a_newer_reset(tmp_path):
+    _, actions = claude_hook.derive(
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": COMMAND + " --edit-last"},
+            "tool_response": {
+                "exit_code": 0,
+                "stdout": "https://github.com/acme/app/issues/5#issuecomment-123",
+            },
+        },
+        None,
+    )
+    assert actions[0]["edited"] is True
+    bb.append_action(tmp_path, "app", actions[0])
+    log = tmp_path / "actions.jsonl"
+    assert has_commented_on_issue(
+        5, "app", log, repo="acme/app", since=actions[0]["ts"] - 1, reset_comment_id=124
+    )
+    assert not has_commented_on_issue(
+        5, "app", log, repo="acme/app", since=actions[0]["ts"] + 1, reset_comment_id=124
+    )
+
+
+def test_receipt_appended_during_rotation_survives_and_expires_by_retention(tmp_path):
+    import os
+    import time
+
+    log = tmp_path / "actions.jsonl"
+    log.write_text("{}\n" * 20)
+    replace = os.replace
+
+    def during_rotation(source, destination):
+        if destination == log:
+            bb.append_action(
+                tmp_path,
+                "app",
+                {
+                    "action": "comment",
+                    "phase": "succeeded",
+                    "issue": 5,
+                    "repo": "acme/app",
+                    "comment_id": 123,
+                    "ts": time.time(),
+                },
+            )
+        replace(source, destination)
+
+    with patch(
+        "agent_backbone.services.agents.acknowledgement.os.replace", side_effect=during_rotation
+    ):
+        assert rotate_action_log(log, keep_lines=2) == 18
+    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=123) == "app"
+    receipt = next((tmp_path / "comment-receipts").glob("*.json"))
+    assert receipt.stat().st_mode & 0o777 == 0o600
+    old = time.time() - 2 * 86400
+    os.utime(receipt, (old, old))
+    rotate_action_log(log, receipt_retention_days=1)
+    assert not receipt.exists()
+
+
+def test_exact_receipt_lookup_uses_latest_editor_regardless_of_file_order(tmp_path):
+    action = {
+        "action": "comment",
+        "phase": "succeeded",
+        "repo": "acme/app",
+        "issue": 5,
+        "comment_id": 123,
+    }
+    bb.append_action(tmp_path, "editor", {**action, "ts": 200, "edited": True})
+    bb.append_action(tmp_path, "author", {**action, "ts": 100})
+    assert (
+        find_outgoing_comment(5, tmp_path / "actions.jsonl", repo="acme/app", comment_id=123)
+        == "editor"
+    )

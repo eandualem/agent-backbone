@@ -127,7 +127,9 @@ def _register_jobs(app: FastAPI):
             "reports": await state.db.reports.prune(days),
             "signing_audit": await state.db.signing.prune(days),
             "signing_receipts": receipts,
-            "action_log_lines": rotate_action_log(state.config.action_log_path),
+            "action_log_lines": rotate_action_log(
+                state.config.action_log_path, receipt_retention_days=days
+            ),
         }
 
     # Immediately at startup: this is what syncs agent state after a restart.
