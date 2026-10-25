@@ -310,7 +310,7 @@ Everything the backbone knows about one agent, with the evidence:
 `session_id` is the conversation id the agent's hook reported; for a running
 agent, only one reported by the current session. A resume opens it only when
 the agent's runtime still matches the one that reported it and can open a
-session by id. Otherwise resume is refused; start fresh or select an explicit id.
+session by id. Otherwise resume is refused; start a fresh conversation with `resume: false`.
 `state_age_seconds` is how long ago the hook last wrote.
 
 ### `GET /api/agents/{name}/state`

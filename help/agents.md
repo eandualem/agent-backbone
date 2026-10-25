@@ -13,12 +13,12 @@ resuming the old Codex conversation would miss the work done in between.
 Use `backbone agent resume NAME` (or `start --resume`; API `resume: true`) only
 when you explicitly want to reopen a previous conversation, such as after an
 unexpected closure. It uses the saved conversation ID for the selected runtime
-when supported, or that runtime's latest conversation when no usable ID is
-available. A fresh start does not replay a previous conversation.
+when supported. If no usable ID is available, resume is refused; start a fresh
+conversation with `backbone agent start NAME --fresh`. A fresh start does not replay a previous conversation.
 When a saved id is used, the start's evidence names it: `resuming the session
 the last launch reported: ID (AGE old)`, or `resuming the session the last
-launch opened: ID` when that launch resumed it and had not reported yet. Without
-either line the runtime's own latest conversation opened. An id from a launch
+launch opened: ID` when that launch resumed it and had not reported yet. A resume without either
+line is refused. An id from a launch
 that ended before reporting or opening one is from an earlier session and is not
 used; the evidence says so. `backbone agent inspect NAME` shows the id on
 record before you resume. A running agent is left as it is

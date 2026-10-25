@@ -163,6 +163,9 @@ def rotate_action_log(action_log: str | Path, keep_lines: int = 2000) -> int:
         return 0
     kept = lines[-keep_lines:]
     tmp = log_path.with_name(f".{log_path.name}.{os.getpid()}.tmp")
-    tmp.write_text("\n".join(kept) + "\n")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as file:
+        os.fchmod(file.fileno(), 0o600)
+        file.write("\n".join(kept) + "\n")
     os.replace(tmp, log_path)
     return len(lines) - len(kept)

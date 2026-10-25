@@ -351,7 +351,7 @@ async def _start_agent(
             ok=False,
             evidence=(
                 "the last launch has no resumable session identity for this runtime; "
-                "start fresh or choose an explicit session id",
+                "start a fresh conversation with --fresh",
             ),
         )
     elif not resume and last_launch and rt.supports_exact_resume:

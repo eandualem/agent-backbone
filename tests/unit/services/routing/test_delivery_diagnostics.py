@@ -320,3 +320,34 @@ async def test_unidentified_receiver_keeps_notification_as_inbox_data(config, db
             "ike", "notification data", config, db=db, requeue=False, queue_id=report.queue_id
         )
     send.assert_not_awaited()
+
+
+@pytest.mark.parametrize("priority", [False, True])
+async def test_unidentified_receiver_holds_every_subscription_batch(config, db, priority):
+    from agent_backbone.models import SUBSCRIPTION_KIND
+    from agent_backbone.services.database._queue_repo import SUBSCRIPTION_BATCH_LIMIT
+
+    lines = [f"event {number}" for number in range(SUBSCRIPTION_BATCH_LIMIT + 3)]
+    # Exercise both extension of an existing batch and creation of the next.
+    await db.queue.enqueue_subscription(
+        session_name="worker", header="events", lines=["earlier"], priority=0
+    )
+    with (
+        patch(f"{_DELIVERY}.get_session_intelligence", return_value=profile()),
+        patch(f"{_DELIVERY}.send_message", return_value=None),
+    ):
+        report = await safe_deliver(
+            "worker",
+            "events\n" + "\n".join(lines),
+            config,
+            db=db,
+            delivery_kind=SUBSCRIPTION_KIND,
+            priority=priority,
+        )
+    assert report.held_for_inbox
+    inbox = await db.queue.checkpoint("worker")
+    assert set(lines) <= {line for row in inbox for line in row["message"].splitlines()[1:]}
+    pending = await db.queue.dequeue("worker")
+    assert not pending if not priority else len(pending) == 1
+    # The high-priority notification leaves the unrelated older normal row alone.
+    assert all(row["message"] == "events\nearlier" for row in pending)

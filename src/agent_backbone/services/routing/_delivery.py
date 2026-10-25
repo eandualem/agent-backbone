@@ -329,6 +329,7 @@ async def _enqueue(
     operation_id: str,
     uncertain: bool = False,
     priority: bool = False,
+    held_for_inbox: bool = False,
 ) -> _QueueReceipt:
     """Store the message; say what happened (``stored`` / ``already_queued`` /
     ``failed``), or None when there is nothing to store it in."""
@@ -345,6 +346,7 @@ async def _enqueue(
                 header=header,
                 lines=body.split("\n") if body else [],
                 priority=int(priority),
+                held_for_inbox=held_for_inbox,
                 source=source,
                 operation_id=operation_id,
             )
@@ -495,7 +497,9 @@ async def safe_deliver(
 
     profile: SessionProfile | None = None
 
-    async def finish(outcome: DeliveryOutcome, *, queue: bool) -> DeliveryReport:
+    async def finish(
+        outcome: DeliveryOutcome, *, queue: bool, held_for_inbox: bool = False
+    ) -> DeliveryReport:
         receipt = _QueueReceipt()
         if queue and requeue:
             receipt = await _enqueue(
@@ -512,6 +516,7 @@ async def safe_deliver(
                 operation_id=operation_id,
                 uncertain=uncertain,
                 priority=priority,
+                held_for_inbox=held_for_inbox,
             )
         elif uncertain and db is not None and queue_id is not None:
             await db.queue.hold_uncertain(queue_id)
@@ -742,7 +747,7 @@ async def safe_deliver(
     # 4. Paste + submit
     sent = await submit()
     if sent is None:
-        report = await finish(DeliveryOutcome.AWAITING_ACK, queue=True)
+        report = await finish(DeliveryOutcome.AWAITING_ACK, queue=True, held_for_inbox=True)
         if db is not None and report.queue_id is not None:
             await db.queue.hold_for_inbox(report.queue_id)
             report = replace(report, held_for_inbox=True)

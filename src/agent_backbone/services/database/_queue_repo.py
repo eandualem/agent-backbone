@@ -260,6 +260,7 @@ class QueueRepo(Repo):
         priority: int,
         source: str = "",
         operation_id: str | None = None,
+        held_for_inbox: bool = False,
     ) -> EnqueueResult:
         """Add subscribed events to the session's open normal batch, or open one.
 
@@ -297,12 +298,20 @@ class QueueRepo(Repo):
                     known.setdefault(line, dict(held_row))
             fresh = [line for line in lines if line not in known]
             holders = {known[line]["id"]: known[line] for line in lines if line in known}
+            if held_for_inbox and holders:
+                await conn.execute(
+                    text(
+                        "UPDATE message_queue SET status='checkpoint', leased_at=NULL "
+                        "WHERE id IN :ids AND status IN ('pending','in_progress')"
+                    ).bindparams(bindparam("ids", expanding=True)),
+                    {"ids": list(holders)},
+                )
             # The process may have stopped before a waiting high batch was
             # offered: offer it again under its own id (a taken one never is).
             offers: list[tuple[int, str]] = [
                 (row["id"], row["message"])
                 for row in holders.values()
-                if row["priority"] and row["status"] == "pending"
+                if row["priority"] and row["status"] == "pending" and not held_for_inbox
             ]
             if lines and not fresh:
                 holder = holders[max(holders)]
@@ -326,10 +335,14 @@ class QueueRepo(Repo):
                     if message != row["message"]:
                         result = await conn.execute(
                             text(
-                                "UPDATE message_queue SET message = :message "
+                                "UPDATE message_queue SET message = :message, status = :status "
                                 "WHERE id = :id AND status = 'pending'"
                             ),
-                            {"id": row["id"], "message": message},
+                            {
+                                "id": row["id"],
+                                "message": message,
+                                "status": "checkpoint" if held_for_inbox else "pending",
+                            },
                         )
                         if result.rowcount:
                             grown = EnqueueResult(
@@ -351,7 +364,7 @@ class QueueRepo(Repo):
                     "delivery_kind": SUBSCRIPTION_KIND,
                     "source": source,
                     "enqueued_at": now_iso(),
-                    "initial_status": "pending",
+                    "initial_status": "checkpoint" if held_for_inbox else "pending",
                     "sender": "",
                     "dedup_key": f"sub:{uuid.uuid4().hex}",
                     "priority": priority,
@@ -360,7 +373,7 @@ class QueueRepo(Repo):
                     text(f"INSERT INTO message_queue {_INSERT_COLUMNS} RETURNING id"), params
                 )
                 row_id = result.scalar_one()
-                if priority:
+                if priority and not held_for_inbox:
                     offers.append((row_id, message))
                 if not rest:
                     return EnqueueResult("inserted", row_id, params["operation_id"], tuple(offers))
