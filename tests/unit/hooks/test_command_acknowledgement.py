@@ -289,7 +289,8 @@ def test_exact_comment_identity_not_nearby_intent_or_forged_tag(tmp_path):
 
 
 @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode", "gemini"])
-def test_exact_publication_receipt_contract(runtime, tmp_path):
+@pytest.mark.parametrize("repository", ["acme/app", "github.com/acme/app"])
+def test_exact_publication_receipt_contract(runtime, repository, tmp_path):
     import json
     import os
     import shutil
@@ -298,6 +299,7 @@ def test_exact_publication_receipt_contract(runtime, tmp_path):
     from agent_backbone.hooks import gemini_hook
     from agent_backbone.hooks.install import hook_source
 
+    command = COMMAND.replace("acme/app", repository)
     url = "https://github.com/acme/app/issues/5#issuecomment-123"
     if runtime == "opencode":
         node = shutil.which("node")
@@ -323,7 +325,7 @@ await hooks["tool.execute.after"](
 if (output.content.length !== 2) throw new Error("offered context was not handed over");
 """
         subprocess.run(
-            [node, "--input-type=module", "-e", script, plugin.as_uri(), COMMAND, url],
+            [node, "--input-type=module", "-e", script, plugin.as_uri(), command, url],
             env={**os.environ, "BACKBONE_AGENT": "app", "BACKBONE_STATE_DIR": str(tmp_path)},
             check=True,
             capture_output=True,
@@ -339,7 +341,7 @@ if (output.content.length !== 2) throw new Error("offered context was not handed
             {
                 "hook_event_name": "AfterTool" if runtime == "gemini" else "PostToolUse",
                 "tool_name": "run_shell_command" if runtime == "gemini" else "Bash",
-                "tool_input": {"command": COMMAND},
+                "tool_input": {"command": command},
                 "tool_response": response,
             },
             None,

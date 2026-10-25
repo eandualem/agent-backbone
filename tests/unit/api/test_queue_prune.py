@@ -1,5 +1,6 @@
 """The periodic prune job includes queue retention and reads live settings."""
 
+import threading
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,6 +12,13 @@ from agent_backbone.config import bootstrap_config
 
 
 async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
+    event_thread = threading.get_ident()
+
+    def rotate(*args, **kwargs):
+        assert threading.get_ident() != event_thread
+        assert kwargs == {"receipt_retention_days": 9}
+        return 5
+
     app = FastAPI()
     app.state.config = bootstrap_config(tmp_path)
     app.state.github = None
@@ -41,7 +49,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
     with (
         patch("agent_backbone.services.scheduler.PeriodicScheduler") as scheduler,
         patch("agent_backbone.services.jobs.UpgradeWatch"),
-        patch("agent_backbone.services.agents.rotate_action_log", return_value=5),
+        patch("agent_backbone.services.agents.rotate_action_log", side_effect=rotate),
         patch("agent_backbone.api.app.batch_receipts", return_value=[tmp_path / "1.taken"]),
     ):
         _register_jobs(app)

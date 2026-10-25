@@ -435,6 +435,9 @@ def _comment_receipts(actions: list[dict], response: object, *, shell: bool) -> 
     for action in actions:
         if action.get("action") == "comment" and action.get("phase") == "succeeded":
             repo = (action.get("repo") or "").casefold()
+            if repo.startswith("github.com/"):
+                repo = repo.removeprefix("github.com/")
+                action["repo"] = repo
             if not repo:
                 matches = [
                     (key, ids) for key, ids in receipts.items() if key[1] == action.get("issue")
