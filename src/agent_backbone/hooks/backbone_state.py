@@ -428,7 +428,16 @@ def _comment_receipts(actions: list[dict], response: object, *, shell: bool) -> 
             receipts.setdefault((repo.casefold(), int(issue)), set()).add(int(comment))
     for action in actions:
         if action.get("action") == "comment" and action.get("phase") == "succeeded":
-            ids = receipts.get(((action.get("repo") or "").casefold(), action.get("issue")), set())
+            repo = (action.get("repo") or "").casefold()
+            if not repo:
+                matches = [
+                    (key, ids) for key, ids in receipts.items() if key[1] == action.get("issue")
+                ]
+                if len(matches) != 1 or len(matches[0][1]) != 1:
+                    continue
+                (repo, _), _ = matches[0]
+                action["repo"] = repo
+            ids = receipts.get((repo, action.get("issue")), set())
             if len(ids) == 1:
                 action["comment_id"] = next(iter(ids))
     return actions

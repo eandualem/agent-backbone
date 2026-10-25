@@ -339,3 +339,34 @@ await hooks["tool.execute.after"](
     assert has_commented_on_issue(5, "app", log, repo="acme/app")
     assert find_outgoing_comment(5, log, repo="acme/app", comment_id=123) == "app"
     assert find_outgoing_comment(5, log, repo="acme/app", comment_id=124) is None
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_unscoped_default_repository_binds_only_an_unambiguous_receipt(ambiguous):
+    action = {"action": "comment", "issue": 42, "phase": "succeeded"}
+    output = "https://github.com/acme/upstream/issues/42#issuecomment-123"
+    if ambiguous:
+        output += "\nhttps://github.com/acme/other/issues/42#issuecomment-456"
+    (bound,) = bb._comment_receipts([action], {"stdout": output}, shell=True)
+    if ambiguous:
+        assert "repo" not in bound and "comment_id" not in bound
+    else:
+        assert bound["repo"] == "acme/upstream" and bound["comment_id"] == 123
+
+
+def test_delayed_event_finds_exact_receipt_beyond_recent_tail(tmp_path):
+    import json
+
+    receipt = {
+        "session": "worker",
+        "action": "comment",
+        "phase": "succeeded",
+        "repo": "acme/app",
+        "issue": 5,
+        "comment_id": 123,
+        "ts": 1,
+    }
+    log = tmp_path / "actions.jsonl"
+    log.write_text(json.dumps(receipt) + "\n" + (json.dumps({"noise": "x" * 1024}) + "\n") * 100)
+    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=123) == "worker"
+    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=124) is None

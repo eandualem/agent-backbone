@@ -39,6 +39,23 @@ def _read_tail(action_log: str | Path | None, max_lines: int) -> list[dict]:
     return entries
 
 
+def _read_receipts(action_log: str | Path | None):
+    """Stream retained publication evidence, independent of the recent-command tail."""
+    if action_log is None:
+        return
+    try:
+        with Path(action_log).expanduser().open(errors="replace") as file:
+            for line in file:
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(entry, dict):
+                    yield entry
+    except OSError:
+        return
+
+
 def _repo_matches(entry: dict, repo: str) -> bool:
     """Scoped lookups require the entry to name the same repository.
 
@@ -66,7 +83,10 @@ def find_outgoing_comment(
     "issue": 42, "repo": "owner/name"}``.
     """
     now = time.time()
-    for entry in _read_tail(action_log, max_lines):
+    entries = (
+        _read_receipts(action_log) if comment_id is not None else _read_tail(action_log, max_lines)
+    )
+    for entry in entries:
         if entry.get("action") != "comment" or entry.get("issue") != issue_number:
             continue
         if not include_intent and entry.get("phase") != "succeeded":
