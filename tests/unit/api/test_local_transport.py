@@ -168,3 +168,14 @@ def test_inconclusive_probe_is_bounded_and_preserves_socket(root):
                     pytest.fail("inconclusive socket was replaced")
         probe.settimeout.assert_called_once_with(1.0)
         assert path.exists()
+
+
+def test_linux_peer_uid_preserves_unsigned_range(monkeypatch):
+    import struct
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(local.sys, "platform", "linux")
+    monkeypatch.setattr(local.socket, "SO_PEERCRED", 17, raising=False)
+    connection = Mock()
+    connection.getsockopt.return_value = struct.pack("iII", 123, 3_000_000_000, 3_000_000_001)
+    assert local.peer_uid(connection) == 3_000_000_000

@@ -32,9 +32,9 @@ def peer_uid(connection: socket.socket) -> int:
         return uid.value
     if hasattr(socket, "SO_PEERCRED"):
         credentials = connection.getsockopt(
-            socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
+            socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("iII")
         )
-        return struct.unpack("3i", credentials)[1]
+        return struct.unpack("iII", credentials)[1]
     raise OSError("Unix peer identity is unavailable on this platform")
 
 
