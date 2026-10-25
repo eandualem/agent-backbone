@@ -31,6 +31,10 @@ async def test_forget_retires_pending_data_and_stale_copies_cannot_reach_reused_
     await store.forget("worker")
     await store.register(spec)
     assert (await queue_row(db, queued.id))["status"] == "expired"
+    history = await db.deliveries.query(operation_id=queued.operation_id)
+    assert any(
+        row["outcome"] == "expired" and row["source"] == "registration-retired" for row in history
+    )
     assert (await db.outbox.entries(1))[0]["status"] == "skipped"
     assert not await db.agents.registration_matches("worker", identity)
     with patch("agent_backbone.services.routing._delivery.send_message") as send:

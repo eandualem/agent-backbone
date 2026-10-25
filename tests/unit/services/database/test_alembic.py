@@ -324,6 +324,8 @@ async def test_pre_diagnostics_database_gains_schema_without_losing_history(
         assert delivery["outcome"] == "offline" and delivery["operation_id"] is None
         queue = await queue_row(db, enqueued.id)
         assert queue["status"] == "expired"  # no proven registration binding
+        history = await db.deliveries.query(session_name="worker")
+        assert any(row["source"] == "registration-unbound" for row in history)
         assert queue["delivered_at"] is not None
         assert queue["message"] == "preserve this queued message" and queue["operation_id"] is None
         async with db.engine.connect() as conn:

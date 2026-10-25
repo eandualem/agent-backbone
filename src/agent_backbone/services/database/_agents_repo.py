@@ -194,6 +194,18 @@ class AgentRepo(Repo):
             # Retain bodies and history, but never hand them to a reused name.
             await conn.execute(
                 text(
+                    "INSERT INTO deliveries (operation_id,kind,repo,issue_number,target_entity,"
+                    "session_name,outcome,source,preview,created_at,registration_id) "
+                    "SELECT operation_id,delivery_kind,repo,issue_number,"
+                    "COALESCE(target_entity,session_name),session_name,'expired',"
+                    "'registration-retired',substr(message,1,120),:now,registration_id "
+                    "FROM message_queue WHERE session_name=:name "
+                    "AND status IN ('pending','in_progress','checkpoint','uncertain')"
+                ),
+                {"name": name, "now": now_iso()},
+            )
+            await conn.execute(
+                text(
                     "UPDATE message_queue SET status='expired', delivered_at=:now, leased_at=NULL "
                     "WHERE session_name=:name "
                     "AND status IN ('pending','in_progress','checkpoint','uncertain')"
