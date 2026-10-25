@@ -268,3 +268,48 @@ async def test_concurrent_starts_cannot_replace_the_live_socket(root):
             "refused",
         ]
     assert not path.exists()
+
+
+async def test_real_uvicorn_serves_tcp_and_unix_and_cleans_up(root, api_app):
+    import httpx
+
+    path = root / "both.sock"
+    config = uvicorn.Config(
+        api_app,
+        host="127.0.0.1",
+        port=0,
+        http=local.LocalPeerProtocol,
+        lifespan="off",
+        log_config=None,
+    )
+    server = uvicorn.Server(config)
+    tcp = config.bind_socket()
+    port = tcp.getsockname()[1]
+    try:
+        with local.private_listener(root, str(path)) as unix:
+            task = asyncio.create_task(server.serve(sockets=[tcp, unix]))
+            try:
+                async with asyncio.timeout(3):
+                    while not server.started:
+                        if task.done():
+                            await task
+                            pytest.fail("server exited before startup")
+                        await asyncio.sleep(0.01)
+                async with (
+                    httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as network,
+                    httpx.AsyncClient(
+                        transport=httpx.AsyncHTTPTransport(uds=str(path)),
+                        base_url="http://localhost",
+                    ) as private,
+                ):
+                    responses = await asyncio.gather(network.get("/health"), private.get("/health"))
+                assert [response.status_code for response in responses] == [200, 200]
+                assert responses[0].json() == responses[1].json()
+            finally:
+                server.should_exit = True
+                await asyncio.wait_for(task, 3)
+            assert all(not listener.is_serving() for listener in server.servers)
+    finally:
+        tcp.close()
+    assert not path.exists()
+    assert tcp.fileno() == -1 and unix.fileno() == -1
