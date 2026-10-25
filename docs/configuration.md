@@ -36,7 +36,11 @@ is) and `BACKBONE_DATABASE_URL` (PostgreSQL instead of the SQLite file).
 Persistent database startup checks that required tables and columns exist,
 even when the migration revision is current. Missing structures trigger
 schema repair while preserving stored rows. A complete current schema does
-not rebuild its indexes on every start.
+not rebuild its indexes on every start. Registration-bound delivery retires
+legacy outstanding queue rows with no registration identity, preserving their
+text in history. Unbound legacy outbox and failed-delivery records are not
+replayed. Forgetting an agent also retires its outstanding notifications; a
+new registration with the same name starts with a new identity.
 
 ## Settings
 

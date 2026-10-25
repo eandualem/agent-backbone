@@ -67,3 +67,25 @@ def gemini_session(path: Path, session_id: str, records: list[dict | str]) -> Pa
     lines = [r if isinstance(r, str) else json.dumps(r, separators=(",", ":")) for r in records]
     path.write_text("\n".join([json.dumps(header, separators=(",", ":")), *lines]) + "\n")
     return path
+
+
+async def register_config_agents(db, config):
+    """Routing fixtures model the database registrations behind their snapshot."""
+    fields = (
+        "dir",
+        "runtime",
+        "model",
+        "repo",
+        "tags",
+        "env",
+        "description",
+        "always_on",
+        "unattended",
+        "inbox_only",
+    )
+    for spec in config.agents:
+        await db.agents.upsert(spec.name, **{name: getattr(spec, name) for name in fields})
+
+
+async def registration_id(db, name):
+    return next(row["report_identity"] for row in await db.agents.list() if row["name"] == name)

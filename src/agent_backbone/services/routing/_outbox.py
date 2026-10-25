@@ -8,15 +8,17 @@ import uuid
 from typing import TYPE_CHECKING
 from weakref import WeakValueDictionary
 
-from agent_backbone.models import DeliveryOutcome, EventType
+from agent_backbone.models import DeliveryOutcome
 from agent_backbone.services.routing._delivery import is_acknowledged, safe_deliver
 from agent_backbone.services.routing._resolution import resolve_entity_session
 from agent_backbone.services.routing._targets import (
     list_open_queue_for_target,
     queue_scope,
-    route_issue,
 )
-from agent_backbone.services.routing._validity import current_notification_issue
+from agent_backbone.services.routing._validity import (
+    current_notification_issue,
+    notification_still_targets,
+)
 from agent_backbone.services.routing.models import DispatchResult
 
 if TYPE_CHECKING:
@@ -53,6 +55,7 @@ async def flush_outbox(
                 result.skipped.append(recipient)
                 continue
             delivery = dict(row["delivery"])
+            delivery.setdefault("registration_id", None)
             # The durable recipient identity survives replay and process restarts.
             delivery["operation_id"] = uuid.uuid5(
                 uuid.NAMESPACE_URL, f"backbone:outbox:{event_id}:{recipient}"
@@ -82,9 +85,8 @@ async def flush_outbox(
                     issue, retired = await current_notification_issue(
                         gh, delivery["repo"], delivery["issue_number"], source_key=source_key
                     )
-                    if retired or (
-                        delivery["delivery_kind"] == "issue"
-                        and target not in route_issue(issue, EventType.ISSUE_OPENED, config).queue
+                    if retired or not await notification_still_targets(
+                        issue, delivery["delivery_kind"], target, config, db
                     ):
                         await db.outbox.set_status(event_id, recipient, "skipped")
                         result.skipped.append(recipient)

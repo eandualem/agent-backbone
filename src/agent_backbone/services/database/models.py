@@ -260,6 +260,7 @@ class DeliveryORM(Base):
     repo: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     issue_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     target_entity: Mapped[str] = mapped_column(Text, nullable=False)
+    registration_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     session_name: Mapped[str] = mapped_column(Text, nullable=False)
     outcome: Mapped[str] = mapped_column(Text, nullable=False)
     source: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
@@ -432,6 +433,7 @@ class MessageQueueORM(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     operation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Delivery operation identity; retained through duplicate enqueue and drain."""
+    registration_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     session_name: Mapped[str] = mapped_column(Text, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     repo: Mapped[str] = mapped_column(Text, nullable=False, server_default="")

@@ -49,7 +49,10 @@ from agent_backbone.services.routing._targets import (
     queue_scope,
     route_issue,
 )
-from agent_backbone.services.routing._validity import current_notification_issue
+from agent_backbone.services.routing._validity import (
+    current_notification_issue,
+    notification_still_targets,
+)
 
 __all__ = [
     "STEER_TTL_SECONDS",
@@ -72,6 +75,7 @@ __all__ = [
     "get_session_intelligence",
     "is_acknowledged",
     "list_open_queue_for_target",
+    "notification_still_targets",
     "queue_detail",
     "queue_scope",
     "quote_envelope_lines",

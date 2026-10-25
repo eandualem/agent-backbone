@@ -20,7 +20,7 @@ from agent_backbone.services.routing._delivery import safe_deliver
 from agent_backbone.services.routing._outbox import flush_outbox
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from tests.conftest import TEST_REPO
-from tests.support import queue_row
+from tests.support import queue_row, register_config_agents
 
 _DELIVERY = "agent_backbone.services.routing._delivery"
 _OUTBOX = "agent_backbone.services.routing._outbox"
@@ -57,6 +57,7 @@ async def test_issue_retry_retires_only_its_recipients_acknowledgment(
     config, db, github_available, ack_repo, ack_target, retired
 ):
     config = replace(config, agents=AgentsConfig(specs={"ike": config.agents.get("ike")}))
+    await register_config_agents(db, config)
     issue = event().issue.model_copy(update={"labels": ParsedLabels(targets=["ike"])})
     opened = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue, delivery_id="ack-retry")
     gh = AsyncMock() if github_available else None
@@ -162,6 +163,7 @@ async def test_restart_after_first_recipient_does_not_resend_it(config, tmp_path
         patch(f"{_DELIVERY}.send_message", AsyncMock(return_value=True)) as send,
     ):
         async with BackboneDB.connect(url) as db:
+            await register_config_agents(db, config)
             with (
                 patch(f"{_OUTBOX}.safe_deliver", side_effect=crash_before_second),
                 pytest.raises(asyncio.CancelledError),
@@ -170,6 +172,7 @@ async def test_restart_after_first_recipient_does_not_resend_it(config, tmp_path
             assert (await db.events.query())[0]["processed_at"] is None
 
         async with BackboneDB.connect(url) as db:
+            await register_config_agents(db, config)
             await dispatch_event(event(), config, db, gh)
             assert (await db.events.query())[0]["processed_at"] is not None
         assert [call.args[0] for call in send.await_args_list] == ["ike", "leo"]
@@ -240,6 +243,7 @@ async def test_existing_issue_claim_is_not_a_completed_receipt(config, db):
     gh.get_issue.return_value = event().issue
     gh.list_issues.return_value = [event().issue]
     config = replace(config, agents=AgentsConfig(specs={"ike": config.agents.get("ike")}))
+    await register_config_agents(db, config)
     issue = event().issue.model_copy(update={"labels": ParsedLabels(targets=["ike"])})
     opened = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue, delivery_id="opened-42")
     claim = await db.deliveries.claim(
@@ -256,6 +260,7 @@ async def test_existing_issue_claim_is_not_a_completed_receipt(config, db):
 
 async def test_failed_issue_plan_is_not_suppressed_by_recent_notification(config, db):
     config = replace(config, agents=AgentsConfig(specs={"ike": config.agents.get("ike")}))
+    await register_config_agents(db, config)
     issue = event().issue.model_copy(update={"labels": ParsedLabels(targets=["ike"])})
     opened = IssueEvent(event_type=EventType.ISSUE_OPENED, issue=issue, delivery_id="opened-42")
     with (
@@ -337,6 +342,7 @@ async def test_pre_delivery_failure_is_scoped_coalesced_and_correlated(config, d
             specs={name: AgentSpec(name=name, dir="/x", runtime=runtime) for name in ("app", "web")}
         ),
     )
+    await register_config_agents(db, config)
     event_id = await _pending_plan(db)
     issue = IssueData(
         number=42, repo_full_name="example/app", labels=ParsedLabels(targets=["app", "web"])
@@ -418,6 +424,7 @@ async def test_outbox_diagnostic_failure_cannot_change_retry_outcome(
             specs={name: AgentSpec(name=name, dir="/x") for name in ("app", "web")}
         ),
     )
+    await register_config_agents(db, config)
     event_id = await _pending_plan(db)
     issue = IssueData(
         number=42, repo_full_name="example/app", labels=ParsedLabels(targets=["app", "web"])

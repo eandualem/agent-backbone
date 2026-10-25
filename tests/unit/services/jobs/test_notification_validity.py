@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from agent_backbone.models import DeliveryOutcome, IssueData
+from agent_backbone.models import DeliveryOutcome, IssueData, ParsedLabels
 from agent_backbone.services.jobs.retry import drain_message_queue
 from agent_backbone.services.routing import DeliveryReport
 
@@ -17,29 +17,35 @@ async def test_queued_resource_is_rechecked_before_delivery(config, db, kind, st
         session_name="ike",
         message="old notice",
         delivery_kind=kind,
-        repo="example/app",
+        repo="example/orchestration",
         issue_number=42,
-        source_key="comment:example/app#42:123",
+        source_key="comment:example/orchestration#42:123",
     )
     gh = AsyncMock()
     if state in {"deleted", "transient"}:
         response = httpx.Response(
             404 if state == "deleted" else 503,
-            request=httpx.Request("GET", "https://api.github.com/repos/example/app/issues/42"),
+            request=httpx.Request(
+                "GET", "https://api.github.com/repos/example/orchestration/issues/42"
+            ),
         )
         gh.get_issue.side_effect = httpx.HTTPStatusError(
             "unavailable", request=response.request, response=response
         )
     else:
         gh.get_issue.return_value = IssueData(
-            number=42, title="Work", state=state, repo_full_name="example/app"
+            number=42,
+            title="Work",
+            state=state,
+            repo_full_name="example/orchestration",
+            labels=ParsedLabels(targets=[] if kind == "watch" else [config.agents.get("ike").name]),
         )
     with patch(
         "agent_backbone.services.jobs.retry.safe_deliver",
         AsyncMock(return_value=DeliveryReport(DeliveryOutcome.DELIVERED)),
     ) as send:
         summary = await drain_message_queue(config, db, gh, active_sessions={"ike"})
-    gh.get_issue.assert_awaited_once_with(42, repo_full_name="example/app")
+    gh.get_issue.assert_awaited_once_with(42, repo_full_name="example/orchestration")
     assert send.await_count == (1 if state == "open" else 0)
     assert await db.queue.pending_count("ike") == (1 if state == "transient" else 0)
     assert summary.get("queue_cleared", 0) == (1 if state in {"closed", "deleted"} else 0)
@@ -51,15 +57,16 @@ async def test_explicit_closure_is_delivered_only_for_its_original_close(config,
         session_name="ike",
         message="closed notice",
         delivery_kind="comment",
-        repo="example/app",
+        repo="example/orchestration",
         issue_number=42,
-        source_key="closed:example/app#42@2026-09-09T00:00:00Z",
+        source_key="closed:example/orchestration#42@2026-09-09T00:00:00Z",
     )
     gh = AsyncMock()
     gh.get_issue.return_value = IssueData(
         number=42,
         title="Work",
-        repo_full_name="example/app",
+        labels=ParsedLabels(targets=[config.agents.get("ike").name]),
+        repo_full_name="example/orchestration",
         state="open" if closure == "reopened" else "closed",
         closed_at="2026-09-09T00:00:00Z" if closure != "newer" else "2026-09-09T01:00:00Z",
     )
@@ -78,7 +85,7 @@ async def test_github_unavailability_does_not_hold_direct_messages(config, db):
             session_name="ike",
             message=kind,
             delivery_kind=kind,
-            repo="example/app",
+            repo="example/orchestration",
             issue_number=42,
         )
     with patch(

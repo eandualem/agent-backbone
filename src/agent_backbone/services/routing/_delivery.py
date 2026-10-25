@@ -38,7 +38,7 @@ from agent_backbone.models import (
     SUCCESS_OUTCOMES,
     DeliveryOutcome,
 )
-from agent_backbone.services.agents import note_submission, read_state_file
+from agent_backbone.services.agents import lifecycle_lock, note_submission, read_state_file
 from agent_backbone.services.routing._intelligence import get_session_intelligence
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from agent_backbone.services.runtimes import (
@@ -123,9 +123,17 @@ def _serialized(fn: Callable[..., Awaitable[_Result]]):
     async def locked(session_name: str, *args, **kwargs):
         key = (id(asyncio.get_running_loop()), session_name)
         lock = _session_locks.setdefault(key, asyncio.Lock())
-        async with lock:
+        async with lifecycle_lock(session_name), lock:
             db = kwargs.get("db")
             queue_id = kwargs.get("queue_id")
+            if "registration_id" in kwargs:
+                identity = kwargs.pop("registration_id")
+                if db is None or not await db.agents.registration_matches(session_name, identity):
+                    if db is not None and queue_id is not None:
+                        await db.queue.mark_delivered(queue_id, reason="registration_changed")
+                    return DeliveryReport(
+                        DeliveryOutcome.ALREADY_DELIVERED, operation_id=kwargs.get("operation_id")
+                    )
             if (
                 db is not None
                 and queue_id is not None

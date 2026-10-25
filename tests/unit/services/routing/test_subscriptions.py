@@ -18,7 +18,7 @@ from agent_backbone.services.routing._subscriptions import match_subscriptions
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
 from agent_backbone.services.sources import SourceEvent
 from tests.conftest import make_config
-from tests.support import queue_row
+from tests.support import queue_row, register_config_agents
 
 _DELIVERY = "agent_backbone.services.routing._delivery"
 _ALERTS = "from:alerts@example.com subject:outage"
@@ -86,6 +86,7 @@ class TestMatching:
 class TestDispatch:
     async def test_batches_per_agent_and_priority_and_dedups(self, tmp_path, db):
         config = _config(tmp_path)
+        await register_config_agents(db, config)
         events = [
             _event("a1", _ALERTS),
             _event("a2", _ALERTS),
@@ -115,6 +116,7 @@ class TestDispatch:
 
     async def test_an_event_stays_replayable_until_every_recipient_holds_it(self, tmp_path, db):
         config = _config(tmp_path)
+        await register_config_agents(db, config)
         shared = _event("l1", _DOMAIN)  # desk (normal) and other (normal)
 
         async def deliver(agent, *args, **kwargs):
@@ -152,6 +154,7 @@ class TestDispatch:
 
     async def test_a_restart_mid_poll_does_not_repeat_a_handed_event(self, tmp_path, db):
         config = _config(tmp_path)
+        await register_config_agents(db, config)
         shared = _event("l1", _DOMAIN)  # desk (normal) and other (normal)
         delivered = type(
             "R", (), {"outcome": DeliveryOutcome.DELIVERED, "queue": None, "queued": False}
@@ -183,6 +186,7 @@ class TestDispatch:
 
     async def test_a_handed_batch_notes_every_holder_in_one_write(self, tmp_path, db):
         config = _config(tmp_path)
+        await register_config_agents(db, config)
         events = [_event("l1", _DOMAIN), _event("l2", _DOMAIN)]  # desk and other, normal
         delivered = type(
             "R", (), {"outcome": DeliveryOutcome.DELIVERED, "queue": None, "queued": False}
@@ -215,6 +219,7 @@ class TestHighPriorityReachesAWorkingAgent:
     @pytest.mark.parametrize("hook_first", [False, True])
     async def test_oversized_poll_has_one_receipt_per_chunk(self, tmp_path, db, count, hook_first):
         config = _config(tmp_path)
+        await register_config_agents(db, config)
         lines = [f"- item-{i}" for i in range(count)]
         with patch(
             f"{_DELIVERY}.get_session_intelligence",
@@ -248,6 +253,7 @@ class TestHighPriorityReachesAWorkingAgent:
 
     async def test_working_claude_agent_is_offered_hook_context(self, tmp_path, db):
         config = _config(tmp_path)
+        await register_config_agents(db, config)
         message = "[via:gmail] mail\n- a1 · x"
         with (
             patch(
@@ -293,6 +299,7 @@ class TestHighPriorityReachesAWorkingAgent:
 
     async def test_hook_receipt_outlives_a_drain_that_could_not_settle_the_row(self, tmp_path, db):
         config = _config(tmp_path)
+        await register_config_agents(db, config)
         with patch(
             f"{_DELIVERY}.get_session_intelligence",
             return_value=_profile(SessionIntelligence.AGENT_WORKING),
@@ -333,6 +340,7 @@ class TestHighPriorityReachesAWorkingAgent:
 
     async def test_offer_is_withdrawn_when_the_prompt_takes_it_first(self, tmp_path, db):
         config = _config(tmp_path)
+        await register_config_agents(db, config)
         with (
             patch(
                 f"{_DELIVERY}.get_session_intelligence",
@@ -367,6 +375,7 @@ class TestHighPriorityReachesAWorkingAgent:
     async def test_normal_priority_and_hookless_runtimes_are_not_offered(self, tmp_path, db):
         for runtime, priority in (("claude", False), ("gemini", True)):
             config = _config(tmp_path, runtime=runtime)
+            await register_config_agents(db, config)
             with (
                 patch(
                     f"{_DELIVERY}.get_session_intelligence",
@@ -387,6 +396,7 @@ class TestHighPriorityReachesAWorkingAgent:
 
     async def test_high_batch_drains_first_and_bypasses_settling(self, tmp_path, db):
         config = _config(tmp_path)
+        await register_config_agents(db, config)
         await db.queue.enqueue(session_name="desk", message="chat", delivery_kind="direct_message")
         await db.queue.enqueue_subscription(
             session_name="desk", header="[via:gmail] mail", lines=["- a1"], priority=1

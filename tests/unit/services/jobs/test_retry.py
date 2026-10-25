@@ -11,7 +11,7 @@ from agent_backbone.models import DeliveryOutcome, IssueData, ParsedLabels
 from agent_backbone.services.jobs.retry import delivery_retry, drain_message_queue, retry_delivery
 from agent_backbone.services.routing import DeliveryReport
 from tests.conftest import TEST_REPO, make_config
-from tests.support import queue_row
+from tests.support import queue_row, register_config_agents, registration_id
 
 
 class TestRetryDeliveryAckCheck:
@@ -25,6 +25,7 @@ class TestRetryDeliveryAckCheck:
         )
         await db.acks.record(154, "feynman", repo=TEST_REPO)
         delivery = {
+            "registration_id": await registration_id(db, "ike"),
             "session_name": "ike",
             "issue_number": 154,
             "target_entity": "feynman",
@@ -43,6 +44,7 @@ class TestRetryDeliveryAckCheck:
         )
         await db.acks.record(154, "ike", repo=TEST_REPO)
         delivery = {
+            "registration_id": await registration_id(db, "ike"),
             "session_name": "ike",
             "issue_number": 154,
             "target_entity": "feynman",
@@ -67,6 +69,7 @@ class TestRetryDeliveryAckCheck:
         mock_gh.get_issue = AsyncMock(return_value=mock_issue)
         mock_deliver.return_value = DeliveryReport(DeliveryOutcome.DELIVERED)
         delivery = {
+            "registration_id": await registration_id(db, "ike"),
             "session_name": "ike",
             "issue_number": 154,
             "target_entity": "ike",
@@ -80,6 +83,7 @@ class TestRetryDeliveryAckCheck:
         mock_gh = AsyncMock()
         mock_gh.get_issue = AsyncMock(return_value=MagicMock(state="closed"))
         delivery = {
+            "registration_id": await registration_id(db, "ike"),
             "session_name": "ike",
             "issue_number": 1,
             "target_entity": "ike",
@@ -97,6 +101,7 @@ class TestRetryDeliveryAckCheck:
                 specs={"backbone": AgentSpec(name="backbone", dir="/x", repo="acme/backbone")}
             ),
         )
+        await register_config_agents(db, config)
         await db.deliveries.record(
             issue_number=77,
             target_entity="backbone",
@@ -110,6 +115,7 @@ class TestRetryDeliveryAckCheck:
         mock_gh.list_issues = AsyncMock(return_value=[mock_issue])
         mock_deliver.return_value = DeliveryReport(DeliveryOutcome.DELIVERED)
         delivery = {
+            "registration_id": await registration_id(db, "backbone"),
             "session_name": "backbone",
             "issue_number": 77,
             "target_entity": "backbone",
@@ -131,6 +137,7 @@ class TestRetryDeliveryAckCheck:
             )
         )
         delivery = {
+            "registration_id": await registration_id(db, "ike"),
             "session_name": "ike",
             "issue_number": 88,
             "target_entity": "ike",
@@ -205,6 +212,7 @@ class TestDeliveryRetryQueueDrain:
             tmp_path,
             agents=AgentsConfig(specs={"app": AgentSpec(name="app", dir="/x", runtime=runtime)}),
         )
+        await register_config_agents(db, config)
         profile = SessionProfile(session_name="app", intelligence=SessionIntelligence.OFFLINE)
         with (
             patch(
@@ -255,6 +263,7 @@ class TestDeliveryRetryQueueDrain:
         config = make_config(
             tmp_path, agents=AgentsConfig(specs={"app": AgentSpec(name="app", dir="/x")})
         )
+        await register_config_agents(db, config)
         queued = await db.queue.enqueue(
             session_name="app", message="ordinary message", delivery_kind="direct_message"
         )
@@ -283,6 +292,7 @@ class TestDeliveryRetryQueueDrain:
                 specs={"app": AgentSpec(name="app", dir="/x", inbox_only=hold == "inbox")}
             ),
         )
+        await register_config_agents(db, config)
         queued = await db.queue.enqueue(
             session_name="app", message="waiting message", delivery_kind="direct_message"
         )
@@ -858,6 +868,7 @@ class TestDrainKeepsTheRowIdentity:
             status = await retry_delivery(
                 config,
                 {
+                    "registration_id": await registration_id(db, "ike"),
                     "session_name": "ike",
                     "target_entity": "ike",
                     "repo": TEST_REPO,
@@ -889,6 +900,7 @@ class TestDrainKeepsTheRowIdentity:
                 await retry_delivery(
                     config,
                     {
+                        "registration_id": await registration_id(db, "ike"),
                         "session_name": "ike",
                         "target_entity": "ike",
                         "repo": "elsewhere/repo",
@@ -920,7 +932,14 @@ class TestDrainKeepsTheRowIdentity:
         mock_list_sessions.return_value = ["ike"]
         mock_deliver.return_value = DeliveryReport(DeliveryOutcome.AGENT_WORKING)
 
-        await delivery_retry(config, db, AsyncMock())
+        gh = AsyncMock()
+        gh.get_issue.return_value = IssueData(
+            number=7,
+            title="Current",
+            repo_full_name=TEST_REPO,
+            labels=ParsedLabels(targets=[config.agents.get("ike").name]),
+        )
+        await delivery_retry(config, db, gh)
 
         kwargs = mock_deliver.await_args.kwargs
         assert kwargs["sender"] == "leo"

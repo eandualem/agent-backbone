@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 from sqlalchemy import text
 
@@ -82,10 +83,13 @@ class AgentRepo(Repo):
                 text(
                     """INSERT INTO agents
                        (name, dir, runtime, model, repo, tags, env, description,
-                        always_on, unattended, inbox_only, created_at, updated_at)
+                        always_on, unattended, inbox_only, created_at, updated_at, report_identity)
                        VALUES (:name, :dir, :runtime, :model, :repo, :tags, :env,
-                               :description, :always_on, :unattended, :inbox_only, :now, :now)
+                               :description, :always_on, :unattended, :inbox_only,
+                               :now, :now, :identity)
                        ON CONFLICT(name) DO UPDATE SET
+                         report_identity = COALESCE(agents.report_identity,
+                                                    excluded.report_identity),
                          dir = excluded.dir,
                          runtime = excluded.runtime,
                          model = excluded.model,
@@ -100,6 +104,7 @@ class AgentRepo(Repo):
                 ),
                 {
                     "name": name,
+                    "identity": uuid.uuid4().hex,
                     "dir": dir,
                     "runtime": runtime,
                     "model": model,
@@ -173,8 +178,42 @@ class AgentRepo(Repo):
                 {"at": at, "name": name},
             )
 
+    async def registration_matches(self, name: str, identity: str | None) -> bool:
+        if not identity:
+            return False
+        async with self._tx() as conn:
+            return bool(
+                await conn.scalar(
+                    text("SELECT 1 FROM agents WHERE name=:name AND report_identity=:identity"),
+                    {"name": name, "identity": identity},
+                )
+            )
+
     async def delete(self, name: str) -> bool:
         async with self._tx() as conn:
+            # Retain bodies and history, but never hand them to a reused name.
+            await conn.execute(
+                text(
+                    "UPDATE message_queue SET status='expired', delivered_at=:now, leased_at=NULL "
+                    "WHERE session_name=:name "
+                    "AND status IN ('pending','in_progress','checkpoint','uncertain')"
+                ),
+                {"name": name, "now": now_iso()},
+            )
+            await conn.execute(
+                text(
+                    "UPDATE event_outbox SET status='skipped', updated_at=:now "
+                    "WHERE recipient=:name AND status IN ('pending','failed')"
+                ),
+                {"name": name, "now": now_iso()},
+            )
+            await conn.execute(
+                text(
+                    "UPDATE deliveries SET superseded_at=:now WHERE session_name=:name "
+                    "AND superseded_at IS NULL"
+                ),
+                {"name": name, "now": now_iso()},
+            )
             await conn.execute(
                 text("DELETE FROM agent_watches WHERE agent_name = :name"), {"name": name}
             )

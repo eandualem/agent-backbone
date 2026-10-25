@@ -401,6 +401,12 @@ async def test_checkpoint_survives_database_restart_and_squashed_migration(tmp_p
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'persist.db'}"
     async with BackboneDB.connect(url) as db:
+        from agent_backbone.config import AgentSpec
+        from agent_backbone.services.agents import AgentStore
+
+        store = AgentStore(db, tmp_path)
+        await store.start()
+        await store.register(AgentSpec(name="worker", dir=str(tmp_path), runtime="shell"))
         receipt = await db.queue.enqueue(
             session_name="worker", message="durable", delivery_kind="direct_message"
         )
