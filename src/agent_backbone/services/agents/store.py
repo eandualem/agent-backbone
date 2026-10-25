@@ -356,7 +356,10 @@ class AgentStore:
             # not be the agent's directory any more (``agent set dir=``).
             repo = json.loads(manifest.read_text(encoding="utf-8")).get("repo")
             if store is not None and isinstance(repo, str):
-                materialize(store, Path(repo), (), [], manifest)
+                result = materialize(store, Path(repo), (), [], manifest)
+                if not result.ok:
+                    log.warning("Could not release skill links for %s: %s", name, result.conflicts)
+                    return False
         except (OSError, ValueError, AttributeError) as exc:
             # Kept: it is what a later cleanup of those links goes by.
             log.warning("Could not release the skill links of '%s': %s", name, exc)

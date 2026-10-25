@@ -878,3 +878,21 @@ def test_anchored_import_rejects_a_leaf_swapped_after_validation(tmp_path, monke
         add_skill(store, source, source_root=root)
     assert (outside / "SKILL.md").read_bytes() == original
     assert not (store / "tidy").exists()
+
+
+def test_anchored_import_rejects_fifo_without_waiting_for_a_writer(tmp_path, monkeypatch):
+    root = tmp_path / "project"
+    source = root / "tidy"
+    source.mkdir(parents=True)
+    skills.os.mkfifo(source / "SKILL.md")
+    open_file = skills.os.open
+
+    def nonblocking_file(path, flags, **kwargs):
+        if str(path) == "SKILL.md":
+            assert flags & skills.os.O_NONBLOCK  # fail rather than hang on a regression
+        return open_file(path, flags, **kwargs)
+
+    monkeypatch.setattr(skills.os, "open", nonblocking_file)
+    with pytest.raises(ValueError, match="regular file"):
+        add_skill(tmp_path / "store", source, source_root=root)
+    assert source.is_dir()

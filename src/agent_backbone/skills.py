@@ -36,6 +36,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 import tempfile
 from contextlib import ExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field
@@ -275,6 +276,15 @@ def _edit_frontmatter(text: str, tags: tuple[str, ...], *, name: str | None = No
     return "---\n" + "".join(out) + "---\n" + body
 
 
+def _read_skill_file(path: str | Path, *, dir_fd: int | None = None) -> str:
+    """Read only a regular, non-symlink file without waiting on a FIFO."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+    with os.fdopen(fd, encoding="utf-8") as file:
+        if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+            raise ValueError("SKILL.md must be a regular file")
+        return file.read()
+
+
 def add_skill(
     store: Path,
     source: Path,
@@ -350,11 +360,9 @@ def _add_skill(
     # Everything that can be checked before touching the filesystem is
     # checked here: a rejected skill leaves the source where it was.
     if source_fd is None:
-        original = (source / "SKILL.md").read_text(encoding="utf-8")
+        original = _read_skill_file(source / "SKILL.md")
     else:
-        fd = os.open("SKILL.md", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=source_fd)
-        with os.fdopen(fd, encoding="utf-8") as file:
-            original = file.read()
+        original = _read_skill_file("SKILL.md", dir_fd=source_fd)
     draft = _parse_skill_text(source.name, source, original)
     # The name is rewritten on the way in, so a mismatched or invalid one is
     # tolerated only when the caller renames; everything else is refused now.
@@ -393,7 +401,7 @@ def _add_skill(
         if staged.is_symlink() or not staged.is_dir():
             raise ValueError("skill source changed while moving into the store")
         staged_file = staged / "SKILL.md"
-        if staged_file.is_symlink() or staged_file.read_text(encoding="utf-8") != original:
+        if staged_file.is_symlink() or _read_skill_file(staged_file) != original:
             raise ValueError("SKILL.md changed while moving into the store")
         if target.exists() or target.is_symlink():
             target.rename(displaced)
