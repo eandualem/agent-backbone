@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -181,6 +182,16 @@ async def read_client_config() -> BackboneConfig:
     from sqlalchemy.ext.asyncio import create_async_engine
 
     boot = bootstrap_config()
+    if agent_credential(boot.api_key):
+        # The launcher exports the effective address without loading operator secrets.
+        from dataclasses import replace
+
+        return replace(
+            boot,
+            backbone=replace(
+                boot.backbone, host=os.environ.get("BACKBONE_HOST", boot.backbone.host)
+            ),
+        )
     try:
         url = make_url(boot.database_url)
         if url.get_backend_name() == "sqlite":

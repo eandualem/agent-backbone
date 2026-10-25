@@ -83,6 +83,8 @@ def launch_environment(
         env[STATE_DIR_ENV_KEY] = str(state_dir)
     reserved = {
         "BACKBONE_API_KEY",
+        "BACKBONE_HOST",
+        "BACKBONE_PORT",
         RUNTIME_ENV_KEY,
         AGENT_ENV_KEY,
         STATE_DIR_ENV_KEY,
@@ -399,6 +401,8 @@ async def _start_agent(
     from agent_backbone.config import agent_api_key
 
     environment["BACKBONE_API_KEY"] = agent_api_key(config.api_key)
+    environment["BACKBONE_HOST"] = config.backbone.host
+    environment["BACKBONE_PORT"] = str(config.backbone.port)
     # `starting` lives in its own marker file, written before the launch: a
     # hook write newer than the marker outranks it, ``wait_until_ready``
     # clears it when the prompt shows, and ``get_agent_state`` stops

@@ -455,7 +455,7 @@ class TestStartAgentScrubsSecrets:
     async def test_secrets_are_scrubbed_from_the_session(self, tmp_path, runtime):
         data_dir = tmp_path / "data"
         data_dir.mkdir()
-        (data_dir / ".env").write_text("BACKBONE_API_KEY=k\nMY_OWN_SECRET=s\n")
+        (data_dir / ".env").write_text("BACKBONE_API_KEY=k\nMY_OWN_SECRET=s\nBACKBONE_PORT=8234\n")
         project = tmp_path / "project"
         project.mkdir()
         spec = AgentSpec(name="worker", dir=str(project), runtime=runtime)
@@ -479,6 +479,8 @@ class TestStartAgentScrubsSecrets:
         assert exported["BACKBONE_AGENT"] == "worker"
         assert exported["BACKBONE_API_KEY"] == agent_api_key("k")
         assert exported["BACKBONE_API_KEY"] != "k"
+        assert exported["BACKBONE_PORT"] == "8234"
+        assert exported["BACKBONE_HOST"] == config.backbone.host
 
     @pytest.mark.parametrize("runtime", sorted(RUNTIMES))
     async def test_env_values_are_on_no_command_line(self, tmp_path, runtime):

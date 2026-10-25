@@ -31,3 +31,17 @@ async def test_agent_cli_cannot_use_direct_database_fallback(config):
             async with Direct(scoped):
                 pytest.fail("agent opened the database")
     database.assert_not_called()
+
+
+async def test_agent_client_uses_exported_address_without_operator_env(tmp_path, monkeypatch):
+    from agent_backbone.cli._common import read_client_config
+
+    (tmp_path / ".env").write_text("BACKBONE_PORT=9999\nBACKBONE_API_KEY=operator-secret\n")
+    monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("BACKBONE_API_KEY", agent_api_key("operator"))
+    monkeypatch.setenv("BACKBONE_PORT", "8234")
+    monkeypatch.setenv("BACKBONE_HOST", "127.0.0.2")
+    config = await read_client_config()
+    assert config.backbone.port == 8234
+    assert config.backbone.host == "127.0.0.2"
+    assert config.api_key == agent_api_key("operator")
