@@ -137,3 +137,17 @@ def test_missing_or_invalid_agent_credential_never_reads_operator_file(
         with pytest.raises(ValueError, match="fallback is disabled"):
             load_secrets(tmp_path)
     read.assert_not_called()
+
+
+def test_explicit_empty_launch_credential_keeps_no_key_client_without_env_fallback(
+    tmp_path, monkeypatch
+):
+    from agent_backbone.config import bootstrap_config
+
+    (tmp_path / ".env").write_text("BACKBONE_API_KEY=operator-secret\n")
+    monkeypatch.setenv("BACKBONE_AGENT", "app")
+    monkeypatch.setenv("BACKBONE_AGENT_CREDENTIAL", "")
+    monkeypatch.delenv("BACKBONE_API_KEY", raising=False)
+    with patch("agent_backbone.config.dotenv_values") as read:
+        assert bootstrap_config(tmp_path).api_key == ""
+    read.assert_not_called()

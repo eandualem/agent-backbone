@@ -947,10 +947,14 @@ def load_secrets(data_dir: Path) -> dict[str, str]:
                 "Invalid agent collaboration credential; operator fallback is disabled"
             )
         environment["BACKBONE_API_KEY"] = collaboration
-    if environment.get("BACKBONE_AGENT") and not environment.get("BACKBONE_API_KEY"):
+    if (
+        environment.get("BACKBONE_AGENT")
+        and not environment.get("BACKBONE_API_KEY")
+        and "BACKBONE_AGENT_CREDENTIAL" not in environment
+    ):
         raise ValueError("Agent credential is missing; operator fallback is disabled")
     if (
-        collaboration
+        "BACKBONE_AGENT_CREDENTIAL" in environment
         or environment.get("BACKBONE_AGENT")
         or agent_credential(environment.get("BACKBONE_API_KEY", ""))
     ):
