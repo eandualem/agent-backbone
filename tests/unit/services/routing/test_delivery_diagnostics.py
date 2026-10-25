@@ -305,6 +305,11 @@ async def test_unidentified_receiver_keeps_notification_as_inbox_data(config, db
         report = await safe_deliver(
             "ike", "notification data", config, db=db, delivery_kind="comment"
         )
+    from agent_backbone.services.routing import queue_detail
+
+    detail = queue_detail(report, "ike", 30)
+    assert "without automatic delivery or expiry" in detail
+    assert "backbone inbox" in detail
     row = await queue_row(db, report.queue_id)
     assert report.outcome == "awaiting_ack" and row["status"] == "checkpoint"
     assert await db.queue.dequeue("ike") == []

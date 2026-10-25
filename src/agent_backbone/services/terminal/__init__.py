@@ -19,6 +19,7 @@ from agent_backbone.services.terminal._core import (
     session_exists,
     set_window_size_mode,
 )
+from agent_backbone.services.terminal._foreground import foreground_commands
 from agent_backbone.services.terminal._memory import process_memory
 from agent_backbone.services.terminal._pty import PtyManager, PtySession
 from agent_backbone.services.terminal._sessions import (
@@ -43,6 +44,7 @@ __all__ = [
     "attach_session",
     "caller_sessions",
     "capture_pane",
+    "foreground_commands",
     "graceful_close",
     "in_copy_mode",
     "list_sessions",

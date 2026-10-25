@@ -540,6 +540,7 @@ async def test_notifications_require_the_actual_foreground_runtime(runtime, fore
             "agent_backbone.services.runtimes.base.query_format_vars",
             return_value={"command": command},
         ),
+        patch("agent_backbone.services.runtimes.base.foreground_commands", return_value=[]),
         patch.object(adapter, "deliver_message", return_value=True) as deliver,
     ):
         result = await send_message("app", "untrusted notification", runtime_hint=runtime)
@@ -556,3 +557,25 @@ async def test_shell_and_unknown_receivers_never_receive_notification_pastes(run
     ):
         assert await send_message("app", "touch /tmp/unwanted", runtime_hint=runtime) is None
     paste.assert_not_awaited()
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider"])
+@pytest.mark.parametrize("entrypoint", ["installed", "unrelated"])
+async def test_interpreted_notification_receivers_require_the_installed_entrypoint(
+    tmp_path, runtime, entrypoint
+):
+    adapter = RUNTIMES[runtime]
+    installed = tmp_path / adapter.binary
+    actual = installed if entrypoint == "installed" else tmp_path / "unrelated.js"
+    with (
+        patch(
+            "agent_backbone.services.runtimes.base.query_format_vars",
+            return_value={"command": "node"},
+        ),
+        patch("agent_backbone.services.runtimes.base.resolve_command", return_value=str(installed)),
+        patch(
+            "agent_backbone.services.runtimes.base.foreground_commands",
+            return_value=[["node", str(actual)]],
+        ),
+    ):
+        assert await adapter.accepts_notifications("app") is (entrypoint == "installed")

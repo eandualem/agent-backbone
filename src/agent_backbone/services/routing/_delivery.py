@@ -21,7 +21,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import wraps
 from typing import TYPE_CHECKING, TypeVar
 from weakref import WeakValueDictionary
@@ -78,6 +78,7 @@ class DeliveryReport:
     operation_id: str | None = None
     delivery_id: int | None = None
     queue_id: int | None = None
+    held_for_inbox: bool = False
 
     @property
     def queued(self) -> bool:
@@ -189,6 +190,11 @@ def queue_detail(
         if report.outcome == DeliveryOutcome.UNATTENDED_COPY_MODE
         else report.outcome.value.replace("_", " ")
     )
+    if report.held_for_inbox and report.queued:
+        return (
+            f"Held for {session_name}'s inbox without automatic delivery or expiry. "
+            "Read and acknowledge it with backbone inbox."
+        )
     if report.queue == "stored" and inbox_only:
         return (
             f"Held for {session_name}'s inbox: it is inbox-only and reads its messages with "
@@ -443,6 +449,7 @@ async def safe_deliver(
                 held["status"] == "uncertain",
                 held["operation_id"],
                 queue_id=held["id"],
+                held_for_inbox=held["status"] == "checkpoint",
             )
 
     # 1. Issue queue gate
@@ -738,6 +745,7 @@ async def safe_deliver(
         report = await finish(DeliveryOutcome.AWAITING_ACK, queue=True)
         if db is not None and report.queue_id is not None:
             await db.queue.hold_for_inbox(report.queue_id)
+            report = replace(report, held_for_inbox=True)
         return report
     if sent:
         return await finish(DeliveryOutcome.DELIVERED, queue=False)
