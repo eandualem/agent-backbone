@@ -107,6 +107,13 @@ with another repository's agent and adapt that lesson to its readers. The team
 must record, test and revise its understanding; a role name or stored conversation
 alone does not make it more capable. [Try that collaboration](docs/team.md#try-a-readme-collaboration).
 
+## Use a desktop workspace
+
+Agent Interface provides a native desktop for Backbone: terminals alongside
+team, activity, usage, skills and policy views. Its **Reports & updates** view brings together progress reports, saved
+answers and Documents. Rich HTML Documents currently render on macOS.
+Connect it to a running Backbone.
+
 ## Quick start
 
 **Let your agent do it.** Open the coding agent you already use and say:
@@ -205,6 +212,9 @@ agents names, safe messages and evidence, and leaves the work to them.
   with that tag finds it in its own CLI.
 - [Telegram](docs/telegram.md): send messages and read reports from your phone.
 - [Token usage](docs/token-usage.md): tokens by agent, conversation and model.
+- [Saved answers](docs/responses.md): return to a question, its answer and next action.
+- [Documents](docs/documents.md): keep detailed explanations and interactive HTML
+  reports available beyond the conversation, with retained correction history.
 - [API](docs/api.md): build a dashboard or automation; Backbone ships no UI.
 - [Runtime support and limits](docs/status-and-roadmap.md): checked capabilities,
   unsupported environments and known limitations.

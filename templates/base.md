@@ -20,6 +20,12 @@ playbook for each; read it before first use):
   Response tied to that question. Responses answer the person; progress reports
   describe the work. Read `backbone help responses` before first use and
   `backbone docs responses` for operating guidance.
+- **Keep detailed work available**: publish substantial explanations, architecture
+  proposals and interactive HTML reports with `backbone documents publish`.
+  Preserve a requested format or destination, and tell the person the saved title
+  and revision ID. Documents retain the artifact without sending a notification.
+  Read `backbone help documents` before first use and `backbone docs documents`
+  for the operating contract.
 - **See the system**: `backbone status`, `backbone agent inspect <agent>`,
   `backbone agent output <agent>` (what a peer has been doing; reads only).
   `backbone agent list` shows peers' purposes and tags; consult useful expertise
