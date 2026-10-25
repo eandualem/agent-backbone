@@ -16,6 +16,7 @@ class AcknowledgementRepo(Repo):
         *,
         repo: str = "",
         not_cleared_since: str | None = None,
+        comment_id: int | None = None,
     ) -> bool:
         async with self._tx() as conn:
             result = await conn.execute(
@@ -25,9 +26,12 @@ class AcknowledgementRepo(Repo):
                        VALUES (:repo, :issue_number, :target_entity, :acknowledged_at)
                        ON CONFLICT(repo, issue_number, target_entity) DO UPDATE SET
                          acknowledged_at = excluded.acknowledged_at
-                       WHERE CAST(:not_cleared_since AS TEXT) IS NULL
+                       WHERE (CAST(:not_cleared_since AS TEXT) IS NULL
                           OR acknowledgments.cleared_at IS NULL
-                          OR acknowledgments.cleared_at <= :not_cleared_since"""
+                          OR acknowledgments.cleared_at <= :not_cleared_since)
+                         AND (CAST(:comment_id AS BIGINT) IS NULL
+                           OR acknowledgments.cleared_comment_id IS NULL
+                           OR :comment_id >= acknowledgments.cleared_comment_id)"""
                 ),
                 {
                     "repo": repo,
@@ -35,6 +39,7 @@ class AcknowledgementRepo(Repo):
                     "target_entity": target_entity,
                     "acknowledged_at": now_iso(),
                     "not_cleared_since": not_cleared_since,
+                    "comment_id": comment_id,
                 },
             )
             return bool(result.rowcount)
@@ -82,7 +87,10 @@ class AcknowledgementRepo(Repo):
                     "VALUES (:repo,:issue_number,:target_entity,'',:now,:comment_id) "
                     "ON CONFLICT(repo,issue_number,target_entity) DO UPDATE SET "
                     "acknowledged_at='', cleared_at=excluded.cleared_at, "
-                    "cleared_comment_id=excluded.cleared_comment_id"
+                    "cleared_comment_id=excluded.cleared_comment_id "
+                    "WHERE acknowledgments.cleared_comment_id IS NULL "
+                    "OR excluded.cleared_comment_id IS NULL "
+                    "OR excluded.cleared_comment_id > acknowledgments.cleared_comment_id"
                 ),
                 {
                     "repo": repo,

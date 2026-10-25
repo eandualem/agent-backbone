@@ -176,8 +176,11 @@ def has_commented_on_issue(
             and _repo_matches(entry, repo)
             and (
                 since is None
-                or entry["comment_id"] == reset_comment_id
-                or (isinstance(entry.get("ts"), (int, float)) and entry["ts"] > since)
+                or (
+                    entry["comment_id"] >= reset_comment_id
+                    if reset_comment_id
+                    else isinstance(entry.get("ts"), (int, float)) and entry["ts"] > since
+                )
             )
         ):
             return True

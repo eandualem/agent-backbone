@@ -908,5 +908,7 @@ async def test_delayed_receipt_can_reconcile_its_own_reset_comment(config, db):
     with patch(f"{_PEND}.safe_deliver", return_value=DeliveryReport(DeliveryOutcome.DELIVERED)):
         assert (await deliver_pending_issues(config, _IDLE, db, gh))["ike"] == "delivered_#8"
         await db.acks.clear(7, "ike", repo=_REPO, comment_id=124)
+        # An older webhook cannot replace the newer boundary, even if processed last.
+        await db.acks.clear(7, "ike", repo=_REPO, comment_id=123)
         assert (await deliver_pending_issues(config, _IDLE, db, gh))["ike"] == "delivered_#7"
         assert not await db.acks.exists(7, "ike", repo=_REPO)

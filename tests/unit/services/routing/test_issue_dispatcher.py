@@ -185,7 +185,9 @@ class TestCapitalisedAgentNames:
         with _patch_safe_deliver() as deliver, _patch_find_outgoing("Builder"):
             result = await issue_dispatcher(event, config, mock_db)
         assert result.delivered == ["ops"] and deliver.await_count == 1
-        mock_db.acks.record.assert_called_once_with(5, "Builder", repo=OTHER_REPO)
+        mock_db.acks.record.assert_called_once_with(
+            5, "Builder", repo=OTHER_REPO, comment_id=event.comment.id
+        )
 
     async def test_review_prefix_cannot_exclude_registered_spelling(self, config, mock_db):
         event = _review_event(6, "ops", ["Builder"], "[from:Builder] LGTM", state="approved")
@@ -580,7 +582,9 @@ class TestCommentRouting:
         event = _comment_event(42, "leo", ["ike"], "[from:ike] Ack")
         with _patch_safe_deliver(DeliveryOutcome.DELIVERED), _patch_find_outgoing("ike"):
             await issue_dispatcher(event, config, mock_db)
-        mock_db.acks.record.assert_called_once_with(42, "ike", repo=OTHER_REPO)
+        mock_db.acks.record.assert_called_once_with(
+            42, "ike", repo=OTHER_REPO, comment_id=event.comment.id
+        )
 
     async def test_external_comment_clears_acknowledgment(self, config, mock_db):
         event = _comment_event(42, "leo", ["ike"], "[from:leo] New info")

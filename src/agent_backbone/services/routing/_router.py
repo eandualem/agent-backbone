@@ -190,7 +190,9 @@ async def _dispatch_comment(
     acknowledged = commenter
     if acknowledged:
         try:
-            await db.acks.record(event.issue.number, acknowledged, repo=repo)
+            await db.acks.record(
+                event.issue.number, acknowledged, repo=repo, comment_id=event.comment.id
+            )
         except Exception:
             log.exception("Failed to record acknowledgment (non-fatal)")
 
