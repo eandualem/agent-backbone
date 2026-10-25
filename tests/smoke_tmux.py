@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import subprocess
 import sys
@@ -33,9 +34,9 @@ async def main() -> None:
     # Characters tmux's command syntax treats specially, handed over on stdin.
     value = f"$HOME ~ 'q' \"d\" \\ {marker[:8]}"
     program = (
-        "import os, sys\n"
+        "import hashlib, os, sys\n"
         "print('smoke-ready:' + os.environ['BACKBONE_SMOKE'] + os.environ['SHELL'], flush=True)\n"
-        "print('smoke-cwd:' + os.getcwd(), flush=True)\n"
+        "print('smoke-cwd:' + hashlib.sha256(os.getcwdb()).hexdigest(), flush=True)\n"
         "for line in sys.stdin:\n"
         "    print('received:' + line.strip(), flush=True)\n"
     )
@@ -48,7 +49,7 @@ async def main() -> None:
         home = Path(directory) / "home"
         home.mkdir()
         os.environ["HOME"] = str(home)
-        working = Path(directory) / "literal # #{HOME} #(printf smoke)"
+        working = Path(directory) / "literal # #[fg=red] #{HOME} #(printf smoke)"
         working.mkdir()
         os.environ["TMUX_TMPDIR"] = directory
         tempfile.tempdir = directory  # where start_session writes the environment file
@@ -63,7 +64,9 @@ async def main() -> None:
             ):
                 raise RuntimeError("could not start the smoke session")
             await wait_for_output(session, f"smoke-ready:{value}/smoke/sh")
-            await wait_for_output(session, f"smoke-cwd:{working.resolve()}")
+            await wait_for_output(
+                session, "smoke-cwd:" + hashlib.sha256(os.fsencode(working.resolve())).hexdigest()
+            )
             fields = await query_format_vars(
                 session,
                 "session_name=#{session_name}\nsocket_path=#{socket_path}\n"

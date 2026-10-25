@@ -195,7 +195,7 @@ class TestStartSession:
             assert result is True
             call_args = _new_session(mock_subprocess)
             assert "-c" in call_args
-            assert directory.replace("#", "##") in call_args
+            assert directory.replace("#", "#{l:##}") in call_args
             assert "claude" in call_args
 
     async def test_start_already_exists(self, mock_subprocess):

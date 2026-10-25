@@ -127,14 +127,18 @@ async def set_tags(name: str, body: SkillTagsRequest, config=Depends(get_config)
     store = _store_or_400(config)
     if not NAME_RE.fullmatch(name):
         raise HTTPException(status_code=422, detail="invalid skill name")
-    current = parse_skill(store / name)
-    if current.error == "not a directory":
-        raise HTTPException(status_code=404, detail=f"unknown skill '{name}'")
     async with store_lock(config.data_dir, store):
         try:
             path = store / name
-            if path.is_symlink() or path.resolve().parent != store.resolve():
+            if (
+                path.is_symlink()
+                or path.resolve().parent != store.resolve()
+                or (path / "SKILL.md").is_symlink()
+            ):
                 raise ValueError("the skill must be a direct directory in the store")
+            current = parse_skill(path)
+            if current.error == "not a directory":
+                raise HTTPException(status_code=404, detail=f"unknown skill '{name}'")
             write_tags(path, tuple(body.tags))
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
