@@ -57,6 +57,21 @@ actions. `backbone responses show ID` reads one in full. Agents publish explicit
 with `backbone respond --file answer.json` while continuing their work; the full
 answer is also queued to their Telegram topic. See [Responses](docs/responses.md).
 
+## Find a saved document
+
+```bash
+backbone documents --agent app
+backbone documents show ID                 # metadata for a revision from the list
+backbone documents show ID --output report.html
+```
+
+Documents retain detailed explanations, analyses and interactive HTML reports.
+Open them in Agent Interface's **Reports & updates** view on macOS, or export
+a revision to a file. Agents publish deliberately with
+`backbone documents publish --file report.html --title "Report"`; publication
+stores it without sending a notification or creating a public page.
+See [Documents](docs/documents.md) for validation, corrections and limits.
+
 ## Read agent progress
 
 ```bash
