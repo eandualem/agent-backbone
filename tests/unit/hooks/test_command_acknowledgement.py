@@ -374,18 +374,21 @@ def test_delayed_event_finds_exact_receipt_beyond_recent_tail(tmp_path):
 
 
 @pytest.mark.parametrize("hook", [claude_hook, codex_hook])
-def test_chained_comments_keep_each_exact_publication_receipt(hook):
+@pytest.mark.parametrize("second_id", [123, 124])
+def test_chained_comments_keep_each_exact_publication_receipt(hook, second_id):
     _, actions = hook.derive(
         {
             "hook_event_name": "PostToolUse",
             "tool_name": "Bash",
-            "tool_input": {"command": COMMAND + " && " + COMMAND},
+            "tool_input": {
+                "command": COMMAND + " && " + COMMAND + (" --edit-last" if second_id == 123 else "")
+            },
             "tool_response": {
                 "exit_code": 0,
                 "stdout": "https://github.com/acme/app/issues/5#issuecomment-123\n"
-                "https://github.com/acme/app/issues/5#issuecomment-124",
+                f"https://github.com/acme/app/issues/5#issuecomment-{second_id}",
             },
         },
         None,
     )
-    assert [action["comment_id"] for action in actions] == [123, 124]
+    assert [action["comment_id"] for action in actions] == [123, second_id]

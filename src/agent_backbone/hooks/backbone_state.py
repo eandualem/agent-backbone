@@ -425,7 +425,7 @@ def _comment_receipts(actions: list[dict], response: object, *, shell: bool) -> 
             r"#issuecomment-(\d+)\s*$",
             output,
         ):
-            receipts.setdefault((repo.casefold(), int(issue)), {})[int(comment)] = None
+            receipts.setdefault((repo.casefold(), int(issue)), []).append(int(comment))
     groups = {}
     for action in actions:
         if action.get("action") == "comment" and action.get("phase") == "succeeded":
@@ -440,7 +440,9 @@ def _comment_receipts(actions: list[dict], response: object, *, shell: bool) -> 
                 action["repo"] = repo
             groups.setdefault((repo, action.get("issue")), []).append(action)
     for key, published in groups.items():
-        ids = receipts.get(key, {})
+        ids = receipts.get(key, [])
+        if len(published) == 1:
+            ids = list(dict.fromkeys(ids))
         if len(ids) == len(published):
             for action, comment_id in zip(published, ids, strict=True):
                 action["comment_id"] = comment_id
