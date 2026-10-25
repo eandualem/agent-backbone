@@ -867,3 +867,26 @@ ordinary messaging; this is not a per-agent authentication boundary.
 returns paged latest-per-document metadata; `GET /api/documents/{revision_id}`
 returns exact content through authenticated JSON. See [Documents](documents.md)
 for the response fields, signed publication, byte limits, retries and retention.
+
+
+### Private local transport
+
+For a local client that must authenticate the provider before sending its API
+key, configure `backbone.socket_path` to an absolute socket path inside the
+Backbone data directory. Its parent must belong to the service account and have
+mode 0700. On the next explicitly requested server start, Backbone binds a 0600
+Unix socket alongside its existing TCP listener. `--reload` is not supported
+with this optional listener. No socket is enabled by default.
+
+Give the same absolute path to the client as `BACKBONE_SOCKET_PATH`. Before
+sending HTTP or bearer credentials, the client must verify the private parent,
+socket type, 0600 mode and ownership, then check the connected peer UID against
+its effective UID. The provider similarly rejects Unix peers with a different
+UID before HTTP parsing. HTTP routes, request bodies, response framing and API
+key requirements are unchanged. A client using this contract must report an
+unavailable socket rather than silently fall back to credential-bearing TCP.
+
+This transport supports macOS and Linux. It authenticates the OS account, not an
+individual agent, and does not isolate unrestricted processes sharing that account.
+An owned inactive socket is replaced at startup; active sockets and other files
+are preserved and cause startup to fail.

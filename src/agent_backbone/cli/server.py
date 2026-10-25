@@ -67,7 +67,11 @@ def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
 def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | None = None) -> None:
     import uvicorn
 
+    from agent_backbone.api.local_transport import LocalPeerProtocol, private_listener
+
     logging_config = log_config(config, log_file)
+    if reload and config.backbone.socket_path:
+        raise ValueError("the private socket requires backbone up without --reload")
     if reload:
         uvicorn.run(
             "agent_backbone.api.app:create_app",
@@ -92,6 +96,7 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
             log_level="info",
             log_config=logging_config,
             workers=1,
+            http=LocalPeerProtocol if config.backbone.socket_path else "auto",
         )
     )
     inner = getattr(app, "other_asgi_app", app)
@@ -99,7 +104,15 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
     # signals after shutdown, which would kill us before the exec below.
     inner.state.request_shutdown = lambda: setattr(server, "should_exit", True)
     try:
-        server.run()
+        if config.backbone.socket_path:
+            with private_listener(config.data_dir, config.backbone.socket_path) as local:
+                tcp = server.config.bind_socket()
+                try:
+                    server.run(sockets=[tcp, local])
+                finally:
+                    tcp.close()
+        else:
+            server.run()
     except KeyboardInterrupt:
         return
     if not server.started:
