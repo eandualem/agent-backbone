@@ -775,7 +775,11 @@ async def safe_deliver(
     sent = await submit()
     if sent is None:
         report = await finish(DeliveryOutcome.AWAITING_ACK, queue=True, held_for_inbox=True)
-        if db is not None and report.queue_id is not None and report.queued:
+        if (
+            db is not None
+            and report.queue_id is not None
+            and report.outcome != DeliveryOutcome.ALREADY_DELIVERED
+        ):
             await db.queue.hold_for_inbox(report.queue_id)
             report = replace(report, held_for_inbox=True)
         return report

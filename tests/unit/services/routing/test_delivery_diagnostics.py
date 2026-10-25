@@ -392,3 +392,27 @@ async def test_inbox_hold_withdraws_replayed_hook_offers(config, db, taken):
     assert row["status"] == ("delivered" if taken else "checkpoint")
     assert (row["delivered_at"] is not None) == taken
     assert await db.queue.dequeue("worker") == []
+
+
+async def test_drained_notification_is_held_when_receiver_becomes_unidentified(config, db):
+    receipt = await db.queue.enqueue(
+        session_name="worker", message="retained comment", delivery_kind="comment"
+    )
+    await db.queue.dequeue("worker")
+    with (
+        patch(f"{_DELIVERY}.get_session_intelligence", return_value=profile()),
+        patch(f"{_DELIVERY}.send_message", return_value=None),
+    ):
+        report = await safe_deliver(
+            "worker",
+            "retained comment",
+            config,
+            db=db,
+            delivery_kind="comment",
+            queue_id=receipt.id,
+            requeue=False,
+        )
+    assert report.held_for_inbox and report.outcome == "awaiting_ack"
+    assert (await queue_row(db, receipt.id))["status"] == "checkpoint"
+    assert [row["id"] for row in await db.queue.checkpoint("worker")] == [receipt.id]
+    assert await db.queue.dequeue("worker") == []
