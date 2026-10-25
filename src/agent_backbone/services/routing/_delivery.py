@@ -330,6 +330,7 @@ async def _enqueue(
     uncertain: bool = False,
     priority: bool = False,
     held_for_inbox: bool = False,
+    withdraw_context: Callable[[int], str] | None = None,
 ) -> _QueueReceipt:
     """Store the message; say what happened (``stored`` / ``already_queued`` /
     ``failed``), or None when there is nothing to store it in."""
@@ -347,6 +348,7 @@ async def _enqueue(
                 lines=body.split("\n") if body else [],
                 priority=int(priority),
                 held_for_inbox=held_for_inbox,
+                withdraw_context=withdraw_context,
                 source=source,
                 operation_id=operation_id,
             )
@@ -517,6 +519,9 @@ async def safe_deliver(
                 uncertain=uncertain,
                 priority=priority,
                 held_for_inbox=held_for_inbox,
+                withdraw_context=lambda row_id: claim_context(
+                    config.state_dir, session_name, str(row_id)
+                ),
             )
         elif uncertain and db is not None and queue_id is not None:
             await db.queue.hold_uncertain(queue_id)

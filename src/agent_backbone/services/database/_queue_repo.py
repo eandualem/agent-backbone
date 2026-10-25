@@ -261,6 +261,7 @@ class QueueRepo(Repo):
         source: str = "",
         operation_id: str | None = None,
         held_for_inbox: bool = False,
+        withdraw_context: Callable[[int], str] | None = None,
     ) -> EnqueueResult:
         """Add subscribed events to the session's open normal batch, or open one.
 
@@ -298,14 +299,25 @@ class QueueRepo(Repo):
                     known.setdefault(line, dict(held_row))
             fresh = [line for line in lines if line not in known]
             holders = {known[line]["id"]: known[line] for line in lines if line in known}
-            if held_for_inbox and holders:
-                await conn.execute(
-                    text(
-                        "UPDATE message_queue SET status='checkpoint', leased_at=NULL "
-                        "WHERE id IN :ids AND status IN ('pending','in_progress')"
-                    ).bindparams(bindparam("ids", expanding=True)),
-                    {"ids": list(holders)},
-                )
+            if held_for_inbox:
+                if withdraw_context is None:
+                    raise ValueError("inbox holds require hook-offer withdrawal")
+                for row in holders.values():
+                    if row["status"] not in {"pending", "in_progress", "checkpoint"}:
+                        continue
+                    taken = withdraw_context(row["id"]) == "taken"
+                    await conn.execute(
+                        text(
+                            "UPDATE message_queue SET status=:status, leased_at=NULL, "
+                            "delivered_at=:delivered WHERE id=:id "
+                            "AND status IN ('pending','in_progress','checkpoint')"
+                        ),
+                        {
+                            "id": row["id"],
+                            "status": "delivered" if taken else "checkpoint",
+                            "delivered": now_iso() if taken else None,
+                        },
+                    )
             # The process may have stopped before a waiting high batch was
             # offered: offer it again under its own id (a taken one never is).
             offers: list[tuple[int, str]] = [

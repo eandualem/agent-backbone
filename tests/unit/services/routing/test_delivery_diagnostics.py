@@ -351,3 +351,33 @@ async def test_unidentified_receiver_holds_every_subscription_batch(config, db, 
     assert not pending if not priority else len(pending) == 1
     # The high-priority notification leaves the unrelated older normal row alone.
     assert all(row["message"] == "events\nearlier" for row in pending)
+
+
+@pytest.mark.parametrize("taken", [False, True])
+async def test_inbox_hold_withdraws_replayed_hook_offers(config, db, taken):
+    from agent_backbone.hooks.backbone_state import offer_context, take_context
+    from agent_backbone.models import SUBSCRIPTION_KIND
+
+    result = await db.queue.enqueue_subscription(
+        session_name="worker", header="events", lines=["old event"], priority=1
+    )
+    offer_context(config.state_dir, "worker", str(result.id), "events\nold event")
+    if taken:
+        assert take_context(config.state_dir, "worker") == ["events\nold event"]
+    with (
+        patch(f"{_DELIVERY}.get_session_intelligence", return_value=profile()),
+        patch(f"{_DELIVERY}.send_message", return_value=None),
+    ):
+        await safe_deliver(
+            "worker",
+            "events\nold event",
+            config,
+            db=db,
+            delivery_kind=SUBSCRIPTION_KIND,
+            priority=True,
+        )
+    assert take_context(config.state_dir, "worker") == []
+    row = await queue_row(db, result.id)
+    assert row["status"] == ("delivered" if taken else "checkpoint")
+    assert (row["delivered_at"] is not None) == taken
+    assert await db.queue.dequeue("worker") == []
