@@ -674,10 +674,15 @@ class TestRepositorySkills:
             assert os.readlink(repo / rel) == os.path.join("..", "..", home, "own")
             assert f"/{rel}" in (repo / ".git" / "info" / "exclude").read_text()
 
-    def test_the_link_follows_the_skill_and_the_runtime(self, tmp_path):
+    @pytest.mark.parametrize("alias", [False, True])
+    def test_the_link_follows_the_skill_and_the_runtime(self, tmp_path, alias):
         store = tmp_path / "store"
         store.mkdir()
         repo = _git_repo(tmp_path / "repo")
+        if alias:
+            linked = tmp_path / "alias"
+            linked.symlink_to(repo, target_is_directory=True)
+            repo = linked
         own = make_skill(repo / ".claude" / "skills", "own")
         manifest = manifest_path(tmp_path / "data", "app")
         codex, claude = RUNTIMES["codex"], RUNTIMES["claude"]

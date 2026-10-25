@@ -42,7 +42,12 @@ def repo(tmp_path: Path) -> Path:
     return repo
 
 
-async def test_a_deleted_worktree_is_pruned_and_the_name_is_reusable(repo: Path):
+@pytest.mark.parametrize("alias", [False, True])
+async def test_a_deleted_worktree_is_pruned_and_the_name_is_reusable(repo: Path, alias):
+    if alias:
+        linked = repo.with_name("alias")
+        linked.symlink_to(repo, target_is_directory=True)
+        repo = linked
     worktree, branch = await create_worktree(repo, "sw")
     assert worktree.is_dir() and branch == "swarm/sw"
     shutil.rmtree(worktree)  # someone deleted the files by hand
