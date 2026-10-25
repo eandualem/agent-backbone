@@ -96,3 +96,39 @@ async def test_github_unavailability_does_not_hold_direct_messages(config, db):
     send.assert_awaited_once()
     assert send.await_args.kwargs["delivery_kind"] == "direct_message"
     assert await db.queue.pending_count("ike") == 1
+
+
+@pytest.mark.parametrize("kind", ["closed", "dependency"])
+@pytest.mark.parametrize("still_recipient", [True, False])
+async def test_lifecycle_watch_retains_its_current_audience(config, db, kind, still_recipient):
+    source_key = "closed:example/orchestration#42@closed-at" if kind == "closed" else ""
+    await db.queue.enqueue(
+        session_name="ike",
+        target_entity="ike",
+        message="lifecycle notice",
+        delivery_kind="watch",
+        repo="example/orchestration",
+        issue_number=42,
+        source_key=source_key,
+        source="dependency-tracker" if kind == "dependency" else "github",
+    )
+    recipient = "ike" if still_recipient else "worker"
+    labels = (
+        ParsedLabels(sender=recipient) if kind == "closed" else ParsedLabels(targets=[recipient])
+    )
+    gh = AsyncMock()
+    gh.get_issue.return_value = IssueData(
+        number=42,
+        title="Work",
+        labels=labels,
+        repo_full_name="example/orchestration",
+        state="closed" if kind == "closed" else "open",
+        closed_at="closed-at",
+    )
+    with patch(
+        "agent_backbone.services.jobs.retry.safe_deliver",
+        AsyncMock(return_value=DeliveryReport(DeliveryOutcome.DELIVERED)),
+    ) as send:
+        await drain_message_queue(config, db, gh, active_sessions={"ike"})
+    assert send.await_count == int(still_recipient)
+    assert await db.queue.pending_count("ike") == 0

@@ -314,7 +314,13 @@ async def _drain_session(
                     issue_number=record["issue_number"],
                 )
                 if not retired and not await notification_still_targets(
-                    issue, record["delivery_kind"], target or session_name, config, db
+                    issue,
+                    record["delivery_kind"],
+                    target or session_name,
+                    config,
+                    db,
+                    source=record.get("source", ""),
+                    source_key=source_key,
                 ):
                     retired = "no_longer_targeted"
                 if retired:

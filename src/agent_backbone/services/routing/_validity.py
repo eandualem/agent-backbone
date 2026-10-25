@@ -41,7 +41,9 @@ async def current_notification_issue(
     return issue, None
 
 
-async def notification_still_targets(issue, kind, target, config, db) -> bool:
+async def notification_still_targets(
+    issue, kind, target, config, db, *, source="", source_key=""
+) -> bool:
     """Re-evaluate the original notification kind against current routing policy."""
     spec = config.agents.get(target)
     if issue is None or spec is None or spec.inbox_only or target in config.routing.ignore_targets:
@@ -51,6 +53,10 @@ async def notification_still_targets(issue, kind, target, config, db) -> bool:
     if kind == "issue":
         return target in routing.queue
     if kind == "watch":
+        if source_key.startswith("closed:"):
+            return target == issue.labels.sender and target not in routing.queue
+        if source == "dependency-tracker":
+            return target in issue.labels.targets
         return target in routing.watch + routing.announce
     if kind == "pull_request":
         return target in routing.queue + routing.watch

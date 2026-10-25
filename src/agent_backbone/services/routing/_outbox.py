@@ -86,7 +86,13 @@ async def flush_outbox(
                         gh, delivery["repo"], delivery["issue_number"], source_key=source_key
                     )
                     if retired or not await notification_still_targets(
-                        issue, delivery["delivery_kind"], target, config, db
+                        issue,
+                        delivery["delivery_kind"],
+                        target,
+                        config,
+                        db,
+                        source=delivery.get("source", ""),
+                        source_key=source_key,
                     ):
                         await db.outbox.set_status(event_id, recipient, "skipped")
                         result.skipped.append(recipient)
