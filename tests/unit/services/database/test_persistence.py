@@ -725,3 +725,22 @@ class TestAgentAlwaysOn:
         assert by_name["free"]["unattended"] is True
         agents = agents_from_rows(rows)
         assert agents.get("free").unattended and not agents.get("asks").unattended
+
+
+async def test_acknowledgment_restore_rechecks_a_concurrent_reset(db):
+    original, _ = await db.acks.reset_boundary(42, "app", repo="acme/app")
+    await db.acks.clear(42, "app", repo="acme/app")
+    assert not await db.acks.record(42, "app", repo="acme/app", not_cleared_since=original)
+    assert not await db.acks.exists(42, "app", repo="acme/app")
+    current, _ = await db.acks.reset_boundary(42, "app", repo="acme/app")
+    assert await db.acks.record(42, "app", repo="acme/app", not_cleared_since=current)
+
+
+async def test_out_of_order_comment_cannot_acknowledge_a_newer_reset(db):
+    await db.acks.clear(42, "app", repo="acme/app", comment_id=4_372_833_000)
+    boundary = await db.acks.reset_boundary(42, "app", repo="acme/app")
+    await db.acks.clear(42, "app", repo="acme/app", comment_id=4_372_832_999)
+    assert await db.acks.reset_boundary(42, "app", repo="acme/app") == boundary
+    assert not await db.acks.record(42, "app", repo="acme/app", comment_id=4_372_832_999)
+    assert not await db.acks.exists(42, "app", repo="acme/app")
+    assert await db.acks.record(42, "app", repo="acme/app", comment_id=4_372_833_001)

@@ -225,8 +225,12 @@ safe. What it does:
 All agents typically share one token, so GitHub shows the same author for
 every comment. The `[from:<agent>]` prefix and the `from:<agent>` label are
 conventions, not authentication. With the shipped hooks installed, an
-agent's own `gh issue comment` calls are logged locally and used for
-acknowledgement, which does not depend on the prefix. If you need real
+agent's own successful comment calls are logged with the returned comment ID.
+Only a matching repository, issue and comment ID can attribute an incoming
+comment to that agent. A prefix or nearby command intent cannot acknowledge work
+or suppress notifications. Existing stored acknowledgements are retained; this
+change does not establish the provenance of historical records. The local hook
+log remains writable to an unrestricted process running as the same OS user. If you need real
 per-agent identity, each agent needs its own GitHub account. Keep its token
 out of the agent's `env`, which is stored in plain text in the database;
 there is no per-agent credential store yet.
@@ -297,3 +301,15 @@ runs with read-only repository access; a separate job creates the source tag
 before a publication job receives the PyPI token. Existing tags stop publication
 for operator inspection. A failed publication can leave the source tag present;
 resolve that state explicitly before retrying. No release runs on pushes or merges.
+
+
+Acknowledgment resets are retained per repository, issue and agent. A retained
+publication receipt must match or follow the newest resetting comment ID, even
+when webhooks arrive out of order or before their completion receipts. Resets
+without a comment ID and edits of existing comments use the receipt completion
+time. A newer reset racing with restoration prevents that restore.
+
+Successful comment receipts are stored as separate private files before the
+rolling action log is appended. They survive action-log rotation and use
+`timing.delivery_retention_days` for retention. Successful comment edits retain
+their completion time, because editing an old comment keeps its original ID.

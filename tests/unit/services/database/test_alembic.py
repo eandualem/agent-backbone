@@ -852,3 +852,23 @@ async def test_sqlite_uri_permissions_target_the_actual_database(
         assert list(tmp_path.iterdir()) == []
     else:
         assert (tmp_path / "shared db").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.skipif(
+    sqlite3.sqlite_version_info < (3, 35, 0), reason="DROP COLUMN needs SQLite 3.35+"
+)
+async def test_existing_acknowledgments_gain_reset_tracking(tmp_path):
+    from sqlalchemy import text
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'before-ack-reset.db'}"
+    async with BackboneDB.connect(url) as db:
+        await db.acks.record(7, "app", repo="acme/app")
+        async with db.engine.begin() as conn:
+            await conn.execute(text("ALTER TABLE acknowledgments DROP COLUMN cleared_at"))
+            await conn.execute(text("ALTER TABLE acknowledgments DROP COLUMN cleared_comment_id"))
+    async with BackboneDB.connect(url) as db:
+        assert await db.acks.exists(7, "app", repo="acme/app")
+        await db.acks.clear(7, "app", repo="acme/app", comment_id=123)
+        cleared, comment_id = await db.acks.reset_boundary(7, "app", repo="acme/app")
+        assert cleared and comment_id == 123
+        assert not await db.acks.exists(7, "app", repo="acme/app")

@@ -204,7 +204,7 @@ def test_verified_versions_groups_a_runtimes_cells_by_version():
     claude = verified_versions("claude")
     assert "plan-approval" in claude["2.1.284"] and "browser-group-name" in claude["not recorded"]
     assert "skills-view" in claude["2.1.294"]
-    assert list(claude)[0] == "2.1.296" and list(claude)[-1] == "not recorded"  # newest first
+    assert list(claude)[0] == "2.1.310" and list(claude)[-1] == "not recorded"  # newest first
     assert verified_versions("shell") == {}
 
 

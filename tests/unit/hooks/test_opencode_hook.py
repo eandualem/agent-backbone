@@ -236,7 +236,7 @@ if (!timerFired) throw new Error("parser blocked the plugin event loop");
 await before({tool: "bash"}, {args: {command}});
 await after({tool: "bash", args: {command}}, {metadata: {exit: 1}});
 await after({tool: "bash", args: {command: "gh issue comment 7 -R acme/app -b done"}},
-            {metadata: {exit: 0}});
+            {metadata: {exit: 0}, output: "https://github.com/acme/app/issues/7#issuecomment-123"});
 """
     subprocess.run(
         [node, "--input-type=module", "-e", script, plugin.as_uri()],

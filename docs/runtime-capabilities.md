@@ -38,6 +38,7 @@ version differs.
 <!-- capability-table:begin -->
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
+| GitHub comment acknowledgements bound to exact publication receipts | ✅ (2.1.310) Payload tests; live check pending. | ✅ (0.160.0) Payload tests; live check pending. | ✅ (0.46.0) Payload tests; live check pending. | ✅ (2.1.4) Plugin tests; live check pending. | ❌ no publication receipt hook | ❌ no publication receipt hook | n/a |
 | Durable HTML Documents with immutable revisions and authenticated reads | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | Stored questions, answers and actions with durable topic delivery | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py |
 | Retained observations of reconciled state over the API | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
@@ -91,6 +92,7 @@ version differs.
 
 | Capability | Fallback where it is unavailable |
 |---|---|
+| GitHub comment acknowledgements bound to exact publication receipts | A GitHub prefix alone cannot acknowledge work; keep the notification visible. |
 | Durable HTML Documents with immutable revisions and authenticated reads | Keep authored HTML locally until a Backbone with Documents is available. |
 | Stored questions, answers and actions with durable topic delivery | Use ordinary replies; they have no separately stored answer record. |
 | Retained observations of reconciled state over the API | Read current state and delivery records; earlier states cannot be reconstructed. |

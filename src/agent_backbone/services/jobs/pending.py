@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from agent_backbone.models import SUCCESS_OUTCOMES, DeliveryOutcome, parse_from_tag
+from agent_backbone.models import SUCCESS_OUTCOMES, DeliveryOutcome
 from agent_backbone.services.agents import AgentState, has_commented_on_issue
 from agent_backbone.services.jobs.diagnostics import observe_job
 from agent_backbone.services.routing import (
@@ -36,34 +37,29 @@ async def deliver_pending_issues(
 ) -> dict[str, str]:
     """Deliver the next pending issue to every idle agent. Returns agent -> action."""
     result: dict[str, str] = {}
-    comment_ack_cache: dict[tuple[str, int], set[str]] = {}
 
     async def acknowledged(repo: str, issue_number: int, name: str) -> bool:
-        """DB record, then local action log, then GitHub comments.
+        """DB record, then exact successful publication in the local action log.
 
         ``name`` is the agent: its ``for:`` target label and its tmux session.
         """
         try:
             if await is_acknowledged(db, repo, issue_number, name, name):
                 return True
-            if has_commented_on_issue(issue_number, name, config.action_log_path, repo=repo):
-                await db.acks.record(issue_number, name, repo=repo)
-                return True
-            key = (repo, issue_number)
-            acknowledged = comment_ack_cache.get(key)
-            if acknowledged is None:
-                comments = await gh.list_comments(issue_number, repo_full_name=repo)
-                acknowledged = {
-                    entity
-                    for comment in comments
-                    if comment.body
-                    for entity in [parse_from_tag(comment.body)]
-                    if entity
-                }
-                comment_ack_cache[key] = acknowledged
-            if name.lower() in acknowledged:  # tags are read lowercased
-                await db.acks.record(issue_number, name, repo=repo)
-                return True
+            cleared, comment_id = await db.acks.reset_boundary(issue_number, name, repo=repo)
+            since = datetime.fromisoformat(cleared).timestamp() if cleared else None
+            if await asyncio.to_thread(
+                has_commented_on_issue,
+                issue_number,
+                name,
+                config.action_log_path,
+                repo=repo,
+                since=since,
+                reset_comment_id=comment_id,
+            ):
+                return await db.acks.record(
+                    issue_number, name, repo=repo, not_cleared_since=cleared
+                )
         except Exception:
             log.exception(
                 "Failed to check acknowledgment for %s#%d (non-fatal)", repo, issue_number
