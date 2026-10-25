@@ -14,6 +14,7 @@ from urllib.parse import unquote, urlsplit
 
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.util import asbool
 
 _POSTGRES_POOL_SIZE = 5
 _POSTGRES_POOL_OVERFLOW = 10
@@ -26,7 +27,7 @@ def is_sqlite(url: str) -> bool:
 def is_memory(url: str) -> bool:
     parsed = make_url(url)
     return parsed.database in {None, "", ":memory:", "file::memory:"} or (
-        parsed.query.get("uri", "").lower() == "true" and parsed.query.get("mode") == "memory"
+        asbool(parsed.query.get("uri", False)) and parsed.query.get("mode") == "memory"
     )
 
 
@@ -36,7 +37,7 @@ def build_engine(url: str) -> AsyncEngine:
         if not is_memory(url):
             parsed = make_url(url)
             db_file = parsed.database
-            uri = parsed.query.get("uri", "").lower() == "true"
+            uri = asbool(parsed.query.get("uri", False))
             if uri and db_file and db_file.startswith("file:"):
                 location = urlsplit(db_file)
                 db_file = unquote(location.path) if location.netloc in {"", "localhost"} else None

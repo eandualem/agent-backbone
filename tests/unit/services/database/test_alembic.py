@@ -831,14 +831,17 @@ async def test_sqlite_file_is_private_before_connection(tmp_path, existing):
 
 
 @pytest.mark.parametrize("memory", [True, False])
-async def test_sqlite_uri_permissions_target_the_actual_database(tmp_path, monkeypatch, memory):
+@pytest.mark.parametrize("uri", ["true", "1", "yes", "on"])
+async def test_sqlite_uri_permissions_target_the_actual_database(
+    tmp_path, monkeypatch, memory, uri
+):
     from sqlalchemy import text
 
     from agent_backbone.services.database.engine import build_engine
 
     monkeypatch.chdir(tmp_path)
     mode = "mode=memory&cache=shared&" if memory else ""
-    engine = build_engine(f"sqlite+aiosqlite:///file:shared%20db?{mode}uri=true")
+    engine = build_engine(f"sqlite+aiosqlite:///file:shared%20db?{mode}uri={uri}")
     try:
         async with engine.connect() as connection:
             assert (await connection.execute(text("SELECT 1"))).scalar() == 1
