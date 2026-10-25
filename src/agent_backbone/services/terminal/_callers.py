@@ -117,7 +117,12 @@ async def caller_sessions(client: tuple[str, int], server: tuple[str, int]) -> l
     if not is_loopback(client[0]) or not is_loopback(server[0]):
         raise CallerUnknown("the connection is not from this machine")
     pids = await peer_pids(client, server)
-    if not pids:
+    return await process_sessions(pids)
+
+
+async def process_sessions(pids: set[int]) -> list[set[str]]:
+    """Place kernel-identified local processes in their nearest tmux panes."""
+    if not pids or any(type(pid) is not int or pid <= 0 for pid in pids):
         raise CallerUnknown("no local process holds the connection")
     parents, panes = await _parents(), await _panes()
     found = []

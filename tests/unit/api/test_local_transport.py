@@ -72,6 +72,8 @@ def test_kernel_peer_identity_matches_this_account():
     try:
         assert local.peer_uid(first) == os.geteuid()
         assert local.peer_uid(second) == os.geteuid()
+        assert local.peer_pid(first) == os.getpid()
+        assert local.peer_pid(second) == os.getpid()
     finally:
         first.close()
         second.close()
@@ -179,3 +181,52 @@ def test_linux_peer_uid_preserves_unsigned_range(monkeypatch):
     connection = Mock()
     connection.getsockopt.return_value = struct.pack("iII", 123, 3_000_000_000, 3_000_000_001)
     assert local.peer_uid(connection) == 3_000_000_000
+
+
+async def test_unix_validation_uses_kernel_pid_and_preserves_agent_identity(
+    root, api_app, auth_headers, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    import httpx
+
+    from agent_backbone.services.terminal import _callers
+
+    agent = next(iter(api_app.state.config.agents)).name
+    monkeypatch.setattr(_callers, "_parents", AsyncMock(return_value={os.getpid(): 100}))
+    monkeypatch.setattr(_callers, "_panes", AsyncMock(return_value={100: {agent}}))
+    validate = AsyncMock(
+        return_value=(
+            "closed",
+            {
+                "receipt": {},
+                "grant": {"status": "closed", "claimed_at": 1, "expires_at": 2, "closed_at": 2},
+            },
+        )
+    )
+    monkeypatch.setattr(api_app.state.db.signing, "validate", validate)
+    config = uvicorn.Config(api_app, http=local.LocalPeerProtocol, lifespan="off", log_config=None)
+    config.load()
+    state = uvicorn.Server(config).server_state
+    path = root / "validate.sock"
+    with local.private_listener(root, str(path)) as listener:
+        server = await asyncio.get_running_loop().create_server(
+            lambda: local.LocalPeerProtocol(config=config, server_state=state, app_state={}),
+            sock=listener,
+        )
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.AsyncHTTPTransport(uds=str(path)), base_url="http://localhost"
+            ) as client:
+                response = await client.post(
+                    "/api/messages/validate",
+                    headers=auth_headers,
+                    json={"confirmation_id": "12345678-1234-4234-8234-123456789abc", "done": True},
+                )
+            assert response.status_code == 200, response.text
+            assert response.json()["agent"] == agent
+            assert validate.await_args.kwargs["agent"] == agent
+            assert not api_app.state.validations._incidents
+        finally:
+            server.close()
+            await server.wait_closed()

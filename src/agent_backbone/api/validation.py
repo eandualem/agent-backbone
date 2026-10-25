@@ -19,7 +19,7 @@ from agent_backbone.api.confirmations import refuse
 from agent_backbone.config import AgentSpec, BackboneConfig
 from agent_backbone.services.integrations import notify_humans
 from agent_backbone.services.routing import settle_steers
-from agent_backbone.services.terminal import CallerUnknown, caller_sessions
+from agent_backbone.services.terminal import CallerUnknown, caller_sessions, process_sessions
 
 INCIDENT_SECONDS = 600
 """An incident ends after this long without a checked failure."""
@@ -149,10 +149,15 @@ async def caller_agent(request: Request, config: BackboneConfig) -> AgentSpec:
     """The registered agent whose pane runs the process on the other end of
     this request's connection; ``CallerUnknown`` when there isn't exactly one."""
     client, server = request.scope.get("client"), request.scope.get("server")
-    if not client or not server:
+    peer = request.scope.get("state", {}).get("backbone.peer_pid")
+    if peer is not None:
+        callers = await process_sessions({peer})
+    elif client and server:
+        callers = await caller_sessions(tuple(client), tuple(server))
+    else:
         raise CallerUnknown("the connection has no network address")
     found: dict[str, AgentSpec] = {}
-    for sessions in await caller_sessions(tuple(client), tuple(server)):
+    for sessions in callers:
         agents = {name: spec for name in sessions if (spec := config.agents.get(name))}
         if len(agents) != 1:
             raise CallerUnknown("the calling process doesn't run in one agent's own pane")

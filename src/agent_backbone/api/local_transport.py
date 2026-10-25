@@ -38,6 +38,23 @@ def peer_uid(connection: socket.socket) -> int:
     raise OSError("Unix peer identity is unavailable on this platform")
 
 
+def peer_pid(connection: socket.socket) -> int:
+    """The process that established the Unix connection, supplied by the kernel."""
+    if sys.platform == "darwin":
+        # sys/un.h: SOL_LOCAL=0, LOCAL_PEERPID=2.
+        pid = connection.getsockopt(0, 2)
+    elif hasattr(socket, "SO_PEERCRED"):
+        pid = struct.unpack(
+            "iII",
+            connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("iII")),
+        )[0]
+    else:
+        raise OSError("Unix peer process identity is unavailable")
+    if pid <= 0:
+        raise OSError("Unix peer process identity is unavailable")
+    return pid
+
+
 class LocalPeerProtocol(H11Protocol):
     """Refuse a Unix peer before parsing HTTP; TCP keeps its existing auth rules."""
 
@@ -49,6 +66,8 @@ class LocalPeerProtocol(H11Protocol):
             self._peer_allowed = connection is not None and (
                 connection.family != socket.AF_UNIX or peer_uid(connection) == os.geteuid()
             )
+            if self._peer_allowed and connection.family == socket.AF_UNIX:
+                self.app_state = {**self.app_state, "backbone.peer_pid": peer_pid(connection)}
         except OSError:
             self._peer_allowed = False
         if not self._peer_allowed:
