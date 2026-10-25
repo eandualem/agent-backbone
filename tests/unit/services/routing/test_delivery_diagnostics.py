@@ -368,13 +368,24 @@ async def test_inbox_hold_withdraws_replayed_hook_offers(config, db, taken):
         patch(f"{_DELIVERY}.get_session_intelligence", return_value=profile()),
         patch(f"{_DELIVERY}.send_message", return_value=None),
     ):
-        await safe_deliver(
+        report = await safe_deliver(
             "worker",
             "events\nold event",
             config,
             db=db,
             delivery_kind=SUBSCRIPTION_KIND,
             priority=True,
+        )
+    assert report.held_for_inbox == (not taken)
+    assert report.outcome == ("already_delivered" if taken else "awaiting_ack")
+    if taken:
+        deliveries = await db.deliveries.query(session_name="worker")
+        assert any(
+            row["source"] == "hook-context" and row["outcome"] == "delivered" for row in deliveries
+        )
+        assert any(
+            row["code"] == "submitted" and row["queue_id"] == result.id
+            for row in await db.diagnostics.query(operation_id=result.operation_id)
         )
     assert take_context(config.state_dir, "worker") == []
     row = await queue_row(db, result.id)

@@ -57,6 +57,8 @@ class EnqueueResult:
     context_offers: tuple[tuple[int, str], ...] = ()
     """Exact immutable high-batch rows, each offered under its own receipt ID."""
 
+    context_taken: tuple[tuple[int, str, str], ...] = ()
+
     @property
     def stored(self) -> bool:
         """Whether a row for this message now exists in the queue."""
@@ -299,6 +301,7 @@ class QueueRepo(Repo):
                     known.setdefault(line, dict(held_row))
             fresh = [line for line in lines if line not in known]
             holders = {known[line]["id"]: known[line] for line in lines if line in known}
+            taken_rows: list[tuple[int, str, str]] = []
             if held_for_inbox:
                 if withdraw_context is None:
                     raise ValueError("inbox holds require hook-offer withdrawal")
@@ -306,6 +309,9 @@ class QueueRepo(Repo):
                     if row["status"] not in {"pending", "in_progress", "checkpoint"}:
                         continue
                     taken = withdraw_context(row["id"]) == "taken"
+                    if taken:
+                        taken_rows.append((row["id"], row["message"], row["operation_id"]))
+                    row["status"] = "delivered" if taken else "checkpoint"
                     await conn.execute(
                         text(
                             "UPDATE message_queue SET status=:status, leased_at=NULL, "
@@ -328,7 +334,14 @@ class QueueRepo(Repo):
             if lines and not fresh:
                 holder = holders[max(holders)]
                 return EnqueueResult(
-                    "already_queued", holder["id"], holder["operation_id"], tuple(offers)
+                    "already_delivered"
+                    if held_for_inbox
+                    and all(row["status"] == "delivered" for row in holders.values())
+                    else "already_queued",
+                    holder["id"],
+                    holder["operation_id"],
+                    tuple(offers),
+                    tuple(taken_rows),
                 )
             rest = list(fresh)
             grown: EnqueueResult | None = None
@@ -358,7 +371,11 @@ class QueueRepo(Repo):
                         )
                         if result.rowcount:
                             grown = EnqueueResult(
-                                "appended", row["id"], row["operation_id"], tuple(offers)
+                                "appended",
+                                row["id"],
+                                row["operation_id"],
+                                tuple(offers),
+                                tuple(taken_rows),
                             )
                         else:
                             rest = list(fresh)  # leased meanwhile: open a new batch
@@ -388,7 +405,9 @@ class QueueRepo(Repo):
                 if priority and not held_for_inbox:
                     offers.append((row_id, message))
                 if not rest:
-                    return EnqueueResult("inserted", row_id, params["operation_id"], tuple(offers))
+                    return EnqueueResult(
+                        "inserted", row_id, params["operation_id"], tuple(offers), tuple(taken_rows)
+                    )
                 operation_id = None
 
     async def pending_count(self, session_name: str) -> int:

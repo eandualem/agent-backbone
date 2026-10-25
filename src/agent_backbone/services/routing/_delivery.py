@@ -93,6 +93,7 @@ class _QueueReceipt:
     operation_id: str | None = None
     error_type: str | None = None
     context_offers: tuple[tuple[int, str], ...] = ()
+    context_taken: tuple[tuple[int, str, str], ...] = ()
 
 
 _session_locks: WeakValueDictionary[tuple[int, str], asyncio.Lock] = WeakValueDictionary()
@@ -380,11 +381,19 @@ async def _enqueue(
     if result.status in ("inserted", "appended"):
         log.info("Queued %s for %s (%s) via %s", kind, session_name, repo or "-", source or "?")
         return _QueueReceipt(
-            "stored", queue_id, stored_operation, context_offers=result.context_offers
+            "stored",
+            queue_id,
+            stored_operation,
+            context_offers=result.context_offers,
+            context_taken=result.context_taken,
         )
     log.info("Same %s for %s already queued (from %s)", kind, session_name, sender or "?")
     return _QueueReceipt(
-        "already_queued", queue_id, stored_operation, context_offers=result.context_offers
+        result.status,
+        queue_id,
+        stored_operation,
+        context_offers=result.context_offers,
+        context_taken=result.context_taken,
     )
 
 
@@ -499,6 +508,48 @@ async def safe_deliver(
 
     profile: SessionProfile | None = None
 
+    async def record_hook_delivery(
+        batch_id: int, batch_text: str, batch_operation: str
+    ) -> DeliveryReport:
+        delivery_id = await _record(
+            db,
+            claim_id=None,
+            repo=repo,
+            issue_number=None,
+            target_entity=target_entity,
+            session_name=session_name,
+            outcome=DeliveryOutcome.DELIVERED,
+            source="hook-context",
+            kind=kind,
+            preview=batch_text[:500],
+            operation_id=batch_operation,
+        )
+        await db.diagnostics.record(
+            category="delivery",
+            code="submitted",
+            severity="info",
+            operation_id=batch_operation,
+            agent_name=session_name,
+            source="hook-context",
+            runtime="",
+            repo=repo,
+            issue_number=None,
+            delivery_id=delivery_id,
+            queue_id=batch_id,
+            event_id=event_id,
+            details={"delivery_kind": kind, "priority": priority, "requeue": requeue},
+        )
+        # The receipt is the only proof the hook delivered it: settle the
+        # row first, so a failure or restart in between never pastes it.
+        await db.queue.mark_delivered(batch_id)
+        await asyncio.to_thread(clear_context, config.state_dir, session_name, str(batch_id))
+        return DeliveryReport(
+            DeliveryOutcome.DELIVERED,
+            operation_id=batch_operation,
+            delivery_id=delivery_id,
+            queue_id=batch_id,
+        )
+
     async def finish(
         outcome: DeliveryOutcome, *, queue: bool, held_for_inbox: bool = False
     ) -> DeliveryReport:
@@ -525,6 +576,14 @@ async def safe_deliver(
             )
         elif uncertain and db is not None and queue_id is not None:
             await db.queue.hold_uncertain(queue_id)
+        for taken_id, taken_text, taken_operation in receipt.context_taken:
+            await record_hook_delivery(taken_id, taken_text, taken_operation)
+        if receipt.status == "already_delivered":
+            return DeliveryReport(
+                DeliveryOutcome.ALREADY_DELIVERED,
+                operation_id=receipt.operation_id or operation_id,
+                queue_id=receipt.id,
+            )
         trace = receipt.operation_id or operation_id
         stored_queue_id = receipt.id if receipt.id is not None else queue_id
         delivery_id = await _record(
@@ -710,50 +769,13 @@ async def safe_deliver(
             claim_context, config.state_dir, session_name, str(queue_id)
         )
         if claim == "taken":
-            delivery_id = await _record(
-                db,
-                claim_id=None,
-                repo=repo,
-                issue_number=None,
-                target_entity=target_entity,
-                session_name=session_name,
-                outcome=DeliveryOutcome.DELIVERED,
-                source="hook-context",
-                kind=kind,
-                preview=preview,
-                operation_id=operation_id,
-            )
-            await db.diagnostics.record(
-                category="delivery",
-                code="submitted",
-                severity="info",
-                operation_id=operation_id,
-                agent_name=session_name,
-                source="hook-context",
-                runtime="",
-                repo=repo,
-                issue_number=None,
-                delivery_id=delivery_id,
-                queue_id=queue_id,
-                event_id=event_id,
-                details={"delivery_kind": kind, "priority": priority, "requeue": requeue},
-            )
-            # The receipt is the only proof the hook delivered it: settle the
-            # row first, so a failure or restart in between never pastes it.
-            await db.queue.mark_delivered(queue_id)
-            await asyncio.to_thread(clear_context, config.state_dir, session_name, str(queue_id))
-            return DeliveryReport(
-                DeliveryOutcome.DELIVERED,
-                operation_id=operation_id,
-                delivery_id=delivery_id,
-                queue_id=queue_id,
-            )
+            return await record_hook_delivery(queue_id, message, operation_id)
 
     # 4. Paste + submit
     sent = await submit()
     if sent is None:
         report = await finish(DeliveryOutcome.AWAITING_ACK, queue=True, held_for_inbox=True)
-        if db is not None and report.queue_id is not None:
+        if db is not None and report.queue_id is not None and report.queued:
             await db.queue.hold_for_inbox(report.queue_id)
             report = replace(report, held_for_inbox=True)
         return report
