@@ -140,6 +140,7 @@ async def list_agents(feed: SessionFeed = Depends(get_feed)):
 @router.get("/agents/{session}/state", response_model=AgentStateDetail)
 async def get_agent_state_endpoint(session: str, config: BackboneConfig = Depends(get_config)):
     """Reconciled state for one agent."""
+    registered_agent_or_404(config, session)
     snapshot = await agent_state(config, session)
     return AgentStateDetail(
         session=session,
@@ -201,7 +202,7 @@ async def inspect_agent(
     db: BackboneDB = Depends(get_db),
 ):
     """Everything the backbone knows about an agent, with the evidence behind it."""
-    spec = config.agents.get(name)
+    spec = registered_agent_or_404(config, name)
     # An inbox-only agent has no session: one with its name is not its own.
     online = not (spec is not None and spec.inbox_only) and await session_exists(name)
     profile = await get_session_intelligence(name, config)

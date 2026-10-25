@@ -116,7 +116,7 @@ async def build_enriched_agent(
         # left by one it had before, is not its own (``agent_state``).
         active_sessions, tmux_info = set(), None
     online = session in active_sessions
-    if online or inbox_only:
+    if spec is None or online or inbox_only:
         snapshot = await agent_state(config, session)
     else:
         # The shared tmux listing already proved the session absent. Reconcile
@@ -146,7 +146,7 @@ async def build_enriched_agent(
     state_value = snapshot.state.value if online else "offline"
 
     runtime: str | None = spec.runtime if spec else None
-    if online:
+    if online and spec is not None:
         with contextlib.suppress(Exception):
             runtime = await query_environment_var(session, RUNTIME_ENV_KEY) or runtime
 

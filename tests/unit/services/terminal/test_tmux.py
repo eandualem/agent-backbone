@@ -175,7 +175,8 @@ class TestStartSession:
         scrubbed = ("set-environment", "-t", "=test:", "-r", "GITHUB_TOKEN")
         assert (scrubbed in [call.args for call in run.await_args_list]) is running
 
-    async def test_start_with_working_dir_and_command(self, mock_subprocess):
+    @pytest.mark.parametrize("directory", ["/tmp/wd", "/tmp/a #() #{HOME} # directory"])
+    async def test_start_with_working_dir_and_command(self, mock_subprocess, directory):
         with patch(
             "agent_backbone.services.terminal._sessions.session_exists",
             new_callable=AsyncMock,
@@ -188,13 +189,13 @@ class TestStartSession:
             mock_subprocess.return_value = proc
             result = await start_session(
                 "test",
-                working_dir="/tmp/wd",
+                working_dir=directory,
                 command=["claude"],
             )
             assert result is True
             call_args = _new_session(mock_subprocess)
             assert "-c" in call_args
-            assert "/tmp/wd" in call_args
+            assert directory.replace("#", "#{l:##}") in call_args
             assert "claude" in call_args
 
     async def test_start_already_exists(self, mock_subprocess):

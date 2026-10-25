@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import subprocess
 import sys
@@ -33,29 +34,39 @@ async def main() -> None:
     # Characters tmux's command syntax treats specially, handed over on stdin.
     value = f"$HOME ~ 'q' \"d\" \\ {marker[:8]}"
     program = (
-        "import os, sys\n"
+        "import hashlib, os, sys\n"
         "print('smoke-ready:' + os.environ['BACKBONE_SMOKE'] + os.environ['SHELL'], flush=True)\n"
+        "print('smoke-cwd:' + hashlib.sha256(os.getcwdb()).hexdigest(), flush=True)\n"
         "for line in sys.stdin:\n"
         "    print('received:' + line.strip(), flush=True)\n"
     )
     # Under /tmp, tmux's own default: the socket path stays within macOS's 104 bytes.
     with tempfile.TemporaryDirectory(prefix="backbone-smoke-", dir="/tmp") as directory:
         # A private server, never the one the caller's own session runs in (#351).
-        os.environ.pop("TMUX", None)
-        os.environ.pop("TMUX_PANE", None)
+        for key in list(os.environ):
+            if key.startswith("BACKBONE_") or key in ("TMUX", "TMUX_PANE"):
+                os.environ.pop(key, None)
+        home = Path(directory) / "home"
+        home.mkdir()
+        os.environ["HOME"] = str(home)
+        working = Path(directory) / "literal # #[fg=red] #{HOME} #(printf smoke)"
+        working.mkdir()
         os.environ["TMUX_TMPDIR"] = directory
         tempfile.tempdir = directory  # where start_session writes the environment file
         socket = Path(directory) / f"tmux-{os.getuid()}" / "default"
         try:
             if not await start_session(
                 session,
-                working_dir=directory,
+                working_dir=str(working),
                 command=[sys.executable, "-u", "-c", program],
                 # tmux sets SHELL in the pane; the agent's own value must win.
                 environment={"BACKBONE_SMOKE": value, "SHELL": "/smoke/sh"},
             ):
                 raise RuntimeError("could not start the smoke session")
             await wait_for_output(session, f"smoke-ready:{value}/smoke/sh")
+            await wait_for_output(
+                session, "smoke-cwd:" + hashlib.sha256(os.fsencode(working.resolve())).hexdigest()
+            )
             fields = await query_format_vars(
                 session,
                 "session_name=#{session_name}\nsocket_path=#{socket_path}\n"

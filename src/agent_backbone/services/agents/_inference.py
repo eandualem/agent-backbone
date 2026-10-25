@@ -587,7 +587,11 @@ async def agent_state(
     An inbox-only agent has no session: nothing a tmux session with its
     name shows (a dialog, a plan) is its state."""
     spec = config.agents.get(name)
-    if spec is not None and spec.inbox_only:
+    if spec is None:
+        return StateSnapshot(
+            state=AgentState.UNKNOWN, evidence=["unregistered session: state is not inspected"]
+        )
+    if spec.inbox_only:
         return StateSnapshot(
             state=AgentState.UNKNOWN, evidence=["inbox-only agent: it has no session"]
         )

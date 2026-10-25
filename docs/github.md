@@ -308,3 +308,6 @@ subresources, still report redirects as errors. A same-origin redirect can move
 an issue to another repository or number; it does not prove a repository rename.
 Backbone does not silently change those identities or combine a new issue number
 with the original repository key.
+
+When effective GitHub intake is `off`, the webhook refuses new events before
+reading their bodies. Previously queued work keeps its existing delivery policy.

@@ -44,6 +44,9 @@ async def _handle(
     gh: GitHubClient | None,
     issue_closed_hooks: Sequence[IssueClosedHook],
 ) -> Response:
+    if config.github_intake == "off":
+        return Response(content="GitHub intake is disabled", status_code=403)
+
     payload_body = await request.body()
 
     if not config.webhook_secret:

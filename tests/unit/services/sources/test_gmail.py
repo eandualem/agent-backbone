@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import imaplib
+import ssl
 from datetime import UTC, datetime
 from unittest.mock import patch
 
@@ -61,7 +62,8 @@ def test_parse_fetch_decodes_headers_and_ids():
 class _FakeImap:
     instances: list[_FakeImap] = []
 
-    def __init__(self, host, timeout=None):
+    def __init__(self, host, timeout=None, ssl_context=None):
+        self.ssl_context = ssl_context
         self.host = host
         self.timeout = timeout
         self.calls: list[tuple] = []
@@ -105,6 +107,8 @@ async def test_poll_runs_one_search_per_filter_and_keeps_the_window(tmp_path):
         )
     client = _FakeImap.instances[0]
     assert client.timeout == 30
+    assert client.ssl_context.verify_mode == ssl.CERT_REQUIRED
+    assert client.ssl_context.check_hostname
     assert ("login", "me@gmail.com") in client.calls
     assert ("select", '"[Gmail]/Tous les messages"', True) in client.calls
     searches = [c for c in client.calls if len(c) > 1 and c[1] == "SEARCH"]
@@ -181,3 +185,18 @@ async def test_unconfigured_source_is_disabled_and_polls_nothing(tmp_path):
     assert sources.health() == {"gmail": "disabled"}
     assert sources.enabled == []
     assert await sources.get("gmail").poll(["from:x"], datetime.now(UTC)) == []
+
+
+async def test_certificate_failure_aborts_before_login(tmp_path):
+    config = make_config(tmp_path, gmail_address="me@gmail.com", gmail_app_password="pw")
+    with (
+        patch(
+            "agent_backbone.services.sources.gmail.imaplib.IMAP4_SSL",
+            side_effect=ssl.SSLCertVerificationError("untrusted peer"),
+        ) as connect,
+        pytest.raises(ssl.SSLCertVerificationError),
+    ):
+        await GmailSource(config).poll(["from:alerts"], datetime.now(UTC))
+    context = connect.call_args.kwargs["ssl_context"]
+    assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
+    connect.return_value.login.assert_not_called()

@@ -144,3 +144,6 @@ poll calls no model and only deliveries start agent turns.
    `config.SOURCES`, settings under `SETTINGS_DEFAULTS` and secrets in `.env`
    (`SECRET_ENV_KEYS`).
 3. Add the entry module to `tests/unit/test_imports.py` and document it here.
+
+Gmail connections verify the TLS certificate chain and hostname before sending
+the app password. A certificate verification failure aborts the poll.

@@ -270,3 +270,31 @@ async def test_a_path_changed_while_waiting_for_the_store_is_checked_again(
     response = await request
     assert response.status_code == 422
     assert (outside / "SKILL.md").is_file() and not (store / "theirs").exists()
+
+
+@pytest.mark.parametrize("name", ["%2e%2e", "linked"])
+async def test_retag_refuses_parent_and_symlink_paths(api_client, auth_headers, store, name):
+    outside = store.parent / "outside"
+    _skill(store.parent, "outside", tags="all")
+    (store / "linked").symlink_to(outside, target_is_directory=True)
+    before = (outside / "SKILL.md").read_bytes()
+    response = await api_client.put(
+        f"/api/skills/{name}/tags", headers=auth_headers, json={"tags": ["changed"]}
+    )
+    assert response.status_code == 422
+    assert (outside / "SKILL.md").read_bytes() == before
+
+
+async def test_retag_rejects_a_symlinked_skill_file_before_reading_it(
+    api_client, auth_headers, store
+):
+    skill = store / "linked-file"
+    skill.mkdir()
+    outside = _skill(store.parent, "outside", tags="all") / "SKILL.md"
+    (skill / "SKILL.md").symlink_to(outside)
+    before = outside.read_bytes()
+    response = await api_client.put(
+        "/api/skills/linked-file/tags", headers=auth_headers, json={"tags": ["coder"]}
+    )
+    assert response.status_code == 422
+    assert (skill / "SKILL.md").is_symlink() and outside.read_bytes() == before
