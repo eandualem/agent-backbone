@@ -254,6 +254,17 @@ class Codex(Runtime):
     # UserPromptSubmit record still says busy while the banner is on screen.
     hooks_miss_failed_turns = True
 
+    def detect_busy(self, pane_content: str) -> bool:
+        if super().detect_busy(pane_content):
+            return True
+        # Codex truncates its timed progress row in narrow panes, including
+        # the interrupt hint. Its input placeholder remains visible meanwhile.
+        # Keep the left-edge glyph: indented reply text is not a status row.
+        tail = sanitize_pane_content(pane_content).strip("\n").splitlines()[-12:]
+        return any(
+            re.match(r"^• (?:Working|Compacting context) \(\d+[hms]\b", line) for line in tail
+        )
+
     def provider_failure(self, pane_content: str) -> str | None:
         # The last "›" line is the input: it, the placeholder and the status
         # line below it (any model, effort and directory) are not output

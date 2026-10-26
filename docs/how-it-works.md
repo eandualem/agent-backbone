@@ -309,6 +309,9 @@ character, its status chrome (lines to ignore), its busy indicator
 (Claude: `esc to interrupt`), its permission prompts (`Do you want to
 proceed?`, the folder-trust question), and how to tell typed text from a
 dim placeholder.
+Codex's timed `Working` and `Compacting context` rows also count as busy when
+a narrow terminal cuts off the interrupt hint; its visible input placeholder
+does not make the agent ready during that work.
 
 Every reading carries its evidence. `backbone agent inspect app` shows the
 state, the delivery condition, the evidence lines, the terminal tail and
