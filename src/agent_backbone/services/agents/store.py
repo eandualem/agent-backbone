@@ -120,14 +120,14 @@ class AgentStore:
         data_dir: Path,
         *,
         on_change: Callable[[BackboneConfig], Awaitable[None] | None] | None = None,
-        provision_credentials: bool = False,
+        credential_endpoint: tuple[str, int] | None = None,
     ) -> None:
         self._db = db
         self._data_dir = data_dir
         self._on_change = on_change
         # Only the running daemon owns profile endpoints and credential rotation.
         # Local Direct readers may have a different environment.
-        self._provision_credentials = provision_credentials
+        self._credential_endpoint = credential_endpoint
         self._agents = AgentsConfig()
         self._settings: dict = {}
         self._config: BackboneConfig | None = None
@@ -160,11 +160,16 @@ class AgentStore:
     async def refresh(self) -> BackboneConfig:
         """Re-read settings and agents from the database and publish."""
         async with self._lock:
-            if self._provision_credentials:
+            if self._credential_endpoint is not None:
                 try:
                     async with profile_lock(self._data_dir):
                         registrations = await self._refresh_snapshot()
-                        _provision_agent_profiles(self._config, registrations)
+                        host, port = self._credential_endpoint
+                        active_config = replace(
+                            self._config,
+                            backbone=replace(self._config.backbone, host=host, port=port),
+                        )
+                        _provision_agent_profiles(active_config, registrations)
                 except (OSError, ValueError):
                     log.warning("Could not provision agent credential profiles", exc_info=True)
                     await self._refresh_snapshot()

@@ -318,6 +318,8 @@ CLI call using its existing name and `BACKBONE_LAUNCH_ID`; a normal new launch
 binds the profile before the runtime starts. An operator start while the daemon
 is stopped can create a missing or retired target profile from its launch
 configuration, while preserving any valid profile's endpoint and credential.
+Profiles keep the running listener's host and port until the server restarts;
+saving a new address does not redirect existing sessions before it is active.
 No shell configuration or
 per-repository files are required. Profiles carry the effective API endpoint,
 which takes precedence over stale launch environment values. Non-loopback

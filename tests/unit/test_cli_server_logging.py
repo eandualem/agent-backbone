@@ -130,3 +130,28 @@ def test_a_negative_log_size_is_refused_and_zero_is_kept():
     with pytest.raises(ValueError, match="zero or a positive"):
         validate_setting("backbone.log_max_mb", -1)
     assert validate_setting("backbone.log_max_mb", 0) == 0
+
+
+def test_reload_factory_uses_the_actual_listener_endpoint(tmp_path, monkeypatch):
+    import os
+    from dataclasses import replace
+    from unittest.mock import patch
+
+    from agent_backbone.cli.server import _reload_app, _run_server
+    from agent_backbone.config import bootstrap_config
+
+    monkeypatch.setenv("BACKBONE_PORT", "7120")
+    monkeypatch.delenv("BACKBONE_HOST", raising=False)
+    config = bootstrap_config(tmp_path)
+    config = replace(config, backbone=replace(config.backbone, host="localhost", port=8234))
+
+    def reload_child(*args, **kwargs):
+        with patch("agent_backbone.api.app.create_app", side_effect=lambda config: config):
+            boot = _reload_app()
+        assert (boot.backbone.host, boot.backbone.port) == (kwargs["host"], kwargs["port"])
+        assert boot.backbone.port == 8234
+
+    with patch("uvicorn.run", side_effect=reload_child):
+        _run_server(config, reload=True)
+    assert os.environ["BACKBONE_PORT"] == "7120"
+    assert "BACKBONE_HOST" not in os.environ

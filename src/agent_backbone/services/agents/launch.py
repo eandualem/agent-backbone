@@ -418,6 +418,11 @@ async def _start_agent(
     async with profile_lock(config.data_dir):
         if await session_exists(spec.name):
             return StartResult(ok=True, already_running=True)
+        registration = (
+            next((row for row in await db.agents.list() if row["name"] == spec.name), None)
+            if db is not None
+            else None
+        )
         launched_at = time.time()
         # Hook-context offers belong to the session they were written for: the
         # new session must not have the old one's guidance injected on its
@@ -464,15 +469,23 @@ async def _start_agent(
             return StartResult(
                 ok=False, evidence=("could not hand the current brief to the session",)
             )
+        if db is not None:
+            current = next(
+                (row for row in await db.agents.list() if row["name"] == spec.name), None
+            )
+            if (current or {}).get("report_identity") != (registration or {}).get(
+                "report_identity"
+            ):
+                details["reason"] = "registration_changed"
+                return StartResult(
+                    ok=False,
+                    evidence=("agent registration changed during startup; retry the start",),
+                )
         write_starting_marker(
             config.state_dir, spec.name, launched_at, launch_id=environment["BACKBONE_LAUNCH_ID"]
         )
-        if db is not None:
-            registration = next(
-                (row for row in await db.agents.list() if row["name"] == spec.name), None
-            )
-            if registration is not None:
-                _bind_agent_profile(config, registration, environment["BACKBONE_LAUNCH_ID"])
+        if registration is not None:
+            _bind_agent_profile(config, registration, environment["BACKBONE_LAUNCH_ID"])
         session_started = now_iso()  # it may receive messages before it is ready
         ok = await start_session(
             spec.name,

@@ -17,6 +17,7 @@ from agent_backbone.config import (
     AgentSpec,
     agent_api_key,
     agent_profile_path,
+    bootstrap_config,
     load_secrets,
     read_agent_profile,
 )
@@ -42,7 +43,8 @@ async def bind_agent_profile(config, registration, launch_id):
 
 async def registered(db, tmp_path, monkeypatch, runtime="codex"):
     monkeypatch.setenv("BACKBONE_API_KEY", "operator")
-    store = AgentStore(db, tmp_path, provision_credentials=True)
+    boot = bootstrap_config(tmp_path)
+    store = AgentStore(db, tmp_path, credential_endpoint=(boot.backbone.host, boot.backbone.port))
     await store.start()
     await store.register(AgentSpec(name="worker", dir=str(tmp_path), runtime=runtime))
     return store
@@ -433,3 +435,53 @@ async def test_resumed_launch_cannot_overwrite_its_replacement_binding(db, tmp_p
     for key, value in live_environment.items():
         monkeypatch.setenv(key, value)
     assert load_secrets(tmp_path)["BACKBONE_API_KEY"] == agent_api_key("operator")
+
+
+async def test_saved_endpoint_change_waits_for_listener_restart(db, tmp_path, monkeypatch):
+    store = await registered(db, tmp_path, monkeypatch)
+    before = read_agent_profile(tmp_path, "worker")
+    await db.settings.set("backbone.port", 8234)
+    await db.settings.set("backbone.host", "localhost")
+    await store.refresh()
+    assert store.config.backbone.port == 8234
+    after = read_agent_profile(tmp_path, "worker")
+    assert (after["host"], after["port"]) == (before["host"], before["port"])
+    restarted = AgentStore(db, tmp_path, credential_endpoint=("localhost", 8234))
+    await restarted.start()
+    assert read_agent_profile(tmp_path, "worker")["port"] == "8234"
+
+
+async def test_launch_refuses_registration_replaced_during_preparation(db, tmp_path, monkeypatch):
+    from agent_backbone.services.agents import start_agent
+
+    store = await registered(db, tmp_path, monkeypatch, runtime="shell")
+    spec = store.agents.get("worker")
+
+    async def replace_registration(*args):
+        # A separate Direct process does not share this process's lifecycle lock.
+        await db.agents.delete("worker")
+        await db.agents.upsert(
+            "worker",
+            dir=str(tmp_path),
+            runtime="shell",
+            model=None,
+            repo="",
+            tags=[],
+            env={},
+            description="",
+            unattended=False,
+        )
+        return 0
+
+    with (
+        patch("agent_backbone.services.agents.launch.session_exists", return_value=False),
+        patch(
+            "agent_backbone.services.agents.launch._retire_stale_briefs",
+            side_effect=replace_registration,
+        ),
+        patch("agent_backbone.services.agents.launch.start_session", return_value=True) as start,
+    ):
+        result = await start_agent(spec, store.config, db=db, wait=False)
+    assert not result.ok
+    assert "registration changed" in " ".join(result.evidence)
+    start.assert_not_awaited()
