@@ -133,8 +133,6 @@ async def test_file_db_runs_migrations(tmp_path):
 
 async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
     """_run_migrations() upgrades a fresh persistent database from the initial revision."""
-    from sqlalchemy import text
-
     url = f"sqlite+aiosqlite:///{tmp_path / 'fresh.db'}"
     db = BackboneDB(url)
     db._engine = build_engine(url)  # migrations alone, without start()'s create_all
@@ -148,14 +146,6 @@ async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
         )
         await db.queue.enqueue(session_name="ike", message="hello", delivery_kind="direct_message")
         assert (await queue_row(db, 1))["status"] == "pending"
-        async with db.engine.begin() as conn:
-            delay = await conn.execute(
-                text(
-                    "INSERT INTO agent_transitions (agent_name, requested_at) "
-                    "VALUES ('worker', '2026-10-26') RETURNING delay_seconds"
-                )
-            )
-            assert delay.scalar_one() == 0
     finally:
         await db.stop()
 

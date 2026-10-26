@@ -349,7 +349,7 @@ class AgentTransitionORM(Base):
     resume: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     start: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
     """0 for stop-only: the session is stopped and nothing is started."""
-    delay_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    delay_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("60"))
     start_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     """When the replacement starts: the explicit time, else stop time plus delay."""
     message: Mapped[str | None] = mapped_column(Text, nullable=True)

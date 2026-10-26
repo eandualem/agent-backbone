@@ -99,7 +99,7 @@ place for state, delivery readiness and the last reply.
 `backbone agent restart` is how you switch CLI or model, start over with a
 clean context, or stop now and continue later. The backbone owns the
 transition: it accepts the request first, stops the session on its next
-tick and starts the replacement when the wait is over, so asking for your
+tick and starts the replacement immediately, or when an explicit delay ends, so asking for your
 own session is safe. `backbone agent stop` on yourself is not: it kills the
 shell that would run your next command.
 
@@ -111,7 +111,7 @@ startup instructions; it knows nothing you did not write down. `--message`
 is a short pointer to that context, not a substitute for it.
 
 ```bash
-backbone agent restart                                 # stop me; fresh session one minute later
+backbone agent restart                                 # stop me; start a fresh session immediately
 backbone agent restart --runtime claude --model opus   # continue in Claude Code with Opus
 backbone agent restart --in 3h20m --message "Resume from HANDOFF.md, section 'PR 12'"
 backbone agent restart --at 2026-09-23T09:00           # local time; an offset is honoured
