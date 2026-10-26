@@ -916,17 +916,38 @@ CAPABILITIES: tuple[Capability, ...] = (
     ),
     _row(
         "scoped-credentials",
-        "Agent collaboration credentials cannot change administrative settings",
+        "Scoped collaboration credentials and persistent client pickup",
         "src/agent_backbone/api/auth.py",
         fallback="Use an operator credential for administrative changes.",
         implemented=lambda rt: True,
-        claude=_ok("tests/unit/api/test_authority.py", _API_BOUNDARY),
-        codex=_ok("tests/unit/api/test_authority.py", _API_BOUNDARY),
-        gemini=_ok("tests/unit/api/test_authority.py", _API_BOUNDARY),
-        opencode=_ok("tests/unit/api/test_authority.py", _API_BOUNDARY),
-        deepcode=_ok("tests/unit/api/test_authority.py", _API_BOUNDARY),
-        aider=_ok("tests/unit/api/test_authority.py", _API_BOUNDARY),
-        shell=_ok("tests/unit/api/test_authority.py", _API_BOUNDARY),
+        claude=_ok(
+            "tests/unit/services/agents/test_credentials.py",
+            "Common CLI and API tests; live uptake pending.",
+        ),
+        codex=_ok(
+            "tests/unit/services/agents/test_credentials.py",
+            "Common CLI and API tests; live uptake pending.",
+        ),
+        gemini=_ok(
+            "tests/unit/services/agents/test_credentials.py",
+            "Common CLI and API tests; live uptake pending.",
+        ),
+        opencode=_ok(
+            "tests/unit/services/agents/test_credentials.py",
+            "Common CLI and API tests; live uptake pending.",
+        ),
+        deepcode=_ok(
+            "tests/unit/services/agents/test_credentials.py",
+            "Common CLI and API tests; live uptake pending.",
+        ),
+        aider=_ok(
+            "tests/unit/services/agents/test_credentials.py",
+            "Common CLI and API tests; live uptake pending.",
+        ),
+        shell=_ok(
+            "tests/unit/services/agents/test_credentials.py",
+            "Common CLI and API tests; live uptake pending.",
+        ),
     ),
     _row(
         "registration-bound-replay",

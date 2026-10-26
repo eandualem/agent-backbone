@@ -227,7 +227,7 @@ review and permission checks, without removing existing functionality.
 | Agent output (`agent output`, `GET /api/sessions/{name}/output`) | Read-only, registered agents only; reads the agent's user-facing messages, complete, from the runtime's own transcript for Claude Code, Codex, Gemini CLI and OpenCode (including messages that scrolled off or never showed on screen), a bounded page at a time with explicit offsets to read further; tool activity and thinking are not exposed; else the visible screen | — |
 | Steering (`tell --steer`, `POST /api/steer`) | Text reaches a working agent mid-turn as hook context on Claude Code and Codex, or as a user message in the running turn on OpenCode, with a provenance envelope; no keystrokes, so it cannot overwrite a draft or answer a dialog; refused (nothing queued) when the agent is not working or the runtime has no hook context. Same collaboration or operator credential as `tell` | — |
 | Secrets | Backbone secrets live only in `<data_dir>/.env` (mode 0600) or the environment — never in the database. Per-agent `env` is for settings: its values are stored in plain text in the database, and `agent set` warns about entries that look like secrets | — |
-| Secrets in agent sessions | Stripped at launch: an agent inherits `BACKBONE_AGENT`/`BACKBONE_RUNTIME`/`BACKBONE_STATE_DIR` and its own `env`, never the backbone's `.env` | existing sessions retain their launch-time credential; other credentials stay in each tool's own store |
+| Secrets in agent sessions | Stripped at launch: an agent inherits `BACKBONE_AGENT`/`BACKBONE_RUNTIME`/`BACKBONE_STATE_DIR` and its own `env`, never the backbone's `.env` | launch environments stay unchanged; managed CLI calls refresh scoped credentials from their profile; other credentials stay in each tool's own store |
 | Hook script | Standard library only, runs as your user, writes only under `<data_dir>/state` | — |
 | Busy agents | Never interrupted: `priority` only bypasses "someone is typing" and the settle window | — |
 
@@ -269,7 +269,7 @@ change does not establish the provenance of historical records. The local hook
 log remains writable to an unrestricted process running as the same OS user. If you need real
 per-agent identity, each agent needs its own GitHub account. Keep its token
 out of the agent's `env`, which is stored in plain text in the database;
-there is no per-agent credential store yet.
+there is no per-agent GitHub credential store yet.
 
 ## Known limitations
 
@@ -349,3 +349,17 @@ Successful comment receipts are stored as separate private files before the
 rolling action log is appended. They survive action-log rotation and use
 `timing.delivery_retention_days` for retention. Successful comment edits retain
 their completion time, because editing an old comment keeps its original ID.
+
+### Existing-session credential pickup
+
+Managed CLI sessions can read daemon-maintained collaboration-only profiles from
+`<data_dir>/agent-credentials/`. These `.env` files are private and never contain
+the operator key. The CLI rejects symlinks, unsafe permissions, malformed files
+and launch mismatches. Its profile pins the endpoint and registration; the API
+rejects a profile request after that registration is retired. Missing credentials
+never trigger an operator `.env` or direct-database fallback. See
+[configuration](configuration.md) for provisioning status and migration behavior.
+
+This is scoped collaboration access, not cryptographic sender authentication.
+Signed-author enrollment remains separate. An unrestricted same-user process can
+read or alter private files; these profiles do not create OS-level isolation.

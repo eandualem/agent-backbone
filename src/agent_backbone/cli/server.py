@@ -64,6 +64,18 @@ def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
     }
 
 
+def _reload_app():
+    """Build the reload child with the endpoint pinned by its parent listener."""
+    from dataclasses import replace
+
+    from agent_backbone.api.app import create_app
+    from agent_backbone.config import bootstrap_config
+
+    config = bootstrap_config()
+    host = os.environ.get("BACKBONE_HOST", config.backbone.host)
+    return create_app(replace(config, backbone=replace(config.backbone, host=host)))
+
+
 def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | None = None) -> None:
     import uvicorn
 
@@ -73,16 +85,31 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
     if reload and config.backbone.socket_path:
         raise ValueError("the private socket requires backbone up without --reload")
     if reload:
-        uvicorn.run(
-            "agent_backbone.api.app:create_app",
-            factory=True,
-            host=config.backbone.host,
-            port=config.backbone.port,
-            reload=True,
-            reload_dirs=["src"],
-            log_level="info",
-            log_config=logging_config,
-        )
+        # The reloader imports the factory in a child instead of passing config.
+        # Give that factory the same fixed endpoint as the listener it serves.
+        endpoint = {
+            "BACKBONE_HOST": config.backbone.host,
+            "BACKBONE_PORT": str(config.backbone.port),
+        }
+        previous = {key: os.environ.get(key) for key in endpoint}
+        os.environ.update(endpoint)
+        try:
+            uvicorn.run(
+                "agent_backbone.cli.server:_reload_app",
+                factory=True,
+                host=config.backbone.host,
+                port=config.backbone.port,
+                reload=True,
+                reload_dirs=["src"],
+                log_level="info",
+                log_config=logging_config,
+            )
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
         return
 
     from agent_backbone.api.app import create_app

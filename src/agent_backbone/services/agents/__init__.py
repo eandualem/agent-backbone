@@ -24,6 +24,7 @@ from agent_backbone.services.agents.acknowledgement import (
     rotate_action_log,
 )
 from agent_backbone.services.agents.audit import record_answer
+from agent_backbone.services.agents.credentials import agent_profile_readiness
 from agent_backbone.services.agents.instructions import instruction_preview
 from agent_backbone.services.agents.launch import (
     StartResult,
@@ -45,6 +46,7 @@ __all__ = [
     "EnrichedAgent",
     "StartResult",
     "StateSnapshot",
+    "agent_profile_readiness",
     "agent_state",
     "approve_agent",
     "bind_task",

@@ -716,10 +716,9 @@ class TestAgentCommands:
         assert _run(["agent", "list"]) == 0
         assert "orch" in capsys.readouterr().out
         assert _run(["agent", "unwatch", "orch", "acme/web"]) == 0
-        with patch(
-            "agent_backbone.services.agents.operations.session_exists",
-            new_callable=AsyncMock,
-            return_value=False,
+        with (
+            patch("agent_backbone.services.agents.operations.session_exists", return_value=False),
+            patch("agent_backbone.services.terminal.session_exists", return_value=False),
         ):
             assert _run(["agent", "forget", "orch"]) == 0
             assert _run(["agent", "forget", "orch"]) == 1

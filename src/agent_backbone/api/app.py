@@ -283,7 +283,12 @@ async def lifespan(app: FastAPI):
         if integrations is not None:
             integrations.schedule_sync()
 
-    app.state.agent_store = AgentStore(app.state.db, data_dir, on_change=_publish)
+    app.state.agent_store = AgentStore(
+        app.state.db,
+        data_dir,
+        on_change=_publish,
+        credential_endpoint=(boot.backbone.host, boot.backbone.port),
+    )
     lifecycle.register("agents", app.state.agent_store)
     await lifecycle.start_all()
     config: BackboneConfig = app.state.config

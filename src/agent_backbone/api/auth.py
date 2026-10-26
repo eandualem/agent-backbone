@@ -67,4 +67,8 @@ async def require_api_key(request: Request) -> None:
     if role is None:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
+    if role == "agent" and (identity := request.headers.get("X-Backbone-Client-Registration")):
+        name = request.headers.get("X-Backbone-Client-Agent", "")
+        if not await request.app.state.db.agents.registration_matches(name, identity):
+            raise HTTPException(status_code=403, detail="Agent credential registration is retired")
     request.state.credential_role = role

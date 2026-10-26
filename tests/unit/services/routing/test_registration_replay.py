@@ -28,7 +28,8 @@ async def test_forget_retires_pending_data_and_stale_copies_cannot_reach_reused_
     await db.outbox.plan(1, [{"session_name": "worker", "target_entity": "worker"}])
     old_plan = (await db.outbox.entries(1))[0]["delivery"]
     assert old_plan["registration_id"] == identity
-    await store.forget("worker")
+    with patch("agent_backbone.services.terminal.session_exists", return_value=False):
+        await store.forget("worker")
     await store.register(spec)
     assert (await queue_row(db, queued.id))["status"] == "expired"
     history = await db.deliveries.query(operation_id=queued.operation_id)
@@ -73,7 +74,8 @@ async def test_delivery_waits_for_lifecycle_mutation_before_checking_registratio
             await entered.wait()
             await asyncio.sleep(0)
             assert not task.done()
-            await store.forget("worker")
+            with patch("agent_backbone.services.terminal.session_exists", return_value=False):
+                await store.forget("worker")
             await store.register(spec)
         assert (await task).outcome == "already_delivered"
     send.assert_not_called()

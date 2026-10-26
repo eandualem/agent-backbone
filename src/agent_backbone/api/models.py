@@ -217,6 +217,9 @@ class AgentStateHistory(BaseModel):
 class AgentInspectResponse(BaseModel):
     """Everything the backbone knows about one agent, with the evidence."""
 
+    credential_profile: str = "unavailable"
+    """Provisioning evidence only; never the credential or proof of a successful request."""
+
     name: str
     known: bool = True
     online: bool = False
