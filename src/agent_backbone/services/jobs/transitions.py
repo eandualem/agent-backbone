@@ -78,7 +78,11 @@ async def _advance(config: BackboneConfig, store: AgentStore, db: BackboneDB, ro
         async with lifecycle_lock(name):
             if row["resume"]:
                 try:
-                    validate_resume(config, spec, row["runtime"] or spec.runtime)
+                    await store.refresh()
+                    current = store.agents.get(name)
+                    if current is None or current.inbox_only:
+                        raise ValueError("agent is no longer available for a session restart")
+                    validate_resume(config, current, row["runtime"] or current.runtime)
                 except ValueError as exc:
                     await db.transitions.finish(row["id"], "failed", {"reason": str(exc)})
                     return "failed"
