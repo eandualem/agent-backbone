@@ -255,8 +255,13 @@ async def test_startup_withdraws_unbound_offers_before_hooks_consume_them(tmp_pa
         await db.stop()
 
 
-async def test_startup_prevents_pruning_and_id_reuse_during_hook_withdrawal(tmp_path):
+@pytest.mark.parametrize("cancel_startup", [False, True])
+async def test_startup_prevents_pruning_and_id_reuse_during_hook_withdrawal(
+    tmp_path, cancel_startup
+):
+    import asyncio
     import sqlite3
+    import threading
     from contextlib import closing
 
     from sqlalchemy import text
@@ -273,16 +278,37 @@ async def test_startup_prevents_pruning_and_id_reuse_during_hook_withdrawal(tmp_
             await conn.execute(text("UPDATE message_queue SET status='expired'"))
         bb.offer_context(tmp_path, "desk", str(queued.id), "old notification")
 
+    loop = asyncio.get_running_loop()
+    withdrawn = threading.Event()
+    pruning_blocked = []
+
     def withdraw(state_dir, agent, key):
-        with closing(sqlite3.connect(database, timeout=0)) as concurrent:
-            with pytest.raises(sqlite3.OperationalError, match="database is locked"):
-                concurrent.execute("DELETE FROM message_queue WHERE status='expired'")
-        bb.clear_context(state_dir, agent, key)
+        try:
+            if cancel_startup:
+                loop.call_soon_threadsafe(startup.cancel)
+            with closing(sqlite3.connect(database, timeout=1)) as concurrent:
+                try:
+                    concurrent.execute("DELETE FROM message_queue WHERE status='expired'")
+                except sqlite3.OperationalError as exc:
+                    assert "database is locked" in str(exc)
+                    pruning_blocked.append(True)
+                else:
+                    pruning_blocked.append(False)
+            bb.clear_context(state_dir, agent, key)
+        finally:
+            withdrawn.set()
 
     db = BackboneDB(url, state_dir=tmp_path)
     try:
         with patch("agent_backbone.services.database.backbone_db.clear_context", withdraw):
-            await db.start()
+            startup = asyncio.create_task(db.start())
+            if cancel_startup:
+                with pytest.raises(asyncio.CancelledError):
+                    await startup
+            else:
+                await startup
+            assert await asyncio.to_thread(withdrawn.wait, 5)
+        assert pruning_blocked == [True]
         assert bb.take_context(tmp_path, "desk") == []
     finally:
         await db.stop()

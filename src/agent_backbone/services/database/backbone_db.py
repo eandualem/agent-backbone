@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -301,9 +300,9 @@ class BackboneDB:
                 for row in legacy:
                     # Include already-retired rows: earlier upgrades left their
                     # offers behind for still-running hooks to consume.
-                    await asyncio.to_thread(
-                        clear_context, self._state_dir, row.session_name, str(row.id)
-                    )
+                    # Keep these unlinks inside the locked transaction even
+                    # when startup is cancelled; no worker may outlive it.
+                    clear_context(self._state_dir, row.session_name, str(row.id))
             await conn.execute(
                 text(
                     "INSERT INTO deliveries (operation_id,kind,repo,issue_number,target_entity,"
