@@ -149,6 +149,11 @@ version differs.
 
 ## Notes
 
+- **Remote approval request binding.** Approval and denial checkmarks mean the
+  runtime's terminal controls are supported, including Codex. They do not claim
+  atomic binding to a native request. See the [known limitation and future
+  integration requirements](security.md#known-limitation-remote-approval-request-binding).
+
 - **Gemini CLI sign-in.** In a test with Gemini CLI 0.46, one personal Google
   account was refused ("no longer supported for Gemini Code Assist for
   individuals") before any model call; Backbone reports such a session as
