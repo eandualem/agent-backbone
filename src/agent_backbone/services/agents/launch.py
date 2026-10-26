@@ -71,13 +71,19 @@ def launch_environment(
     """Environment exported into an agent session so shipped hooks can find the backbone.
 
     This is the whole contract: the runtime, the agent's name, the state
-    directory, the launch's operation (``BACKBONE_OPERATION_ID``, how a
-    recovered restart recognises the session it started), and whatever the
+    directory, the registration bound by the launcher, the launch's operation
+    (``BACKBONE_OPERATION_ID``, how a recovered restart recognises the session
+    it started), and whatever the
     agent itself is configured with. The backbone's secrets are not part of
     it and are stripped from the session (see ``session_secret_keys`` and
     ``start_session``'s ``scrub``).
     """
-    env = {RUNTIME_ENV_KEY: runtime, AGENT_ENV_KEY: name, "BACKBONE_LAUNCH_ID": uuid4().hex}
+    env = {
+        RUNTIME_ENV_KEY: runtime,
+        AGENT_ENV_KEY: name,
+        "BACKBONE_LAUNCH_ID": uuid4().hex,
+        "BACKBONE_REGISTRATION_ID": "",
+    }
     if operation_id:
         env[OPERATION_ENV_KEY] = operation_id
     if state_dir:
@@ -91,6 +97,7 @@ def launch_environment(
         AGENT_ENV_KEY,
         STATE_DIR_ENV_KEY,
         "BACKBONE_LAUNCH_ID",
+        "BACKBONE_REGISTRATION_ID",
         OPERATION_ENV_KEY,
     }
     for key, value in (extra or {}).items():
@@ -494,6 +501,7 @@ async def _start_agent(
             config.state_dir, spec.name, launched_at, launch_id=environment["BACKBONE_LAUNCH_ID"]
         )
         if registration is not None:
+            environment["BACKBONE_REGISTRATION_ID"] = registration["report_identity"]
             _bind_agent_profile(config, registration, environment["BACKBONE_LAUNCH_ID"])
         session_started = now_iso()  # it may receive messages before it is ready
         ok = await start_session(

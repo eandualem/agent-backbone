@@ -232,6 +232,15 @@ class AgentRepo(Repo):
             await conn.execute(
                 text("DELETE FROM agent_subscriptions WHERE agent_name = :name"), {"name": name}
             )
+            # A replacement registration must not inherit a prior acknowledgment.
+            # Publication receipts and delivery history remain available.
+            await conn.execute(
+                text(
+                    "UPDATE acknowledgments SET acknowledged_at='', cleared_at=:now, "
+                    "cleared_comment_id=NULL WHERE target_entity=:name"
+                ),
+                {"name": name, "now": now_iso()},
+            )
             result = await conn.execute(
                 text("DELETE FROM agents WHERE name = :name"), {"name": name}
             )

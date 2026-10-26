@@ -17,13 +17,17 @@ class AcknowledgementRepo(Repo):
         repo: str = "",
         not_cleared_since: str | None = None,
         comment_id: int | None = None,
+        registration_id: str | None = None,
     ) -> bool:
         async with self._tx() as conn:
             result = await conn.execute(
                 text(
                     """INSERT INTO acknowledgments
                        (repo, issue_number, target_entity, acknowledged_at)
-                       VALUES (:repo, :issue_number, :target_entity, :acknowledged_at)
+                       SELECT :repo, :issue_number, :target_entity, :acknowledged_at
+                       WHERE CAST(:registration_id AS TEXT) IS NULL OR EXISTS (
+                         SELECT 1 FROM agents WHERE name=:target_entity
+                           AND report_identity=:registration_id)
                        ON CONFLICT(repo, issue_number, target_entity) DO UPDATE SET
                          acknowledged_at = excluded.acknowledged_at
                        WHERE (CAST(:not_cleared_since AS TEXT) IS NULL
@@ -40,6 +44,7 @@ class AcknowledgementRepo(Repo):
                     "acknowledged_at": now_iso(),
                     "not_cleared_since": not_cleared_since,
                     "comment_id": comment_id,
+                    "registration_id": registration_id,
                 },
             )
             return bool(result.rowcount)

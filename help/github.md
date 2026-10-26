@@ -12,8 +12,11 @@ routed by four relationships for an issue in repository R:
 | watch | `backbone agent watch R` | notified of new issues; `for:` labels route to you |
 
 Issues are delivered one at a time: acknowledge the current one before
-the next arrives. Acknowledge by commenting on the issue with a leading
-`[from:<your-name>]` tag; closing the issue also releases the queue and
+the next arrives. Publish with `gh issue comment N --repo OWNER/REPO --body-file comment.md`
+through your hooked runtime so Backbone records the
+exact successful publication receipt. Keep a leading `[from:<your-name>]`
+tag for readable provenance; the tag alone does not acknowledge work.
+Closing the issue also releases the queue and
 triggers whatever depends on it (a swarm working the issue tears down,
 for example).
 

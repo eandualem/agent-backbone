@@ -279,6 +279,9 @@ class TestGitHubPoller:
         entry = {
             "ts": datetime(2026, 8, 31, 10, tzinfo=UTC).timestamp(),
             "session": "ike",
+            "registration_id": next(
+                row["report_identity"] for row in await db.agents.list() if row["name"] == "ike"
+            ),
             "action": "pull_request",
             "phase": "succeeded",
             "repo": TEST_REPO,

@@ -85,6 +85,7 @@ def find_outgoing_comment(
     repo: str = "",
     include_intent: bool = True,
     comment_id: int | None = None,
+    registrations: dict[str, str] | None = None,
 ) -> str | None:
     """Session that recently commented on an issue according to the hook action log.
 
@@ -92,6 +93,7 @@ def find_outgoing_comment(
     "issue": 42, "repo": "owner/name"}``.
     """
     now = time.time()
+    current_names = {identity: name for name, identity in (registrations or {}).items() if identity}
     entries = (
         read_comment_receipts(action_log)
         if comment_id is not None
@@ -109,6 +111,8 @@ def find_outgoing_comment(
             or type(entry.get("comment_id")) is not int
             or entry.get("comment_id") != comment_id
             or entry.get("phase") != "succeeded"
+            or not isinstance(entry.get("registration_id"), str)
+            or not current_names.get(entry.get("registration_id"))
         ):
             continue
         if not _repo_matches(entry, repo):
@@ -116,7 +120,7 @@ def find_outgoing_comment(
         if comment_id is not None:
             timestamp = entry.get("ts", 0)
             if isinstance(timestamp, (int, float)) and (latest is None or timestamp > latest[0]):
-                latest = timestamp, entry.get("session")
+                latest = timestamp, current_names[entry["registration_id"]]
         elif now - float(entry.get("ts", 0)) <= recency_seconds:
             return entry.get("session")
     return latest[1] if latest else None
@@ -132,6 +136,7 @@ def find_outgoing_pull_request(
     base_repo: str = "",
     include_intent: bool = True,
     at: float | None = None,
+    registrations: dict[str, str] | None = None,
 ) -> str | None:
     """Session that ran ``gh pr create`` from this head repository and branch
     within ``recency_seconds`` of ``at`` (default now).
@@ -151,7 +156,11 @@ def find_outgoing_pull_request(
     if not head_ref or not (head_repo or base_repo):
         return None
     now = time.time() if at is None else at
+    current_names = {identity: name for name, identity in (registrations or {}).items() if identity}
     for entry in _read_tail(action_log, max_lines):
+        identity = entry.get("registration_id")
+        if not isinstance(identity, str) or identity not in current_names:
+            continue
         if entry.get("action") != "pull_request":
             continue
         if not include_intent and entry.get("phase") != "succeeded":
@@ -166,7 +175,7 @@ def find_outgoing_pull_request(
         if (entry.get("branch") or "") != head_ref:
             continue
         if abs(now - float(entry.get("ts", 0))) <= recency_seconds:
-            return entry.get("session")
+            return current_names[identity]
     return None
 
 
@@ -180,8 +189,15 @@ def has_commented_on_issue(
     since: float | None = None,
     reset_comment_id: int | None = None,
     receipts: Iterable[dict] | None = None,
+    registration_id: str | None = None,
 ) -> bool:
-    """Whether a retained receipt was published after the latest acknowledgment reset."""
+    """Whether this registration published after the latest acknowledgment reset.
+
+    The caller resolves the session's current registration from the database.
+    Receipt names may predate a rename; the stable registration is authoritative.
+    """
+    if not registration_id:
+        return False
     for entry in read_comment_receipts(action_log) if receipts is None else receipts:
         if (
             entry.get("action") == "comment"
@@ -189,7 +205,7 @@ def has_commented_on_issue(
             and type(entry.get("comment_id")) is int
             and entry["comment_id"] > 0
             and entry.get("issue") == issue_number
-            and entry.get("session") == session
+            and entry.get("registration_id") == registration_id
             and _repo_matches(entry, repo)
             and (
                 since is None

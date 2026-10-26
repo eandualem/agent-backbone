@@ -205,7 +205,10 @@ function savePlan(t, question, root) {
 
 function appendAction(t, action) {
   privateDirectory(t.dir);
-  const record = JSON.stringify({ ...action, session: t.agent }) + "\n";
+  const record = JSON.stringify({
+    ...action, session: t.agent,
+    registration_id: process.env.BACKBONE_REGISTRATION_ID || "",
+  }) + "\n";
   if (action.action === "comment" && action.phase === "succeeded" &&
       Number.isSafeInteger(action.comment_id) && action.comment_id > 0) {
     const receipts = path.join(t.dir, "comment-receipts");

@@ -1883,3 +1883,22 @@ async def test_a_failed_start_record_never_fails_a_running_session(tmp_path):
         patch(f"{_BASE}.resolve_command", return_value="/bin/claude"),
     ):
         assert (await start_agent(spec, config, db=db, wait=False)).ok
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_launch_exports_current_registration_for_publication_receipts(db, tmp_path, runtime):
+    from agent_backbone.services.agents import AgentStore
+
+    store = AgentStore(db, tmp_path)
+    await store.start()
+    spec = await store.register(AgentSpec(name="worker", dir=str(tmp_path), runtime=runtime))
+    identity = next(
+        row["report_identity"] for row in await db.agents.list() if row["name"] == spec.name
+    )
+    with (
+        patch(f"{_MOD}.session_exists", return_value=False),
+        patch(f"{_MOD}.start_session", return_value=True) as start,
+        patch(f"{_BASE}.resolve_command", return_value=f"/bin/{runtime}"),
+    ):
+        assert (await start_agent(spec, store.config, db=db, wait=False)).ok
+    assert start.call_args.kwargs["environment"]["BACKBONE_REGISTRATION_ID"] == identity

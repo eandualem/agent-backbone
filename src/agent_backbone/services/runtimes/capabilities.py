@@ -194,29 +194,29 @@ _RESPONSE_DELIVERY = (
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
         "comment-receipts",
-        "GitHub comment acknowledgements bound to exact publication receipts",
+        "GitHub acknowledgements bound to registration and successful publication",
         "src/agent_backbone/hooks/backbone_state.py",
-        fallback="A GitHub prefix alone cannot acknowledge work; keep the notification visible.",
+        fallback="Unbound receipts cannot acknowledge work; restart older sessions normally.",
         implemented=_declared("comment-receipts"),
         cli_dependent=True,
         claude=_ok(
             "tests/unit/hooks/test_command_acknowledgement.py",
-            "Payload tests; live check pending.",
+            "Registration-bound payload tests; live check pending normal restart.",
             verified_on="2.1.310",
         ),
         codex=_ok(
             "tests/unit/hooks/test_command_acknowledgement.py",
-            "Payload tests; live check pending.",
+            "Registration-bound payload tests; live check pending normal restart.",
             verified_on="0.160.0",
         ),
         opencode=_ok(
             "tests/unit/hooks/test_command_acknowledgement.py",
-            "Plugin tests; live check pending.",
+            "Registration-bound plugin tests; live check pending normal restart.",
             verified_on="2.1.4",
         ),
         gemini=_ok(
             "tests/unit/hooks/test_command_acknowledgement.py",
-            "Payload tests; live check pending.",
+            "Registration-bound payload tests; live check pending normal restart.",
             verified_on="0.46.0",
         ),
         deepcode=_gap(note="no publication receipt hook"),

@@ -911,7 +911,16 @@ def remember_usage_session(state_dir: Path, agent: str, record: dict) -> None:
 
 def append_action(state_dir: Path, agent: str, action: dict) -> None:
     _private_directory(state_dir)
-    record = json.dumps({**action, "session": agent}) + "\n"
+    record = (
+        json.dumps(
+            {
+                **action,
+                "session": agent,
+                "registration_id": os.environ.get("BACKBONE_REGISTRATION_ID", ""),
+            }
+        )
+        + "\n"
+    )
     if (
         action.get("action") == "comment"
         and action.get("phase") == "succeeded"

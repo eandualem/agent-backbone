@@ -48,7 +48,9 @@ log = logging.getLogger(__name__)
 SOURCE = "issue-dispatcher"
 
 
-async def _resolve_commenter_entity(event: IssueEvent, config: BackboneConfig) -> str | None:
+async def _resolve_commenter_entity(
+    event: IssueEvent, config: BackboneConfig, registrations: dict[str, str]
+) -> str | None:
     """Attribute only the exact comment recorded by a successful local publication."""
     if event.comment is None:
         return None
@@ -59,6 +61,7 @@ async def _resolve_commenter_entity(event: IssueEvent, config: BackboneConfig) -
         repo=event.issue.repo_full_name,
         include_intent=False,
         comment_id=event.comment.id,
+        registrations=registrations,
     )
 
 
@@ -175,7 +178,21 @@ async def _dispatch_comment(
     event: IssueEvent, config: BackboneConfig, db: BackboneDB, result: DispatchResult
 ) -> None:
     repo = event.issue.repo_full_name
-    commenter = await _resolve_commenter_entity(event, config)
+    registrations = {row["name"]: row["report_identity"] for row in await db.agents.list()}
+    commenter = await _resolve_commenter_entity(event, config, registrations)
+    if commenter:
+        try:
+            if not registrations.get(commenter) or not await db.acks.record(
+                event.issue.number,
+                commenter,
+                repo=repo,
+                comment_id=event.comment.id,
+                registration_id=registrations[commenter],
+            ):
+                commenter = None
+        except Exception:
+            log.exception("Failed to record acknowledgment (non-fatal)")
+            commenter = None
     audience = comment_audience(event.issue, commenter, config)
     # A swarm's coordinator is a party to the swarm's own issue — it is not
     # an owner (members never are), so it would otherwise hear nothing.
@@ -187,15 +204,6 @@ async def _dispatch_comment(
     commenter_session: str | None = None
     if commenter:
         commenter_session = resolve_entity_session(commenter, config)
-    acknowledged = commenter
-    if acknowledged:
-        try:
-            await db.acks.record(
-                event.issue.number, acknowledged, repo=repo, comment_id=event.comment.id
-            )
-        except Exception:
-            log.exception("Failed to record acknowledgment (non-fatal)")
-
     for target in audience:
         session = resolve_entity_session(target, config)
         if session is None or session == commenter_session:
@@ -253,6 +261,7 @@ async def _dispatch_pull_request(
     opened it (its hook logged the ``gh pr create``), for which the issues
     the pull request closes count as acknowledged instead."""
     repo = event.issue.repo_full_name
+    registrations = {row["name"]: row["report_identity"] for row in await db.agents.list()}
     # A polled opening can arrive long after the fact (startup backfill), so
     # it is matched to the action log at the pull request's creation time.
     # An unknown creation time is matched against now, as before.
@@ -267,7 +276,13 @@ async def _dispatch_pull_request(
         action_log=config.action_log_path,
         base_repo=repo,
         at=opened_at,
+        registrations=registrations,
     )
+    if opener and (
+        not registrations.get(opener)
+        or not await db.agents.registration_matches(opener, registrations[opener])
+    ):
+        opener = None
     confirmed = (
         find_outgoing_pull_request(
             event.issue.head_repo,
@@ -276,6 +291,7 @@ async def _dispatch_pull_request(
             base_repo=repo,
             include_intent=False,
             at=opened_at,
+            registrations=registrations,
         )
         if opener
         else None
@@ -283,9 +299,13 @@ async def _dispatch_pull_request(
     if confirmed:
         for number in event.issue.linked_issues():
             try:
-                await db.acks.record(number, confirmed, repo=repo)
+                if not await db.acks.record(
+                    number, confirmed, repo=repo, registration_id=registrations[confirmed]
+                ):
+                    opener = None
             except Exception:
                 log.exception("Failed to record acknowledgment (non-fatal)")
+                opener = None
     routing = route_issue(event.issue, event.event_type, config)
     message = format_pull_request_notification(event.issue)
     for target in routing.queue + routing.watch:
