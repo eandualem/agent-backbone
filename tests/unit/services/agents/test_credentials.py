@@ -11,10 +11,17 @@ from unittest.mock import patch
 import pytest
 
 from agent_backbone.cli._common import headers, read_client_config
-from agent_backbone.config import AgentSpec, agent_api_key, agent_profile_path, load_secrets
+from agent_backbone.config import (
+    AgentSpec,
+    agent_api_key,
+    agent_profile_path,
+    load_secrets,
+    read_agent_profile,
+)
 from agent_backbone.services.agents import AgentStore, write_starting_marker
 from agent_backbone.services.agents.credentials import (
     agent_profile_readiness,
+    bind_agent_profile,
     provision_agent_profiles,
 )
 from agent_backbone.services.runtimes import RUNTIMES
@@ -160,3 +167,20 @@ async def test_explicit_client_without_managed_launch_keeps_its_scoped_credentia
     monkeypatch.setenv("BACKBONE_API_KEY", agent_api_key("operator"))
     monkeypatch.delenv("BACKBONE_LAUNCH_ID", raising=False)
     assert load_secrets(tmp_path)["BACKBONE_API_KEY"] == agent_api_key("operator")
+
+
+async def test_launch_binding_preserves_new_registrations_and_rotated_credentials(
+    db, tmp_path, monkeypatch
+):
+    store = await registered(db, tmp_path, monkeypatch)
+    stale = store.config
+    # Another registration and key rotation complete after this launch captured
+    # its configuration. A launch must not perform fleet-wide reconciliation.
+    await store.register(AgentSpec(name="peer", dir=str(tmp_path)))
+    current = replace(store.config, api_key="rotated")
+    provision_agent_profiles(current, await db.agents.list())
+    bind_agent_profile(stale, "worker", "b" * 32)
+    worker = read_agent_profile(tmp_path, "worker")
+    peer = read_agent_profile(tmp_path, "peer")
+    assert worker["launch"] == "b" * 32
+    assert worker["credential"] == peer["credential"] == agent_api_key("rotated")

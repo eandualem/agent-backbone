@@ -269,7 +269,7 @@ change does not establish the provenance of historical records. The local hook
 log remains writable to an unrestricted process running as the same OS user. If you need real
 per-agent identity, each agent needs its own GitHub account. Keep its token
 out of the agent's `env`, which is stored in plain text in the database;
-there is no per-agent credential store yet.
+there is no per-agent GitHub credential store yet.
 
 ## Known limitations
 

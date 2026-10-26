@@ -6,6 +6,7 @@ import os
 import re
 import stat
 import tempfile
+import threading
 from datetime import datetime
 
 from agent_backbone.config import (
@@ -16,6 +17,8 @@ from agent_backbone.config import (
     read_agent_profile,
 )
 from agent_backbone.services.agents._file_reader import read_launch_marker
+
+_profile_lock = threading.Lock()
 
 
 def _write_profile(path, content: str) -> None:
@@ -36,49 +39,66 @@ def provision_agent_profiles(config: BackboneConfig, registrations: list[dict]) 
     registration. Forget/recreate therefore cannot assign a surviving old marker
     to the replacement. New launches write their marker before provisioning.
     """
-    if not config.api_key or agent_credential(config.api_key):
-        return
-    root = config.data_dir / "agent-credentials"
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = root.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise ValueError("Agent credential profile directory must be private")
-    host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(config.backbone.host, config.backbone.host)
-    if not re.fullmatch(r"[A-Za-z0-9_.:-]+", host):
-        raise ValueError("Agent credential profiles require a valid API hostname")
-    keep = set()
-    for row in registrations:
-        name, identity = row["name"], row.get("report_identity")
-        if not identity:
-            continue
-        path = agent_profile_path(config.data_dir, name)
-        keep.add(path)
-        launch = read_launch_marker(config.state_dir, name)
-        try:
-            created = datetime.fromisoformat(row["created_at"]).timestamp()
-            launch_id = launch[1] if launch and launch[0] >= created else ""
-        except (KeyError, TypeError, ValueError):
-            launch_id = ""
-        values = {
-            "agent": name,
-            "registration": identity,
-            "launch": launch_id,
-            "host": host,
-            "port": str(config.backbone.port),
-            "credential": agent_api_key(config.api_key),
-        }
-        try:
-            current = read_agent_profile(config.data_dir, name)
-        except ValueError:
-            current = None
-        if current != values:
-            # Never inherit a permissive mode from an older or malformed file.
-            _write_profile(path, "".join(f"{key}={value}\n" for key, value in values.items()))
-    for path in root.glob("*.env"):
-        if path not in keep:
-            # Retain a refusal for old processes, even if their environment still
-            # contains a formerly valid shared collaboration credential.
-            _write_profile(path, "retired=true\n")
+    with _profile_lock:
+        if not config.api_key or agent_credential(config.api_key):
+            return
+        root = config.data_dir / "agent-credentials"
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = root.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError("Agent credential profile directory must be private")
+        host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(config.backbone.host, config.backbone.host)
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]+", host):
+            raise ValueError("Agent credential profiles require a valid API hostname")
+        keep = set()
+        for row in registrations:
+            name, identity = row["name"], row.get("report_identity")
+            if not identity:
+                continue
+            path = agent_profile_path(config.data_dir, name)
+            keep.add(path)
+            launch = read_launch_marker(config.state_dir, name)
+            try:
+                created = datetime.fromisoformat(row["created_at"]).timestamp()
+                launch_id = launch[1] if launch and launch[0] >= created else ""
+            except (KeyError, TypeError, ValueError):
+                launch_id = ""
+            values = {
+                "agent": name,
+                "registration": identity,
+                "launch": launch_id,
+                "host": host,
+                "port": str(config.backbone.port),
+                "credential": agent_api_key(config.api_key),
+            }
+            try:
+                current = read_agent_profile(config.data_dir, name)
+            except ValueError:
+                current = None
+            if current != values:
+                # Never inherit a permissive mode from an older or malformed file.
+                _write_profile(path, "".join(f"{key}={value}\n" for key, value in values.items()))
+        for path in root.glob("*.env"):
+            if path not in keep:
+                # Retain a refusal for old processes, even if their environment still
+                # contains a formerly valid shared collaboration credential.
+                _write_profile(path, "retired=true\n")
+
+
+def bind_agent_profile(config: BackboneConfig, name: str, launch_id: str) -> None:
+    """Bind only this launch, preserving newer credentials and every peer's profile.
+
+    Configuration refresh owns fleet provisioning and retirement. Sharing its
+    writer lock makes this read/replace atomic with a concurrent key rotation.
+    """
+    with _profile_lock:
+        profile = read_agent_profile(config.data_dir, name)
+        if profile is not None:
+            profile["launch"] = launch_id
+            _write_profile(
+                agent_profile_path(config.data_dir, name),
+                "".join(f"{key}={value}\n" for key, value in profile.items()),
+            )
 
 
 def agent_profile_readiness(config: BackboneConfig, row: dict) -> str:

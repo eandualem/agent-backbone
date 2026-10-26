@@ -25,7 +25,7 @@ from agent_backbone.services.agents._file_reader import (
     write_starting_marker,
 )
 from agent_backbone.services.agents._inference import get_agent_state
-from agent_backbone.services.agents.credentials import provision_agent_profiles
+from agent_backbone.services.agents.credentials import bind_agent_profile
 from agent_backbone.services.agents.instructions import instruction_preview
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.database import now_iso
@@ -459,7 +459,9 @@ async def _start_agent(
         config.state_dir, spec.name, launched_at, launch_id=environment["BACKBONE_LAUNCH_ID"]
     )
     if db is not None:
-        await asyncio.to_thread(provision_agent_profiles, config, await db.agents.list())
+        await asyncio.to_thread(
+            bind_agent_profile, config, spec.name, environment["BACKBONE_LAUNCH_ID"]
+        )
     session_started = now_iso()  # it may receive messages before it is ready
     ok = await start_session(
         spec.name,
