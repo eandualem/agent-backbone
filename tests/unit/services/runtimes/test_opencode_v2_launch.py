@@ -98,9 +98,7 @@ def test_changed_selection_is_not_reported_as_success(monkeypatch):
 
 
 @pytest.mark.parametrize("resume", [False, "ses_existing"])
-def test_v2_command_uses_selected_session_and_keeps_resume_brief_suppressed(
-    monkeypatch, tmp_path, resume
-):
+def test_v2_command_uses_selected_session_and_native_instructions(monkeypatch, tmp_path, resume):
     runtime = RUNTIMES["opencode"]
     monkeypatch.setattr(type(runtime), "installed_version", lambda self: "2.1.4")
     monkeypatch.setattr(
@@ -128,7 +126,8 @@ def test_v2_command_uses_selected_session_and_keeps_resume_brief_suppressed(
     native = command[command.index("/bin/opencode") :]
     assert native[:3] == ["/bin/opencode", "--standalone", "--auto"]
     assert "--model" not in native and "--session" not in native
-    assert ("--prompt" in native) is (not resume)
+    assert "--prompt" not in native
+    assert command[3] == str(brief.resolve())
 
 
 @pytest.mark.parametrize("version", ["1.19.4", "2.1.3"])

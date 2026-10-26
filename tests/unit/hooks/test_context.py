@@ -516,19 +516,21 @@ def test_opencode_marks_when_each_turn_starts(tmp_path):
 
 
 @pytest.mark.parametrize("hook", [claude_hook, codex_hook])
-def test_a_session_takes_its_offers_at_session_start(tmp_path, monkeypatch, hook):
-    """#273: a resumed session takes its refreshed brief as it starts."""
+@pytest.mark.parametrize("source", ["startup", "resume"])
+def test_a_session_takes_its_offers_at_session_start(tmp_path, monkeypatch, hook, source):
+    """Native startup context preserves the full brief, once, before the first turn."""
     monkeypatch.delenv("BACKBONE_STATE_DIR", raising=False)
     monkeypatch.setenv("BACKBONE_LAUNCH_ID", "launch-x")
-    bb.offer_steer(tmp_path, "desk", "launch-x", "brief-refresh", "the current brief")
+    brief = "The current brief.\n" * 2000 + "Final policy."
+    bb.offer_steer(tmp_path, "desk", "launch-x", "brief-refresh", brief)
     out = _run(
         hook,
         tmp_path,
-        {"hook_event_name": "SessionStart", "session_id": "s", "source": "resume"},
+        {"hook_event_name": "SessionStart", "session_id": "s", "source": source},
     )
     data = json.loads(out)
     assert data["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-    assert data["hookSpecificOutput"]["additionalContext"] == "the current brief"
+    assert data["hookSpecificOutput"]["additionalContext"] == brief
     assert _run(hook, tmp_path, {"hook_event_name": "SessionStart", "session_id": "s"}) == ""
 
 

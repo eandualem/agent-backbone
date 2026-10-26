@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 64ca131dc965
+Revision ID: d84012c8d305
 Revises:
-Create Date: 2026-10-26 02:49:00.943788
+Create Date: 2026-10-26 13:24:04.508013
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "64ca131dc965"
+revision: str = "d84012c8d305"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -85,7 +85,7 @@ def upgrade() -> None:
         sa.Column("model", sa.Text(), nullable=True),
         sa.Column("resume", sa.Integer(), server_default=sa.text("0"), nullable=False),
         sa.Column("start", sa.Integer(), server_default=sa.text("1"), nullable=False),
-        sa.Column("delay_seconds", sa.Integer(), server_default=sa.text("(60)"), nullable=False),
+        sa.Column("delay_seconds", sa.Integer(), server_default=sa.text("0"), nullable=False),
         sa.Column("start_at", sa.Text(), nullable=True),
         sa.Column("message", sa.Text(), nullable=True),
         sa.Column("status", sa.Text(), server_default="pending", nullable=False),

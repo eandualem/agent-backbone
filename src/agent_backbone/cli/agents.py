@@ -125,7 +125,7 @@ def _transition_line(row: dict) -> str:
         line += (
             f", starts at {row['start_at'][:16]}Z"
             if row.get("start_at")
-            else f", starts {row.get('delay_seconds', 60)}s after the stop"
+            else f", starts {row.get('delay_seconds', 0)}s after the stop"
             if row.get("start")
             else ", stopping"
         )

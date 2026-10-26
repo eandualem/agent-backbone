@@ -262,9 +262,9 @@ async def _start_agent(
     (``agents.pre_trust``). The agent's brief — the common backbone brief
     (``agents.inject_brief``), or ``brief_file`` when the caller has its own,
     such as a swarm role brief — reaches the runtime the way its
-    ``brief_mode`` says: at launch (Claude Code, Gemini, OpenCode) or
-    queued as the first message the agent receives once it is at its prompt
-    (Codex, Aider). A resumed session keeps the brief it started with, so a
+    ``brief_mode`` says: native instructions or a launch prompt, hook context,
+    or queued as the first message once it is at its prompt. A resumed session
+    may keep the brief it started with, so a
     runtime whose hook can add session context is handed the current one
     there (``brief_refresh``); a plain shell has nobody to brief (pasting it
     would run it as commands).
@@ -441,10 +441,11 @@ async def _start_agent(
     # A resumed session keeps the brief it started with: a runtime whose hook
     # can add session context is handed the current one there. A chat message
     # is never used for that, because a peer's message can imitate it (#294).
-    refresh = resume and rt.brief_mode != "none" and brief is not None
+    hook_brief = brief is not None and (
+        rt.brief_mode == "hook_context" or (resume and rt.brief_refresh == "hook_context")
+    )
     if (
-        refresh
-        and rt.brief_refresh == "hook_context"
+        hook_brief
         # The hook that takes the offer must be wired into this launch too.
         and not (
             rt.hook_launch_args(config.data_dir, config.state_dir)

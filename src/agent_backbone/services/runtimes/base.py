@@ -60,7 +60,7 @@ _FALLBACK_DIRS = (
 # A version as a word of its own: ``v2.1.284`` is 2.1.284, never 1.284.
 _VERSION = re.compile(r"(?<![\w.])v?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?)(?![\w.-])")
 
-BriefMode = Literal["system_prompt", "initial_prompt", "message", "none"]
+BriefMode = Literal["system_prompt", "hook_context", "initial_prompt", "message", "none"]
 
 
 @dataclass(frozen=True)
@@ -232,7 +232,7 @@ class Runtime:
     """Command to launch; ``None`` starts the login shell instead."""
     brief_mode: BriefMode = "message"
     """How the agent brief reaches the runtime at launch: appended to the
-    system prompt, passed as the first (initial) prompt, delivered as the
+    system prompt or hook context, passed as the first (initial) prompt, delivered as the
     first message once the agent is at its prompt, or not at all."""
     brief_refresh: Literal["hook_context", "none"] = "none"
     """How a resumed session gets its current brief (it keeps the one it
