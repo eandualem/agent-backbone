@@ -325,6 +325,11 @@ per-repository files are required. Profiles carry the effective API endpoint,
 which takes precedence over stale launch environment values. Non-loopback
 endpoints retain HTTPS certificate verification.
 
+In explicitly unauthenticated development mode, profiles keep their endpoint
+and registration/launch binding with an empty credential. Enabling an API key
+again refreshes the credential; agent clients still cannot use direct database
+fallback.
+
 A profile belongs to one registration and managed launch. Missing or uncertain
 launch evidence, unsafe files, and retired or mismatched registrations refuse
 profile pickup. Renaming preserves the registration but retires the old profile

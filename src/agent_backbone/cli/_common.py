@@ -132,7 +132,14 @@ async def api_up(config: BackboneConfig) -> bool:
 
 def is_agent_client(key: str) -> bool:
     """Launch identity remains meaningful when development authentication is off."""
-    return agent_credential(key) or "BACKBONE_AGENT_CREDENTIAL" in os.environ
+    return (
+        agent_credential(key)
+        or "BACKBONE_AGENT_CREDENTIAL" in os.environ
+        or (
+            not key
+            and bool(os.environ.get("BACKBONE_AGENT") and os.environ.get("BACKBONE_LAUNCH_ID"))
+        )
+    )
 
 
 class Direct:

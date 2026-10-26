@@ -983,7 +983,8 @@ def read_agent_profile(data_dir: Path, name: str) -> dict[str, str] | None:
         or not (values.get("port") or "").isdigit()
         or not 1 <= int(values["port"]) <= 65535
         or not re.fullmatch(
-            re.escape(AGENT_KEY_PREFIX) + r"[a-f0-9]{64}", values.get("credential") or ""
+            "(?:" + re.escape(AGENT_KEY_PREFIX) + r"[a-f0-9]{64})?",
+            values.get("credential") or "",
         )
     ):
         raise ValueError("Agent credential profile is invalid or retired")

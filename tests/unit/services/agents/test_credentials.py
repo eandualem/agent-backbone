@@ -161,6 +161,9 @@ async def test_renamed_agent_keeps_registration_but_retires_old_name(db, tmp_pat
     assert row["report_identity"] == old["report_identity"]
     assert agent_profile_readiness(store.config, row) == "future-launch-only"
     assert agent_profile_path(tmp_path, "worker").read_text() == "retired=true\n"
+    retired_inode = agent_profile_path(tmp_path, "worker").stat().st_ino
+    await store.refresh()
+    assert agent_profile_path(tmp_path, "worker").stat().st_ino == retired_inode
 
 
 async def test_registration_header_refuses_a_retired_profile(api_client, api_app):
@@ -548,3 +551,48 @@ async def test_registration_mutations_wait_for_session_creation(
     for key, value in start.call_args.kwargs["environment"].items():
         monkeypatch.setenv(key, value)
     assert load_secrets(tmp_path)["BACKBONE_API_KEY"] == agent_api_key("operator")
+
+
+@pytest.mark.parametrize("refresh_before_start", [False, True])
+async def test_profiles_follow_explicit_unauthenticated_mode(
+    db, tmp_path, monkeypatch, refresh_before_start
+):
+    from agent_backbone.cli._common import Direct
+    from agent_backbone.services.agents import start_agent
+
+    store = await registered(db, tmp_path, monkeypatch, runtime="shell")
+    spec = store.agents.get("worker")
+    old_launch = "a" * 32
+    write_starting_marker(store.config.state_dir, spec.name, time.time(), launch_id=old_launch)
+    await store.refresh()
+    unkeyed = replace(
+        store.config,
+        api_key="",
+        security=replace(store.config.security, allow_unauthenticated=True),
+    )
+    if refresh_before_start:
+        await provision_agent_profiles(unkeyed, await db.agents.list())
+    with (
+        patch("agent_backbone.services.agents.launch.session_exists", return_value=False),
+        patch("agent_backbone.services.agents.launch.start_session", return_value=True) as start,
+    ):
+        assert (await start_agent(spec, unkeyed, db=db, wait=False)).ok
+    for key, value in start.call_args.kwargs["environment"].items():
+        monkeypatch.setenv(key, value)
+    # Older runtimes may have filtered both credential variables. The bound
+    # profile still supplies the endpoint without recovering operator secrets.
+    monkeypatch.delenv("BACKBONE_API_KEY")
+    monkeypatch.delenv("BACKBONE_AGENT_CREDENTIAL")
+    client = await read_client_config()
+    assert client.api_key == "" and client.github_token == ""
+    assert client.client_registration == spec.registration_id
+    with pytest.raises(ValueError, match="direct database fallback is disabled"):
+        async with Direct(client):
+            pass
+    registration = next(row for row in await db.agents.list() if row["name"] == spec.name)
+    await bind_agent_profile(
+        replace(unkeyed, api_key="rotated"),
+        registration,
+        start.call_args.kwargs["environment"]["BACKBONE_LAUNCH_ID"],
+    )
+    assert (await read_client_config()).api_key == agent_api_key("rotated")

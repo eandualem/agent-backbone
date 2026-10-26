@@ -23,6 +23,24 @@ from agent_backbone.services.agents._file_reader import read_launch_marker
 
 
 def _write_profile(path, content: str) -> None:
+    existing = None
+    try:
+        existing = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        info = os.fstat(existing)
+        encoded = content.encode()
+        if (
+            stat.S_ISREG(info.st_mode)
+            and info.st_uid == os.getuid()
+            and not info.st_mode & 0o077
+            and info.st_size == len(encoded)
+            and os.read(existing, len(encoded) + 1) == encoded
+        ):
+            return
+    except OSError:
+        pass
+    finally:
+        if existing is not None:
+            os.close(existing)
     fd, temporary = tempfile.mkstemp(prefix=".profile-", dir=path.parent)
     try:
         with os.fdopen(fd, "w") as stream:
@@ -88,7 +106,9 @@ def _profile_values(config: BackboneConfig, name: str, identity: str, launch: st
 
 def _provision_agent_profiles(config: BackboneConfig, registrations: list[dict]) -> None:
     """Caller holds profile_lock from before reading the authoritative snapshot."""
-    if not config.api_key or agent_credential(config.api_key):
+    if agent_credential(config.api_key) or (
+        not config.api_key and not config.security.allow_unauthenticated
+    ):
         return
     root = config.data_dir / "agent-credentials"
     keep = set()
@@ -121,7 +141,9 @@ def _provision_agent_profiles(config: BackboneConfig, registrations: list[dict])
 
 def _bind_agent_profile(config: BackboneConfig, registration: dict, launch_id: str) -> None:
     """Caller holds profile_lock from before reading the registration."""
-    if not config.api_key or agent_credential(config.api_key):
+    if agent_credential(config.api_key) or (
+        not config.api_key and not config.security.allow_unauthenticated
+    ):
         return
     name, identity = registration["name"], registration["report_identity"]
     try:
@@ -132,6 +154,8 @@ def _bind_agent_profile(config: BackboneConfig, registration: dict, launch_id: s
         profile = _profile_values(config, name, identity, launch_id)
     else:
         profile.update(registration=identity, launch=launch_id)
+        if not config.api_key or not profile["credential"]:
+            profile["credential"] = agent_api_key(config.api_key)
     _write_profile(
         agent_profile_path(config.data_dir, name),
         "".join(f"{key}={value}\n" for key, value in profile.items()),
