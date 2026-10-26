@@ -46,8 +46,11 @@ async def test_current_permission_dialog_stays_waiting(tmp_path, runtime, dialog
 
 
 @pytest.mark.parametrize("runtime,dialog,answered", CASES)
-async def test_answered_dialog_does_not_mean_the_turn_ended(tmp_path, runtime, dialog, answered):
-    waiting(tmp_path)
+@pytest.mark.parametrize("age", [0, 10])
+async def test_answered_dialog_does_not_mean_the_turn_ended(
+    tmp_path, runtime, dialog, answered, age
+):
+    waiting(tmp_path, age)
     state = await get_agent_state(tmp_path, "app", runtime_hint=runtime, pane_content=answered)
     assert state.state == AgentState.BUSY and state.reason is None
     assert state.current_issue == 7 and state.session_id == "example"
@@ -62,16 +65,13 @@ async def test_old_dialog_does_not_resurrect_stale_wait(tmp_path, runtime, dialo
 
 
 @pytest.mark.parametrize("runtime,dialog,answered", CASES)
-@pytest.mark.parametrize("age,pane", [(0, "answered"), (10, "inconclusive")])
-async def test_redraw_and_inconclusive_screen_keep_wait(
-    tmp_path, runtime, dialog, answered, age, pane
-):
-    waiting(tmp_path, age)
+async def test_inconclusive_screen_keeps_wait(tmp_path, runtime, dialog, answered):
+    waiting(tmp_path)
     state = await get_agent_state(
         tmp_path,
         "app",
         runtime_hint=runtime,
-        pane_content=answered if pane == "answered" else "inconclusive",
+        pane_content="inconclusive",
     )
     assert state.state == AgentState.WAITING_FOR_HUMAN
 
@@ -81,12 +81,12 @@ async def test_new_hook_written_during_capture_wins(tmp_path, runtime, dialog, a
     waiting(tmp_path)
 
     async def capture(_):
-        waiting(tmp_path, 0)
+        write_state_file(tmp_path, "app", {"state": "busy", "ts": time.time()})
         return answered
 
     with patch("agent_backbone.services.agents._inference.capture_pane", new=capture):
         state = await get_agent_state(tmp_path, "app", runtime_hint=runtime)
-    assert state.state == AgentState.WAITING_FOR_HUMAN and state.source == "push"
+    assert state.state == AgentState.BUSY and state.source == "push"
 
 
 @pytest.mark.parametrize(
@@ -97,7 +97,10 @@ async def test_new_hook_written_during_capture_wins(tmp_path, runtime, dialog, a
         ("■ Selected model is at capacity.\n›", AgentState.BLOCKED, "provider"),
     ],
 )
-async def test_refusal_work_and_provider_error_are_not_human_waits(tmp_path, screen, state, reason):
-    waiting(tmp_path)
+@pytest.mark.parametrize("age", [0, 10])
+async def test_refusal_work_and_provider_error_are_not_human_waits(
+    tmp_path, screen, state, reason, age
+):
+    waiting(tmp_path, age)
     result = await get_agent_state(tmp_path, "app", runtime_hint="codex", pane_content=screen)
     assert (result.state, result.reason) == (state, reason)

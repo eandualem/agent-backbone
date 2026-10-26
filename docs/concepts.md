@@ -111,7 +111,7 @@ Derived from the state plus the terminal, right before anything is pasted:
 | `human_reading` | someone is selecting text or reading tmux scrollback | no — queued, even with `priority` |
 | `unattended_copy_mode` | the pane is in tmux copy mode and no client is viewing it | no — queued, even with `priority`, until someone attaches and presses `q` |
 | `human_typing` | someone typed text into the prompt | no — queued, unless `priority` |
-| `settling` | hook reported idle less than `timing.grace_period_seconds` ago, or a fresh session's brief (Codex, aider) is not delivered yet | not yet, unless `priority`; the brief goes first even then |
+| `settling` | hook reported idle less than `timing.grace_period_seconds` ago, or a fresh session's brief (Aider) is not delivered yet | not yet, unless `priority`; the brief goes first even then |
 | `ready` | idle, empty prompt | **yes** |
 | `unknown` | no signal either way | yes, best effort |
 

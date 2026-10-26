@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from agent_backbone.config import AgentSpec, BackboneConfig
     from agent_backbone.services.database import BackboneDB
 
-DEFAULT_DELAY_SECONDS = 60
+DEFAULT_DELAY_SECONDS = 0
 MAX_DELAY_SECONDS = 30 * 86400
 """The longest supported wait between the stop and the start."""
 SOURCE = "agent-restart"

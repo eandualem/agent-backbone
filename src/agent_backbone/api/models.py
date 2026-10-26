@@ -82,7 +82,7 @@ class AgentRestartRequest(BaseModel):
     start: bool = True
     """False stops the session and starts nothing."""
     delay_seconds: int | None = None
-    """Seconds between the stop and the start (default 60); excludes ``start_at``."""
+    """Seconds between the stop and the start (default 0); excludes ``start_at``."""
     start_at: str | None = None
     """ISO 8601 start time (local time unless an offset is given)."""
     message: str | None = None
@@ -108,7 +108,7 @@ class AgentTransitionView(BaseModel):
     model: str | None = None
     resume: bool = False
     start: bool = True
-    delay_seconds: int = 60
+    delay_seconds: int = 0
     start_at: str | None = None
     message: str | None = None
     status: str

@@ -40,6 +40,17 @@ def _codex_on_macos():
 
 
 class TestHookLaunchArgs:
+    def test_codex_startup_context_is_not_truncated(self, tmp_path):
+        args = RUNTIMES["codex"].hook_launch_args(tmp_path, tmp_path / "state")
+        settings = tomllib.loads("\n".join(a for a in args if a.startswith("hooks.")))
+        for event, entries in settings["hooks"].items():
+            for entry in entries:
+                for hook in entry["hooks"]:
+                    if event == "SessionStart":
+                        assert hook["additionalContextLimit"] == 0
+                    else:
+                        assert "additionalContextLimit" not in hook
+
     def test_claude_gets_backbone_owned_settings(self, tmp_path):
         args = RUNTIMES["claude"].hook_launch_args(tmp_path, tmp_path / "state")
         assert args[0] == "--settings"
@@ -148,21 +159,16 @@ class TestBuildCommand:
                 raise AssertionError("expected RuntimeError")
 
     def test_codex_brief_stays_off_the_command_line(self, tmp_path):
-        # tmux caps a launch command at 16 KB; the brief is queued as the first
-        # message instead of riding along as the initial prompt.
+        # Native hook context keeps policy text out of tmux's bounded argv.
         brief = tmp_path / "brief.md"
         brief.write_text("You are agent x.")
         with _resolve("/bin/codex"):
-            command = RUNTIMES["codex"].build_command(model="gpt-5.2", brief_file=brief)
-        assert command == [
-            "/bin/codex",
-            *_NET,
-            *_STANDARD_TIER,
-            *_NO_UPDATE_PROMPT,
-            "--no-alt-screen",
-            "--model",
-            "gpt-5.2",
-        ]
+            command = RUNTIMES["codex"].build_command(
+                model="gpt-5.2", brief_file=brief, data_dir=tmp_path, state_dir=tmp_path / "state"
+            )
+        assert "You are agent x." not in " ".join(command)
+        assert any(arg.startswith("hooks.SessionStart=") for arg in command)
+        assert command[-2:] == ["--model", "gpt-5.2"]
 
     def test_codex_resume_is_a_subcommand(self):
         with _resolve("/bin/codex"):
@@ -247,21 +253,18 @@ class TestBuildCommand:
             command = RUNTIMES["opencode"].build_command(
                 model="opencode/big-pickle", brief_file=brief
             )
-        assert json.loads(command[2])["model"] == "opencode/big-pickle"
-        assert command[3:] == [
-            "/bin/opencode",
-            "--standalone",
-            "--prompt",
-            "You are agent z.",
-        ]
+        assert command[3] == str(brief.resolve())
+        assert json.loads(command[6])["model"] == "opencode/big-pickle"
+        assert command[7:] == ["/bin/opencode", "--standalone"]
 
-    def test_opencode_resume_does_not_rebrief(self, tmp_path):
+    def test_opencode_resume_loads_the_current_native_instructions(self, tmp_path):
         brief = tmp_path / "brief.md"
         brief.write_text("You are agent z.")
         with _resolve("/bin/opencode"):
             command = RUNTIMES["opencode"].build_command(resume=True, brief_file=brief)
-        assert json.loads(command[2])["resume"] is True
-        assert command[3:] == ["/bin/opencode", "--standalone"]
+        assert command[3] == str(brief.resolve())
+        assert json.loads(command[6])["resume"] is True
+        assert command[7:] == ["/bin/opencode", "--standalone"]
 
     def test_aider_ignores_the_brief_at_launch(self, tmp_path):
         brief = tmp_path / "brief.md"

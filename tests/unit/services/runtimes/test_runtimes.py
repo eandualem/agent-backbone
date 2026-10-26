@@ -31,9 +31,9 @@ class TestRegistry:
     def test_brief_modes(self):
         assert {r.id: r.brief_mode for r in RUNTIMES.values()} == {
             "claude": "system_prompt",
-            "codex": "message",
+            "codex": "hook_context",
             "gemini": "initial_prompt",
-            "opencode": "initial_prompt",
+            "opencode": "system_prompt",
             "deepcode": "initial_prompt",
             "aider": "message",
             "shell": "none",

@@ -86,7 +86,13 @@ def _toml_entries(entries: list[dict]) -> str:
     for entry in entries:
         hooks = ", ".join(
             f"{{type = {_toml_string(h['type'])}, command = {_toml_string(h['command'])}, "
-            f"timeout = {int(h['timeout'])}}}"
+            f"timeout = {int(h['timeout'])}"
+            + (
+                f", additionalContextLimit = {int(h['additionalContextLimit'])}"
+                if "additionalContextLimit" in h
+                else ""
+            )
+            + "}"
             for h in entry["hooks"]
         )
         fields = []
@@ -123,10 +129,9 @@ class Codex(Runtime):
     fallback_prompts = ("›",)
     display_name = "Codex"
     binary = "codex"
-    # Codex takes its first prompt only on the command line, and tmux caps a
-    # launch command at 16 KB — a brief with a few policies plus the sandbox
-    # and hook flags crosses it. So the brief is queued as the first message.
-    brief_mode = "message"
+    # SessionStart supplies developer context before the first turn, without
+    # submitting a prompt or putting the policy text in tmux's launch command.
+    brief_mode = "hook_context"
     # A resumed session gets its current brief from its SessionStart hook, a
     # channel a peer message cannot imitate (#294).
     brief_refresh = "hook_context"
@@ -400,12 +405,20 @@ class Codex(Runtime):
             return []
         args: list[str] = []
         for event, entries in settings["hooks"].items():
+            if event == "SessionStart":
+                for entry in entries:
+                    for hook in entry["hooks"]:
+                        # Codex 0.160 otherwise spills context above 2,500 tokens
+                        # to a file. The complete startup policy must reach the model.
+                        hook["additionalContextLimit"] = 0
             args.extend(["-c", f"hooks.{event}={_toml_entries(entries)}"])
         args.append("--dangerously-bypass-hook-trust")
         return args
 
     def launch_args(self, *, model, resume, brief_file, pre_trust, data_dir, state_dir):
         hook = self.hook_launch_args(data_dir, state_dir)
+        if brief_file is not None and not hook:
+            raise RuntimeError("Could not install Codex hooks for the current brief")
         # Pin the launch tier independently of model/effort and inherited config.
         # An operator can still explicitly change the tier inside the session.
         # Inline output preserves tmux scrollback and mouse handling.

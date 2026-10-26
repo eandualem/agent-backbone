@@ -15,7 +15,7 @@ from agent_backbone.services.runtimes import _opencode_launch
     [
         (None, True),
         (
-            '{"permissions":[{"action":"shell","resource":"*","effect":"deny"}],"provider":{"custom":{}},"plugins":["other"]}',
+            '{"permissions":[{"action":"shell","resource":"*","effect":"deny"}],"provider":{"custom":{}},"plugins":["other"],"instructions":["existing.md"]}',
             True,
         ),
         ('{/* JSONC */"permissions":[{"action":"shell","resource":"*","effect":"deny"}]}', False),
@@ -24,6 +24,7 @@ from agent_backbone.services.runtimes import _opencode_launch
             False,
         ),
         ('["unexpected"]', False),
+        ('{"instructions":"unexpected"}', False),
         ("invalid config", False),
     ],
 )
@@ -38,6 +39,7 @@ def test_child_launcher_preserves_effective_environment(tmp_path, raw, mergeable
             sys.executable,
             _opencode_launch.__file__,
             str(plugin),
+            str(tmp_path / "brief.md"),
             sys.executable,
             "-c",
             'import os; print(os.environ["OPENCODE_CONFIG_CONTENT"])',
@@ -56,12 +58,14 @@ def test_child_launcher_preserves_effective_environment(tmp_path, raw, mergeable
         assert result.returncode == 0
         content = json.loads(result.stdout)
         assert str(plugin.resolve()) in content["plugins"]
+        assert str(tmp_path / "brief.md") in content["instructions"]
         if raw:
             assert content["permissions"] == [
                 {"action": "shell", "resource": "*", "effect": "deny"}
             ]
             assert content["provider"] == {"custom": {}}
             assert "other" in content["plugins"]
+            assert content["instructions"] == ["existing.md", str(tmp_path / "brief.md")]
 
 
 def test_child_launcher_keeps_an_existing_hook_once(tmp_path):
