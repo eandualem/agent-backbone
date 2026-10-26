@@ -459,9 +459,13 @@ async def _start_agent(
         config.state_dir, spec.name, launched_at, launch_id=environment["BACKBONE_LAUNCH_ID"]
     )
     if db is not None:
-        await asyncio.to_thread(
-            bind_agent_profile, config, spec.name, environment["BACKBONE_LAUNCH_ID"]
+        registration = next(
+            (row for row in await db.agents.list() if row["name"] == spec.name), None
         )
+        if registration is not None:
+            await asyncio.to_thread(
+                bind_agent_profile, config, registration, environment["BACKBONE_LAUNCH_ID"]
+            )
     session_started = now_iso()  # it may receive messages before it is ready
     ok = await start_session(
         spec.name,

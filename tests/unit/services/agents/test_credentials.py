@@ -179,7 +179,8 @@ async def test_launch_binding_preserves_new_registrations_and_rotated_credential
     await store.register(AgentSpec(name="peer", dir=str(tmp_path)))
     current = replace(store.config, api_key="rotated")
     provision_agent_profiles(current, await db.agents.list())
-    bind_agent_profile(stale, "worker", "b" * 32)
+    row = next(row for row in await db.agents.list() if row["name"] == "worker")
+    bind_agent_profile(stale, row, "b" * 32)
     worker = read_agent_profile(tmp_path, "worker")
     peer = read_agent_profile(tmp_path, "peer")
     assert worker["launch"] == "b" * 32
@@ -204,3 +205,27 @@ async def test_local_configuration_reader_cannot_replace_daemon_endpoint(db, tmp
     monkeypatch.setenv("BACKBONE_STATE_DIR", str(daemon.config.state_dir))
     monkeypatch.delenv("BACKBONE_API_KEY")
     assert (await read_client_config()).backbone.port == 8234
+
+
+async def test_offline_recreated_registration_can_start_without_restoring_old_identity(
+    db, tmp_path, monkeypatch
+):
+    daemon = await registered(db, tmp_path, monkeypatch)
+    old = read_agent_profile(tmp_path, "worker")
+    await daemon.forget("worker")
+    # With no daemon, Direct can register/start through its local operator store.
+    offline = AgentStore(db, tmp_path)
+    await offline.start()
+    spec = await offline.register(AgentSpec(name="worker", dir=str(tmp_path), runtime="shell"))
+    with (
+        patch("agent_backbone.services.agents.launch.session_exists", return_value=False),
+        patch("agent_backbone.services.agents.launch.start_session", return_value=True) as start,
+    ):
+        from agent_backbone.services.agents import start_agent
+
+        assert (await start_agent(spec, offline.config, db=db, wait=False)).ok
+    profile = read_agent_profile(tmp_path, "worker")
+    row = next(row for row in await db.agents.list() if row["name"] == "worker")
+    assert profile["registration"] == row["report_identity"] != old["registration"]
+    assert profile["launch"] == start.call_args.kwargs["environment"]["BACKBONE_LAUNCH_ID"]
+    assert profile["credential"] == agent_api_key("operator")

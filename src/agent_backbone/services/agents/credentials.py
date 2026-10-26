@@ -8,6 +8,7 @@ import stat
 import tempfile
 import threading
 from datetime import datetime
+from pathlib import Path
 
 from agent_backbone.config import (
     BackboneConfig,
@@ -32,6 +33,29 @@ def _write_profile(path, content: str) -> None:
             os.unlink(temporary)
 
 
+def _profile_root(config: BackboneConfig) -> Path:
+    root = config.data_dir / "agent-credentials"
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = root.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError("Agent credential profile directory must be private")
+    return root
+
+
+def _profile_values(config: BackboneConfig, name: str, identity: str, launch: str) -> dict:
+    host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(config.backbone.host, config.backbone.host)
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]+", host):
+        raise ValueError("Agent credential profiles require a valid API hostname")
+    return {
+        "agent": name,
+        "registration": identity,
+        "launch": launch,
+        "host": host,
+        "port": str(config.backbone.port),
+        "credential": agent_api_key(config.api_key),
+    }
+
+
 def provision_agent_profiles(config: BackboneConfig, registrations: list[dict]) -> None:
     """Refresh all registered agents, including offline ones, from operator configuration.
 
@@ -42,14 +66,7 @@ def provision_agent_profiles(config: BackboneConfig, registrations: list[dict]) 
     with _profile_lock:
         if not config.api_key or agent_credential(config.api_key):
             return
-        root = config.data_dir / "agent-credentials"
-        root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        info = root.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise ValueError("Agent credential profile directory must be private")
-        host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(config.backbone.host, config.backbone.host)
-        if not re.fullmatch(r"[A-Za-z0-9_.:-]+", host):
-            raise ValueError("Agent credential profiles require a valid API hostname")
+        root = _profile_root(config)
         keep = set()
         for row in registrations:
             name, identity = row["name"], row.get("report_identity")
@@ -63,14 +80,7 @@ def provision_agent_profiles(config: BackboneConfig, registrations: list[dict]) 
                 launch_id = launch[1] if launch and launch[0] >= created else ""
             except (KeyError, TypeError, ValueError):
                 launch_id = ""
-            values = {
-                "agent": name,
-                "registration": identity,
-                "launch": launch_id,
-                "host": host,
-                "port": str(config.backbone.port),
-                "credential": agent_api_key(config.api_key),
-            }
+            values = _profile_values(config, name, identity, launch_id)
             try:
                 current = read_agent_profile(config.data_dir, name)
             except ValueError:
@@ -85,20 +95,30 @@ def provision_agent_profiles(config: BackboneConfig, registrations: list[dict]) 
                 _write_profile(path, "retired=true\n")
 
 
-def bind_agent_profile(config: BackboneConfig, name: str, launch_id: str) -> None:
-    """Bind only this launch, preserving newer credentials and every peer's profile.
+def bind_agent_profile(config: BackboneConfig, registration: dict, launch_id: str) -> None:
+    """Bind only this registered launch, preserving valid daemon credentials.
 
-    Configuration refresh owns fleet provisioning and retirement. Sharing its
-    writer lock makes this read/replace atomic with a concurrent key rotation.
+    An operator can start a new registration while the daemon is stopped. If
+    no usable profile exists, provision only that target from the launch config.
+    Never reconcile peers or overwrite a valid profile's endpoint or credential.
     """
+    if not config.api_key or agent_credential(config.api_key):
+        return
     with _profile_lock:
-        profile = read_agent_profile(config.data_dir, name)
-        if profile is not None:
-            profile["launch"] = launch_id
-            _write_profile(
-                agent_profile_path(config.data_dir, name),
-                "".join(f"{key}={value}\n" for key, value in profile.items()),
-            )
+        _profile_root(config)
+        name, identity = registration["name"], registration["report_identity"]
+        try:
+            profile = read_agent_profile(config.data_dir, name)
+        except ValueError:
+            profile = None
+        if profile is None:
+            profile = _profile_values(config, name, identity, launch_id)
+        else:
+            profile.update(registration=identity, launch=launch_id)
+        _write_profile(
+            agent_profile_path(config.data_dir, name),
+            "".join(f"{key}={value}\n" for key, value in profile.items()),
+        )
 
 
 def agent_profile_readiness(config: BackboneConfig, row: dict) -> str:
