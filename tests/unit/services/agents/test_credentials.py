@@ -3,6 +3,8 @@
 These tests exercise no runtime process or paid model call.
 """
 
+import asyncio
+import multiprocessing
 import os
 import time
 from dataclasses import replace
@@ -20,11 +22,22 @@ from agent_backbone.config import (
 )
 from agent_backbone.services.agents import AgentStore, write_starting_marker
 from agent_backbone.services.agents.credentials import (
+    _bind_agent_profile,
+    _provision_agent_profiles,
     agent_profile_readiness,
-    bind_agent_profile,
-    provision_agent_profiles,
+    profile_lock,
 )
 from agent_backbone.services.runtimes import RUNTIMES
+
+
+async def provision_agent_profiles(config, registrations):
+    async with profile_lock(config.data_dir):
+        _provision_agent_profiles(config, registrations)
+
+
+async def bind_agent_profile(config, registration, launch_id):
+    async with profile_lock(config.data_dir):
+        _bind_agent_profile(config, registration, launch_id)
 
 
 async def registered(db, tmp_path, monkeypatch, runtime="codex"):
@@ -66,7 +79,7 @@ async def test_existing_and_offline_agents_pick_up_scoped_profiles_without_resta
         rotated = replace(
             store.config, api_key="rotated", backbone=replace(config.backbone, port=8234)
         )
-        provision_agent_profiles(rotated, rows)
+        await provision_agent_profiles(rotated, rows)
         client.setenv("BACKBONE_AGENT_CREDENTIAL", config.api_key)
         config = await read_client_config()
         assert config.api_key == agent_api_key("rotated")
@@ -178,9 +191,9 @@ async def test_launch_binding_preserves_new_registrations_and_rotated_credential
     # its configuration. A launch must not perform fleet-wide reconciliation.
     await store.register(AgentSpec(name="peer", dir=str(tmp_path)))
     current = replace(store.config, api_key="rotated")
-    provision_agent_profiles(current, await db.agents.list())
+    await provision_agent_profiles(current, await db.agents.list())
     row = next(row for row in await db.agents.list() if row["name"] == "worker")
-    bind_agent_profile(stale, row, "b" * 32)
+    await bind_agent_profile(stale, row, "b" * 32)
     worker = read_agent_profile(tmp_path, "worker")
     peer = read_agent_profile(tmp_path, "peer")
     assert worker["launch"] == "b" * 32
@@ -229,3 +242,99 @@ async def test_offline_recreated_registration_can_start_without_restoring_old_id
     assert profile["registration"] == row["report_identity"] != old["registration"]
     assert profile["launch"] == start.call_args.kwargs["environment"]["BACKBONE_LAUNCH_ID"]
     assert profile["credential"] == agent_api_key("operator")
+
+
+def _paused_profile_binding(config, registration, entered, release):
+    from agent_backbone.services.agents import credentials
+
+    write = credentials._write_profile
+
+    def paused_write(*args):
+        entered.set()
+        if not release.wait(10):
+            raise TimeoutError("profile binding was not released")
+        write(*args)
+
+    with patch.object(credentials, "_write_profile", side_effect=paused_write):
+        asyncio.run(bind_agent_profile(config, registration, "b" * 32))
+
+
+async def test_daemon_rotation_serializes_with_a_separate_cli_binding(db, tmp_path, monkeypatch):
+    store = await registered(db, tmp_path, monkeypatch)
+    rows = await db.agents.list()
+    row = next(row for row in rows if row["name"] == "worker")
+    context = multiprocessing.get_context("spawn")
+    entered, release = context.Event(), context.Event()
+    process = context.Process(
+        target=_paused_profile_binding, args=(store.config, row, entered, release)
+    )
+    process.start()
+    rotation = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        rotated = replace(
+            store.config, api_key="rotated", backbone=replace(store.config.backbone, port=8234)
+        )
+        rotation = asyncio.create_task(provision_agent_profiles(rotated, rows))
+        await asyncio.sleep(0.1)
+        assert not rotation.done()
+        release.set()
+        await asyncio.wait_for(rotation, 10)
+        await asyncio.to_thread(process.join, 10)
+        assert process.exitcode == 0
+        profile = read_agent_profile(tmp_path, "worker")
+        assert profile["credential"] == agent_api_key("rotated")
+        assert profile["port"] == "8234"
+    finally:
+        release.set()
+        if rotation is not None:
+            await asyncio.wait_for(rotation, 10)
+        await asyncio.to_thread(process.join, 10)
+        if process.is_alive():
+            process.kill()
+            process.join()
+
+
+@pytest.mark.parametrize("change", ["register", "rename", "replace"])
+async def test_refresh_snapshot_cannot_overwrite_a_newer_cli_registration(
+    db, tmp_path, monkeypatch, change
+):
+    daemon = await registered(db, tmp_path, monkeypatch)
+    direct = AgentStore(db, tmp_path)
+    await direct.start()
+    captured, release = asyncio.Event(), asyncio.Event()
+    list_agents = db.agents.list
+
+    async def delayed_snapshot():
+        rows = await list_agents()
+        if not captured.is_set():
+            captured.set()
+            await release.wait()
+        return rows
+
+    binding = None
+    with patch.object(db.agents, "list", side_effect=delayed_snapshot):
+        refresh = asyncio.create_task(daemon.refresh())
+        try:
+            await asyncio.wait_for(captured.wait(), 5)
+            name = "peer"
+            if change == "rename":
+                with patch("agent_backbone.services.terminal.session_exists", return_value=False):
+                    await direct.rename("worker", name)
+            else:
+                if change == "replace":
+                    name = "worker"
+                    await direct.forget(name)
+                await direct.register(AgentSpec(name=name, dir=str(tmp_path)))
+            row = next(row for row in await list_agents() if row["name"] == name)
+            binding = asyncio.create_task(bind_agent_profile(direct.config, row, "b" * 32))
+            await asyncio.sleep(0.1)
+            assert not binding.done()
+        finally:
+            release.set()
+            await asyncio.wait_for(refresh, 5)
+            if binding is not None:
+                await asyncio.wait_for(binding, 5)
+    profile = read_agent_profile(tmp_path, name)
+    assert profile["registration"] == row["report_identity"]
+    assert profile["launch"] == "b" * 32
