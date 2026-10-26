@@ -51,7 +51,9 @@ async def test_latest_aggregation_happens_before_limit_and_includes_missing(db):
     page = await db.reports.query(ReportQuery(limit=2))
     assert [entry["record"]["id"] for entry in page["items"]] == [latest["id"], quiet["id"]]
     page = await db.reports.query(ReportQuery(limit=2, cursor=page["next_cursor"]))
-    assert page["items"] == [{"agent_name": "missing", "author_id": None, "record": None}]
+    (missing,) = page["items"]
+    assert missing["agent_name"] == "missing" and missing["record"] is None
+    assert await db.agents.registration_matches("missing", missing["author_id"])
     assert not page["has_more"]
 
 

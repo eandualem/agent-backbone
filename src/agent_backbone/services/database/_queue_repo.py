@@ -23,10 +23,12 @@ _MAX_ENQUEUE_ATTEMPTS = 3
 """Retry a duplicate that completes between conflict detection and receipt lookup."""
 
 _INSERT_COLUMNS = """(operation_id, session_name, message, repo, issue_number, target_entity,
-                delivery_kind, source, enqueued_at, status, sender, dedup_key, priority)
+                delivery_kind, source, enqueued_at, status, sender, dedup_key,
+                priority, registration_id)
                VALUES (:operation_id, :session_name, :message, :repo, :issue_number, :target_entity,
                        :delivery_kind, :source, :enqueued_at, :initial_status,
-                       :sender, :dedup_key, :priority)"""
+                       :sender, :dedup_key, :priority,
+                       (SELECT report_identity FROM agents WHERE name=:session_name))"""
 
 Revise = Callable[[str | None], str]
 """Builds a notice's text from its current text (None when there is none yet)."""

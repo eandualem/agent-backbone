@@ -59,6 +59,23 @@ The backbone can type into your agents' terminals. Treat it accordingly.
 - **Agents receive a collaboration credential.** Launchers strip the operator
   key and other service secrets, then export the derived agent key; see below.
 
+## Retained notifications and registration changes
+
+Queued messages, failed delivery attempts and GitHub outbox entries belong to
+one agent registration. Forgetting that agent retires its outstanding work;
+registering the same name again does not inherit it. Renaming or updating an
+existing registration preserves its identity. Delivery checks the identity
+under the same lifecycle lock used by registration changes before any paste.
+
+Retries also recheck the current GitHub issue and routing audience. A removed
+recipient, closed issue or completed review notification is retired instead
+of replayed. This does not authenticate GitHub text or a claimed sender.
+
+On upgrade, outstanding legacy queue rows without a registration identity are
+retired with their text retained in history. Legacy outbox and failed-delivery
+records without that identity cannot be pasted. Inspect the history and send
+new messages deliberately when needed; the migration does not guess ownership.
+
 ## Unattended agents and writable directories
 
 An agent's `unattended` flag selects its runtime's no-approval switch. It is

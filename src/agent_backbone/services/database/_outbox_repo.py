@@ -15,6 +15,11 @@ class OutboxRepo(Repo):
         """Persist the entire audience atomically before the first delivery."""
         async with self._tx() as conn:
             for delivery in deliveries:
+                identity = await conn.scalar(
+                    text("SELECT report_identity FROM agents WHERE name=:name"),
+                    {"name": delivery["session_name"]},
+                )
+                delivery = {**delivery, "registration_id": identity}
                 source_key = delivery.get("source_key") or ""
                 status = "pending"
                 if source_key.startswith("review-start:"):

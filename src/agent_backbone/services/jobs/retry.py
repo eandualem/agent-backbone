@@ -25,6 +25,7 @@ from agent_backbone.services.routing import (
     format_next_issue_notification,
     is_acknowledged,
     list_open_queue_for_target,
+    notification_still_targets,
     queue_scope,
     retry_outbox,
     route_issue,
@@ -288,7 +289,7 @@ async def _drain_session(
                 and record.get("issue_number")
             ):
                 try:
-                    _, retired = await current_notification_issue(
+                    issue, retired = await current_notification_issue(
                         gh, record["repo"], record["issue_number"], source_key=source_key
                     )
                 except Exception as exc:
@@ -312,6 +313,16 @@ async def _drain_session(
                     repo=record["repo"],
                     issue_number=record["issue_number"],
                 )
+                if not retired and not await notification_still_targets(
+                    issue,
+                    record["delivery_kind"],
+                    target or session_name,
+                    config,
+                    db,
+                    source=record.get("source", ""),
+                    source_key=source_key,
+                ):
+                    retired = "no_longer_targeted"
                 if retired:
                     await db.queue.mark_delivered(record["id"], reason=retired)
                     summary["queue_cleared"] = summary.get("queue_cleared", 0) + 1
@@ -394,6 +405,7 @@ async def _drain_session(
                     requeue=False,
                     operation_id=record.get("operation_id"),
                     queue_id=record["id"],
+                    registration_id=record.get("registration_id"),
                 )
             ).outcome
             if outcome in _QUEUE_DONE:
@@ -471,6 +483,10 @@ async def retry_delivery(
     config: BackboneConfig, delivery: dict, db: BackboneDB, gh: GitHubClient
 ) -> str:
     """Re-attempt one failed issue delivery after checking its current audience."""
+    if not await db.agents.registration_matches(
+        delivery["session_name"], delivery.get("registration_id")
+    ):
+        return "registration_changed"
     issue, status = await _current_issue(config, delivery, db, gh)
     if status:
         return status
@@ -496,6 +512,7 @@ async def retry_delivery(
             enforce_issue_queue=True,
             queue_scope=scope,
             operation_id=operation_id,
+            registration_id=delivery.get("registration_id"),
         )
     ).outcome
     if outcome == DeliveryOutcome.DELIVERED:

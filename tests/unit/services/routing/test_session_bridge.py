@@ -1005,8 +1005,17 @@ class TestSafeDeliver:
         expected = "waiting_for_human" if state == AgentState.WAITING_FOR_HUMAN else "agent_working"
         assert report.outcome == expected and report.queued
         assert await db.queue.pending_count("ike") == 1
+        from agent_backbone.models import IssueData, ParsedLabels
+
+        gh = AsyncMock()
+        gh.get_issue.return_value = IssueData(
+            number=42,
+            title="Current",
+            repo_full_name=_REPO,
+            labels=ParsedLabels(targets=[config.agents.get("ike").name]),
+        )
         with _online(), _patch_send_message(True) as send:
-            result = await drain_message_queue(config, db, AsyncMock(), active_sessions=["ike"])
+            result = await drain_message_queue(config, db, gh, active_sessions=["ike"])
             send.assert_awaited_once()
         assert result["queue_delivered"] == 1
         assert await db.queue.pending_count("ike") == 0

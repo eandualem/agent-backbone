@@ -151,7 +151,7 @@ async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
 
 
 async def test_direct_migrations_refuse_unstamped_partial_schema(tmp_path):
-    from sqlalchemy import inspect
+    from sqlalchemy import inspect, text
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'partial.db'}"
     db = BackboneDB(url)
@@ -161,9 +161,15 @@ async def test_direct_migrations_refuse_unstamped_partial_schema(tmp_path):
             await conn.run_sync(
                 lambda sync: metadata.create_all(sync, tables=[metadata.tables["deliveries"]])
             )
-        delivery_id = await db.deliveries.record(
-            issue_number=7, target_entity="worker", session_name="worker", outcome="offline"
-        )
+            delivery_id = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO deliveries "
+                        "(issue_number, target_entity, session_name, outcome, created_at) "
+                        "VALUES (7, 'worker', 'worker', 'offline', '2026-01-01') RETURNING id"
+                    )
+                )
+            ).scalar_one()
 
         with pytest.raises(RuntimeError, match="refusing to stamp partial schema"):
             await db._run_migrations()
@@ -317,7 +323,10 @@ async def test_pre_diagnostics_database_gains_schema_without_losing_history(
         assert delivery["id"] == delivery_id
         assert delivery["outcome"] == "offline" and delivery["operation_id"] is None
         queue = await queue_row(db, enqueued.id)
-        assert queue["status"] == "pending"
+        assert queue["status"] == "expired"  # no proven registration binding
+        history = await db.deliveries.query(session_name="worker")
+        assert any(row["source"] == "registration-unbound" for row in history)
+        assert queue["delivered_at"] is not None
         assert queue["message"] == "preserve this queued message" and queue["operation_id"] is None
         async with db.engine.connect() as conn:
             revision = (
@@ -606,8 +615,14 @@ async def test_restamp_on_old_sqlite_keeps_the_dead_column(tmp_path, monkeypatch
 async def test_migration_holds_checkpoint_dedup_after_old_stamp(tmp_path):
     from sqlalchemy import text
 
+    from agent_backbone.config import AgentSpec
+    from agent_backbone.services.agents import AgentStore
+
     url = f"sqlite+aiosqlite:///{tmp_path / 'checkpoint-upgrade.db'}"
     async with BackboneDB.connect(url) as db:
+        store = AgentStore(db, tmp_path)
+        await store.start()
+        await store.register(AgentSpec(name="worker", dir=str(tmp_path), runtime="codex"))
         receipt = await db.queue.enqueue(
             session_name="worker", message="keep", delivery_kind="direct_message"
         )

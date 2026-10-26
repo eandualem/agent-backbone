@@ -305,6 +305,7 @@ def parse_from_tag(comment_body: str) -> str | None:
 
 RETIREMENT_REASONS = frozenset(
     {
+        "registration_changed",
         "acknowledged",
         "no_repo",
         "issue_closed",

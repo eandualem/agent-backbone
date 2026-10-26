@@ -249,7 +249,14 @@ async def test_legacy_issue_retry_uses_its_exact_delivery_identity(config, db):
 
 async def test_outbox_replay_and_queue_drain_keep_event_correlation(config, db):
     gh = AsyncMock()
-    gh.get_issue.return_value = IssueData(number=7, repo_full_name="example/test", title="Current")
+    from agent_backbone.models import ParsedLabels
+
+    gh.get_issue.return_value = IssueData(
+        number=7,
+        repo_full_name="example/test",
+        title="Current",
+        labels=ParsedLabels(targets=[config.agents.get("ike").name]),
+    )
     event_id = await db.events.record(
         delivery_id="comment:example/test:123", source="webhook", event_type="comment_created"
     )
