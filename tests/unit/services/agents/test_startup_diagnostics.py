@@ -17,6 +17,11 @@ _LAUNCH = "agent_backbone.services.agents.launch"
 PANE = (Path(__file__).parents[3] / "fixtures" / "codex-model-error.txt").read_text()
 
 
+async def registered_spec(db, tmp_path, **fields):
+    store = AgentStore(db, tmp_path / "data")
+    return await store.register(AgentSpec(name="app", dir=str(tmp_path), **fields))
+
+
 @pytest.mark.parametrize(
     ("ready", "severity"),
     [
@@ -27,7 +32,7 @@ PANE = (Path(__file__).parents[3] / "fixtures" / "codex-model-error.txt").read_t
     ],
 )
 async def test_start_records_outcome_and_never_copies_human_evidence(db, tmp_path, ready, severity):
-    spec = AgentSpec(name="app", dir=str(tmp_path), runtime="shell")
+    spec = await registered_spec(db, tmp_path, runtime="shell")
     config = bootstrap_config(tmp_path / "data")
     with (
         patch(f"{_LAUNCH}.session_exists", AsyncMock(return_value=False)),
@@ -58,7 +63,7 @@ async def test_existing_and_unwaited_sessions_do_not_claim_readiness(db, tmp_pat
         patch(f"{_LAUNCH}.start_session", AsyncMock(return_value=True)),
     ):
         await start_agent(
-            AgentSpec(name="app", dir=str(tmp_path), runtime="shell"),
+            await registered_spec(db, tmp_path, runtime="shell"),
             bootstrap_config(tmp_path / "data"),
             db=db,
             wait=False,
@@ -75,7 +80,7 @@ async def test_unexpected_launch_error_is_recorded_and_original_error_preserved(
         pytest.raises(OSError, match="PRIVATE_EXCEPTION_DETAIL"),
     ):
         await start_agent(
-            AgentSpec(name="app", dir=str(tmp_path), runtime="shell"),
+            await registered_spec(db, tmp_path, runtime="shell"),
             bootstrap_config(tmp_path / "data"),
             db=db,
         )
@@ -144,7 +149,7 @@ async def test_start_captures_typed_error_and_model_change_before_returning(db, 
         patch.object(RUNTIMES["codex"], "pre_trust"),
     ):
         result = await start_agent(
-            AgentSpec(name="app", dir=str(tmp_path), runtime="codex", model="example-model"),
+            await registered_spec(db, tmp_path, runtime="codex", model="example-model"),
             config,
             db=db,
             operation_id="observed-start",
@@ -183,7 +188,7 @@ async def test_repeated_visibility_and_a_second_model_keep_distinct_metadata(db,
         patch.object(RUNTIMES["codex"], "pre_trust"),
     ):
         await start_agent(
-            AgentSpec(name="app", dir=str(tmp_path), runtime="codex"),
+            await registered_spec(db, tmp_path, runtime="codex"),
             bootstrap_config(tmp_path / "data"),
             db=db,
             operation_id="one-start",

@@ -73,7 +73,7 @@ async def test_start_refuses_a_bad_tag_before_registering(db, tmp_path):
     assert store.agents.get("site") is None
 
 
-@pytest.mark.parametrize("mutation", ["forget", "update"])
+@pytest.mark.parametrize("mutation", ["forget", "update", "replace"])
 @pytest.mark.parametrize("separate_store", [False, True])
 async def test_start_rejects_a_spec_changed_after_resolution(
     db, tmp_path, mutation, separate_store
@@ -83,9 +83,11 @@ async def test_start_rejects_a_spec_changed_after_resolution(
     spec = await resolve_agent(store, req)
     writer = AgentStore(db, tmp_path) if separate_store else store
     await writer.start()
-    if mutation == "forget":
+    if mutation in {"forget", "replace"}:
         with patch("agent_backbone.services.terminal.session_exists", return_value=False):
             await writer.forget("app")
+        if mutation == "replace":
+            await writer.register(spec)
     else:
         await writer.update("app", description="changed after resolution")
     with patch(f"{_OPS}.launch.start_agent", AsyncMock()) as launch:
@@ -93,6 +95,43 @@ async def test_start_rejects_a_spec_changed_after_resolution(
             await start_resolved(store, store.config, spec, req, db=db)
     launch.assert_not_awaited()
     assert (store.agents.get("app") is None) == (mutation == "forget")
+
+
+async def test_start_rejects_registration_replaced_during_diagnostics(db, tmp_path):
+    store = await registered_store(db, tmp_path)
+    req = StartRequest(name="app", wait=False)
+    spec = await resolve_agent(store, req)
+    original_record = db.diagnostics.record
+    original_profile = tmp_path / "agent-credentials"
+
+    async def replace_after_resolution(**event):
+        if event["code"] == "requested":
+            await db.agents.delete("app")
+            await db.agents.upsert(
+                "app",
+                dir=str(tmp_path),
+                runtime="shell",
+                model=None,
+                repo="",
+                tags=[],
+                env={},
+                description="",
+                unattended=False,
+            )
+        await original_record(**event)
+
+    with (
+        patch.object(db.diagnostics, "record", side_effect=replace_after_resolution),
+        patch("agent_backbone.services.agents.launch.session_exists", return_value=False),
+        patch("agent_backbone.services.agents.launch.start_session") as launch,
+        patch("agent_backbone.services.agents.launch.write_starting_marker") as marker,
+    ):
+        result = await start_resolved(store, store.config, spec, req, db=db)
+    assert not result.ok
+    assert "registration changed" in " ".join(result.evidence)
+    launch.assert_not_called()
+    marker.assert_not_called()
+    assert not list(original_profile.glob("*.env"))
 
 
 async def test_forget_during_real_start_waits_then_refuses(db, tmp_path):

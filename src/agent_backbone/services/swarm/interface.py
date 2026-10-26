@@ -290,7 +290,7 @@ async def create_swarm(
                     *inherited,
                 ),
             )
-            await store.register(agent)
+            agent = await store.register(agent)
             launches.append((agent, brief_file))
 
         # Initial-prompt runtimes can act as soon as they start. Make every

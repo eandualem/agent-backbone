@@ -530,6 +530,8 @@ class AgentSpec:
     """A client without a terminal (a service reading the API): never launched
     and never typed into. Its messages wait for ``backbone inbox`` without
     expiring, and it raises no offline alerts. Off by default."""
+    registration_id: str = field(default="", repr=False)
+    """Database-assigned identity retained by a resolved startup snapshot."""
 
     @property
     def path(self) -> Path:
@@ -1220,6 +1222,7 @@ def agents_from_rows(rows: list[dict]) -> AgentsConfig:
         specs[row["name"]] = AgentSpec(
             name=row["name"],
             dir=row["dir"],
+            registration_id=row.get("report_identity") or "",
             runtime=row.get("runtime") or "claude",
             model=row.get("model") or None,
             repo=row.get("repo") or "",

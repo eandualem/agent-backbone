@@ -423,6 +423,15 @@ async def _start_agent(
             if db is not None
             else None
         )
+        if db is not None and (
+            not spec.registration_id
+            or (registration or {}).get("report_identity") != spec.registration_id
+        ):
+            details["reason"] = "registration_changed"
+            return StartResult(
+                ok=False,
+                evidence=("agent registration changed during startup; retry the start",),
+            )
         launched_at = time.time()
         # Hook-context offers belong to the session they were written for: the
         # new session must not have the old one's guidance injected on its

@@ -966,7 +966,8 @@ async def test_telegram_start_is_fresh_with_the_saved_runtime_and_model(config, 
         )
     from agent_backbone.services.agents import AgentStore
 
-    await AgentStore(db, config.data_dir).register(spec)
+    spec = await AgentStore(db, config.data_dir).register(spec)
+    config = replace(config, agents=AgentsConfig(specs={"ike": spec}))
     bot = _bot(config)
     bot._db = db
     with (
