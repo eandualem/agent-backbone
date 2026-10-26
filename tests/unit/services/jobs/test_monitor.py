@@ -616,6 +616,62 @@ class TestDeliverPendingIssues:
         assert result["ike"] == "deferred"
         d.assert_not_called()
 
+    async def test_receipts_read_once_per_pass_and_refreshed_next_pass(self, config, db):
+        from pathlib import Path
+
+        from agent_backbone.hooks.backbone_state import append_action
+
+        name = next(iter(_IDLE))
+        reads = []
+        original_open = Path.open
+
+        def record_open(path, *args, **kwargs):
+            if path == config.action_log_path and not args:
+                reads.append(path)
+            return original_open(path, *args, **kwargs)
+
+        for number in (7, 8):
+            append_action(
+                config.state_dir,
+                name,
+                {
+                    "action": "comment",
+                    "phase": "succeeded",
+                    "repo": _REPO,
+                    "issue": number,
+                    "comment_id": number * 100,
+                    "ts": time.time(),
+                },
+            )
+        gh = AsyncMock()
+        gh.list_issues.return_value = [_issue(7), _issue(8)]
+        gh.list_comments.return_value = []
+        with patch.object(Path, "open", autospec=True, side_effect=record_open):
+            with patch(f"{_PEND}.safe_deliver", new_callable=AsyncMock) as deliver:
+                await deliver_pending_issues(config, _IDLE, db, gh)
+                deliver.assert_not_awaited()
+            assert len(reads) == 1
+            assert await db.acks.exists(7, name, repo=_REPO)
+            assert await db.acks.exists(8, name, repo=_REPO)
+            append_action(
+                config.state_dir,
+                name,
+                {
+                    "action": "comment",
+                    "phase": "succeeded",
+                    "repo": _REPO,
+                    "issue": 9,
+                    "comment_id": 900,
+                    "ts": time.time(),
+                },
+            )
+            gh.list_issues.return_value = [_issue(9)]
+            with patch(f"{_PEND}.safe_deliver", new_callable=AsyncMock) as deliver:
+                await deliver_pending_issues(config, _IDLE, db, gh)
+                deliver.assert_not_awaited()
+            assert len(reads) == 2
+            assert await db.acks.exists(9, name, repo=_REPO)
+
     async def test_skips_acknowledged_issue(self, config, db):
         await db.acks.record(7, "ike", repo=_REPO)
         gh = AsyncMock()

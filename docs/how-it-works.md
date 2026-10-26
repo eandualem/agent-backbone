@@ -137,8 +137,10 @@ when messages are queued for it ([`always_on`](configuration.md#agents)).
 Restarting (`agent restart`, `POST /api/agents/{name}/restart`) is the one
 restart the backbone performs, because it was asked for. The request is
 validated (registered agent, installed runtime, model and effort, same-CLI
-resume) and stored as a `pending` transition; nothing is stopped inside the
-request. The `agent-transitions` job then stops the session on its next tick
+resume with a known exact conversation identity) and stored as a `pending`
+transition; nothing is stopped inside the request. Resume eligibility is checked again before stopping, so an unsupported
+runtime or missing conversation identity leaves the existing session running.
+The `agent-transitions` job then stops the session on its next tick
 (5 s), records the stop, and starts the replacement immediately, or after an
 explicit delay or time, through the same operation as `agent start`: the record update, the brief, the hooks and
 the readiness wait. A continuation message is handed to the replacement once

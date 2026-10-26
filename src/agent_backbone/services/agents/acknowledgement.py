@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Iterable
 from pathlib import Path
 
 _TAIL_BLOCK = 64 * 1024
@@ -39,7 +40,7 @@ def _read_tail(action_log: str | Path | None, max_lines: int) -> list[dict]:
     return entries
 
 
-def _read_receipts(action_log: str | Path | None):
+def read_comment_receipts(action_log: str | Path | None):
     """Stream retained publication evidence, independent of the recent-command tail."""
     if action_log is None:
         return
@@ -92,7 +93,9 @@ def find_outgoing_comment(
     """
     now = time.time()
     entries = (
-        _read_receipts(action_log) if comment_id is not None else _read_tail(action_log, max_lines)
+        read_comment_receipts(action_log)
+        if comment_id is not None
+        else _read_tail(action_log, max_lines)
     )
     latest: tuple[float, str | None] | None = None
     for entry in entries:
@@ -176,9 +179,10 @@ def has_commented_on_issue(
     repo: str = "",
     since: float | None = None,
     reset_comment_id: int | None = None,
+    receipts: Iterable[dict] | None = None,
 ) -> bool:
     """Whether a retained receipt was published after the latest acknowledgment reset."""
-    for entry in _read_receipts(action_log):
+    for entry in read_comment_receipts(action_log) if receipts is None else receipts:
         if (
             entry.get("action") == "comment"
             and entry.get("phase") == "succeeded"
