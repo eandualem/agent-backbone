@@ -616,12 +616,18 @@ class TestDeliverPendingIssues:
         assert result["ike"] == "deferred"
         d.assert_not_called()
 
-    async def test_receipts_read_once_per_pass_and_refreshed_next_pass(self, config, db):
+    async def test_receipts_read_once_per_pass_and_refreshed_next_pass(
+        self, config, db, monkeypatch
+    ):
         from pathlib import Path
 
         from agent_backbone.hooks.backbone_state import append_action
 
         name = next(iter(_IDLE))
+        identity = next(
+            row["report_identity"] for row in await db.agents.list() if row["name"] == name
+        )
+        monkeypatch.setenv("BACKBONE_REGISTRATION_ID", identity)
         reads = []
         original_open = Path.open
 
@@ -672,10 +678,16 @@ class TestDeliverPendingIssues:
             assert len(reads) == 2
             assert await db.acks.exists(9, name, repo=_REPO)
 
-    async def test_receipt_written_during_pass_prevents_later_candidate_delivery(self, config, db):
+    async def test_receipt_written_during_pass_prevents_later_candidate_delivery(
+        self, config, db, monkeypatch
+    ):
         from agent_backbone.hooks.backbone_state import append_action
 
         name = next(iter(_IDLE))
+        identity = next(
+            row["report_identity"] for row in await db.agents.list() if row["name"] == name
+        )
+        monkeypatch.setenv("BACKBONE_REGISTRATION_ID", identity)
         action = {"action": "comment", "phase": "succeeded", "repo": _REPO, "ts": time.time()}
         append_action(config.state_dir, name, {**action, "issue": 7, "comment_id": 700})
         record = db.acks.record
@@ -949,6 +961,11 @@ async def test_old_publication_receipt_cannot_restore_a_cleared_acknowledgment(c
         "repo": _REPO,
         "comment_id": 123,
     }
+    receipt["registration_id"] = next(
+        row["report_identity"]
+        for row in await db.agents.list()
+        if row["name"] == receipt["session"]
+    )
     config.action_log_path.parent.mkdir(parents=True, exist_ok=True)
     config.action_log_path.write_text(json.dumps(receipt) + "\n" + "{}\n" * 250)
     await db.acks.record(7, "ike", repo=_REPO)
@@ -977,6 +994,11 @@ async def test_delayed_receipt_can_reconcile_its_own_reset_comment(config, db):
         "repo": _REPO,
         "comment_id": 123,
     }
+    receipt["registration_id"] = next(
+        row["report_identity"]
+        for row in await db.agents.list()
+        if row["name"] == receipt["session"]
+    )
     config.action_log_path.parent.mkdir(parents=True, exist_ok=True)
     config.action_log_path.write_text("")
     await db.acks.clear(7, "ike", repo=_REPO, comment_id=123)

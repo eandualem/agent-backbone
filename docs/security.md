@@ -261,12 +261,16 @@ safe. What it does:
 All agents typically share one token, so GitHub shows the same author for
 every comment. The `[from:<agent>]` prefix and the `from:<agent>` label are
 conventions, not authentication. With the shipped hooks installed, an
-agent's own successful comment calls are logged with the returned comment ID.
-Only a matching repository, issue and comment ID can attribute an incoming
-comment to that agent. A prefix or nearby command intent cannot acknowledge work
-or suppress notifications. Existing stored acknowledgements are retained; this
-change does not establish the provenance of historical records. The local hook
-log remains writable to an unrestricted process running as the same OS user. If you need real
+agent's own successful comment calls are logged with the returned comment ID
+and the registration ID exported at launch. Only a receipt matching the current
+registration, repository, issue and comment ID can attribute an incoming comment
+to that agent. A prefix or nearby command intent cannot acknowledge work or
+suppress notifications. Older sessions need a normal restart to emit bound
+receipts; unbound receipts remain as history and cannot acknowledge work
+automatically. Pull-request actions also need the current registration before
+acknowledging linked issues. Forgetting an agent clears its stored
+acknowledgements, while a rename retains its registration. The local hook log remains writable to an
+unrestricted process running as the same OS user. If you need real
 per-agent identity, each agent needs its own GitHub account. Keep its token
 out of the agent's `env`, which is stored in plain text in the database;
 there is no per-agent GitHub credential store yet.

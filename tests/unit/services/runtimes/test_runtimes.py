@@ -280,7 +280,10 @@ class TestLaunchEnvironment:
         from agent_backbone.services.agents.launch import launch_environment
 
         env = launch_environment(
-            "reviewer", "claude", "/data/state", {"FOO": "1", "BACKBONE_LAUNCH_ID": "spoofed"}
+            "reviewer",
+            "claude",
+            "/data/state",
+            {"FOO": "1", "BACKBONE_LAUNCH_ID": "spoofed", "BACKBONE_REGISTRATION_ID": "spoofed"},
         )
         launch_id = env.pop("BACKBONE_LAUNCH_ID")
         assert len(launch_id) == 32
@@ -292,6 +295,7 @@ class TestLaunchEnvironment:
             "BACKBONE_RUNTIME": "claude",
             "BACKBONE_AGENT": "reviewer",
             "BACKBONE_STATE_DIR": "/data/state",
+            "BACKBONE_REGISTRATION_ID": "",
             "FOO": "1",
         }
 

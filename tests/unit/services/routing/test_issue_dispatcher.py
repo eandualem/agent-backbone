@@ -186,7 +186,15 @@ class TestCapitalisedAgentNames:
             result = await issue_dispatcher(event, config, mock_db)
         assert result.delivered == ["ops"] and deliver.await_count == 1
         mock_db.acks.record.assert_called_once_with(
-            5, "Builder", repo=OTHER_REPO, comment_id=event.comment.id
+            5,
+            "Builder",
+            repo=OTHER_REPO,
+            comment_id=event.comment.id,
+            registration_id=next(
+                row["report_identity"]
+                for row in mock_db.agents.list.return_value
+                if row["name"] == event.issue.labels.targets[0]
+            ),
         )
 
     async def test_review_prefix_cannot_exclude_registered_spelling(self, config, mock_db):
@@ -225,10 +233,14 @@ class TestReviewDispatch:
 
 
 @pytest.fixture
-def mock_db():
+def mock_db(config):
     db = AsyncMock()
+    db.agents.list.return_value = [
+        {"name": spec.name, "report_identity": f"{index:032x}"}
+        for index, spec in enumerate(config.agents, 1)
+    ]
     db.dependencies.counts = AsyncMock(return_value={})
-    db.acks.record = AsyncMock()
+    db.acks.record = AsyncMock(return_value=True)
     db.acks.clear = AsyncMock()
     db.deliveries.record = AsyncMock()
     return db
@@ -370,6 +382,7 @@ class TestIssueDispatcher:
             head_ref="feat/x",
             head_repo="acme/backbone",
         )
+        mock_db.agents.list.return_value = [{"name": "backbone", "report_identity": "a" * 32}]
         event = IssueEvent(event_type=EventType.PULL_REQUEST_OPENED, issue=issue)
         with (
             _patch_safe_deliver() as deliver,
@@ -583,7 +596,15 @@ class TestCommentRouting:
         with _patch_safe_deliver(DeliveryOutcome.DELIVERED), _patch_find_outgoing("ike"):
             await issue_dispatcher(event, config, mock_db)
         mock_db.acks.record.assert_called_once_with(
-            42, "ike", repo=OTHER_REPO, comment_id=event.comment.id
+            42,
+            "ike",
+            repo=OTHER_REPO,
+            comment_id=event.comment.id,
+            registration_id=next(
+                row["report_identity"]
+                for row in mock_db.agents.list.return_value
+                if row["name"] == event.issue.labels.targets[0]
+            ),
         )
 
     async def test_external_comment_clears_acknowledgment(self, config, mock_db):

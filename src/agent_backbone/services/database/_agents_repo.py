@@ -191,6 +191,11 @@ class AgentRepo(Repo):
 
     async def delete(self, name: str) -> bool:
         async with self._tx() as conn:
+            if conn.dialect.name == "postgresql":
+                # Serialize retirement with bound acknowledgment writes.
+                await conn.execute(
+                    text("SELECT 1 FROM agents WHERE name=:name FOR UPDATE"), {"name": name}
+                )
             # Retain bodies and history, but never hand them to a reused name.
             await conn.execute(
                 text(
@@ -232,6 +237,15 @@ class AgentRepo(Repo):
             await conn.execute(
                 text("DELETE FROM agent_subscriptions WHERE agent_name = :name"), {"name": name}
             )
+            # A replacement registration must not inherit a prior acknowledgment.
+            # Publication receipts and delivery history remain available.
+            await conn.execute(
+                text(
+                    "UPDATE acknowledgments SET acknowledged_at='', cleared_at=:now, "
+                    "cleared_comment_id=NULL WHERE target_entity=:name"
+                ),
+                {"name": name, "now": now_iso()},
+            )
             result = await conn.execute(
                 text("DELETE FROM agents WHERE name = :name"), {"name": name}
             )
@@ -258,7 +272,10 @@ class AgentRepo(Repo):
         )
         values = {"old": name, "new": new_name}
         async with self._tx() as conn:
-            exists = await conn.execute(text("SELECT 1 FROM agents WHERE name = :old"), values)
+            lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
+            exists = await conn.execute(
+                text("SELECT 1 FROM agents WHERE name = :old" + lock), values
+            )
             if not exists.first():
                 raise KeyError(name)
             for table, column in (*references, ("swarms", "initiator"), ("swarms", "coordinator")):

@@ -43,8 +43,10 @@ playbook for each; read it before first use):
   hands over to a fresh session (another CLI or model, now or later), your own
   included; write your memory first (`backbone help agents`).
 - **Issues drive work**: unlabelled issues in your repository are yours;
-  `for:<agent>` labels route work between agents; acknowledge with a comment
-  starting `[from:{agent_name}]`.
+  `for:<agent>` labels route work between agents; acknowledge using
+  `gh issue comment` through your hooked runtime, with a comment starting
+  `[from:{agent_name}]`. Backbone requires the exact successful publication
+  receipt; `backbone help github` explains the supported paths.
 - **Skills**: shared skills tagged for you appear as links in your CLI's skills
   directory. The store behind them is read-only by design; share or update one
   with `backbone skills add PATH [--tag …]` (`backbone help skills`).

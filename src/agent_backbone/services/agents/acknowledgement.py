@@ -85,6 +85,7 @@ def find_outgoing_comment(
     repo: str = "",
     include_intent: bool = True,
     comment_id: int | None = None,
+    registrations: dict[str, str] | None = None,
 ) -> str | None:
     """Session that recently commented on an issue according to the hook action log.
 
@@ -92,6 +93,7 @@ def find_outgoing_comment(
     "issue": 42, "repo": "owner/name"}``.
     """
     now = time.time()
+    current_names = {identity: name for name, identity in (registrations or {}).items() if identity}
     entries = (
         read_comment_receipts(action_log)
         if comment_id is not None
@@ -116,7 +118,11 @@ def find_outgoing_comment(
         if comment_id is not None:
             timestamp = entry.get("ts", 0)
             if isinstance(timestamp, (int, float)) and (latest is None or timestamp > latest[0]):
-                latest = timestamp, entry.get("session")
+                identity = entry.get("registration_id")
+                latest = (
+                    timestamp,
+                    (current_names.get(identity) if isinstance(identity, str) else None),
+                )
         elif now - float(entry.get("ts", 0)) <= recency_seconds:
             return entry.get("session")
     return latest[1] if latest else None
@@ -132,6 +138,7 @@ def find_outgoing_pull_request(
     base_repo: str = "",
     include_intent: bool = True,
     at: float | None = None,
+    registrations: dict[str, str] | None = None,
 ) -> str | None:
     """Session that ran ``gh pr create`` from this head repository and branch
     within ``recency_seconds`` of ``at`` (default now).
@@ -151,6 +158,7 @@ def find_outgoing_pull_request(
     if not head_ref or not (head_repo or base_repo):
         return None
     now = time.time() if at is None else at
+    current_names = {identity: name for name, identity in (registrations or {}).items() if identity}
     for entry in _read_tail(action_log, max_lines):
         if entry.get("action") != "pull_request":
             continue
@@ -166,7 +174,9 @@ def find_outgoing_pull_request(
         if (entry.get("branch") or "") != head_ref:
             continue
         if abs(now - float(entry.get("ts", 0))) <= recency_seconds:
-            return entry.get("session")
+            # The latest matching publication owns attribution, even if retired.
+            identity = entry.get("registration_id")
+            return current_names.get(identity) if isinstance(identity, str) else None
     return None
 
 
@@ -180,8 +190,16 @@ def has_commented_on_issue(
     since: float | None = None,
     reset_comment_id: int | None = None,
     receipts: Iterable[dict] | None = None,
+    registration_id: str | None = None,
 ) -> bool:
-    """Whether a retained receipt was published after the latest acknowledgment reset."""
+    """Whether this registration published after the latest acknowledgment reset.
+
+    The caller resolves the session's current registration from the database.
+    Receipt names may predate a rename; the stable registration is authoritative.
+    """
+    if not registration_id:
+        return False
+    latest: dict[tuple[str, int], dict] = {}
     for entry in read_comment_receipts(action_log) if receipts is None else receipts:
         if (
             entry.get("action") == "comment"
@@ -189,20 +207,24 @@ def has_commented_on_issue(
             and type(entry.get("comment_id")) is int
             and entry["comment_id"] > 0
             and entry.get("issue") == issue_number
-            and entry.get("session") == session
             and _repo_matches(entry, repo)
-            and (
-                since is None
-                or (
-                    entry.get("edited") is True
-                    and isinstance(entry.get("ts"), (int, float))
-                    and entry["ts"] > since
-                )
-                or (
-                    entry["comment_id"] >= reset_comment_id
-                    if reset_comment_id
-                    else isinstance(entry.get("ts"), (int, float)) and entry["ts"] > since
-                )
+            and isinstance(entry.get("ts", 0), (int, float))
+        ):
+            key = ((entry.get("repo") or "").casefold(), entry["comment_id"])
+            if key not in latest or entry.get("ts", 0) > latest[key].get("ts", 0):
+                latest[key] = entry
+    for entry in latest.values():
+        if entry.get("registration_id") == registration_id and (
+            since is None
+            or (
+                entry.get("edited") is True
+                and isinstance(entry.get("ts"), (int, float))
+                and entry["ts"] > since
+            )
+            or (
+                entry["comment_id"] >= reset_comment_id
+                if reset_comment_id
+                else isinstance(entry.get("ts"), (int, float)) and entry["ts"] > since
             )
         ):
             return True

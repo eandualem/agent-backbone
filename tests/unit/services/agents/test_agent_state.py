@@ -521,6 +521,7 @@ def _action_entry(session="ike", action="comment", issue=42, ts=None):
     return {
         "ts": ts if ts is not None else time.time(),
         "session": session,
+        "registration_id": "a" * 32,
         "action": action,
         "phase": "succeeded",
         "comment_id": 123,
@@ -573,17 +574,25 @@ class TestHasCommentedOnIssue:
         log_file = tmp_path / "github-actions.jsonl"
         entry = _action_entry(session="ike", issue=42, ts=time.time() - 3600)
         log_file.write_text(json.dumps(entry) + "\n")
-        assert has_commented_on_issue(42, "ike", action_log=str(log_file)) is True
+        assert (
+            has_commented_on_issue(42, "ike", action_log=str(log_file), registration_id="a" * 32)
+            is True
+        )
 
     def test_no_match_wrong_issue(self, tmp_path):
         log_file = tmp_path / "github-actions.jsonl"
         entry = _action_entry(session="ike", issue=42)
         log_file.write_text(json.dumps(entry) + "\n")
-        assert has_commented_on_issue(99, "ike", action_log=str(log_file)) is False
+        assert (
+            has_commented_on_issue(99, "ike", action_log=str(log_file), registration_id="a" * 32)
+            is False
+        )
 
     def test_missing_file_returns_false(self, tmp_path):
         assert (
-            has_commented_on_issue(42, "ike", action_log=str(tmp_path / "nonexistent.jsonl"))
+            has_commented_on_issue(
+                42, "ike", action_log=str(tmp_path / "nonexistent.jsonl"), registration_id="a" * 32
+            )
             is False
         )
 
@@ -597,6 +606,7 @@ class TestRotateActionLog:
                     {
                         "ts": float(i),
                         "session": "ike",
+                        "registration_id": "a" * 32,
                         "action": "comment",
                         "issue": i,
                         "phase": "succeeded",
@@ -627,8 +637,8 @@ class TestRotateActionLog:
     def test_acknowledgment_uses_all_retained_receipts(self, tmp_path):
         """Old exact publication receipts still acknowledge the issue."""
         path = self._log(tmp_path, 20000)
-        assert has_commented_on_issue(19999, "ike", path) is True
-        assert has_commented_on_issue(0, "ike", path) is True
+        assert has_commented_on_issue(19999, "ike", path, registration_id="a" * 32) is True
+        assert has_commented_on_issue(0, "ike", path, registration_id="a" * 32) is True
 
 
 class TestStartingMarker:
@@ -720,7 +730,9 @@ class TestPromptIdentity:
 class TestFindOutgoingPullRequest:
     def _log(self, tmp_path, *entries: dict):
         path = tmp_path / "actions.jsonl"
-        path.write_text("".join(json.dumps(e) + "\n" for e in entries))
+        path.write_text(
+            "".join(json.dumps({**e, "registration_id": "a" * 32}) + "\n" for e in entries)
+        )
         return path
 
     def test_matches_head_repository_and_branch(self, tmp_path):
@@ -735,10 +747,25 @@ class TestFindOutgoingPullRequest:
                 "branch": "feat/x",
             },
         )
-        assert find_outgoing_pull_request("forker/app", "feat/x", action_log=log) == "app"
+        assert (
+            find_outgoing_pull_request(
+                "forker/app", "feat/x", action_log=log, registrations={"app": "a" * 32}
+            )
+            == "app"
+        )
         # the same branch name from another fork is not it
-        assert find_outgoing_pull_request("other/app", "feat/x", action_log=log) is None
-        assert find_outgoing_pull_request("forker/app", "feat/other", action_log=log) is None
+        assert (
+            find_outgoing_pull_request(
+                "other/app", "feat/x", action_log=log, registrations={"app": "a" * 32}
+            )
+            is None
+        )
+        assert (
+            find_outgoing_pull_request(
+                "forker/app", "feat/other", action_log=log, registrations={"app": "a" * 32}
+            )
+            is None
+        )
 
     def test_an_event_without_a_head_repository_compares_the_base_ones(self, tmp_path):
         """A fork deleted before the event arrives: GitHub names no head repo,
@@ -754,9 +781,13 @@ class TestFindOutgoingPullRequest:
                 "branch": "feat/x",
             },
         )
-        found = find_outgoing_pull_request("", "feat/x", action_log=log, base_repo="acme/app")
+        found = find_outgoing_pull_request(
+            "", "feat/x", action_log=log, registrations={"app": "a" * 32}, base_repo="acme/app"
+        )
         assert found == "app"
-        missed = find_outgoing_pull_request("", "feat/x", action_log=log, base_repo="other/app")
+        missed = find_outgoing_pull_request(
+            "", "feat/x", action_log=log, registrations={"app": "a" * 32}, base_repo="other/app"
+        )
         assert missed is None
 
     def test_an_explicit_head_repository_is_never_satisfied_by_a_base_one(self, tmp_path):
@@ -774,7 +805,11 @@ class TestFindOutgoingPullRequest:
             },
         )
         found = find_outgoing_pull_request(
-            "acme/app", "feat/x", action_log=log, base_repo="acme/app"
+            "acme/app",
+            "feat/x",
+            action_log=log,
+            registrations={"app": "a" * 32},
+            base_repo="acme/app",
         )
         assert found is None
 
@@ -789,7 +824,12 @@ class TestFindOutgoingPullRequest:
                 "branch": "feat/x",
             },
         )
-        assert find_outgoing_pull_request("acme/app", "feat/x", action_log=log) == "app"
+        assert (
+            find_outgoing_pull_request(
+                "acme/app", "feat/x", action_log=log, registrations={"app": "a" * 32}
+            )
+            == "app"
+        )
 
     def test_old_entries_and_missing_fields_do_not_match(self, tmp_path):
         log = self._log(
@@ -803,8 +843,18 @@ class TestFindOutgoingPullRequest:
             },
             {"ts": time.time(), "session": "app", "action": "pull_request", "repo": "acme/app"},
         )
-        assert find_outgoing_pull_request("acme/app", "feat/x", action_log=log) is None
-        assert find_outgoing_pull_request("", "feat/x", action_log=log) is None
+        assert (
+            find_outgoing_pull_request(
+                "acme/app", "feat/x", action_log=log, registrations={"app": "a" * 32}
+            )
+            is None
+        )
+        assert (
+            find_outgoing_pull_request(
+                "", "feat/x", action_log=log, registrations={"app": "a" * 32}
+            )
+            is None
+        )
 
 
 class TestChoiceDialogBeatsHookPermission:

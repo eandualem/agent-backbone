@@ -240,7 +240,12 @@ await after({tool: "bash", args: {command: "gh issue comment 7 -R acme/app -b do
 """
     subprocess.run(
         [node, "--input-type=module", "-e", script, plugin.as_uri()],
-        env={**os.environ, "BACKBONE_AGENT": "app", "BACKBONE_STATE_DIR": str(tmp_path)},
+        env={
+            **os.environ,
+            "BACKBONE_AGENT": "app",
+            "BACKBONE_STATE_DIR": str(tmp_path),
+            "BACKBONE_REGISTRATION_ID": "a" * 32,
+        },
         check=True,
         capture_output=True,
         text=True,
@@ -248,9 +253,10 @@ await after({tool: "bash", args: {command: "gh issue comment 7 -R acme/app -b do
     )
     log = tmp_path / "actions.jsonl"
     rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert all(row["registration_id"] == "a" * 32 for row in rows)
     assert [(row["issue"], row["phase"]) for row in rows] == [(5, "intent"), (7, "succeeded")]
-    assert not has_commented_on_issue(5, "app", log, repo="acme/app")
-    assert has_commented_on_issue(7, "app", log, repo="acme/app")
+    assert not has_commented_on_issue(5, "app", log, repo="acme/app", registration_id="a" * 32)
+    assert has_commented_on_issue(7, "app", log, repo="acme/app", registration_id="a" * 32)
 
 
 def test_old_opencode_launch_cannot_overwrite_replacement_state(tmp_path):

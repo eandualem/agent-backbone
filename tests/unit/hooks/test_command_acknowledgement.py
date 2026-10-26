@@ -17,6 +17,18 @@ from agent_backbone.services.agents import (
 from agent_backbone.services.runtimes.claude import ClaudeCode
 
 COMMAND = "gh issue comment 5 -R acme/app -b done"
+REGISTRATION = "a" * 32
+REGISTRATIONS = {
+    "app": REGISTRATION,
+    "worker": "b" * 32,
+    "editor": "c" * 32,
+    "author": "d" * 32,
+}
+
+
+@pytest.fixture(autouse=True)
+def registered_hook(monkeypatch):
+    monkeypatch.setenv("BACKBONE_REGISTRATION_ID", REGISTRATION)
 
 
 @pytest.mark.parametrize("hook", [claude_hook, codex_hook])
@@ -71,12 +83,12 @@ def test_intent_and_failed_completion_do_not_acknowledge(hook, response, tmp_pat
         bb.append_action(tmp_path, "app", action)
     log = tmp_path / "actions.jsonl"
     assert find_outgoing_comment(5, log, repo="acme/app") == "app"
-    assert not has_commented_on_issue(5, "app", log, repo="acme/app")
+    assert not has_commented_on_issue(5, "app", log, repo="acme/app", registration_id=REGISTRATION)
     _, actions = hook.derive(
         {**payload, "hook_event_name": "PostToolUse", "tool_response": response}, None
     )
     assert not actions
-    assert not has_commented_on_issue(5, "app", log, repo="acme/app")
+    assert not has_commented_on_issue(5, "app", log, repo="acme/app", registration_id=REGISTRATION)
 
 
 @pytest.mark.parametrize(
@@ -119,12 +131,16 @@ def test_successful_completion_acknowledges_in_both_runtimes(hook, response, tmp
     )
     assert len(actions) == 1 and actions[0]["phase"] == "succeeded"
     bb.append_action(tmp_path, "app", actions[0])
-    assert has_commented_on_issue(5, "app", tmp_path / "actions.jsonl", repo="acme/app")
+    assert has_commented_on_issue(
+        5, "app", tmp_path / "actions.jsonl", repo="acme/app", registration_id=REGISTRATION
+    )
 
 
 def test_legacy_actions_cannot_acknowledge(tmp_path):
     bb.append_action(tmp_path, "app", {"action": "comment", "issue": 5, "repo": "acme/app"})
-    assert not has_commented_on_issue(5, "app", tmp_path / "actions.jsonl", repo="acme/app")
+    assert not has_commented_on_issue(
+        5, "app", tmp_path / "actions.jsonl", repo="acme/app", registration_id=REGISTRATION
+    )
 
 
 def test_argv_preserves_quoted_body_and_multiple_actual_commands():
@@ -248,7 +264,9 @@ def test_gh_default_remote_does_not_acknowledge_origin(monkeypatch, tmp_path):
         (action,) = bb.shell_actions("gh issue comment 42 -b done", "/repo", 1)
     assert "repo" not in action
     bb.append_action(tmp_path, "ike", {**action, "phase": "succeeded"})
-    assert not has_commented_on_issue(42, "ike", tmp_path / "actions.jsonl", repo="acme/origin")
+    assert not has_commented_on_issue(
+        42, "ike", tmp_path / "actions.jsonl", repo="acme/origin", registration_id=REGISTRATION
+    )
 
 
 @pytest.mark.parametrize("hook", [claude_hook, codex_hook])
@@ -267,7 +285,9 @@ def test_success_without_a_matching_publication_receipt_cannot_acknowledge(hook,
     )
     for action in actions:
         bb.append_action(tmp_path, "app", action)
-    assert not has_commented_on_issue(5, "app", tmp_path / "actions.jsonl", repo="acme/app")
+    assert not has_commented_on_issue(
+        5, "app", tmp_path / "actions.jsonl", repo="acme/app", registration_id=REGISTRATION
+    )
 
 
 def test_exact_comment_identity_not_nearby_intent_or_forged_tag(tmp_path):
@@ -283,9 +303,20 @@ def test_exact_comment_identity_not_nearby_intent_or_forged_tag(tmp_path):
         },
     )
     log = tmp_path / "actions.jsonl"
-    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=123) == "app"
-    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=124) is None
-    assert find_outgoing_comment(5, log, repo="other/repo", comment_id=123) is None
+    assert (
+        find_outgoing_comment(5, log, repo="acme/app", comment_id=123, registrations=REGISTRATIONS)
+        == "app"
+    )
+    assert (
+        find_outgoing_comment(5, log, repo="acme/app", comment_id=124, registrations=REGISTRATIONS)
+        is None
+    )
+    assert (
+        find_outgoing_comment(
+            5, log, repo="other/repo", comment_id=123, registrations=REGISTRATIONS
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode", "gemini"])
@@ -349,17 +380,28 @@ if (output.content.length !== 2) throw new Error("offered context was not handed
         for action in actions:
             bb.append_action(tmp_path, "app", action)
     log = tmp_path / "actions.jsonl"
-    assert json.loads(log.read_text().splitlines()[-1])["comment_id"] == 123
-    assert has_commented_on_issue(5, "app", log, repo="acme/app")
-    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=123) == "app"
-    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=124) is None
+    receipt = json.loads(log.read_text().splitlines()[-1])
+    assert receipt["comment_id"] == 123
+    assert receipt["registration_id"] == REGISTRATION
+    assert has_commented_on_issue(5, "app", log, repo="acme/app", registration_id=REGISTRATION)
+    assert (
+        find_outgoing_comment(5, log, repo="acme/app", comment_id=123, registrations=REGISTRATIONS)
+        == "app"
+    )
+    assert (
+        find_outgoing_comment(5, log, repo="acme/app", comment_id=124, registrations=REGISTRATIONS)
+        is None
+    )
     assert len(list((tmp_path / "comment-receipts").glob("*.json"))) == 1
     with log.open("a") as file:
         file.write("{}\n" * 2100)
     rotate_action_log(log)
-    assert has_commented_on_issue(5, "app", log, repo="acme/app")
+    assert has_commented_on_issue(5, "app", log, repo="acme/app", registration_id=REGISTRATION)
     log.unlink()
-    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=123) == "app"
+    assert (
+        find_outgoing_comment(5, log, repo="acme/app", comment_id=123, registrations=REGISTRATIONS)
+        == "app"
+    )
 
 
 @pytest.mark.parametrize("ambiguous", [False, True])
@@ -380,6 +422,7 @@ def test_delayed_event_finds_exact_receipt_beyond_recent_tail(tmp_path):
 
     receipt = {
         "session": "worker",
+        "registration_id": REGISTRATIONS["worker"],
         "action": "comment",
         "phase": "succeeded",
         "repo": "acme/app",
@@ -389,9 +432,17 @@ def test_delayed_event_finds_exact_receipt_beyond_recent_tail(tmp_path):
     }
     log = tmp_path / "actions.jsonl"
     log.write_text(json.dumps(receipt) + "\n" + (json.dumps({"noise": "x" * 1024}) + "\n") * 100)
-    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=123) == "worker"
-    assert has_commented_on_issue(5, "worker", log, repo="acme/app")
-    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=124) is None
+    assert (
+        find_outgoing_comment(5, log, repo="acme/app", comment_id=123, registrations=REGISTRATIONS)
+        == "worker"
+    )
+    assert has_commented_on_issue(
+        5, "worker", log, repo="acme/app", registration_id=REGISTRATIONS["worker"]
+    )
+    assert (
+        find_outgoing_comment(5, log, repo="acme/app", comment_id=124, registrations=REGISTRATIONS)
+        is None
+    )
 
 
 @pytest.mark.parametrize("hook", [claude_hook, codex_hook])
@@ -445,10 +496,22 @@ def test_successful_edit_of_older_comment_can_answer_a_newer_reset(tmp_path):
     bb.append_action(tmp_path, "app", actions[0])
     log = tmp_path / "actions.jsonl"
     assert has_commented_on_issue(
-        5, "app", log, repo="acme/app", since=actions[0]["ts"] - 1, reset_comment_id=124
+        5,
+        "app",
+        log,
+        repo="acme/app",
+        since=actions[0]["ts"] - 1,
+        reset_comment_id=124,
+        registration_id=REGISTRATION,
     )
     assert not has_commented_on_issue(
-        5, "app", log, repo="acme/app", since=actions[0]["ts"] + 1, reset_comment_id=124
+        5,
+        "app",
+        log,
+        repo="acme/app",
+        since=actions[0]["ts"] + 1,
+        reset_comment_id=124,
+        registration_id=REGISTRATION,
     )
 
 
@@ -480,7 +543,10 @@ def test_receipt_appended_during_rotation_survives_and_expires_by_retention(tmp_
         "agent_backbone.services.agents.acknowledgement.os.replace", side_effect=during_rotation
     ):
         assert rotate_action_log(log, keep_lines=2) == 18
-    assert find_outgoing_comment(5, log, repo="acme/app", comment_id=123) == "app"
+    assert (
+        find_outgoing_comment(5, log, repo="acme/app", comment_id=123, registrations=REGISTRATIONS)
+        == "app"
+    )
     receipt = next((tmp_path / "comment-receipts").glob("*.json"))
     assert receipt.stat().st_mode & 0o777 == 0o600
     old = time.time() - 2 * 86400
@@ -489,7 +555,7 @@ def test_receipt_appended_during_rotation_survives_and_expires_by_retention(tmp_
     assert not receipt.exists()
 
 
-def test_exact_receipt_lookup_uses_latest_editor_regardless_of_file_order(tmp_path):
+def test_exact_receipt_lookup_uses_latest_editor_regardless_of_file_order(tmp_path, monkeypatch):
     action = {
         "action": "comment",
         "phase": "succeeded",
@@ -497,9 +563,17 @@ def test_exact_receipt_lookup_uses_latest_editor_regardless_of_file_order(tmp_pa
         "issue": 5,
         "comment_id": 123,
     }
+    monkeypatch.setenv("BACKBONE_REGISTRATION_ID", REGISTRATIONS["editor"])
     bb.append_action(tmp_path, "editor", {**action, "ts": 200, "edited": True})
+    monkeypatch.setenv("BACKBONE_REGISTRATION_ID", REGISTRATIONS["author"])
     bb.append_action(tmp_path, "author", {**action, "ts": 100})
     assert (
-        find_outgoing_comment(5, tmp_path / "actions.jsonl", repo="acme/app", comment_id=123)
+        find_outgoing_comment(
+            5,
+            tmp_path / "actions.jsonl",
+            repo="acme/app",
+            comment_id=123,
+            registrations=REGISTRATIONS,
+        )
         == "editor"
     )
