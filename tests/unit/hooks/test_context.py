@@ -255,6 +255,39 @@ async def test_startup_withdraws_unbound_offers_before_hooks_consume_them(tmp_pa
         await db.stop()
 
 
+async def test_startup_prevents_pruning_and_id_reuse_during_hook_withdrawal(tmp_path):
+    import sqlite3
+    from contextlib import closing
+
+    from sqlalchemy import text
+
+    from agent_backbone.services.database import BackboneDB
+
+    database = tmp_path / "queue.db"
+    url = f"sqlite+aiosqlite:///{database}"
+    async with BackboneDB.connect(url) as db:
+        queued = await db.queue.enqueue(
+            session_name="desk", message="old notification", delivery_kind="subscription"
+        )
+        async with db.engine.begin() as conn:
+            await conn.execute(text("UPDATE message_queue SET status='expired'"))
+        bb.offer_context(tmp_path, "desk", str(queued.id), "old notification")
+
+    def withdraw(state_dir, agent, key):
+        with closing(sqlite3.connect(database, timeout=0)) as concurrent:
+            with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+                concurrent.execute("DELETE FROM message_queue WHERE status='expired'")
+        bb.clear_context(state_dir, agent, key)
+
+    db = BackboneDB(url, state_dir=tmp_path)
+    try:
+        with patch("agent_backbone.services.database.backbone_db.clear_context", withdraw):
+            await db.start()
+        assert bb.take_context(tmp_path, "desk") == []
+    finally:
+        await db.stop()
+
+
 def _prompt(runtime: str, tmp_path, at: float) -> dict:
     """A prompt starts a turn on ``runtime`` (Claude Code, Codex) at ``at``:
     the turn as the backbone names it in an offer."""

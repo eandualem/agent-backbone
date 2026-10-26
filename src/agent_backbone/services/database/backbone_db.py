@@ -290,8 +290,13 @@ class BackboneDB:
                 )
             # Legacy queues have no provable link to the current registration.
             if self._state_dir is not None:
+                # Hold the rows until withdrawal finishes: pruning must not
+                # reuse an ID for a current notification while its files clear.
                 legacy = await conn.execute(
-                    text("SELECT id, session_name FROM message_queue WHERE registration_id IS NULL")
+                    text(
+                        "UPDATE message_queue SET registration_id=NULL "
+                        "WHERE registration_id IS NULL RETURNING id, session_name"
+                    )
                 )
                 for row in legacy:
                     # Include already-retired rows: earlier upgrades left their
