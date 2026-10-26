@@ -166,6 +166,18 @@ async def test_renamed_agent_keeps_registration_but_retires_old_name(db, tmp_pat
     assert agent_profile_path(tmp_path, "worker").stat().st_ino == retired_inode
 
 
+@pytest.mark.parametrize("mode", [0o400, 0o700])
+async def test_refresh_repairs_owner_permissions_rejected_by_profile_reader(
+    db, tmp_path, monkeypatch, mode
+):
+    store = await registered(db, tmp_path, monkeypatch)
+    path = agent_profile_path(tmp_path, "worker")
+    path.chmod(mode)
+    await store.refresh()
+    assert read_agent_profile(tmp_path, "worker") is not None
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
 async def test_registration_header_refuses_a_retired_profile(api_client, api_app):
     row = (await api_app.state.db.agents.list())[0]
     request_headers = {
