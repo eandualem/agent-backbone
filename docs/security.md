@@ -72,9 +72,11 @@ recipient, closed issue or completed review notification is retired instead
 of replayed. This does not authenticate GitHub text or a claimed sender.
 
 On upgrade, outstanding legacy queue rows without a registration identity are
-retired with their text retained in history. Legacy outbox and failed-delivery
-records without that identity cannot be pasted. Inspect the history and send
-new messages deliberately when needed; the migration does not guess ownership.
+retired with their text retained in history. Their unconsumed hook offers are
+removed too, including offers left by an earlier upgrade. Legacy outbox and
+failed-delivery records without that identity cannot be pasted. Inspect the
+history and send new messages deliberately when needed; the migration does not
+guess ownership.
 
 ## Unattended agents and writable directories
 

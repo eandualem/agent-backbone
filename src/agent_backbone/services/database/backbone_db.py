@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -12,6 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 import agent_backbone.services.database.models  # noqa: F401  (registers the ORM tables)
+from agent_backbone.hooks.backbone_state import clear_context
 from agent_backbone.services.database._acks_repo import AcknowledgementRepo
 from agent_backbone.services.database._agents_repo import AgentRepo
 from agent_backbone.services.database._delivery_repo import DeliveryRepo
@@ -217,8 +219,9 @@ class BackboneDB:
             await db.deliveries.record(...)
     """
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, *, state_dir: Path | None = None) -> None:
         self._url = url
+        self._state_dir = state_dir
         self._engine: AsyncEngine | None = None
         engine = lambda: self.engine  # noqa: E731 — the repos read the live engine
         self.deliveries = DeliveryRepo(engine)
@@ -286,6 +289,16 @@ class BackboneDB:
                     {"name": name, "identity": uuid.uuid4().hex},
                 )
             # Legacy queues have no provable link to the current registration.
+            if self._state_dir is not None:
+                legacy = await conn.execute(
+                    text("SELECT id, session_name FROM message_queue WHERE registration_id IS NULL")
+                )
+                for row in legacy:
+                    # Include already-retired rows: earlier upgrades left their
+                    # offers behind for still-running hooks to consume.
+                    await asyncio.to_thread(
+                        clear_context, self._state_dir, row.session_name, str(row.id)
+                    )
             await conn.execute(
                 text(
                     "INSERT INTO deliveries (operation_id,kind,repo,issue_number,target_entity,"
