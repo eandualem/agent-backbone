@@ -679,6 +679,7 @@ class TestTeardown:
 
         with (
             patch(f"{_IFACE}.session_exists", AsyncMock(return_value=False)),
+            patch("agent_backbone.services.terminal.session_exists", return_value=False),
             patch(f"{_IFACE}.remove_worktree", side_effect=remove),
         ):
             teardown = asyncio.create_task(

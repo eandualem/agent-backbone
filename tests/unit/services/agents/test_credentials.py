@@ -8,7 +8,7 @@ import multiprocessing
 import os
 import time
 from dataclasses import replace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -43,6 +43,9 @@ async def bind_agent_profile(config, registration, launch_id):
 
 async def registered(db, tmp_path, monkeypatch, runtime="codex"):
     monkeypatch.setenv("BACKBONE_API_KEY", "operator")
+    monkeypatch.setattr(
+        "agent_backbone.services.terminal.session_exists", AsyncMock(return_value=False)
+    )
     boot = bootstrap_config(tmp_path)
     store = AgentStore(db, tmp_path, credential_endpoint=(boot.backbone.host, boot.backbone.port))
     await store.start()
@@ -314,29 +317,32 @@ async def test_refresh_snapshot_cannot_overwrite_a_newer_cli_registration(
             await release.wait()
         return rows
 
-    binding = None
+    name = "worker" if change == "replace" else "peer"
+
+    async def mutate_and_bind():
+        if change == "rename":
+            await direct.rename("worker", name)
+        else:
+            if change == "replace":
+                await direct.forget(name)
+            await direct.register(AgentSpec(name=name, dir=str(tmp_path)))
+        row = next(row for row in await list_agents() if row["name"] == name)
+        await bind_agent_profile(direct.config, row, "b" * 32)
+        return row
+
+    mutation = None
     with patch.object(db.agents, "list", side_effect=delayed_snapshot):
         refresh = asyncio.create_task(daemon.refresh())
         try:
             await asyncio.wait_for(captured.wait(), 5)
-            name = "peer"
-            if change == "rename":
-                with patch("agent_backbone.services.terminal.session_exists", return_value=False):
-                    await direct.rename("worker", name)
-            else:
-                if change == "replace":
-                    name = "worker"
-                    await direct.forget(name)
-                await direct.register(AgentSpec(name=name, dir=str(tmp_path)))
-            row = next(row for row in await list_agents() if row["name"] == name)
-            binding = asyncio.create_task(bind_agent_profile(direct.config, row, "b" * 32))
+            mutation = asyncio.create_task(mutate_and_bind())
             await asyncio.sleep(0.1)
-            assert not binding.done()
+            assert not mutation.done()
         finally:
             release.set()
             await asyncio.wait_for(refresh, 5)
-            if binding is not None:
-                await asyncio.wait_for(binding, 5)
+            if mutation is not None:
+                row = await asyncio.wait_for(mutation, 5)
     profile = read_agent_profile(tmp_path, name)
     assert profile["registration"] == row["report_identity"]
     assert profile["launch"] == "b" * 32
@@ -485,3 +491,60 @@ async def test_launch_refuses_registration_replaced_during_preparation(db, tmp_p
     assert not result.ok
     assert "registration changed" in " ".join(result.evidence)
     start.assert_not_awaited()
+
+
+@pytest.mark.parametrize("mutation", ["register", "new", "forget", "rename"])
+async def test_registration_mutations_wait_for_session_creation(
+    db, tmp_path, monkeypatch, mutation
+):
+    from agent_backbone.services.agents import start_agent
+
+    store = await registered(db, tmp_path, monkeypatch, runtime="shell")
+    spec = store.agents.get("worker")
+    entered, release = asyncio.Event(), asyncio.Event()
+    running = False
+
+    async def create(*args, **kwargs):
+        nonlocal running
+        entered.set()
+        await release.wait()
+        running = True
+        return True
+
+    async def exists(name):
+        return running and name == "worker"
+
+    async def mutate():
+        if mutation == "forget":
+            return await store.forget("worker")
+        if mutation == "rename":
+            return await store.rename("worker", "renamed")
+        return await store.register(replace(spec, name="peer" if mutation == "new" else "worker"))
+
+    with (
+        patch("agent_backbone.services.agents.launch.session_exists", side_effect=exists),
+        patch("agent_backbone.services.terminal.session_exists", side_effect=exists),
+        patch("agent_backbone.services.agents.launch.start_session", side_effect=create) as start,
+    ):
+        launch = asyncio.create_task(start_agent(spec, store.config, db=db, wait=False))
+        await asyncio.wait_for(entered.wait(), 5)
+        refresh = asyncio.create_task(store.refresh())
+        change = asyncio.create_task(mutate())
+        try:
+            await asyncio.sleep(0.1)
+            assert not change.done()
+        finally:
+            release.set()
+            results = await asyncio.wait_for(
+                asyncio.gather(launch, refresh, change, return_exceptions=True), 5
+            )
+        assert results[0].ok
+        assert not isinstance(results[1], BaseException)
+        if mutation in {"forget", "rename"}:
+            assert isinstance(results[2], (RuntimeError, ValueError))
+        else:
+            assert not isinstance(results[2], BaseException)
+    await store.refresh()
+    for key, value in start.call_args.kwargs["environment"].items():
+        monkeypatch.setenv(key, value)
+    assert load_secrets(tmp_path)["BACKBONE_API_KEY"] == agent_api_key("operator")

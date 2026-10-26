@@ -103,7 +103,8 @@ async def test_update_from_stale_snapshot_never_recreates_a_forgotten_agent(db, 
     first = await _store(db, tmp_path)
     second = AgentStore(db, tmp_path)
     await second.start()
-    await first.forget("app")
+    with patch("agent_backbone.services.terminal.session_exists", return_value=False):
+        await first.forget("app")
     with pytest.raises(KeyError, match="app"):
         await second.update("app", description="late update")
     with pytest.raises(KeyError, match="app"):

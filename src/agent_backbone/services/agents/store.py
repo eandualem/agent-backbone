@@ -274,25 +274,26 @@ class AgentStore:
     async def register(self, spec: AgentSpec) -> AgentSpec:
         """Insert or update an agent and publish the new snapshot."""
         validate_agent_spec(spec)
-        current = self._agents.get(spec.name)
-        await _refuse_running_inbox_only(
-            spec.name, spec.inbox_only and not (current and current.inbox_only)
-        )
-        await self._db.agents.upsert(
-            spec.name,
-            dir=spec.dir,
-            runtime=spec.runtime,
-            model=spec.model,
-            repo=spec.repo,
-            tags=list(spec.tags),
-            env=dict(spec.env),
-            description=spec.description,
-            always_on=spec.always_on,
-            unattended=spec.unattended,
-            inbox_only=spec.inbox_only,
-        )
-        for repo in spec.watches:
-            await self._db.agents.add_watch(spec.name, repo)
+        async with profile_lock(self._data_dir):
+            current = agents_from_rows(await self._db.agents.list()).get(spec.name)
+            await _refuse_running_inbox_only(
+                spec.name, spec.inbox_only and not (current and current.inbox_only)
+            )
+            await self._db.agents.upsert(
+                spec.name,
+                dir=spec.dir,
+                runtime=spec.runtime,
+                model=spec.model,
+                repo=spec.repo,
+                tags=list(spec.tags),
+                env=dict(spec.env),
+                description=spec.description,
+                always_on=spec.always_on,
+                unattended=spec.unattended,
+                inbox_only=spec.inbox_only,
+            )
+            for repo in spec.watches:
+                await self._db.agents.add_watch(spec.name, repo)
         await self.refresh()
         return self._agents.get(spec.name) or spec
 
@@ -351,14 +352,19 @@ class AgentStore:
 
     @serialized_mutation
     async def forget(self, name: str) -> bool:
-        spec = self._agents.get(name)
-        removed = await self._db.agents.delete(name)
+        from agent_backbone.services.terminal import session_exists
+
+        async with profile_lock(self._data_dir):
+            if await session_exists(name):
+                raise RuntimeError(f"'{name}' is running — stop it first")
+            spec = self._agents.get(name)
+            removed = await self._db.agents.delete(name)
+            if removed:
+                # Clear old context before another process can reuse the name.
+                shutil.rmtree(self.config.state_dir / CONTEXT_DIR / name, ignore_errors=True)
+                if spec is not None:
+                    self._release_skills(spec.name)
         await self.refresh()
-        if removed:
-            # A pending hook-context offer must not reach the next agent of this name.
-            shutil.rmtree(self.config.state_dir / CONTEXT_DIR / name, ignore_errors=True)
-            if spec is not None:
-                self._release_skills(spec.name)
         return removed
 
     def _release_skills(self, name: str) -> bool:
@@ -403,86 +409,88 @@ class AgentStore:
         # Stable lock order prevents two cross-renames from deadlocking.
         async with lifecycle_lock(min(name, new_name)), lifecycle_lock(max(name, new_name)):
             await self.refresh()
-            spec = self._agents.get(name)
-            if spec is None:
-                raise KeyError(name)
-            validate_agent_spec(replace(spec, name=new_name))
-            if (
-                name == self.config.backbone.session_name
-                or new_name == self.config.backbone.session_name
-            ):
-                raise ValueError("the backbone session name is reserved")
-            if spec.swarm:
-                raise ValueError("swarm member names belong to the swarm lifecycle")
-            if await session_exists(name) or await session_exists(new_name):
-                raise ValueError(
-                    f"stop '{name}' before renaming; both session names must be unused"
-                )
-            source = self.config.state_dir / f"{name}.json"
-            target = self.config.state_dir / f"{new_name}.json"
-            launch_moves = [
-                (
-                    self.config.state_dir / f"{name}.launch",
-                    self.config.state_dir / f"{new_name}.launch",
-                ),
-                (
-                    self.config.state_dir / "launches" / name,
-                    self.config.state_dir / "launches" / new_name,
-                ),
-            ]
-            if target.exists() or any(destination.exists() for _, destination in launch_moves):
-                raise ValueError(f"'{new_name}' already has saved state; choose another name")
-            # Its skill manifest follows too, or the old name would keep its links
-            # alive; it moves with the rename or not at all.
-            from agent_backbone.skills import manifest_path
+            async with profile_lock(self._data_dir):
+                agents = agents_from_rows(await self._db.agents.list())
+                spec = agents.get(name)
+                if spec is None:
+                    raise KeyError(name)
+                validate_agent_spec(replace(spec, name=new_name))
+                if (
+                    name == self.config.backbone.session_name
+                    or new_name == self.config.backbone.session_name
+                ):
+                    raise ValueError("the backbone session name is reserved")
+                if spec.swarm:
+                    raise ValueError("swarm member names belong to the swarm lifecycle")
+                if await session_exists(name) or await session_exists(new_name):
+                    raise ValueError(
+                        f"stop '{name}' before renaming; both session names must be unused"
+                    )
+                source = self.config.state_dir / f"{name}.json"
+                target = self.config.state_dir / f"{new_name}.json"
+                launch_moves = [
+                    (
+                        self.config.state_dir / f"{name}.launch",
+                        self.config.state_dir / f"{new_name}.launch",
+                    ),
+                    (
+                        self.config.state_dir / "launches" / name,
+                        self.config.state_dir / "launches" / new_name,
+                    ),
+                ]
+                if target.exists() or any(destination.exists() for _, destination in launch_moves):
+                    raise ValueError(f"'{new_name}' already has saved state; choose another name")
+                # Its skill manifest follows too, or the old name would keep its links
+                # alive; it moves with the rename or not at all.
+                from agent_backbone.skills import manifest_path
 
-            old_manifest = manifest_path(self.config.data_dir, name)
-            new_manifest = manifest_path(self.config.data_dir, new_name)
-            others = [n for n in self._agents.names if n != name]
-            if new_name in others or case_twin(others, new_name):
-                raise ValueError(f"'{new_name}' is already an agent")
-            # A manifest under a name no agent holds is a forgotten agent's,
-            # kept because its links could not be released then: retry now. On a
-            # case-insensitive filesystem a case-only rename names the agent's own.
-            leftover = new_manifest.exists() and not (
-                old_manifest.exists() and old_manifest.samefile(new_manifest)
-            )
-            if leftover and not self._release_skills(new_name):
-                raise ValueError(
-                    f"'{new_name}' still has a forgotten agent's skill links that could not be "
-                    "released; choose another name"
+                old_manifest = manifest_path(self.config.data_dir, name)
+                new_manifest = manifest_path(self.config.data_dir, new_name)
+                others = [n for n in agents.names if n != name]
+                if new_name in others or case_twin(others, new_name):
+                    raise ValueError(f"'{new_name}' is already an agent")
+                # A manifest under a name no agent holds is a forgotten agent's,
+                # kept because its links could not be released then: retry now. On a
+                # case-insensitive filesystem a case-only rename names the agent's own.
+                leftover = new_manifest.exists() and not (
+                    old_manifest.exists() and old_manifest.samefile(new_manifest)
                 )
-            copied = moved = False
-            moved_launch_state: list[tuple[Path, Path]] = []
-            try:
-                if source.exists():
-                    atomic_write_text(target, source.read_text())
-                    copied = True
-                if old_manifest.exists():
-                    old_manifest.rename(new_manifest)
-                    moved = True
-                for original, destination in launch_moves:
-                    if original.exists():
-                        original.rename(destination)
-                        moved_launch_state.append((original, destination))
-                await self._db.agents.rename(name, new_name)
-            except BaseException:
-                for original, destination in reversed(moved_launch_state):
-                    destination.rename(original)
-                if copied:
-                    target.unlink(missing_ok=True)
-                if moved:
-                    new_manifest.rename(old_manifest)
-                raise
-            source.unlink(missing_ok=True)
-            (self.config.state_dir / f"{name}.starting").unlink(missing_ok=True)
-            # Pending hook-context offers follow the queue rows just rekeyed.
-            offers = self.config.state_dir / CONTEXT_DIR / name
-            if offers.exists():
+                if leftover and not self._release_skills(new_name):
+                    raise ValueError(
+                        f"'{new_name}' still has a forgotten agent's skill links that could not be "
+                        "released; choose another name"
+                    )
+                copied = moved = False
+                moved_launch_state: list[tuple[Path, Path]] = []
                 try:
-                    offers.rename(self.config.state_dir / CONTEXT_DIR / new_name)
-                except OSError as exc:
-                    log.warning("Could not move %s's pending context offers: %s", name, exc)
+                    if source.exists():
+                        atomic_write_text(target, source.read_text())
+                        copied = True
+                    if old_manifest.exists():
+                        old_manifest.rename(new_manifest)
+                        moved = True
+                    for original, destination in launch_moves:
+                        if original.exists():
+                            original.rename(destination)
+                            moved_launch_state.append((original, destination))
+                    await self._db.agents.rename(name, new_name)
+                except BaseException:
+                    for original, destination in reversed(moved_launch_state):
+                        destination.rename(original)
+                    if copied:
+                        target.unlink(missing_ok=True)
+                    if moved:
+                        new_manifest.rename(old_manifest)
+                    raise
+                source.unlink(missing_ok=True)
+                (self.config.state_dir / f"{name}.starting").unlink(missing_ok=True)
+                # Pending hook-context offers follow the queue rows just rekeyed.
+                offers = self.config.state_dir / CONTEXT_DIR / name
+                if offers.exists():
+                    try:
+                        offers.rename(self.config.state_dir / CONTEXT_DIR / new_name)
+                    except OSError as exc:
+                        log.warning("Could not move %s's pending context offers: %s", name, exc)
             await self.refresh()
             return self._agents.get(new_name)
 

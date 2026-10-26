@@ -84,7 +84,8 @@ async def test_start_rejects_a_spec_changed_after_resolution(
     writer = AgentStore(db, tmp_path) if separate_store else store
     await writer.start()
     if mutation == "forget":
-        await writer.forget("app")
+        with patch("agent_backbone.services.terminal.session_exists", return_value=False):
+            await writer.forget("app")
     else:
         await writer.update("app", description="changed after resolution")
     with patch(f"{_OPS}.launch.start_agent", AsyncMock()) as launch:

@@ -81,7 +81,8 @@ async def test_start_inbox_only_registers_without_launching(db, tmp_path):
     launch.assert_not_awaited()
     assert result.ok and result.ready == "inbox_only"
     assert store.agents.get("client").inbox_only
-    await store.forget("client")  # between resolving and starting
+    with patch("agent_backbone.services.terminal.session_exists", return_value=False):
+        await store.forget("client")  # between resolving and starting
     with pytest.raises(ValueError, match="forgotten"):
         await start_resolved(store, store.config, spec, req, db=db)
     with pytest.raises(ValueError, match="nothing to resume"):
