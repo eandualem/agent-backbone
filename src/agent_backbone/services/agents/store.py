@@ -86,8 +86,8 @@ def case_twin(names, name: str | None) -> str | None:
 
 
 def refuse_case_twin(agents, name: str | None) -> None:
-    """A new name beside a registered one of different case ("alfred" beside
-    "Alfred") would be a second agent that messages to the first never reach.
+    """A new name beside a registered one of different case ("worker" beside
+    "Worker") would be a second agent that messages to the first never reach.
     An exact registered name is not new and passes."""
     if name and agents.get(name) is None and (twin := case_twin(agents.names, name)):
         raise ValueError(
