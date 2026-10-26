@@ -349,3 +349,17 @@ Successful comment receipts are stored as separate private files before the
 rolling action log is appended. They survive action-log rotation and use
 `timing.delivery_retention_days` for retention. Successful comment edits retain
 their completion time, because editing an old comment keeps its original ID.
+
+### Existing-session credential pickup
+
+Managed CLI sessions can read daemon-maintained collaboration-only profiles from
+`<data_dir>/agent-credentials/`. These `.env` files are private and never contain
+the operator key. The CLI rejects symlinks, unsafe permissions, malformed files
+and launch mismatches. Its profile pins the endpoint and registration; the API
+rejects a profile request after that registration is retired. Missing credentials
+never trigger an operator `.env` or direct-database fallback. See
+[configuration](configuration.md) for provisioning status and migration behavior.
+
+This is scoped collaboration access, not cryptographic sender authentication.
+Signed-author enrollment remains separate. An unrestricted same-user process can
+read or alter private files; these profiles do not create OS-level isolation.

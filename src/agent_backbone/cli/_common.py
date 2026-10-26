@@ -40,7 +40,11 @@ def api_url(config: BackboneConfig, path: str) -> str:
 
 
 def headers(config: BackboneConfig) -> dict[str, str]:
-    return {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
+    result = {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
+    if config.client_registration:
+        result["X-Backbone-Client-Agent"] = config.client_agent
+        result["X-Backbone-Client-Registration"] = config.client_registration
+    return result
 
 
 async def api(
@@ -187,6 +191,8 @@ async def read_client_config() -> BackboneConfig:
     from sqlalchemy.ext.asyncio import create_async_engine
 
     boot = bootstrap_config()
+    if boot.client_registration:
+        return boot
     if is_agent_client(boot.api_key):
         # The launcher exports the effective address without loading operator secrets.
         from dataclasses import replace

@@ -32,6 +32,7 @@ from agent_backbone.git import detect_repo
 from agent_backbone.hooks.backbone_state import CONTEXT_DIR
 from agent_backbone.services.agents._locks import lifecycle_lock, serialized_mutation
 from agent_backbone.services.agents._validation import validate_agent_spec, validate_repo
+from agent_backbone.services.agents.credentials import provision_agent_profiles
 from agent_backbone.services.terminal import session_exists
 
 if TYPE_CHECKING:
@@ -156,10 +157,15 @@ class AgentStore:
         """Re-read settings and agents from the database and publish."""
         async with self._lock:
             self._settings = await self._db.settings.all()
-            self._agents = agents_from_rows(await self._db.agents.list())
+            registrations = await self._db.agents.list()
+            self._agents = agents_from_rows(registrations)
             self._config = build_config(
                 self._data_dir, settings=self._settings, agents=self._agents
             )
+            try:
+                await asyncio.to_thread(provision_agent_profiles, self._config, registrations)
+            except (OSError, ValueError):
+                log.warning("Could not provision agent credential profiles", exc_info=True)
         if self._on_change is not None:
             result = self._on_change(self._config)
             if asyncio.iscoroutine(result):

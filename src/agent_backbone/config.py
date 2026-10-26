@@ -21,11 +21,14 @@ backbone picks it up on its next refresh.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
+import io
 import json
 import logging
 import os
 import re
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -795,6 +798,8 @@ class BackboneConfig:
     and agents from the database."""
 
     api_key: str = ""
+    client_agent: str = ""
+    client_registration: str = ""
     webhook_secret: str = ""
     github_token: str = ""
     github_app_id: int | None = None
@@ -897,8 +902,10 @@ class BackboneConfig:
 
 def resolve_data_dir(explicit: str | Path | None = None) -> Path:
     """Data directory from an explicit value, ``BACKBONE_DATA_DIR``, or the default."""
-    raw = explicit or os.environ.get("BACKBONE_DATA_DIR") or DEFAULT_DATA_DIR
-    return Path(raw).expanduser()
+    raw = explicit or os.environ.get("BACKBONE_DATA_DIR")
+    if not raw and os.environ.get("BACKBONE_AGENT") and os.environ.get("BACKBONE_STATE_DIR"):
+        raw = Path(os.environ["BACKBONE_STATE_DIR"]).expanduser().parent
+    return Path(raw or DEFAULT_DATA_DIR).expanduser()
 
 
 def env_file_keys(env_path: Path | str) -> tuple[str, ...]:
@@ -925,6 +932,62 @@ def agent_credential(key: str) -> bool:
     return key.startswith(AGENT_KEY_PREFIX)
 
 
+def agent_profile_path(data_dir: Path, name: str) -> Path:
+    """Private CLI connection material, named without trusting a filesystem component."""
+    return data_dir / "agent-credentials" / (hashlib.sha256(name.encode()).hexdigest() + ".env")
+
+
+def read_agent_profile(data_dir: Path, name: str) -> dict[str, str] | None:
+    """Read only a private regular file; never follow a profile or directory symlink."""
+    path = agent_profile_path(data_dir, name)
+    try:
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ValueError("Agent credential profile directory is unsafe") from exc
+    try:
+        info = os.fstat(directory)
+        if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+            raise ValueError("Agent credential profile directory must be private")
+        try:
+            fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise ValueError("Agent credential profile is unsafe") from exc
+        with os.fdopen(fd, "r", encoding="utf-8") as stream:
+            info = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_size > 8192
+            ):
+                raise ValueError("Agent credential profile must be a private regular file")
+            values = dict(dotenv_values(stream=io.StringIO(stream.read(8193)), interpolate=False))
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("Agent credential profile is unreadable") from exc
+    finally:
+        os.close(directory)
+    expected = {"agent", "registration", "launch", "host", "port", "credential"}
+    if (
+        values.keys() != expected
+        or any(not isinstance(value, str) for value in values.values())
+        or values["agent"] != name
+        or not re.fullmatch(r"[a-f0-9]{32}", values.get("registration") or "")
+        or not re.fullmatch(r"(?:[a-f0-9]{32})?", values.get("launch") or "")
+        or not re.fullmatch(r"[A-Za-z0-9_.:-]+", values.get("host") or "")
+        or not (values.get("port") or "").isdigit()
+        or not 1 <= int(values["port"]) <= 65535
+        or not re.fullmatch(
+            re.escape(AGENT_KEY_PREFIX) + r"[a-f0-9]{64}", values.get("credential") or ""
+        )
+    ):
+        raise ValueError("Agent credential profile is invalid or retired")
+    return values
+
+
 def load_secrets(data_dir: Path) -> dict[str, str]:
     """``<data_dir>/.env`` merged **under** the process environment.
 
@@ -947,6 +1010,27 @@ def load_secrets(data_dir: Path) -> dict[str, str]:
                 "Invalid agent collaboration credential; operator fallback is disabled"
             )
         environment["BACKBONE_API_KEY"] = collaboration
+    name = environment.get("BACKBONE_AGENT")
+    if name and (
+        environment.get("BACKBONE_LAUNCH_ID")
+        or (
+            not environment.get("BACKBONE_API_KEY")
+            and "BACKBONE_AGENT_CREDENTIAL" not in environment
+        )
+    ):
+        profile = read_agent_profile(data_dir, name)
+        if profile is not None:
+            launch = environment.get("BACKBONE_LAUNCH_ID")
+            if not launch or launch != profile["launch"]:
+                raise ValueError("Agent credential profile does not match this launch")
+            environment.update(
+                BACKBONE_API_KEY=profile["credential"],
+                BACKBONE_AGENT_CREDENTIAL=profile["credential"],
+                BACKBONE_HOST=profile["host"],
+                BACKBONE_PORT=profile["port"],
+                BACKBONE_CLIENT_AGENT=name,
+                BACKBONE_CLIENT_REGISTRATION=profile["registration"],
+            )
     if (
         environment.get("BACKBONE_AGENT")
         and not environment.get("BACKBONE_API_KEY")
@@ -1038,6 +1122,8 @@ def build_config(
 
     return BackboneConfig(
         api_key=env.get("BACKBONE_API_KEY", ""),
+        client_agent=env.get("BACKBONE_CLIENT_AGENT", ""),
+        client_registration=env.get("BACKBONE_CLIENT_REGISTRATION", ""),
         webhook_secret=env.get("GITHUB_WEBHOOK_SECRET", ""),
         github_token=env.get("GITHUB_TOKEN", ""),
         github_app_id=_opt_int(env.get("GITHUB_APP_ID", "")),
@@ -1047,7 +1133,9 @@ def build_config(
         gmail_app_password=env.get("GMAIL_APP_PASSWORD", ""),
         backbone=BackboneSection(
             data_dir=str(data_dir),
-            host=s["backbone.host"],
+            host=env.get("BACKBONE_HOST", s["backbone.host"])
+            if env.get("BACKBONE_CLIENT_REGISTRATION")
+            else s["backbone.host"],
             port=_opt_int(env.get("BACKBONE_PORT")) or s["backbone.port"],
             socket_path=s["backbone.socket_path"],
             session_name=s["backbone.session_name"],

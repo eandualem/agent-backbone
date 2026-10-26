@@ -308,4 +308,29 @@ use PostgreSQL's password-change procedure for an existing installation.
 Agent launches also export `BACKBONE_AGENT_CREDENTIAL`, an alias for the scoped
 collaboration credential that survives runtime filtering of `*KEY*`, `*TOKEN*`
 and `*SECRET*` variable names. It never contains the operator key. Agent CLI
-calls with missing credentials refuse instead of importing the operator `.env`.
+calls never import the operator `.env`.
+
+The daemon also maintains private collaboration-only profiles under
+`<data_dir>/agent-credentials/` (directory mode 0700, `.env` files mode 0600).
+They cover every registered agent, including offline agents, without starting
+sessions. An existing managed session can pick up its profile on its next normal
+CLI call using its existing name and `BACKBONE_LAUNCH_ID`; a normal new launch
+refreshes the profile before the runtime starts. No shell configuration or
+per-repository files are required. Profiles carry the effective API endpoint,
+which takes precedence over stale launch environment values. Non-loopback
+endpoints retain HTTPS certificate verification.
+
+A profile belongs to one registration and managed launch. Missing or uncertain
+launch evidence, unsafe files, and retired or mismatched registrations refuse
+profile pickup. Renaming preserves the registration but retires the old profile
+name; forgetting an agent leaves a refusal for its old processes. The next
+ordinary start binds a new launch. Explicit scoped environment credentials still
+work for clients without a managed launch, or where no profile has been
+provisioned; there is no operator fallback.
+
+`backbone agent inspect NAME` reports `credential_profile` without disclosing
+credentials: `ready-existing-launch`, `future-launch-only`, `uncertain-legacy`,
+or `unavailable`. This is provisioning evidence, not proof of a successful
+request or that an offline agent's workspace is usable. Profiles refresh when
+configuration changes and on the existing monitor pass. Credential rotation is
+picked up on the next command after provisioning.

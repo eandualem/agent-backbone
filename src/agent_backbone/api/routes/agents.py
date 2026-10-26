@@ -46,6 +46,7 @@ from agent_backbone.services.agents import (
     AgentConfigView,
     AgentStore,
     EnrichedAgent,
+    agent_profile_readiness,
     agent_state,
     approve_agent,
     deny_agent,
@@ -236,8 +237,13 @@ async def inspect_agent(
     except Exception:
         recent = []
     transitions = await db.transitions.list_for(name, limit=1)
+    registration = next((row for row in await db.agents.list() if row["name"] == name), {})
+    credential_profile = (
+        agent_profile_readiness(config, registration) if registration else "unavailable"
+    )
 
     return AgentInspectResponse(
+        credential_profile=credential_profile,
         name=name,
         known=spec is not None,
         online=online,

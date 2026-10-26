@@ -44,6 +44,7 @@ def _print_inspection(data: dict) -> None:
             ),
             ("CLI", data.get("runtime")),
             ("Configured model", data.get("model") or "default"),
+            ("Credential profile", data.get("credential_profile") or "unavailable"),
         ],
     )
     fields = [("State", data["state"]), ("Delivery", data["delivery"])]
