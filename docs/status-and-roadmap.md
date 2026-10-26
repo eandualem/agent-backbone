@@ -76,6 +76,11 @@ same source. Use `backbone runtimes` to see which CLIs are installed locally.
 
 ## Known rough edges
 
+- Remote approval controls remain available, but a dialog can change between
+  the screen check and the keypress. Native request binding that preserves the
+  runtime's automatic review is a future improvement; see the
+  [known limitation](security.md#known-limitation-remote-approval-request-binding).
+
 - Claude Code's folder-trust prompt is answered by the backbone at
   `agent start` (`agents.pre_trust`, on by default). With it disabled, a
   human answers once per directory (`start` tells you; `tmux attach`).

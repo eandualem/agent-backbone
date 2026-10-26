@@ -192,6 +192,25 @@ and `codex` use their own credential stores.
 Note that `BACKBONE_DATA_DIR` is *not* stripped: it is not a secret, and
 agents need it to find the same backbone you are running.
 
+## Known limitation: remote approval request binding
+
+Remote Allow/Deny remains available on Codex and the other supported runtimes.
+Backbone checks the visible dialog and sends the runtime's approval or denial
+keys. Telegram buttons also check a fingerprint of the prompt they were created
+for. These checks and the keypress are separate operations: a dialog can change
+between them, so the answer is not atomically bound to a native request ID.
+This limitation also applies to remote plan decisions when enabled. Do not treat
+an approval event as proof that a particular native request was answered.
+
+A stronger request-bound integration remains future work. In the inspected
+[Codex approval implementation](https://github.com/openai/codex/blob/970111f6cb62cc02fe36a82ea7d71b37a2889c97/codex-rs/core/src/tools/approvals.rs#L495-L518),
+configuration-sourced `PermissionRequest` hooks can resolve a request before
+StrictAutoReview or Guardian review runs. Returning `Allow` through that hook
+could therefore skip automatic review. Backbone retains its existing terminal
+controls; it does not use this proposed hook channel to answer approvals.
+A future integration must bind the exact request while preserving the runtime's
+review and permission checks, without removing existing functionality.
+
 ## Defaults
 
 | Concern | Default | Override |
@@ -202,13 +221,13 @@ agents need it to find the same backbone you are running.
 | Webhook | Rejected unless `GITHUB_WEBHOOK_SECRET` is set and the HMAC matches | — |
 | Telegram | Bot requires allowed chats; instructions, lifecycle commands and approval buttons additionally require a numeric ID in `telegram.allowed_user_ids` | Empty user lists refuse control; group membership is insufficient |
 | Remote plan approve/reject | Off (they act on a waiting agent) — bounded: the runtime's own plan keys, sent only while its plan dialog is on screen, refused for runtimes without a plan mode; a rejection's feedback goes through `safe_deliver` as a recorded message | `security.allow_remote_plan_control = true` |
-| Remote permission approval (`agent approve`, the Telegram **Allow** / **Deny** buttons) | On — bounded: the runtime's affirmative or refusing key only (Deny: Escape, verified for Claude Code, Codex, Gemini CLI, OpenCode and Deep Code, refused elsewhere), only while its dialog is on screen, only to a registered agent, every answer recorded as an `approval` / `denial` event with who asked (a Telegram button records `telegram:<user id>`, and is bound to the prompt it was raised for — a stale button answers nothing) | `security.allow_remote_approval = false` |
+| Remote permission approval (`agent approve`, the Telegram **Allow** / **Deny** buttons) | On — bounded: the runtime's affirmative or refusing key only (Deny: Escape, verified for Claude Code, Codex, Gemini CLI, OpenCode and Deep Code, refused elsewhere), only while its dialog is on screen, only to a registered agent, every answer recorded as an `approval` / `denial` event with who asked (a Telegram button records `telegram:<user id>`, and checks the prompt fingerprint before answering; see the [request-binding limitation](#known-limitation-remote-approval-request-binding)) | `security.allow_remote_approval = false` |
 | Unattended swarm members | On for members on a sandboxed runtime only (Codex, `-a never` inside its workspace-write sandbox: worktree, temp, network); members without a sandbox keep asking | `swarm.unattended_members = false` |
 | Terminal streaming | Read-only, registered agents only; the Socket.IO `/terminal` namespace has no input event | — |
 | Agent output (`agent output`, `GET /api/sessions/{name}/output`) | Read-only, registered agents only; reads the agent's user-facing messages, complete, from the runtime's own transcript for Claude Code, Codex, Gemini CLI and OpenCode (including messages that scrolled off or never showed on screen), a bounded page at a time with explicit offsets to read further; tool activity and thinking are not exposed; else the visible screen | — |
 | Steering (`tell --steer`, `POST /api/steer`) | Text reaches a working agent mid-turn as hook context on Claude Code and Codex, or as a user message in the running turn on OpenCode, with a provenance envelope; no keystrokes, so it cannot overwrite a draft or answer a dialog; refused (nothing queued) when the agent is not working or the runtime has no hook context. Same collaboration or operator credential as `tell` | — |
 | Secrets | Backbone secrets live only in `<data_dir>/.env` (mode 0600) or the environment — never in the database. Per-agent `env` is for settings: its values are stored in plain text in the database, and `agent set` warns about entries that look like secrets | — |
-| Secrets in agent sessions | Stripped: an agent inherits `BACKBONE_AGENT`/`BACKBONE_RUNTIME`/`BACKBONE_STATE_DIR` and its own `env`, never the backbone's `.env` | an agent that calls the API reads the key from `<data_dir>/.env`; other credentials stay in each tool's own store |
+| Secrets in agent sessions | Stripped at launch: an agent inherits `BACKBONE_AGENT`/`BACKBONE_RUNTIME`/`BACKBONE_STATE_DIR` and its own `env`, never the backbone's `.env` | existing sessions retain their launch-time credential; other credentials stay in each tool's own store |
 | Hook script | Standard library only, runs as your user, writes only under `<data_dir>/state` | — |
 | Busy agents | Never interrupted: `priority` only bypasses "someone is typing" and the settle window | — |
 

@@ -59,9 +59,10 @@ when running the workflow.
 
 `.github/workflows/release.yml` publishes `main` only (it refuses any
 other ref, and a version that does not match `pyproject.toml`), runs the
-tests, builds with `uv build`, publishes with `uv publish` and then tags
-`v<version>`. It uses the `PYPI_API_TOKEN` repository secret. The token is
-never in the repository or in the data directory's `.env`.
+tests, builds with `uv build`, creates the source tag `v<version>`, and then
+publishes the built distributions with `uv publish`. It uses the
+`PYPI_API_TOKEN` repository secret. The token is never in the repository or in
+the data directory's `.env`.
 
 `docs/` ships inside the wheel (`backbone docs`), so a docs-only change is
 still worth a release.
