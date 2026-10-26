@@ -299,7 +299,8 @@ async def _dispatch_pull_request(
         if opener
         else None
     )
-    if confirmed:
+    # A retry may leave only intent, but another author's success cannot confirm it.
+    if confirmed and confirmed == opener:
         for number in event.issue.linked_issues():
             try:
                 if not await db.acks.record(

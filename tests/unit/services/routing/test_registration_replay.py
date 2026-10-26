@@ -246,8 +246,8 @@ async def test_bound_receipt_follows_the_same_registration_after_rename(db, tmp_
     send.assert_not_awaited()
 
 
-@pytest.mark.parametrize("receipt_kind", ["unbound", "retired", "pending"])
-async def test_latest_pr_receipt_cannot_fall_back_to_older_author(
+@pytest.mark.parametrize("receipt_kind", ["unbound", "retired", "pending", "retry"])
+async def test_pr_receipts_keep_retries_within_registration(
     db, tmp_path, monkeypatch, receipt_kind
 ):
     from agent_backbone.services.routing._router import _dispatch_pull_request
@@ -272,14 +272,16 @@ async def test_latest_pr_receipt_cannot_fall_back_to_older_author(
     identity = next(
         row["report_identity"] for row in await db.agents.list() if row["name"] == "worker"
     )
+    if receipt_kind == "retry":
+        identity = earlier.registration_id
     monkeypatch.setenv("BACKBONE_REGISTRATION_ID", "" if receipt_kind == "unbound" else identity)
     append_action(
         store.config.state_dir,
-        "worker",
+        "earlier" if receipt_kind == "retry" else "worker",
         {
             "ts": time.time(),
             "action": "pull_request",
-            "phase": "intent" if receipt_kind == "pending" else "succeeded",
+            "phase": "intent" if receipt_kind in {"pending", "retry"} else "succeeded",
             "repo": "acme/app",
             "branch": "feat/example",
         },
@@ -301,8 +303,8 @@ async def test_latest_pr_receipt_cannot_fall_back_to_older_author(
     with patch("agent_backbone.services.routing._router._deliver", new_callable=AsyncMock) as send:
         await _dispatch_pull_request(event, store.config, db, DispatchResult())
     assert not await db.acks.exists(5, "worker", repo="acme/app")
-    assert not await db.acks.exists(5, "earlier", repo="acme/app")
-    assert send.await_count == (1 if receipt_kind == "pending" else 2)
+    assert await db.acks.exists(5, "earlier", repo="acme/app") == (receipt_kind == "retry")
+    assert send.await_count == (1 if receipt_kind in {"pending", "retry"} else 2)
 
 
 @pytest.mark.parametrize("editor_bound", [False, True])

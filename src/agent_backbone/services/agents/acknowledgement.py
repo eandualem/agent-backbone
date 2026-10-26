@@ -162,6 +162,8 @@ def find_outgoing_pull_request(
     for entry in _read_tail(action_log, max_lines):
         if entry.get("action") != "pull_request":
             continue
+        if not include_intent and entry.get("phase") != "succeeded":
+            continue
         entry_head = (entry.get("head_repo") or "").casefold()
         entry_base = (entry.get("repo") or "").casefold()
         if head_repo:
@@ -173,8 +175,6 @@ def find_outgoing_pull_request(
             continue
         if abs(now - float(entry.get("ts", 0))) <= recency_seconds:
             # The latest matching publication owns attribution, even if retired.
-            if not include_intent and entry.get("phase") != "succeeded":
-                return None
             identity = entry.get("registration_id")
             return current_names.get(identity) if isinstance(identity, str) else None
     return None
