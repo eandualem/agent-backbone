@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 from agent_backbone.services.agents import launch, lifecycle_lock
 from agent_backbone.services.agents.operations import StartRequest, resolve_agent, start_resolved
-from agent_backbone.services.agents.transitions import SOURCE, due_after
+from agent_backbone.services.agents.transitions import SOURCE, due_after, validate_resume
 from agent_backbone.services.database import now_iso
 from agent_backbone.services.jobs.diagnostics import observe_job
 from agent_backbone.services.routing import envelope, safe_deliver
@@ -76,6 +76,16 @@ async def _advance(config: BackboneConfig, store: AgentStore, db: BackboneDB, ro
         return "failed"
     if row["stopped_at"] is None:
         async with lifecycle_lock(name):
+            if row["resume"]:
+                try:
+                    await store.refresh()
+                    current = store.agents.get(name)
+                    if current is None or current.inbox_only:
+                        raise ValueError("agent is no longer available for a session restart")
+                    validate_resume(config, current, row["runtime"] or current.runtime)
+                except ValueError as exc:
+                    await db.transitions.finish(row["id"], "failed", {"reason": str(exc)})
+                    return "failed"
             stopped = await launch.stop_agent(name)
         if not stopped:
             await db.transitions.finish(

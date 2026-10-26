@@ -8,7 +8,11 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from agent_backbone.models import SUCCESS_OUTCOMES, DeliveryOutcome
-from agent_backbone.services.agents import AgentState, has_commented_on_issue
+from agent_backbone.services.agents import (
+    AgentState,
+    has_commented_on_issue,
+    read_comment_receipts,
+)
 from agent_backbone.services.jobs.diagnostics import observe_job
 from agent_backbone.services.routing import (
     format_next_issue_notification,
@@ -37,17 +41,23 @@ async def deliver_pending_issues(
 ) -> dict[str, str]:
     """Deliver the next pending issue to every idle agent. Returns agent -> action."""
     result: dict[str, str] = {}
+    receipts: tuple[dict, ...] | None = None
 
     async def acknowledged(repo: str, issue_number: int, name: str) -> bool:
         """DB record, then exact successful publication in the local action log.
 
         ``name`` is the agent: its ``for:`` target label and its tmux session.
         """
+        nonlocal receipts
         try:
             if await is_acknowledged(db, repo, issue_number, name, name):
                 return True
             cleared, comment_id = await db.acks.reset_boundary(issue_number, name, repo=repo)
             since = datetime.fromisoformat(cleared).timestamp() if cleared else None
+            if receipts is None:
+                receipts = await asyncio.to_thread(
+                    lambda: tuple(read_comment_receipts(config.action_log_path))
+                )
             if await asyncio.to_thread(
                 has_commented_on_issue,
                 issue_number,
@@ -56,6 +66,7 @@ async def deliver_pending_issues(
                 repo=repo,
                 since=since,
                 reset_comment_id=comment_id,
+                receipts=receipts,
             ):
                 return await db.acks.record(
                     issue_number, name, repo=repo, not_cleared_since=cleared
@@ -94,6 +105,7 @@ async def deliver_pending_issues(
         return False
 
     async def deliver_one(name: str) -> str:
+        nonlocal receipts
         pending_issues = await list_open_queue_for_target(config, name, gh, db=db)
         if not pending_issues:
             return "no_pending"
@@ -105,6 +117,11 @@ async def deliver_pending_issues(
                 continue
             if await was_recently_delivered(repo, candidate.number, name, name):
                 return "recently_delivered"
+
+            # A later candidate can have been acknowledged since this pass loaded receipts.
+            receipts = None
+            if await acknowledged(repo, candidate.number, name):
+                continue
 
             outcome = (
                 await safe_deliver(

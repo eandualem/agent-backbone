@@ -1610,6 +1610,33 @@ class TestResumeOnlyTheLastLaunchesSession:
             assert "old-sess" in command
         assert any("resuming the session the last launch reported" in line for line in evidence)
 
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode", "gemini"])
+    async def test_malformed_hook_id_falls_back_to_exact_launch_identity(self, tmp_path, runtime):
+        from agent_backbone.services.agents import write_starting_marker
+
+        config, spec = self._setup(tmp_path, runtime, reported_by_last_launch=True)
+        write_starting_marker(
+            config.state_dir, spec.name, 3.0, launch_id="L2", opened=(runtime, "saved-session")
+        )
+        write_state_file(
+            config.state_dir,
+            spec.name,
+            {
+                "state": "idle",
+                "ts": 4.0,
+                "runtime": runtime,
+                "launch_id": "L2",
+                "session_id": {"invalid": "object"},
+            },
+        )
+        command, evidence = await self._start(config, spec, resume=True)
+        if runtime == "opencode":
+            selected = next(arg for arg in command if arg.startswith('{"model"'))
+            assert json.loads(selected)["resume"] == "saved-session"
+        else:
+            assert "saved-session" in command
+        assert any("last launch opened: saved-session" in line for line in evidence)
+
 
 @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
 async def test_a_launch_that_resumed_by_id_holds_that_conversation_before_reporting(

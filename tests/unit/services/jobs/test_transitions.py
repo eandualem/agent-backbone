@@ -3,17 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from agent_backbone.config import AgentsConfig
 from agent_backbone.models import DeliveryOutcome
-from agent_backbone.services.agents import AgentStore, StartResult
+from agent_backbone.services.agents import (
+    AgentStore,
+    StartResult,
+    lifecycle_lock,
+    write_starting_marker,
+    write_state_file,
+)
 from agent_backbone.services.database import now_iso
 from agent_backbone.services.jobs.retry import drain_message_queue
 from agent_backbone.services.jobs.transitions import run_transitions
 from agent_backbone.services.routing import DeliveryReport, safe_deliver
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+from agent_backbone.services.runtimes import RUNTIMES
 
 _JOB = "agent_backbone.services.jobs.transitions"
 _DELIVERY = "agent_backbone.services.routing._delivery"
@@ -122,8 +133,81 @@ async def test_stop_only_completes_after_the_stop(db, config, store, seams):
     start.assert_not_awaited()
 
 
+@pytest.mark.parametrize("runtime", sorted(RUNTIMES))
+async def test_impossible_resume_never_stops_existing_session(db, config, store, seams, runtime):
+    stop, start, _ = seams
+    spec = replace(next(iter(config.agents)), runtime=runtime)
+    name = spec.name
+    await store.update(name, runtime=runtime)
+    config = replace(config, agents=AgentsConfig(specs={name: spec}))
+    write_state_file(
+        config.state_dir,
+        name,
+        {
+            "state": "idle",
+            "ts": time.time(),
+            "runtime": runtime,
+            "session_id": "old",
+        },
+    )
+    # A replacement started after the request and has not reported its own identity.
+    write_starting_marker(config.state_dir, name, time.time(), launch_id="replacement")
+    row = await db.transitions.create(agent_name=name, resume=True)
+    assert await _run(config, store, db) == {name: "failed"}
+    stop.assert_not_awaited()
+    start.assert_not_awaited()
+    failed = await db.transitions.get(row["id"])
+    assert failed["status"] == "failed" and failed["stopped_at"] is None
+    assert "resum" in failed["result"]["reason"]
+
+
+async def test_resume_rechecks_runtime_changed_while_waiting_for_lock(db, config, store, seams):
+    stop, start, _ = seams
+    name = next(iter(config.agents)).name
+    write_state_file(
+        config.state_dir,
+        name,
+        {
+            "state": "idle",
+            "ts": time.time(),
+            "runtime": "claude",
+            "session_id": "saved",
+        },
+    )
+    row = await db.transitions.create(agent_name=name, resume=True)
+    waiting = asyncio.Event()
+
+    @asynccontextmanager
+    async def observed_lock(agent_name):
+        waiting.set()
+        async with lifecycle_lock(agent_name):
+            yield
+
+    with patch(f"{_JOB}.lifecycle_lock", observed_lock):
+        async with lifecycle_lock(name):
+            task = asyncio.create_task(_run(config, store, db))
+            await asyncio.wait_for(waiting.wait(), timeout=2)
+            await store.update(name, runtime="aider")
+        assert await task == {name: "failed"}
+    stop.assert_not_awaited()
+    start.assert_not_awaited()
+    failed = await db.transitions.get(row["id"])
+    assert failed["stopped_at"] is None
+    assert "cannot resume an exact session" in failed["result"]["reason"]
+
+
 async def test_runtime_model_and_resume_reach_the_start_request(db, config, store, seams):
     _, start, _ = seams
+    write_state_file(
+        config.state_dir,
+        config.agents.get("ike").name,
+        {
+            "state": "idle",
+            "ts": time.time(),
+            "runtime": "claude",
+            "session_id": "saved",
+        },
+    )
     with patch(f"{_JOB}.resolve_agent", new_callable=AsyncMock) as resolve:
         resolve.return_value = config.agents.get("ike")
         await db.transitions.create(

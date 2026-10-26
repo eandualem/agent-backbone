@@ -20,6 +20,7 @@ from agent_backbone.services.agents.acknowledgement import (
     find_outgoing_comment,
     find_outgoing_pull_request,
     has_commented_on_issue,
+    read_comment_receipts,
     rotate_action_log,
 )
 from agent_backbone.services.agents.audit import record_answer
@@ -64,6 +65,7 @@ __all__ = [
     "note_submission",
     "plan_control",
     "prompt_id",
+    "read_comment_receipts",
     "read_plan",
     "read_state_file",
     "record_answer",
