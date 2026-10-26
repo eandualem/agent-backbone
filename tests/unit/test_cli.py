@@ -344,9 +344,9 @@ class TestAgentCommands:
         listing = json.loads(capsys.readouterr().out)
         assert listing["items"][0]["dir"] == str(project)
 
-    @pytest.mark.parametrize("runtime", ["claude", "codex"])
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "aider"])
     def test_an_offline_start_briefs_the_agent(self, tmp_path, capsys, runtime):
-        """Claude Code takes its brief at launch; Codex's first message is sent here too."""
+        """Native instruction channels need no paste; Aider still receives its queued brief."""
         from agent_backbone.models import DeliveryOutcome
         from agent_backbone.services.routing import DeliveryReport
 
@@ -371,7 +371,7 @@ class TestAgentCommands:
             assert _run(argv) == 0
         out = capsys.readouterr().out
         assert "brief is not delivered yet" not in out
-        if runtime == "codex":
+        if runtime == "aider":
             assert deliver.await_count == 1
             assert deliver.await_args.args[1].startswith("[via:backbone]")
         else:
@@ -399,7 +399,7 @@ class TestAgentCommands:
             patch(_DETECT_REPO, new_callable=AsyncMock, return_value=""),
             patch("agent_backbone.services.jobs.retry.safe_deliver", side_effect=unconfirmed),
         ):
-            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "codex"]
+            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "aider"]
             assert _run(argv) == 0
         out = capsys.readouterr().out
         assert "could not be confirmed" in out and "backbone inbox" in out
@@ -422,7 +422,7 @@ class TestAgentCommands:
                 side_effect=RuntimeError("database is locked"),
             ),
         ):
-            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "codex"]
+            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "aider"]
             assert _run(argv) == 0
         out = capsys.readouterr().out
         assert "app: ready" in out and "could not deliver the brief from here" in out
@@ -452,7 +452,7 @@ class TestAgentCommands:
                 side_effect=RuntimeError("database is locked"),
             ),
         ):
-            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "codex"]
+            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "aider"]
             assert _run(argv) == 0
         out = capsys.readouterr().out
         assert "app: ready" in out and "could not read where the brief is" in out
@@ -469,7 +469,7 @@ class TestAgentCommands:
             patch("agent_backbone.services.runtimes.base.Runtime.pre_trust"),
             patch(_DETECT_REPO, new_callable=AsyncMock, return_value=""),
         ):
-            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "codex"]
+            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "aider"]
             assert _run([*argv, "--no-wait"]) == 0
         assert "brief is not delivered yet" in capsys.readouterr().out
 
@@ -1386,7 +1386,7 @@ class TestAgentRestart:
         from agent_backbone.cli.agents import _transition_line
 
         pending = {"id": 3, "status": "pending", "start": True, "resume": False, "start_at": None}
-        assert _transition_line(pending) == "#3 pending: fresh start, starts 60s after the stop"
+        assert _transition_line(pending) == "#3 pending: fresh start, starts 0s after the stop"
         done = {
             "id": 4,
             "status": "completed",

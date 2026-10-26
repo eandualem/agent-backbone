@@ -104,14 +104,13 @@ async def test_stop_now_then_start_when_due(db, config, store, seams):
 async def test_default_delay_and_a_zero_delay_start_in_the_same_tick(db, config, store, seams):
     stop, start, _ = seams
     default = await db.transitions.create(agent_name="ike")
-    assert default["delay_seconds"] == 60
-    assert await _run(config, store, db) == {"ike": "stopped"}
-    start.assert_not_awaited()
-    await db.transitions.finish(default["id"], "failed", {"reason": "test cleanup"})
+    assert default["delay_seconds"] == 0
+    assert await _run(config, store, db) == {"ike": "started"}
+    start.assert_awaited_once()
 
     await db.transitions.create(agent_name="leo", delay_seconds=0)
     assert await _run(config, store, db) == {"leo": "started"}
-    assert stop.await_count == 2 and start.await_count == 1
+    assert stop.await_count == 2 and start.await_count == 2
 
 
 async def test_stop_only_completes_after_the_stop(db, config, store, seams):

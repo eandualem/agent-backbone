@@ -58,6 +58,14 @@ This page follows real requests through the system. Read
    Codex also starts with `-c check_for_update_on_startup=false`, so an
    available Codex update never stops a launch on its update dialog; upgrade
    Codex yourself when you choose to.
+   The configured brief and shared policies load through native instruction
+   channels: Claude Code appends the policy file to its system prompt, Codex's
+   `SessionStart` hook supplies the complete text as developer context, and
+   OpenCode adds the file to its native `instructions` list. These paths preserve
+   built-in guidance and do not submit the policies as a first user prompt.
+   OpenCode retains existing instructions, plugins and permission settings.
+   Gemini CLI and Deep Code still use launch prompts; Aider queues its brief
+   as the first message. A plain shell receives no model instructions.
 5. **Wait until ready** (up to `timing.start_timeout_seconds`, 60 s): a
    fresh hook-written `idle` state, or a visible empty prompt for runtimes
    without hooks. A fresh busy or blocked hook keeps startup waiting even if
@@ -131,9 +139,8 @@ restart the backbone performs, because it was asked for. The request is
 validated (registered agent, installed runtime, model and effort, same-CLI
 resume) and stored as a `pending` transition; nothing is stopped inside the
 request. The `agent-transitions` job then stops the session on its next tick
-(5 s), records the stop, and — when the wait is over (default one minute after
-the stop, or the explicit delay or time) — starts the replacement through the
-same operation as `agent start`: the record update, the brief, the hooks and
+(5 s), records the stop, and starts the replacement immediately, or after an
+explicit delay or time, through the same operation as `agent start`: the record update, the brief, the hooks and
 the readiness wait. A continuation message is handed to the replacement once
 it is at its prompt (queued if it is not; that queue row never expires). No
 process inside the session takes part after acceptance, so an agent can ask
@@ -145,8 +152,8 @@ this transition's work. An agent with a pending transition is not reported
 as unexpectedly offline.
 
 When the backbone is down, the CLI does the same thing directly against the
-database and tmux, and says so. A brief sent as the first message (Codex,
-Aider) is delivered there too, through the same queue drain; if the agent
+database and tmux, and says so. A brief sent as the first message (Aider) is
+delivered there too, through the same queue drain; if the agent
 is not ready for it in time, the CLI says the brief goes first once the
 backbone runs, and if its paste could not be confirmed, that the agent's
 messages are held until it is acknowledged.
@@ -154,9 +161,8 @@ messages are held until it is acknowledged.
 ## 2. State: how the backbone knows what an agent is doing
 
 Permission requests do not always open a human dialog: an automatic reviewer can
-handle them. After the three-second redraw window, a visible busy state, current
-provider error or input prompt can supersede a permission hook when no active
-dialog remains. An input prompt alone reads as `busy` until turn completion is
+handle them. A visible busy state, current provider error or input prompt can
+immediately supersede a permission hook when no active dialog remains. An input prompt alone reads as `busy` until turn completion is
 established, so messages cannot interrupt unfinished work. Old dialog text above
 a new input prompt does not count as a current human wait. Refusal records remain
 action history; they do not mean an approval is pending.
@@ -303,6 +309,9 @@ character, its status chrome (lines to ignore), its busy indicator
 (Claude: `esc to interrupt`), its permission prompts (`Do you want to
 proceed?`, the folder-trust question), and how to tell typed text from a
 dim placeholder.
+Codex's timed `Working` and `Compacting context` rows also count as busy when
+a narrow terminal cuts off the interrupt hint; its visible input placeholder
+does not make the agent ready during that work.
 
 Every reading carries its evidence. `backbone agent inspect app` shows the
 state, the delivery condition, the evidence lines, the terminal tail and

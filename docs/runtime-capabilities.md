@@ -45,15 +45,15 @@ version differs.
 | Configured instruction sources and text over the API | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ source preview only; no instruction injection |
 | Message delivery into the session | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? not verified live | n/a |
 | Folder-trust dialog answered at start | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (version not recorded) `--skip-trust` | n/a | n/a | ? not checked | n/a |
-| Brief reaches a fresh session before other work | ✅ | ✅ | ✅ | ✅ | ? | ? not verified live | n/a |
-| Current brief after resume | ✅ (2.1.284) | ✅ (0.157.1) | ❌ | ❌ #273 | ❌ | ❌ | n/a |
+| Brief reaches a fresh session before other work | ✅ native system-prompt file | ✅ SessionStart developer context; new transport awaits a working-session live check | ✅ | ✅ native instructions file; new transport awaits a working-session live check | ? | ? not verified live | n/a |
+| Current brief after resume | ✅ (2.1.284) | ✅ (0.157.1) | ❌ | ❌ #273 native instructions now load on resume; working-session check pending | ❌ | ❌ | n/a |
 | Brief followed after context compaction | ✅ (2.1.282) | ✅ (0.156.1) | ? | ❌ #291 the rule is kept but no longer followed | ? | ? | n/a |
 | Project AGENTS.md loaded at start | ✅ | ✅ | ❌ reads GEMINI.md unless context.fileName is set | ✅ | ✅ | ❌ reads only files passed to it | n/a |
 | Non-empty user-level instruction file detected | ✅ | ✅ | ✅ | ✅ files listed under `instructions` in its config not checked | ✅ | ? no default user-level file per its docs; not yet verified | n/a |
 | CLI-native memory disabled or detected | ✅ managed settings not read | ✅ managed config and the `[memories]` switches not read | ✅ | n/a | n/a | ? not yet verified | n/a |
 | Installed CLI version compared with the verified one (`doctor`) | ✅ | ✅ | ✅ | ✅ | ✅ | ? not yet verified | n/a |
 | Replacement state excludes previous launch hooks and submissions | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| State reported by the runtime (hooks) | ✅ (2.1.284) | ✅ (0.157.1) from its first prompt (the brief): Codex runs no hook before its first turn | ✅ (0.46.0) | ✅ (1.18.32) | ❌ read from the terminal only | ❌ read from the terminal only | n/a |
+| State reported by the runtime (hooks) | ✅ (2.1.284) | ✅ (0.157.1) from its first work prompt: Codex runs no hook before its first turn | ✅ (0.46.0) | ✅ (1.18.32) | ❌ read from the terminal only | ❌ read from the terminal only | n/a |
 | Interrupted turn reads idle (Escape, refused dialog) | ✅ (2.1.284) from the terminal: Claude Code runs no hook on an interrupt | ✅ (0.157.1) | ❌ a declined dialog runs no hook | ✅ (1.18.32) | ? read from the terminal only | ? not verified live | n/a |
 | Steer and high-priority events into a working agent | ✅ (2.1.284) a steer that names its turn is handed over only in that turn, also after an Escape | ✅ (0.157.1) a command still running when its call returns hands it over when it exits (0.157.1); a steer that names its turn is handed over only in that turn, also after a provider failure | ❌ | ✅ (1.18.32) as a user message in the running turn, after the next tool call | ❌ | ❌ | n/a |
 | Permission dialog detected and alerted | ✅ (2.1.296) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? markers not verified live | n/a |

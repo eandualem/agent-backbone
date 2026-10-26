@@ -405,6 +405,35 @@ class TestGetAgentState:
         assert result.source == "pull"
         mock_capture.assert_awaited_once()
 
+    @pytest.mark.parametrize(
+        "runtime,pane",
+        [
+            ("claude", "✳ Working… (esc to interrupt · 301s)\n❯ \n"),
+            ("opencode", "┃  Build · Small\n   esc interrupt\n"),
+            # Reconstructed from a reported Codex 0.160.0 inspect excerpt;
+            # the original raw pane was not retained.
+            ("codex", "• Compacting context (4m 57s • es…\n› Ask Codex to do anything\n"),
+            # Codex 0.160.0's upstream renders_truncated snapshot.
+            ("codex", "• Working (0s • esc…\n› Ask Codex to do anything\n"),
+        ],
+    )
+    async def test_visible_progress_keeps_expired_busy_hook_busy(self, tmp_path, runtime, pane):
+        (tmp_path / "app.json").write_text(
+            json.dumps({"state": "busy", "ts": time.time() - 301, "runtime": runtime})
+        )
+        result = await get_agent_state(tmp_path, "app", runtime_hint=runtime, pane_content=pane)
+        assert result.state == AgentState.BUSY
+        assert result.source == "pull"
+        assert "terminal shows a busy marker" in " ".join(result.evidence)
+
+    @pytest.mark.parametrize(
+        "output",
+        ["  • Compacting context (4m 57s • es…", "• Compacting context is running."],
+    )
+    def test_codex_progress_quoted_in_reply_does_not_prevent_idle(self, output):
+        result = infer_state_from_pane(output + "\n› Ask Codex to do anything\n", "codex")
+        assert result.state == AgentState.IDLE
+
     async def test_stale_plan_waiting_without_plan_file_does_not_resurrect(self, tmp_path):
         """A missing plan file must not keep a dead plan_waiting snapshot alive."""
         state_file = tmp_path / "feynman.json"

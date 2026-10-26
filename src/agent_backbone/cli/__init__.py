@@ -296,7 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="delay",
         default=None,
         metavar="DURATION",
-        help="wait between the stop and the start: 90s, 20m, 3h20m (default: 1m)",
+        help="wait after the stop: 90s, 20m, 3h20m (default: immediate)",
     )
     prs.add_argument(
         "--at",

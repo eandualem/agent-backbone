@@ -599,23 +599,37 @@ class TestStartAgentBrief:
 
     @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
     async def test_starter_policies_reach_the_fresh_launch(self, tmp_path, runtime):
+        from agent_backbone.hooks.backbone_state import take_context
+
         config = bootstrap_config(tmp_path / "data")
         starters = ("starter-collaboration", "starter-continuity", "starter-learning")
         config = replace(config, launch=replace(config.launch, shared_policy=starters))
+        brief = tmp_path / "large-brief.md"
+        policy = "Keep the complete policy.\n" * 1500 + "Final instruction."
+        brief.write_text(policy)
         db = AsyncMock()
         db.queue.retire_pending_briefs.return_value = 0
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait:
-            result = await start_agent(self._spec(tmp_path, runtime), config, db=db)
+            result = await start_agent(
+                self._spec(tmp_path, runtime), config, brief_file=brief, db=db
+            )
         assert result.ok and result.ready == "ready"
         command = started.await_args.kwargs["command"]
         if runtime == "claude":
             content = Path(command[command.index("--append-system-prompt-file") + 1]).read_text()
         elif runtime == "opencode":
-            content = command[command.index("--prompt") + 1]
+            content = Path(command[3]).read_text()
         else:
-            db.queue.enqueue.assert_awaited_once()
-            content = db.queue.enqueue.await_args.kwargs["message"]
+            launch_id = started.await_args.kwargs["environment"]["BACKBONE_LAUNCH_ID"]
+            assert take_context(config.state_dir, "ike", "another-launch") == []
+            (content,) = take_context(config.state_dir, "ike", launch_id)
+            assert take_context(config.state_dir, "ike", launch_id) == []
+        db.queue.enqueue.assert_not_awaited()
+        assert "--prompt" not in command
+        assert policy in content
+        assert policy not in " ".join(command)
+        assert len(" ".join(command).encode()) < 16000
         for name in starters:
             assert content.count(f"## Shared policy: {name}") == 1
             assert read_template(name).strip() in content
@@ -802,7 +816,12 @@ class TestStartAgentBrief:
     @pytest.mark.parametrize(
         "runtime", [rt for rt in RUNTIMES if RUNTIMES[rt].brief_refresh == "hook_context"]
     )
-    async def test_a_resume_stops_when_the_refresh_hook_cannot_be_wired(self, tmp_path, runtime):
+    @pytest.mark.parametrize("resume", [False, True])
+    async def test_a_resume_stops_when_the_refresh_hook_cannot_be_wired(
+        self, tmp_path, runtime, resume
+    ):
+        if not resume and RUNTIMES[runtime].brief_mode != "hook_context":
+            return  # Fresh system-prompt launches do not need a context offer.
         config = bootstrap_config(tmp_path / "data")
         db = AsyncMock()
         db.queue.retire_pending_briefs.return_value = 0
@@ -816,7 +835,11 @@ class TestStartAgentBrief:
             patch.object(RUNTIMES[runtime], "hook_launch_args", return_value=[]),
         ):
             result = await start_agent(
-                self._spec(tmp_path, runtime), config, resume=True, session_id="saved-id", db=db
+                self._spec(tmp_path, runtime),
+                config,
+                resume=resume,
+                session_id="saved-id" if resume else None,
+                db=db,
             )
         assert result.ok is False
         started.assert_not_awaited()

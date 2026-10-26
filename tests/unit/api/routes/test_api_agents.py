@@ -492,7 +492,7 @@ class TestRestartAgent:
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["status"] == "pending" and data["session"] == "ike"
-        assert data["delay_seconds"] == 60 and data["start_at"] is None
+        assert data["delay_seconds"] == 0 and data["start_at"] is None
         assert data["model"] == "opus" and data["message"] == "carry on"
         tmux_svc.stop_session.assert_not_awaited()
         launch.start_session.assert_not_awaited()

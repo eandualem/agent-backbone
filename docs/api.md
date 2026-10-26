@@ -241,7 +241,7 @@ All fields are optional. `runtime` and `model` (with an optional `:effort`)
 are recorded on the agent as `start` would; omitted, the saved ones are used.
 `resume` continues the saved conversation and is valid only when the runtime
 is unchanged. `start: false` stops and starts nothing. The wait is between the
-stop and the start: `delay_seconds` (default 60, at most 30 days) or `start_at`
+stop and the start: `delay_seconds` (default 0, at most 30 days) or `start_at`
 (ISO 8601; local time unless an offset is given), not both. `message` is
 delivered to the replacement once it is at its prompt, as
 `[via:backbone from:<from_entity>]`, and never expires while it waits.

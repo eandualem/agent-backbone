@@ -436,7 +436,7 @@ def test_codex_input_is_never_output():
     assert RUNTIMES["codex"].provider_failure(pane) is None
 
 
-async def test_a_record_written_while_the_pane_is_read_decides(tmp_path):
+async def test_a_new_permission_during_capture_waits_for_current_dialog_evidence(tmp_path):
     write_state_file(tmp_path, "desk", {"state": "busy", "ts": time.time() - 10})
 
     async def dialog_meanwhile(session):
@@ -446,7 +446,8 @@ async def test_a_record_written_while_the_pane_is_read_decides(tmp_path):
 
     with patch("agent_backbone.services.agents._inference.capture_pane", dialog_meanwhile):
         snapshot = await get_agent_state(tmp_path, "desk", runtime_hint="codex")
-    assert snapshot.state == AgentState.WAITING_FOR_HUMAN
+    assert snapshot.state == AgentState.BUSY and snapshot.reason is None
+    assert "permission request changed" in " ".join(snapshot.evidence)
 
 
 async def test_a_newer_record_is_read_against_a_new_screen(tmp_path):

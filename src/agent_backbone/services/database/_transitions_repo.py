@@ -34,7 +34,7 @@ class TransitionRepo(Repo):
         model: str | None = None,
         resume: bool = False,
         start: bool = True,
-        delay_seconds: int = 60,
+        delay_seconds: int = 0,
         start_at: str | None = None,
         message: str | None = None,
     ) -> dict | None:
