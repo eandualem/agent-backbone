@@ -413,67 +413,75 @@ async def _start_agent(
     # clears it when the prompt shows, and ``get_agent_state`` stops
     # trusting it after a short window regardless.
     details["stage"] = "launch"
-    launched_at = time.time()
-    # Hook-context offers belong to the session they were written for: the
-    # new session must not have the old one's guidance injected on its
-    # first tool call. Queue rows behind a batch survive and are pasted;
-    # what the old session already took stays to be settled, never re-pasted.
-    clear_agent_context(config.state_dir, spec.name)
-    # Likewise a brief queued for an earlier launch that never received it:
-    # this launch brings its own, and the old one must not reach it (#290).
-    retired = await _retire_stale_briefs(db, spec.name)
-    if retired is None:
-        details["reason"] = "brief_retirement_failed"
-        return StartResult(
-            ok=False, evidence=("could not retire an earlier launch's undelivered brief",)
+    # Direct CLI processes have separate lifecycle locks. Recheck under the
+    # shared profile guard before touching the live launch's state or identity.
+    async with profile_lock(config.data_dir):
+        if await session_exists(spec.name):
+            return StartResult(ok=True, already_running=True)
+        launched_at = time.time()
+        # Hook-context offers belong to the session they were written for: the
+        # new session must not have the old one's guidance injected on its
+        # first tool call. Queue rows behind a batch survive and are pasted;
+        # what the old session already took stays to be settled, never re-pasted.
+        clear_agent_context(config.state_dir, spec.name)
+        # Likewise a brief queued for an earlier launch that never received it:
+        # this launch brings its own, and the old one must not reach it (#290).
+        retired = await _retire_stale_briefs(db, spec.name)
+        if retired is None:
+            details["reason"] = "brief_retirement_failed"
+            return StartResult(
+                ok=False, evidence=("could not retire an earlier launch's undelivered brief",)
+            )
+        # Queued before the session exists, so no message sent once it is ready
+        # can go ahead of it; a launch that fails leaves it for the next one to retire.
+        # A resumed conversation whose brief never reached it gets the current one,
+        # unless its hook hands it over below (once is enough).
+        if (
+            rt.brief_mode == "message"
+            and brief is not None
+            and (not resume or (retired > 0 and rt.brief_refresh != "hook_context"))
+            and not await _queue_brief(db, spec.name, brief)
+        ):
+            details["reason"] = "brief_queue_failed"
+            return StartResult(ok=False, evidence=("could not queue the agent's brief",))
+        # A resumed session keeps the brief it started with: a runtime whose hook
+        # can add session context is handed the current one there. A chat message
+        # is never used for that, because a peer's message can imitate it (#294).
+        hook_brief = brief is not None and (
+            rt.brief_mode == "hook_context" or (resume and rt.brief_refresh == "hook_context")
         )
-    # Queued before the session exists, so no message sent once it is ready
-    # can go ahead of it; a launch that fails leaves it for the next one to retire.
-    # A resumed conversation whose brief never reached it gets the current one,
-    # unless its hook hands it over below (once is enough).
-    if (
-        rt.brief_mode == "message"
-        and brief is not None
-        and (not resume or (retired > 0 and rt.brief_refresh != "hook_context"))
-        and not await _queue_brief(db, spec.name, brief)
-    ):
-        details["reason"] = "brief_queue_failed"
-        return StartResult(ok=False, evidence=("could not queue the agent's brief",))
-    # A resumed session keeps the brief it started with: a runtime whose hook
-    # can add session context is handed the current one there. A chat message
-    # is never used for that, because a peer's message can imitate it (#294).
-    hook_brief = brief is not None and (
-        rt.brief_mode == "hook_context" or (resume and rt.brief_refresh == "hook_context")
-    )
-    if (
-        hook_brief
-        # The hook that takes the offer must be wired into this launch too.
-        and not (
-            rt.hook_launch_args(config.data_dir, config.state_dir)
-            and _offer_refreshed_brief(config, spec.name, environment["BACKBONE_LAUNCH_ID"], brief)
+        if (
+            hook_brief
+            # The hook that takes the offer must be wired into this launch too.
+            and not (
+                rt.hook_launch_args(config.data_dir, config.state_dir)
+                and _offer_refreshed_brief(
+                    config, spec.name, environment["BACKBONE_LAUNCH_ID"], brief
+                )
+            )
+        ):
+            details["reason"] = "brief_refresh_failed"
+            return StartResult(
+                ok=False, evidence=("could not hand the current brief to the session",)
+            )
+        write_starting_marker(
+            config.state_dir, spec.name, launched_at, launch_id=environment["BACKBONE_LAUNCH_ID"]
         )
-    ):
-        details["reason"] = "brief_refresh_failed"
-        return StartResult(ok=False, evidence=("could not hand the current brief to the session",))
-    write_starting_marker(
-        config.state_dir, spec.name, launched_at, launch_id=environment["BACKBONE_LAUNCH_ID"]
-    )
-    if db is not None:
-        async with profile_lock(config.data_dir):
+        if db is not None:
             registration = next(
                 (row for row in await db.agents.list() if row["name"] == spec.name), None
             )
             if registration is not None:
                 _bind_agent_profile(config, registration, environment["BACKBONE_LAUNCH_ID"])
-    session_started = now_iso()  # it may receive messages before it is ready
-    ok = await start_session(
-        spec.name,
-        working_dir=str(spec.path),
-        command=command,
-        environment=environment,
-        scrub=session_secret_keys(config.data_dir),
-        mouse=rt.mouse_scroll,
-    )
+        session_started = now_iso()  # it may receive messages before it is ready
+        ok = await start_session(
+            spec.name,
+            working_dir=str(spec.path),
+            command=command,
+            environment=environment,
+            scrub=session_secret_keys(config.data_dir),
+            mouse=rt.mouse_scroll,
+        )
     if not ok:
         details["reason"] = "session_failed"
         clear_starting_marker(config.state_dir, spec.name)

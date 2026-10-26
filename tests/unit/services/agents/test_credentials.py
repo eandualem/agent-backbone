@@ -338,3 +338,49 @@ async def test_refresh_snapshot_cannot_overwrite_a_newer_cli_registration(
     profile = read_agent_profile(tmp_path, name)
     assert profile["registration"] == row["report_identity"]
     assert profile["launch"] == "b" * 32
+
+
+async def test_concurrent_starts_do_not_rebind_the_surviving_session(db, tmp_path, monkeypatch):
+    from agent_backbone.services.agents import start_agent
+
+    store = await registered(db, tmp_path, monkeypatch, runtime="shell")
+    spec = store.agents.get("worker")
+    both_started = asyncio.Event()
+    checks = 0
+    live_environment = None
+
+    async def exists(_name):
+        nonlocal checks
+        if checks < 2:
+            checks += 1
+            if checks == 2:
+                both_started.set()
+            await both_started.wait()
+            return False
+        return live_environment is not None
+
+    async def create(_name, **kwargs):
+        nonlocal live_environment
+        # start_session retains an existing session and its original environment.
+        if live_environment is None:
+            live_environment = kwargs["environment"]
+        return True
+
+    with (
+        patch("agent_backbone.services.agents.launch.session_exists", side_effect=exists),
+        patch("agent_backbone.services.agents.launch.start_session", side_effect=create) as start,
+    ):
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                start_agent(spec, store.config, db=db, wait=False),
+                start_agent(spec, store.config, db=db, wait=False),
+            ),
+            5,
+        )
+    assert all(result.ok for result in results)
+    assert sum(result.already_running for result in results) == 1
+    assert start.await_count == 1
+    await store.refresh()
+    for key, value in live_environment.items():
+        monkeypatch.setenv(key, value)
+    assert load_secrets(tmp_path)["BACKBONE_API_KEY"] == agent_api_key("operator")

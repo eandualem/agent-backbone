@@ -1016,7 +1016,9 @@ class TestStartingState:
         with (
             patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True),
             patch(f"{_MOD}.capture_pane", side_effect=_capture),
-            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, side_effect=[False, True]),
+            patch(
+                f"{_MOD}.session_exists", new_callable=AsyncMock, side_effect=[False, False, True]
+            ),
         ):
             result = await start_agent(spec, config)
 

@@ -136,7 +136,7 @@ async def test_launch_value_error_is_not_reclassified_as_a_preflight_failure(db,
 async def test_start_captures_typed_error_and_model_change_before_returning(db, tmp_path):
     config = bootstrap_config(tmp_path / "data")
     with (
-        patch(f"{_LAUNCH}.session_exists", AsyncMock(side_effect=[False, True])),
+        patch(f"{_LAUNCH}.session_exists", AsyncMock(side_effect=[False, False, True])),
         patch(f"{_LAUNCH}.start_session", AsyncMock(return_value=True)),
         patch(f"{_LAUNCH}.capture_pane", AsyncMock(return_value=PANE)),
         patch(f"{_LAUNCH}.read_state_file", return_value=None),
