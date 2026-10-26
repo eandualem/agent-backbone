@@ -29,7 +29,7 @@ from agent_backbone.services.runtimes import RUNTIMES
 
 async def registered(db, tmp_path, monkeypatch, runtime="codex"):
     monkeypatch.setenv("BACKBONE_API_KEY", "operator")
-    store = AgentStore(db, tmp_path)
+    store = AgentStore(db, tmp_path, provision_credentials=True)
     await store.start()
     await store.register(AgentSpec(name="worker", dir=str(tmp_path), runtime=runtime))
     return store
@@ -184,3 +184,23 @@ async def test_launch_binding_preserves_new_registrations_and_rotated_credential
     peer = read_agent_profile(tmp_path, "peer")
     assert worker["launch"] == "b" * 32
     assert worker["credential"] == peer["credential"] == agent_api_key("rotated")
+
+
+async def test_local_configuration_reader_cannot_replace_daemon_endpoint(db, tmp_path, monkeypatch):
+    monkeypatch.setenv("BACKBONE_PORT", "8234")
+    daemon = await registered(db, tmp_path, monkeypatch)
+    launch = "a" * 32
+    write_starting_marker(daemon.config.state_dir, "worker", time.time(), launch_id=launch)
+    await daemon.refresh()
+    # Direct uses the default store from an operator terminal whose environment
+    # need not match the running service's launch environment.
+    monkeypatch.delenv("BACKBONE_PORT")
+    local_reader = AgentStore(db, tmp_path)
+    await local_reader.refresh()
+    assert local_reader.config.backbone.port != 8234
+    assert read_agent_profile(tmp_path, "worker")["port"] == "8234"
+    monkeypatch.setenv("BACKBONE_AGENT", "worker")
+    monkeypatch.setenv("BACKBONE_LAUNCH_ID", launch)
+    monkeypatch.setenv("BACKBONE_STATE_DIR", str(daemon.config.state_dir))
+    monkeypatch.delenv("BACKBONE_API_KEY")
+    assert (await read_client_config()).backbone.port == 8234

@@ -120,10 +120,14 @@ class AgentStore:
         data_dir: Path,
         *,
         on_change: Callable[[BackboneConfig], Awaitable[None] | None] | None = None,
+        provision_credentials: bool = False,
     ) -> None:
         self._db = db
         self._data_dir = data_dir
         self._on_change = on_change
+        # Only the running daemon owns profile endpoints and credential rotation.
+        # Local Direct readers may have a different environment.
+        self._provision_credentials = provision_credentials
         self._agents = AgentsConfig()
         self._settings: dict = {}
         self._config: BackboneConfig | None = None
@@ -162,10 +166,11 @@ class AgentStore:
             self._config = build_config(
                 self._data_dir, settings=self._settings, agents=self._agents
             )
-            try:
-                await asyncio.to_thread(provision_agent_profiles, self._config, registrations)
-            except (OSError, ValueError):
-                log.warning("Could not provision agent credential profiles", exc_info=True)
+            if self._provision_credentials:
+                try:
+                    await asyncio.to_thread(provision_agent_profiles, self._config, registrations)
+                except (OSError, ValueError):
+                    log.warning("Could not provision agent credential profiles", exc_info=True)
         if self._on_change is not None:
             result = self._on_change(self._config)
             if asyncio.iscoroutine(result):
