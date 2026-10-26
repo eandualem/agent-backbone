@@ -384,3 +384,52 @@ async def test_concurrent_starts_do_not_rebind_the_surviving_session(db, tmp_pat
     for key, value in live_environment.items():
         monkeypatch.setenv(key, value)
     assert load_secrets(tmp_path)["BACKBONE_API_KEY"] == agent_api_key("operator")
+
+
+async def test_resumed_launch_cannot_overwrite_its_replacement_binding(db, tmp_path, monkeypatch):
+    from agent_backbone.services.agents import start_agent
+
+    store = await registered(db, tmp_path, monkeypatch)
+    spec = store.agents.get("worker")
+    recording, release, replacement_checked = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    live_environment = None
+    record = db.agents.conversation_started
+
+    async def exists(_name):
+        if recording.is_set():
+            replacement_checked.set()
+        return live_environment is not None
+
+    async def create(_name, **kwargs):
+        nonlocal live_environment
+        live_environment = kwargs["environment"]
+        return True
+
+    async def delayed_record(*args):
+        if not recording.is_set():
+            recording.set()
+            await release.wait()
+        await record(*args)
+
+    with (
+        patch("agent_backbone.services.agents.launch.session_exists", side_effect=exists),
+        patch("agent_backbone.services.agents.launch.start_session", side_effect=create),
+        patch("agent_backbone.services.runtimes.base.resolve_command", return_value="/bin/codex"),
+        patch.object(db.agents, "conversation_started", side_effect=delayed_record),
+    ):
+        original = asyncio.create_task(
+            start_agent(spec, store.config, session_id="saved", db=db, wait=False)
+        )
+        await asyncio.wait_for(recording.wait(), 5)
+        live_environment = None  # The first session exits before its bookkeeping finishes.
+        replacement = asyncio.create_task(start_agent(spec, store.config, db=db, wait=False))
+        try:
+            await asyncio.wait_for(replacement_checked.wait(), 5)
+            await asyncio.sleep(0.1)
+        finally:
+            release.set()
+        assert all(result.ok for result in await asyncio.gather(original, replacement))
+    await store.refresh()
+    for key, value in live_environment.items():
+        monkeypatch.setenv(key, value)
+    assert load_secrets(tmp_path)["BACKBONE_API_KEY"] == agent_api_key("operator")
