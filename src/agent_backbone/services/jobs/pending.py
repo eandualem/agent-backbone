@@ -105,6 +105,7 @@ async def deliver_pending_issues(
         return False
 
     async def deliver_one(name: str) -> str:
+        nonlocal receipts
         pending_issues = await list_open_queue_for_target(config, name, gh, db=db)
         if not pending_issues:
             return "no_pending"
@@ -116,6 +117,11 @@ async def deliver_pending_issues(
                 continue
             if await was_recently_delivered(repo, candidate.number, name, name):
                 return "recently_delivered"
+
+            # A later candidate can have been acknowledged since this pass loaded receipts.
+            receipts = None
+            if await acknowledged(repo, candidate.number, name):
+                continue
 
             outcome = (
                 await safe_deliver(

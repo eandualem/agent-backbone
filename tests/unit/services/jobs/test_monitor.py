@@ -672,6 +672,29 @@ class TestDeliverPendingIssues:
             assert len(reads) == 2
             assert await db.acks.exists(9, name, repo=_REPO)
 
+    async def test_receipt_written_during_pass_prevents_later_candidate_delivery(self, config, db):
+        from agent_backbone.hooks.backbone_state import append_action
+
+        name = next(iter(_IDLE))
+        action = {"action": "comment", "phase": "succeeded", "repo": _REPO, "ts": time.time()}
+        append_action(config.state_dir, name, {**action, "issue": 7, "comment_id": 700})
+        record = db.acks.record
+
+        async def record_then_publish(issue_number, *args, **kwargs):
+            result = await record(issue_number, *args, **kwargs)
+            if issue_number == 7:
+                append_action(config.state_dir, name, {**action, "issue": 8, "comment_id": 800})
+            return result
+
+        gh = AsyncMock()
+        gh.list_issues.return_value = [_issue(7), _issue(8)]
+        gh.list_comments.return_value = []
+        with patch.object(db.acks, "record", side_effect=record_then_publish):
+            with patch(f"{_PEND}.safe_deliver", new_callable=AsyncMock) as deliver:
+                await deliver_pending_issues(config, _IDLE, db, gh)
+                deliver.assert_not_awaited()
+        assert await db.acks.exists(8, name, repo=_REPO)
+
     async def test_skips_acknowledged_issue(self, config, db):
         await db.acks.record(7, "ike", repo=_REPO)
         gh = AsyncMock()

@@ -66,6 +66,18 @@ class TestValidate:
                 "state": "idle",
                 "ts": time.time(),
                 "runtime": runtime,
+                "session_id": {"invalid": "object"},
+            },
+        )
+        with pytest.raises(ValueError, match="resum"):
+            validate_transition(config, spec, request)
+        write_state_file(
+            config.state_dir,
+            spec.name,
+            {
+                "state": "idle",
+                "ts": time.time(),
+                "runtime": runtime,
                 "session_id": "saved",
             },
         )
