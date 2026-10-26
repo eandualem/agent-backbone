@@ -289,3 +289,86 @@ async def test_unbound_or_retired_pr_receipt_cannot_acknowledge_work(
         await _dispatch_pull_request(event, store.config, db, DispatchResult())
     assert not await db.acks.exists(5, "worker", repo="acme/app")
     send.assert_awaited_once()
+
+
+@pytest.mark.parametrize("editor_bound", [False, True])
+async def test_latest_comment_edit_cannot_fall_back_to_older_author(
+    db, tmp_path, monkeypatch, editor_bound
+):
+    from agent_backbone.services.agents import has_commented_on_issue
+
+    store = AgentStore(db, tmp_path)
+    author = await store.register(AgentSpec(name="author", dir=str(tmp_path), repo="acme/app"))
+    editor = await store.register(AgentSpec(name="editor", dir=str(tmp_path), repo="acme/app"))
+    for spec, timestamp, identity in (
+        (author, 100, author.registration_id),
+        (editor, 200, editor.registration_id if editor_bound else ""),
+    ):
+        monkeypatch.setenv("BACKBONE_REGISTRATION_ID", identity)
+        append_action(
+            store.config.state_dir,
+            spec.name,
+            {
+                "ts": timestamp,
+                "action": "comment",
+                "phase": "succeeded",
+                "issue": 5,
+                "repo": "acme/app",
+                "comment_id": 123,
+            },
+        )
+    with patch("agent_backbone.services.terminal.session_exists", return_value=False):
+        await store.forget(editor.name)
+    event = IssueEvent(
+        event_type=EventType.COMMENT_CREATED,
+        issue=IssueData(
+            number=5, repo_full_name="acme/app", labels=ParsedLabels(targets=[author.name])
+        ),
+        comment=CommentData(id=123, body="Later edit"),
+    )
+    with patch("agent_backbone.services.routing._router._deliver", new_callable=AsyncMock) as send:
+        await _dispatch_comment(event, store.config, db, DispatchResult())
+    assert not await db.acks.exists(5, author.name, repo="acme/app")
+    send.assert_awaited_once()
+    _cleared, comment_id = await db.acks.reset_boundary(5, author.name, repo="acme/app")
+    assert not has_commented_on_issue(
+        5,
+        author.name,
+        store.config.action_log_path,
+        repo="acme/app",
+        registration_id=author.registration_id,
+        since=200,
+        reset_comment_id=comment_id,
+    )
+
+
+async def test_delayed_own_comment_keeps_attribution_without_restoring_reset_ack(
+    db, tmp_path, monkeypatch
+):
+    store = AgentStore(db, tmp_path)
+    spec = await store.register(AgentSpec(name="worker", dir=str(tmp_path), repo="acme/app"))
+    monkeypatch.setenv("BACKBONE_REGISTRATION_ID", spec.registration_id)
+    append_action(
+        store.config.state_dir,
+        spec.name,
+        {
+            "ts": time.time(),
+            "action": "comment",
+            "phase": "succeeded",
+            "issue": 5,
+            "repo": "acme/app",
+            "comment_id": 123,
+        },
+    )
+    await db.acks.clear(5, spec.name, repo="acme/app", comment_id=124)
+    event = IssueEvent(
+        event_type=EventType.COMMENT_CREATED,
+        issue=IssueData(
+            number=5, repo_full_name="acme/app", labels=ParsedLabels(targets=[spec.name])
+        ),
+        comment=CommentData(id=123, body="Older own comment"),
+    )
+    with patch("agent_backbone.services.routing._router._deliver", new_callable=AsyncMock) as send:
+        await _dispatch_comment(event, store.config, db, DispatchResult())
+    assert not await db.acks.exists(5, spec.name, repo="acme/app")
+    send.assert_not_awaited()

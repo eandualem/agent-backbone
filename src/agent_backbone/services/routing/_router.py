@@ -182,12 +182,15 @@ async def _dispatch_comment(
     commenter = await _resolve_commenter_entity(event, config, registrations)
     if commenter:
         try:
-            if not registrations.get(commenter) or not await db.acks.record(
+            acknowledged = await db.acks.record(
                 event.issue.number,
                 commenter,
                 repo=repo,
                 comment_id=event.comment.id,
                 registration_id=registrations[commenter],
+            )
+            if not acknowledged and not await db.agents.registration_matches(
+                commenter, registrations[commenter]
             ):
                 commenter = None
         except Exception:

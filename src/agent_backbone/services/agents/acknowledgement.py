@@ -111,8 +111,6 @@ def find_outgoing_comment(
             or type(entry.get("comment_id")) is not int
             or entry.get("comment_id") != comment_id
             or entry.get("phase") != "succeeded"
-            or not isinstance(entry.get("registration_id"), str)
-            or not current_names.get(entry.get("registration_id"))
         ):
             continue
         if not _repo_matches(entry, repo):
@@ -120,7 +118,11 @@ def find_outgoing_comment(
         if comment_id is not None:
             timestamp = entry.get("ts", 0)
             if isinstance(timestamp, (int, float)) and (latest is None or timestamp > latest[0]):
-                latest = timestamp, current_names[entry["registration_id"]]
+                identity = entry.get("registration_id")
+                latest = (
+                    timestamp,
+                    (current_names.get(identity) if isinstance(identity, str) else None),
+                )
         elif now - float(entry.get("ts", 0)) <= recency_seconds:
             return entry.get("session")
     return latest[1] if latest else None
@@ -198,6 +200,7 @@ def has_commented_on_issue(
     """
     if not registration_id:
         return False
+    latest: dict[tuple[str, int], dict] = {}
     for entry in read_comment_receipts(action_log) if receipts is None else receipts:
         if (
             entry.get("action") == "comment"
@@ -205,20 +208,24 @@ def has_commented_on_issue(
             and type(entry.get("comment_id")) is int
             and entry["comment_id"] > 0
             and entry.get("issue") == issue_number
-            and entry.get("registration_id") == registration_id
             and _repo_matches(entry, repo)
-            and (
-                since is None
-                or (
-                    entry.get("edited") is True
-                    and isinstance(entry.get("ts"), (int, float))
-                    and entry["ts"] > since
-                )
-                or (
-                    entry["comment_id"] >= reset_comment_id
-                    if reset_comment_id
-                    else isinstance(entry.get("ts"), (int, float)) and entry["ts"] > since
-                )
+            and isinstance(entry.get("ts", 0), (int, float))
+        ):
+            key = ((entry.get("repo") or "").casefold(), entry["comment_id"])
+            if key not in latest or entry.get("ts", 0) > latest[key].get("ts", 0):
+                latest[key] = entry
+    for entry in latest.values():
+        if entry.get("registration_id") == registration_id and (
+            since is None
+            or (
+                entry.get("edited") is True
+                and isinstance(entry.get("ts"), (int, float))
+                and entry["ts"] > since
+            )
+            or (
+                entry["comment_id"] >= reset_comment_id
+                if reset_comment_id
+                else isinstance(entry.get("ts"), (int, float)) and entry["ts"] > since
             )
         ):
             return True
