@@ -20,6 +20,18 @@ class AcknowledgementRepo(Repo):
         registration_id: str | None = None,
     ) -> bool:
         async with self._tx() as conn:
+            if registration_id is not None and conn.dialect.name == "postgresql":
+                # Lock registration before the acknowledgment, as forget/rename do.
+                # An EXISTS snapshot alone can outlive a concurrent retirement.
+                current = await conn.execute(
+                    text(
+                        "SELECT 1 FROM agents WHERE name=:name "
+                        "AND report_identity=:identity FOR UPDATE"
+                    ),
+                    {"name": target_entity, "identity": registration_id},
+                )
+                if not current.first():
+                    return False
             result = await conn.execute(
                 text(
                     """INSERT INTO acknowledgments

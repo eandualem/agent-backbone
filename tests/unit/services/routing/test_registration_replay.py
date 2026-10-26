@@ -246,32 +246,45 @@ async def test_bound_receipt_follows_the_same_registration_after_rename(db, tmp_
     send.assert_not_awaited()
 
 
-@pytest.mark.parametrize("retired", [False, True])
-async def test_unbound_or_retired_pr_receipt_cannot_acknowledge_work(
-    db, tmp_path, monkeypatch, retired
+@pytest.mark.parametrize("receipt_kind", ["unbound", "retired", "pending"])
+async def test_latest_pr_receipt_cannot_fall_back_to_older_author(
+    db, tmp_path, monkeypatch, receipt_kind
 ):
     from agent_backbone.services.routing._router import _dispatch_pull_request
 
     store = AgentStore(db, tmp_path)
     await store.start()
-    spec = AgentSpec(name="worker", dir=str(tmp_path), repo="acme/app")
-    await store.register(spec)
-    identity = next(
-        row["report_identity"] for row in await db.agents.list() if row["name"] == "worker"
-    )
-    monkeypatch.setenv("BACKBONE_REGISTRATION_ID", identity if retired else "")
+    earlier = await store.register(AgentSpec(name="earlier", dir=str(tmp_path), repo="acme/app"))
+    monkeypatch.setenv("BACKBONE_REGISTRATION_ID", earlier.registration_id)
     append_action(
         store.config.state_dir,
-        "worker",
+        "earlier",
         {
-            "ts": time.time(),
+            "ts": time.time() - 60,
             "action": "pull_request",
             "phase": "succeeded",
             "repo": "acme/app",
             "branch": "feat/example",
         },
     )
-    if retired:
+    spec = AgentSpec(name="worker", dir=str(tmp_path), repo="acme/app")
+    await store.register(spec)
+    identity = next(
+        row["report_identity"] for row in await db.agents.list() if row["name"] == "worker"
+    )
+    monkeypatch.setenv("BACKBONE_REGISTRATION_ID", "" if receipt_kind == "unbound" else identity)
+    append_action(
+        store.config.state_dir,
+        "worker",
+        {
+            "ts": time.time(),
+            "action": "pull_request",
+            "phase": "intent" if receipt_kind == "pending" else "succeeded",
+            "repo": "acme/app",
+            "branch": "feat/example",
+        },
+    )
+    if receipt_kind == "retired":
         with patch("agent_backbone.services.terminal.session_exists", return_value=False):
             await store.forget("worker")
         await store.register(spec)
@@ -288,7 +301,8 @@ async def test_unbound_or_retired_pr_receipt_cannot_acknowledge_work(
     with patch("agent_backbone.services.routing._router._deliver", new_callable=AsyncMock) as send:
         await _dispatch_pull_request(event, store.config, db, DispatchResult())
     assert not await db.acks.exists(5, "worker", repo="acme/app")
-    send.assert_awaited_once()
+    assert not await db.acks.exists(5, "earlier", repo="acme/app")
+    assert send.await_count == (1 if receipt_kind == "pending" else 2)
 
 
 @pytest.mark.parametrize("editor_bound", [False, True])
