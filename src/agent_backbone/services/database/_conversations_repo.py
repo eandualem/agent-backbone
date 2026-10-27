@@ -18,7 +18,6 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import Text, and_, case, func, insert, not_, or_, select, text, update
 
-from agent_backbone.services.database._queue_repo import _INSERT_COLUMNS
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._reports_repo import chain_ids, chain_roots
 from agent_backbone.services.database._time import cutoff_iso, format_iso, now_iso
@@ -27,6 +26,7 @@ from agent_backbone.services.database.models import (
     ConversationEntryORM,
     ConversationReadORM,
     ConversationRedeliveryORM,
+    DiagnosticORM,
     DocumentORM,
     MessageQueueORM,
     ReportORM,
@@ -34,6 +34,7 @@ from agent_backbone.services.database.models import (
 
 _A = AgentORM.__table__
 _D = DocumentORM.__table__
+_DG = DiagnosticORM.__table__
 _E = ConversationEntryORM.__table__
 _Q = MessageQueueORM.__table__
 _R = ReportORM.__table__
@@ -170,8 +171,18 @@ def _where(kind: str, artifact_id: str):
     return and_(_E.c.kind == kind, _E.c.artifact_id == artifact_id)
 
 
+RETIRED = "retired_registration_changed"
+"""The queue completes a row whose recipient registration changed without
+delivering it; the reason is kept with the operation's diagnostics."""
+
+
 def _entries():
-    return select(_E, _Q.c.status.label("queue_status")).select_from(
+    retired = (
+        select(_DG.c.id)
+        .where(_DG.c.operation_id == _E.c.operation_id, _DG.c.code == RETIRED)
+        .exists()
+    )
+    return select(_E, _Q.c.status.label("queue_status"), retired.label("retired")).select_from(
         _E.outerjoin(_Q, _Q.c.operation_id == _E.c.operation_id)
     )
 
@@ -194,7 +205,7 @@ def _entry(row) -> dict:
     if owner:
         return entry | {
             "recipient": {"agent_id": row.recipient_id, "name": row.recipient_name},
-            "delivery": _DELIVERY.get(row.queue_status, row.delivery),
+            "delivery": "failed" if row.retired else _DELIVERY.get(row.queue_status, row.delivery),
         }
     return entry | {
         "in_reply_to": row.in_reply_to,
@@ -297,26 +308,34 @@ async def _counts(conn, kind: str, artifact_id: str) -> dict:
 
 
 async def _queue(
-    conn, *, entry: dict, artifact: dict, recipient: str, compose: Compose, operation_id: str
+    conn,
+    *,
+    entry: dict,
+    artifact: dict,
+    recipient: tuple[str, str],
+    compose: Compose,
+    operation_id: str,
 ) -> None:
-    """Insert one delivery operation for an owner message."""
+    """Insert one delivery operation for an owner message, bound to the
+    registration that was checked: never re-resolved from the name, so a
+    replacement agent with that name cannot receive it."""
     await conn.execute(
-        text(f"INSERT INTO message_queue {_INSERT_COLUMNS}"),
-        {
-            "operation_id": operation_id,
-            "session_name": recipient,
-            "message": compose(entry, artifact),
-            "repo": "",
-            "issue_number": None,
-            "target_entity": None,
-            "delivery_kind": "direct_message",
-            "source": "conversation",
-            "enqueued_at": now_iso(),
-            "initial_status": "pending",
-            "sender": "owner",
-            "dedup_key": f"src:conversation:{entry['id']}:{operation_id}",
-            "priority": 0,
-        },
+        insert(_Q).values(
+            operation_id=operation_id,
+            registration_id=recipient[0],
+            session_name=recipient[1],
+            message=compose(entry, artifact),
+            repo="",
+            issue_number=None,
+            target_entity=None,
+            delivery_kind="direct_message",
+            source="conversation",
+            enqueued_at=now_iso(),
+            status="pending",
+            sender="owner",
+            dedup_key=f"src:conversation:{entry['id']}:{operation_id}",
+            priority=0,
+        )
     )
 
 
@@ -536,6 +555,14 @@ class ConversationRepo(Repo):
             author_id = "" if author is None else await _identity(conn, author)
             if author_id is None:
                 raise KeyError(author)
+            # A named recipient's row lock too comes before the conversation's,
+            # in the same order as a reply; its refusal waits for the retry check.
+            target = refused = None
+            if author is None:
+                try:
+                    target = await self._recipient(conn, recipient, artifact)
+                except ConversationRefused as exc:
+                    refused = exc
             await _lock(conn, kind, artifact_id)
             previous = (
                 await conn.execute(
@@ -568,7 +595,6 @@ class ConversationRepo(Repo):
                 raise ConversationRefused(
                     422, "invalid_revision", "The anchor names no version of this artifact."
                 )
-            target = None
             if author is None:
                 recent = await conn.scalar(
                     select(func.count()).where(
@@ -584,7 +610,8 @@ class ConversationRepo(Repo):
                         f"At most {limits.owner_messages_per_hour} messages per conversation"
                         " per hour.",
                     )
-                target = await self._recipient(conn, recipient, artifact)
+                if refused is not None:
+                    raise refused
             else:
                 if not await _participant(conn, kind, artifact_id, artifact, author_id):
                     raise ConversationRefused(
@@ -634,7 +661,7 @@ class ConversationRepo(Repo):
                     conn,
                     entry=entry,
                     artifact=artifact,
-                    recipient=target[1],
+                    recipient=target,
                     compose=compose,
                     operation_id=operation_id,
                 )
@@ -741,7 +768,7 @@ class ConversationRepo(Repo):
                         conn,
                         entry=entry,
                         artifact=artifact,
-                        recipient=target,
+                        recipient=(row.recipient_id, target),
                         compose=compose,
                         operation_id=operation_id,
                     )

@@ -352,3 +352,27 @@ async def test_concurrent_redeliveries_queue_one_delivery(
         )
     )
     assert sorted(r.json()["result"] for r in results) == ["already_pending", "queued"]
+
+
+async def test_delivery_stays_bound_to_the_checked_registration(
+    api_app, api_client, auth_headers, deliver
+):
+    db = api_app.state.db
+    doc = await _document(api_client, auth_headers)
+    path = f"/api/conversations/document/{doc['document_id']}"
+    entry = (
+        await api_client.post(
+            path + "/messages", headers=auth_headers, json={"request_id": "a", "text": "hi"}
+        )
+    ).json()["entry"]
+    # A replacement registration under the same name, as after forget and re-register.
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE agents SET report_identity = 'replacement' WHERE name = 'ike'")
+        )
+    row = await _queued(db, entry["id"])
+    assert row["registration_id"] == entry["recipient"]["agent_id"] == doc["author_id"]
+    assert [r["id"] for r in await db.queue.dequeue("ike")] == [row["id"]]
+    await db.queue.mark_delivered(row["id"], reason="registration_changed")
+    page = (await api_client.get(path, headers=auth_headers)).json()
+    assert page["entries"][0]["delivery"] == "failed"

@@ -102,8 +102,11 @@ class QueueRepo(Repo):
             # A conversation message keeps its final delivery state after its row goes.
             await conn.execute(
                 text(
-                    "UPDATE conversation_entries SET delivery = (SELECT MAX(CASE q.status"
-                    " WHEN 'delivered' THEN 'delivered' ELSE 'failed' END) FROM message_queue q"
+                    "UPDATE conversation_entries SET delivery = (SELECT MAX(CASE"
+                    " WHEN q.status = 'delivered' AND NOT EXISTS (SELECT 1 FROM diagnostics d"
+                    " WHERE d.operation_id = q.operation_id"
+                    " AND d.code = 'retired_registration_changed')"
+                    " THEN 'delivered' ELSE 'failed' END) FROM message_queue q"
                     " WHERE q.operation_id = conversation_entries.operation_id)"
                     " WHERE operation_id IN (SELECT operation_id FROM message_queue"
                     " WHERE status IN ('delivered', 'expired') AND delivered_at < :cutoff)"
