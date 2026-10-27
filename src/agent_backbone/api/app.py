@@ -440,6 +440,7 @@ def create_app(config: BackboneConfig | None = None):
     from agent_backbone.api.routes.issues import router as issues_router
     from agent_backbone.api.routes.messages import router as messages_router
     from agent_backbone.api.routes.plans import router as plans_router
+    from agent_backbone.api.routes.policies import router as policies_router
     from agent_backbone.api.routes.reports import router as reports_router
     from agent_backbone.api.routes.responses import router as responses_router
     from agent_backbone.api.routes.signing import router as signing_router
@@ -464,6 +465,7 @@ def create_app(config: BackboneConfig | None = None):
         issues_router,
         messages_router,
         plans_router,
+        policies_router,
         reports_router,
         responses_router,
         documents_router,

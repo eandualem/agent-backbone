@@ -608,7 +608,10 @@ messages](owner-confirmed-messages.md).
 ## Skills
 
 The shared skills store ([skills](skills.md)). `GET /api/skills` lists every
-store entry with its tags, validity and the agents it reaches.
+store entry with its tags, validity, the agents it reaches and the
+`artifact_id` of its [conversation](conversations.md#skills-and-policies).
+`GET /api/policies` lists every policy with its `artifact_id`; both kinds serve
+their snapshots at `/api/{skills|policies}/{artifact_id}/versions`.
 `POST /api/skills` `{path, name?, tags, replace?, actor}` **moves** a skill
 directory into the store and tags it (422 when the directory is not a skill or
 the name is taken without `replace`; 400 when `skills.store` is empty).

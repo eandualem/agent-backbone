@@ -4,9 +4,11 @@ Every artifact an agent publishes has one conversation that lasts across all of
 its versions. You ask about a Document, Response or progress report, the agent
 responsible for it receives your question, and its reply (and any revision it
 publishes because of it) appears in the same thread, beside the artifact.
+Shared skills and policies have conversations too, so you can ask an agent to
+explain one even though no agent published it.
 
-Conversations exist today for Documents, Responses and progress reports. Sheets,
-current plans, skills and policies follow; until then their routes return
+Conversations exist today for Documents, Responses, progress reports, skills and
+policies. Sheets and current plans follow; until then their routes return
 `404 {"error": "unknown_artifact"}`.
 
 ## Identity
@@ -18,6 +20,8 @@ A conversation is keyed by the artifact's kind and stable ID:
 | `document` | `document_id` | Author of the latest revision |
 | `response` | `conversation_id`: the first Response in its correction chain | Its author |
 | `report` | The report's ID (reports have no corrections) | Its author |
+| `skill` | Assigned when Backbone first reads the skill ([below](#skills-and-policies)) | The maintainer the operator mapped, if any |
+| `policy` | Assigned when Backbone first reads the policy | The maintainer the operator mapped, if any |
 
 Responses and reports carry `conversation_id` in their list and show output.
 Reading a conversation that has never been used returns an empty list with its
@@ -32,13 +36,49 @@ A conversation is an append-only list of entries:
 - **Owner messages**, delivered to a recipient, with a delivery state.
 - **Agent messages**, optionally answering an entry (`in_reply_to`) and naming
   the version the reply produced (`resulting_revision_id`).
-- **Revision events**, appended automatically when a correction is published.
+- **Revision events**, appended automatically when a correction is published,
+  or when Backbone sees a skill or policy change (author type `backbone`).
   They record that a version appeared and who published it, never which
   message caused it.
 
 Any message can carry an `anchor`: the version the author was viewing
 (`revision_id`) and a display `label`. Artifact content stays in its own store;
 entries only reference versions, and every version stays readable.
+
+## Skills and policies
+
+A skill or policy stays where it lives: the shared skills store, or the policy
+templates edited with `backbone instructions`. Backbone reads it when it is
+listed (`GET /api/skills`, `GET /api/policies`), changed through the store
+(`skills add`, `skills tag`), or when its conversation or versions are read.
+
+- **Identity.** The store and the item's name. How it is distributed (to every
+  agent, or by tag) is not part of it, so retagging keeps the conversation, and
+  a policy override and the bundled default are the same policy. Backbone
+  assigns the `artifact_id` the first time it reads the item.
+- **Versions.** Each time Backbone sees changed content it keeps an immutable
+  snapshot (`v1`, `v2`, …) with its SHA-256 and the time it was observed. The
+  first snapshot is where history starts: nothing earlier is invented, and
+  edits made between two observations are not captured. A policy's version is
+  the text agents receive. A skill's version is its definition text, the
+  `SKILL.md` file only: scripts and other files in the skill change on their
+  own and are not kept, so an old version is not the complete earlier skill
+  and does not reproduce how it behaved.
+- **Missing.** An item that cannot be read (deleted, or briefly absent during a
+  save) is reported as `source_status: "missing"` and keeps its identity; when
+  it can be read again, changed content becomes a new version.
+- **Retired.** Only the operator ends an identity
+  (`POST /api/conversations/{kind}/{artifact_id}/retire`). Retiring deletes
+  nothing: the conversation and its versions stay readable by `artifact_id`,
+  as do a missing item's, even when the listings no longer show the item.
+  Anything later found under the same name gets a new identity. A rename is a
+  new identity; the old conversation is never attached to it.
+- **Responsible agent.** None by default (`responsible.status: "unassigned"`),
+  so each message names its recipient, for example an agent who can explain the
+  policy. The operator can map one registered agent as maintainer
+  (`PUT …/maintainer {"agent": NAME}`, `DELETE …/maintainer` to clear); tags,
+  paths and who last changed a file never make an agent responsible. Changing
+  the item still goes through its own store.
 
 ## Delivery
 
@@ -83,9 +123,14 @@ artifact you published.
 | `POST /api/conversations/{kind}/{artifact_id}/read` | `{"read_through": ID}` advances the owner's marker (never backwards) and returns the new counts. |
 | `POST /api/conversations/{kind}/{artifact_id}/messages/{entry_id}/redeliver` | `{"request_id": …}` queues a new delivery for a failed owner message: `queued`, `already_pending` or `refused`. |
 | `GET /api/documents/{document_id}/revisions`, `/api/responses/{conversation_id}/revisions`, `/api/reports/{conversation_id}/revisions` | Versions newest first; read one exactly with the kind's existing read. |
+| `GET /api/skills/{artifact_id}/versions`, `/api/policies/{artifact_id}/versions` | Snapshots newest first (`revision_id`, `label`, `created_at`, `sha256`); `…/versions/{revision_id}` adds `content`. |
+| `GET /api/policies` | Every policy with `name`, `artifact_id`, `status` and `latest_revision_id`. `GET /api/skills` items carry `artifact_id`. |
+| `PUT /api/conversations/{kind}/{artifact_id}/maintainer`, `DELETE …/maintainer` | Skills and policies: map `{"agent": NAME or registration ID}` as the responsible agent, or clear it. |
+| `POST /api/conversations/{kind}/{artifact_id}/retire` | Skills and policies: end the identity. |
 
-Owner messages, read markers and redelivery need the operator credential. An
-agent credential reads as the agent it names (the client's agent header, or
+Owner messages, read markers, redelivery, maintainer mapping and retirement
+need the operator credential. An agent credential reads as the agent it names
+(the client's agent header, or
 `?agent=NAME`).
 
 `unread` counts agent messages and events after `read_through`; the owner's own
@@ -98,7 +143,7 @@ A refused send returns `{"result": "refused", "error": CODE, "message": …}`:
 | `too_long` | Text over 4,000 characters |
 | `rate_limited` | Over `conversations.owner_messages_per_hour` |
 | `conversation_full` | At `conversations.max_messages`; old messages are never dropped |
-| `recipient_required` | The responsible agent is retired; name a recipient |
+| `recipient_required` | No active responsible agent (retired, or unassigned for a skill or policy); name a recipient |
 | `unknown_recipient` | No registered agent by that name or ID |
 | `invalid_revision` | An anchor or `resulting_revision_id` is not a version of this artifact by this author |
 | `invalid_reply` | `in_reply_to` names no entry of this conversation |

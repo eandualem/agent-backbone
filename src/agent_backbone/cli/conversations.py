@@ -27,7 +27,7 @@ def add_conversation_parsers(subparsers) -> None:
     read = subparsers.add_parser(
         "conversations", help="read and reply in the conversations on artifacts"
     )
-    read.add_argument("--kind", choices=("document", "response", "report"))
+    read.add_argument("--kind", choices=("document", "response", "report", "skill", "policy"))
     read.add_argument("--limit", type=int, choices=range(1, 201), metavar="1–200", default=50)
     read.add_argument("--after", help="the next page: the cursor a previous list printed")
     read.add_argument("--agent", help="read as this agent (default: $BACKBONE_AGENT)")
@@ -137,7 +137,12 @@ def _print_conversation(data) -> None:
         [
             ("Title", data["title"]),
             ("Latest version", data["latest_revision_id"]),
-            ("Responsible", f"{responsible['name']} ({responsible['status']})"),
+            (
+                "Responsible",
+                f"{responsible['name']} ({responsible['status']})"
+                if responsible["name"]
+                else responsible["status"],
+            ),
             ("Messages", data["total"]),
             ("Older entries", f"--before {data['older'][1:]}" if data["older"] else "none"),
         ],
@@ -153,7 +158,8 @@ def _print_conversation(data) -> None:
             state = entry.get("delivery") or ""
         else:
             event = entry[entry["kind"]]
-            text = f"published {event['label']} (version {event['revision_id']})"
+            verb = "observed" if entry["author"]["type"] == "backbone" else "published"
+            text = f"{verb} {event['label']} (version {event['revision_id']})"
             state = ""
         rows.append((entry["id"], entry["author"]["name"], text, state))
     print_table("Entries", ("Entry", "From", "Message", "Delivery"), rows, empty="No entries.")

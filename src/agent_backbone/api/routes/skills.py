@@ -1,4 +1,4 @@
-"""The shared skills store: list, add, retag and preview.
+"""The shared skills store: list, add, retag, preview and versions.
 
 Agents call these through the CLI (``backbone skills add …``) so a
 sandboxed runtime, which cannot write to the store itself, still has a
@@ -10,16 +10,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import Path as PathParam
 
 from agent_backbone.api.auth import require_operator
-from agent_backbone.api.deps import get_config, registered_agent_or_404
+from agent_backbone.api.deps import get_config, get_db, registered_agent_or_404
 from agent_backbone.api.models import (
     SkillAddRequest,
     SkillChangeView,
     SkillTagsRequest,
     SkillView,
 )
+from agent_backbone.api.observed import observe_all, observe_name, observe_one
+from agent_backbone.api.routes.conversations import observed_version, versions
 from agent_backbone.services.agents import skills_preview
 from agent_backbone.services.agents.operations import relink_skills
 from agent_backbone.skills import (
@@ -44,10 +47,12 @@ def _store_or_400(config):
 
 
 @router.get("/skills")
-async def list_skills(config=Depends(get_config)):
-    """Every store entry, valid or not, with the agents each one reaches."""
+async def list_skills(config=Depends(get_config), db=Depends(get_db)):
+    """Every store entry, valid or not, with the agents each one reaches and
+    its conversation ``artifact_id`` (None while it has never been readable)."""
     store = config.skills.store_path
     entries = read_store(store) if store else []
+    observed = await observe_all(config, db, "skill")
     items = []
     for entry in entries:
         reaches = [
@@ -57,7 +62,14 @@ async def list_skills(config=Depends(get_config)):
             and set(entry.tags)
             & ({t.lower() for t in spec.tags} | {"all", f"agent:{spec.name.lower()}"})
         ]
-        items.append({**SkillView.from_skill(entry).model_dump(), "reaches": reaches})
+        artifact_id = observed.get(entry.name, {}).get("artifact_id")
+        items.append(
+            {
+                **SkillView.from_skill(entry).model_dump(),
+                "reaches": reaches,
+                "artifact_id": artifact_id,
+            }
+        )
     return {
         "store": str(store) if store else None,
         "git": bool(store and is_git_repository(store)),
@@ -88,8 +100,9 @@ def _registered_source_root(config, path: str) -> Path | None:
     return None
 
 
-async def _changed(skill, config, failure: str | None) -> SkillChangeView:
+async def _changed(skill, config, db, failure: str | None) -> SkillChangeView:
     """The skill, after relinking running agents so the change reaches them now."""
+    await observe_name(config, db, "skill", skill.name)
     relinked = await relink_skills(config, list(config.agents), skill=skill.name)
     warnings = [f"store history not recorded: {failure}"] if failure else []
     return SkillChangeView(
@@ -98,7 +111,7 @@ async def _changed(skill, config, failure: str | None) -> SkillChangeView:
 
 
 @router.post("/skills", response_model=SkillChangeView, dependencies=[Depends(require_operator)])
-async def add_to_store(body: SkillAddRequest, config=Depends(get_config)):
+async def add_to_store(body: SkillAddRequest, config=Depends(get_config), db=Depends(get_db)):
     """Move a skill directory into the store and tag it (a move, never a copy)."""
     store = _store_or_400(config)
     async with store_lock(config.data_dir, store):
@@ -125,13 +138,15 @@ async def add_to_store(body: SkillAddRequest, config=Depends(get_config)):
         failure = await commit_store(
             store, f"add {skill.name} [{' '.join(skill.tags)}] by {body.actor}"
         )
-    return await _changed(skill, config, failure)
+    return await _changed(skill, config, db, failure)
 
 
 @router.put(
     "/skills/{name}/tags", response_model=SkillChangeView, dependencies=[Depends(require_operator)]
 )
-async def set_tags(name: str, body: SkillTagsRequest, config=Depends(get_config)):
+async def set_tags(
+    name: str, body: SkillTagsRequest, config=Depends(get_config), db=Depends(get_db)
+):
     """Replace a store skill's tags."""
     store = _store_or_400(config)
     if not NAME_RE.fullmatch(name):
@@ -153,7 +168,7 @@ async def set_tags(name: str, body: SkillTagsRequest, config=Depends(get_config)
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         skill = parse_skill(store / name)
         failure = await commit_store(store, f"tag {name} [{' '.join(body.tags)}] by {body.actor}")
-    return await _changed(skill, config, failure)
+    return await _changed(skill, config, db, failure)
 
 
 @router.get("/skills/preview/{agent}")
@@ -161,3 +176,26 @@ async def preview(agent: str, config=Depends(get_config)):
     """What that agent's next launch links, and where."""
     spec = registered_agent_or_404(config, agent)
     return skills_preview(spec, config)
+
+
+@router.get("/skills/{artifact_id}/versions", operation_id="list_skill_versions")
+async def skill_versions(
+    artifact_id: str = PathParam(max_length=64),
+    before: int | None = Query(default=None, ge=1, le=2**63 - 1),
+    limit: int = Query(default=50, ge=1, le=200),
+    config=Depends(get_config),
+    db=Depends(get_db),
+):
+    """Snapshots newest first, each taken when Backbone saw the SKILL.md change."""
+    await observe_one(config, db, "skill", artifact_id)
+    return await versions(db, "skill", artifact_id, before, limit)
+
+
+@router.get("/skills/{artifact_id}/versions/{version_id}", operation_id="get_skill_version")
+async def skill_version(
+    artifact_id: str = PathParam(max_length=64),
+    version_id: str = PathParam(max_length=20),
+    db=Depends(get_db),
+):
+    """One snapshot with its content."""
+    return await observed_version(db, "skill", artifact_id, version_id)

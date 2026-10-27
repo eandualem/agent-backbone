@@ -192,6 +192,49 @@ class ConversationReadORM(Base):
     """When the marker last moved: summary polling reports the changed counts."""
 
 
+class ObservedSourceORM(Base):
+    """A skill or policy identity, assigned when Backbone first reads its source.
+
+    ``source_key`` is the canonical store plus the item's name; how the item is
+    distributed is not part of it. A retired identity keeps its row, and the
+    next one under the same key takes the next ``generation``."""
+
+    __tablename__ = "observed_sources"
+    artifact_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    source_key: Mapped[str] = mapped_column(Text, nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    """``active``, ``missing`` (unreadable at the last observation) or ``retired``."""
+    first_observed_at: Mapped[str] = mapped_column(Text, nullable=False)
+    retired_at: Mapped[str | None] = mapped_column(Text)
+    maintainer_id: Mapped[str | None] = mapped_column(Text)
+    """The registration the operator mapped as maintainer; none by default."""
+    maintainer_name: Mapped[str | None] = mapped_column(Text)
+    """Its name when mapped, shown if that registration is later retired."""
+    __table_args__ = (
+        Index("uq_observed_source_generation", "kind", "source_key", "generation", unique=True),
+    )
+
+
+class ObservedVersionORM(Base):
+    """An immutable snapshot of a skill or policy, taken when its content changed."""
+
+    __tablename__ = "observed_versions"
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    artifact_id: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        Index("idx_observed_versions", "artifact_id", "id"),
+        {"sqlite_autoincrement": True},
+    )
+
+
 class ConversationRedeliveryORM(Base):
     """Redelivery requests by their idempotency key."""
 
