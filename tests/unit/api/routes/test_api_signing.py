@@ -547,3 +547,39 @@ async def test_response_publication_preserves_enrolled_author_signature(
         "/api/responses", headers={**auth_headers, **signed}, content=raw
     )
     assert accepted.status_code == 201
+
+
+async def test_current_plan_and_feedback_preserve_enrolled_author_signature(
+    api_client, auth_headers, api_app
+):
+    from tests.report_support import author
+    from tests.unit.api.routes.test_api_current_plans import publication
+
+    db = api_app.state.db
+    await author(db, SENDER)
+    identity = (await db.current_plans.query(agent=SENDER))["items"][0]["author_id"]
+    key = Ed25519PrivateKey.generate()
+    await _enroll(api_client, auth_headers, db, key)
+    body = publication(identity, author=SENDER)
+    for path, payload in [("/api/current-plans", body)]:
+        refused = await api_client.post(path, headers=auth_headers, json=payload)
+        assert refused.status_code == 403
+        assert refused.json()["detail"]["reason"] == "signature_required"
+        raw, signed = await _signed(db, key, "POST", path, payload)
+        accepted = await api_client.post(path, headers={**auth_headers, **signed}, content=raw)
+        assert accepted.status_code == 201
+    receipt = accepted.json()["receipt"]
+    feedback = {
+        "author": SENDER,
+        "request_id": uuid.uuid4().hex,
+        "observed_plan_id": receipt["plan_id"],
+        "observed_revision_id": receipt["revision_id"],
+        "kind": "question",
+        "text": "What remains?",
+    }
+    path = f"/api/current-plans/{identity}/feedback"
+    assert (await api_client.post(path, headers=auth_headers, json=feedback)).status_code == 403
+    raw, signed = await _signed(db, key, "POST", path, feedback)
+    with patch("agent_backbone.api.routes.current_plans.deliver_now", AsyncMock()):
+        accepted = await api_client.post(path, headers={**auth_headers, **signed}, content=raw)
+    assert accepted.status_code == 200 and accepted.json()["delivery"]["queued"]

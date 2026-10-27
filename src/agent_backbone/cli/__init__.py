@@ -48,6 +48,7 @@ from agent_backbone.cli.agents import (
 )
 from agent_backbone.cli.completion import cmd_completion, complete
 from agent_backbone.cli.conversations import add_conversation_parsers
+from agent_backbone.cli.current_plans import add_current_plan_parsers
 from agent_backbone.cli.diagnostics import add_diagnostics_parser
 from agent_backbone.cli.documents import add_document_parsers
 from agent_backbone.cli.fleet import add_fleet_parser
@@ -168,6 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_document_parsers(sub)
     add_conversation_parsers(sub)
     add_sheet_parsers(sub)
+    add_current_plan_parsers(sub)
 
     p = sub.add_parser("config", help="settings (stored in the database)")
     csub = p.add_subparsers(dest="config_command", required=True)

@@ -11,6 +11,7 @@ from agent_backbone.services.database._conversations_repo import (
     Limits,
     UnknownArtifact,
 )
+from agent_backbone.services.database._current_plans_repo import CurrentPlanError
 from agent_backbone.services.database._diagnostics_repo import diagnostic_details
 from agent_backbone.services.database._documents_repo import (
     DocumentCapacity,
@@ -35,6 +36,7 @@ __all__ = [
     "BackboneDB",
     "Base",
     "ConversationRefused",
+    "CurrentPlanError",
     "DocumentCapacity",
     "DocumentConflict",
     "DocumentRateLimit",

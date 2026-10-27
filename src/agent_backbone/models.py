@@ -578,3 +578,101 @@ class IssueEvent(BaseModel):
             delivery_id=delivery_id,
             action=action,
         )
+
+
+# Current plans are short authored snapshots, never runtime approval dialogs.
+CURRENT_PLAN_BODY_BYTES = 65_536
+PlanIdentity = Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
+
+
+class PlanReference(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    kind: Literal["issue", "sheet", "document"]
+    target: str = Field(min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def valid_target(self):
+        patterns = {
+            "issue": r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*",
+            "sheet": r"[0-9a-f]{32}",
+            "document": r"[1-9][0-9]*",
+        }
+        if not re.fullmatch(patterns[self.kind], self.target):
+            raise ValueError("reference target does not match its kind")
+        return self
+
+
+class CurrentPlanItem(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    item_id: PlanIdentity
+    text: ReportText = Field(min_length=1, max_length=240)
+    section: Literal["now", "next", "later"]
+    status: Literal["pending", "in_progress", "blocked", "done"]
+    detail: str = Field(default="", max_length=400)
+    references: list[PlanReference] = Field(default_factory=list, max_length=3)
+
+    @field_validator("detail")
+    @classmethod
+    def plain_detail(cls, value):
+        return _report_text(value) if value else value
+
+
+class CurrentPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    plan_id: PlanIdentity
+    title: ReportText = Field(min_length=1, max_length=160)
+    items: list[CurrentPlanItem] = Field(max_length=30)
+
+    @model_validator(mode="after")
+    def bounded_ordered_items(self):
+        if len({item.item_id for item in self.items}) != len(self.items):
+            raise ValueError("item IDs must be unique")
+        sections = [{"now": 0, "next": 1, "later": 2}[i.section] for i in self.items]
+        if sections != sorted(sections):
+            raise ValueError("order items by now, next, then later")
+        size = len(self.title) + sum(
+            len(i.text) + len(i.detail) + sum(len(r.target) for r in i.references)
+            for i in self.items
+        )
+        if size > 8000:
+            raise ValueError("current plan exceeds 8000 combined text characters")
+        return self
+
+
+class PublishCurrentPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    author: ReportAgentName
+    author_id: PlanIdentity
+    request_id: PlanIdentity
+    base_revision_id: PlanIdentity | None
+    plan: CurrentPlan
+
+
+class CurrentPlanFeedback(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    author: ReportAgentName | None
+    request_id: PlanIdentity
+    observed_plan_id: PlanIdentity
+    observed_revision_id: PlanIdentity
+    item_ids: list[PlanIdentity] = Field(default_factory=list, max_length=10)
+    kind: Literal["question", "feedback"]
+    text: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("text")
+    @classmethod
+    def feedback_text(cls, value):
+        # Keep ordinary paragraph breaks, without permitting terminal control sequences.
+        if not value.strip() or any(
+            (unicodedata.category(c) in {"Cc", "Cs"} and c not in "\n\t")
+            or c in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+            for c in value
+        ):
+            raise ValueError("feedback must be nonblank text without control or bidi characters")
+        return value
+
+    @field_validator("item_ids")
+    @classmethod
+    def unique_items(cls, value):
+        if len(set(value)) != len(value):
+            raise ValueError("selected item IDs must be unique")
+        return value
