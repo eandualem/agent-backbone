@@ -126,7 +126,10 @@ async def test_maintainer_mapping_is_explicit_and_operator_only(
     mine = (await api_client.get("/api/conversations?agent=ike", headers=AGENT)).json()
     assert [item["artifact_id"] for item in mine["items"]] == [artifact_id]
 
+    cursor = (await api_client.get("/api/conversations", headers=auth_headers)).json()["cursor"]
     cleared = await api_client.delete(path + "/maintainer", headers=auth_headers)
+    polled = await api_client.get(f"/api/conversations?since={cursor}", headers=auth_headers)
+    assert polled.json()["items"][0]["responsible"]["status"] == "unassigned"
     assert cleared.json()["responsible"]["status"] == "unassigned"
     document = await api_client.put(
         "/api/conversations/document/" + "0" * 32 + "/maintainer", headers=auth_headers, json=body
@@ -142,6 +145,7 @@ async def test_policy_identity_survives_an_override(api_app, api_client, auth_he
     override = api_app.state.config.template_dirs.editable / "policies" / "starter-continuity.md"
     override.parent.mkdir(parents=True)
     override.write_text("Keep notes.\n")
+    (override.parent / "my--policy.md").write_text("Allowed by the policy name rule.\n")
     base = f"/api/policies/{policy['artifact_id']}/versions"
     versions = (await api_client.get(base, headers=auth_headers)).json()["items"]
     assert [v["label"] for v in versions] == ["v2", "v1"]
@@ -149,4 +153,5 @@ async def test_policy_identity_survives_an_override(api_app, api_client, auth_he
     assert latest.json()["content"] == "Keep notes.\n"
     again = (await api_client.get("/api/policies", headers=auth_headers)).json()["items"]
     assert policy["artifact_id"] in {item["artifact_id"] for item in again}
+    assert "my--policy" in {item["name"] for item in again}
     assert (await api_client.get(f"{base}/999", headers=auth_headers)).status_code == 404

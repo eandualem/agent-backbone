@@ -904,8 +904,11 @@ class ConversationRepo(Repo):
                     and row.source_key[len(prefix) :] not in items
                 ]
                 if gone:
+                    # Only still-active ones: a concurrent retirement must stand.
                     await conn.execute(
-                        update(_S).where(_S.c.artifact_id.in_(gone)).values(status="missing")
+                        update(_S)
+                        .where(_S.c.artifact_id.in_(gone), _S.c.status == "active")
+                        .values(status="missing")
                     )
             for name, content in items.items():
                 source = await _source(conn, kind, prefix + name, name, create=content is not None)
@@ -969,6 +972,13 @@ class ConversationRepo(Repo):
                 update(_S)
                 .where(_S.c.artifact_id == artifact_id)
                 .values(maintainer_id=agent_id, maintainer_name=name)
+            )
+            # The summary's responsible agent changed: report it to ``since`` polling.
+            await _lock(conn, kind, artifact_id)
+            await conn.execute(
+                update(_READ)
+                .where(_READ.c.kind == kind, _READ.c.artifact_id == artifact_id)
+                .values(updated_at=now_iso())
             )
             artifact = await _observed(conn, kind, artifact_id)
             return _responsible(artifact, await _names(conn, [agent_id]))

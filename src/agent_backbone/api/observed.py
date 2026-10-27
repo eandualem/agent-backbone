@@ -43,8 +43,13 @@ def _read(config, kind: str, name: str) -> str | None:
 
 
 def _names(config, kind: str) -> list[str]:
+    """Names each kind's own rules accept; ``list_templates`` already applies the policy rule."""
     if kind == "skill":
-        return [entry.name for entry in read_store(config.skills.store_path)]
+        return [
+            entry.name
+            for entry in read_store(config.skills.store_path)
+            if NAME_RE.fullmatch(entry.name)
+        ]
     return [
         entry["name"].partition(":")[2]
         for entry in list_templates(config.template_dirs)
@@ -57,8 +62,7 @@ async def observe_all(config, db: BackboneDB, kind: str) -> dict[str, dict]:
     store = _store(config, kind)
     if store is None:
         return {}
-    names = [name for name in _names(config, kind) if NAME_RE.fullmatch(name)]
-    items = {name: _read(config, kind, name) for name in names}
+    items = {name: _read(config, kind, name) for name in _names(config, kind)}
     return await db.conversations.observe(kind, store, items, complete=True)
 
 

@@ -189,7 +189,8 @@ class ConversationReadORM(Base):
     artifact_id: Mapped[str] = mapped_column(Text, primary_key=True)
     read_through: Mapped[int] = mapped_column(BigInteger, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
-    """When the marker last moved: summary polling reports the changed counts."""
+    """When the marker last moved, or a maintainer mapping changed: summary
+    polling reports the changed counts and responsible agent."""
 
 
 class ObservedSourceORM(Base):
