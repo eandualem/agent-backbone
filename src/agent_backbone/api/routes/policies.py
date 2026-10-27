@@ -12,15 +12,21 @@ from fastapi import APIRouter, Depends, Path, Query
 from agent_backbone.api.deps import get_config, get_db
 from agent_backbone.api.observed import observe_all, observe_one
 from agent_backbone.api.routes.conversations import observed_version, versions
+from agent_backbone.templates import policy_source
 
 router = APIRouter(prefix="/api/policies", tags=["policies"])
 
 
 @router.get("", operation_id="list_policies")
 async def list_policies(config=Depends(get_config), db=Depends(get_db)):
-    """Every policy in the store, with its conversation identity and latest version."""
+    """Every policy in the store, with its conversation identity and latest version.
+    ``path`` is the file agents receive it from, as the instruction sources report it:
+    the override when there is one, otherwise the bundled default."""
     observed = await observe_all(config, db, "policy")
-    items = [{"name": name} | item for name, item in sorted(observed.items())]
+    items = [
+        {"name": name, "path": str(policy_source(config.template_dirs, name))} | item
+        for name, item in sorted(observed.items())
+    ]
     return {"items": items, "total": len(items)}
 
 

@@ -168,6 +168,7 @@ async def test_policy_identity_survives_an_override(api_app, api_client, auth_he
     assert latest.json()["content"] == "Keep notes.\n"
     again = (await api_client.get("/api/policies", headers=auth_headers)).json()["items"]
     assert policy["artifact_id"] in {item["artifact_id"] for item in again}
+    assert {item["name"]: item for item in again}["starter-continuity"]["path"] == str(override)
     assert "my--policy" in {item["name"] for item in again}
     (override.parent / "blank.md").write_text("  \n")
     blank = (await api_client.get("/api/policies", headers=auth_headers)).json()["items"]

@@ -126,7 +126,7 @@ artifact you published.
 | `POST /api/conversations/{kind}/{artifact_id}/messages/{entry_id}/redeliver` | `{"request_id": …}` queues a new delivery for a failed owner message: `queued`, `already_pending` or `refused`. |
 | `GET /api/documents/{document_id}/revisions`, `/api/responses/{conversation_id}/revisions`, `/api/reports/{conversation_id}/revisions` | Versions newest first; read one exactly with the kind's existing read. |
 | `GET /api/skills/{artifact_id}/versions`, `/api/policies/{artifact_id}/versions` | Snapshots newest first (`revision_id`, `label`, `created_at`, `sha256`); `…/versions/{revision_id}` adds `content`. |
-| `GET /api/policies` | Every policy with `name`, `artifact_id`, `status` and `latest_revision_id`. `GET /api/skills` items carry `artifact_id`. |
+| `GET /api/policies` | Every policy with `name`, `path` (the file agents receive it from: the override if there is one, otherwise the bundled default), `artifact_id`, `status` and `latest_revision_id`. `GET /api/skills` items carry `artifact_id`. |
 | `PUT /api/conversations/{kind}/{artifact_id}/maintainer`, `DELETE …/maintainer` | Skills and policies: map `{"agent": NAME or registration ID}` as the responsible agent, or clear it. |
 | `POST /api/conversations/{kind}/{artifact_id}/retire` | Skills and policies: end the identity. |
 
