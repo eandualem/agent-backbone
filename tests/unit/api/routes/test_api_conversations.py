@@ -156,7 +156,7 @@ async def test_ask_reply_and_revise_round_trip(api_app, api_client, auth_headers
 async def test_refusals_are_typed(api_app, api_client, auth_headers, deliver):
     db = api_app.state.db
     doc = await _document(api_client, auth_headers)
-    other = await _document(api_client, auth_headers, author="leo", key="other")
+    other = await _document(api_client, auth_headers, author="brunel", key="other")
     path = f"/api/conversations/document/{doc['document_id']}/messages"
 
     async def refused(payload, status, error, headers=auth_headers, at=path):
@@ -177,7 +177,7 @@ async def test_refusals_are_typed(api_app, api_client, auth_headers, deliver):
     assert sent.status_code == 201
     await refused({"request_id": "a", "text": "changed"}, 409, "request_conflict")
     await refused(
-        {"request_id": "b", "author": "leo", "text": "not mine"}, 403, "not_participant", AGENT
+        {"request_id": "b", "author": "brunel", "text": "not mine"}, 403, "not_participant", AGENT
     )
     await refused(
         {
@@ -212,10 +212,10 @@ async def test_refusals_are_typed(api_app, api_client, auth_headers, deliver):
     api_app.state.config.settings["conversations.max_messages"] = 100
     api_app.state.config.settings["conversations.owner_messages_per_hour"] = 100
     await refused({"request_id": "f", "text": "who now?"}, 422, "recipient_required")
-    to_leo = await api_client.post(
-        path, headers=auth_headers, json={"request_id": "f", "text": "who?", "recipient": "leo"}
+    to_brunel = await api_client.post(
+        path, headers=auth_headers, json={"request_id": "f", "text": "who?", "recipient": "brunel"}
     )
-    assert to_leo.json()["entry"]["recipient"]["name"] == "leo"
+    assert to_brunel.json()["entry"]["recipient"]["name"] == "brunel"
 
     for missing in ("/api/conversations/document/" + "0" * 32, "/api/conversations/sheet/x"):
         result = await api_client.get(missing, headers=auth_headers)
@@ -261,11 +261,11 @@ async def test_agent_reads_only_its_conversations(api_app, api_client, auth_head
         path + "/messages", headers=auth_headers, json={"request_id": "a", "text": "hi"}
     )
     assert (await api_client.get(path + "?agent=ike", headers=AGENT)).status_code == 200
-    denied = await api_client.get(path + "?agent=leo", headers=AGENT)
+    denied = await api_client.get(path + "?agent=brunel", headers=AGENT)
     assert denied.status_code == 403 and denied.json()["error"] == "not_participant"
     assert (await api_client.get(path, headers=AGENT)).status_code == 403
     mine = (await api_client.get("/api/conversations?agent=ike", headers=AGENT)).json()
-    theirs = (await api_client.get("/api/conversations?agent=leo", headers=AGENT)).json()
+    theirs = (await api_client.get("/api/conversations?agent=brunel", headers=AGENT)).json()
     assert len(mine["items"]) == 1 and theirs["items"] == []
 
 
@@ -307,9 +307,9 @@ async def test_responsible_agent_lists_conversations_addressed_to_others(
     await api_client.post(
         f"/api/conversations/document/{doc['document_id']}/messages",
         headers=auth_headers,
-        json={"request_id": "a", "text": "Leo, can you check this?", "recipient": "leo"},
+        json={"request_id": "a", "text": "Brunel, can you check this?", "recipient": "brunel"},
     )
-    for agent in ("ike", "leo"):
+    for agent in ("ike", "brunel"):
         listed = (await api_client.get(f"/api/conversations?agent={agent}", headers=AGENT)).json()
         assert [item["artifact_id"] for item in listed["items"]] == [doc["document_id"]]
 
