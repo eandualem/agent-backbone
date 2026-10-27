@@ -10,6 +10,7 @@ from pydantic import BaseModel, ValidationError
 
 from agent_backbone.api.auth import require_api_key
 from agent_backbone.api.deps import get_db
+from agent_backbone.api.routes.conversations import versions
 from agent_backbone.models import (
     REPORT_BODY_BYTES,
     REPORT_LINKS,
@@ -73,6 +74,7 @@ class ReportRecord(BaseModel):
     created_at: str
     source: str
     report: ProgressReport
+    conversation_id: int
     age_seconds: int
     stale: bool
     telegram_delivery: str = "not_requested"
@@ -164,6 +166,17 @@ async def reports(
         raise HTTPException(422, _validation_errors(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@router.get("/{conversation_id}/revisions", operation_id="list_report_revisions")
+async def report_revisions(
+    conversation_id: str = Path(max_length=20),
+    before: int | None = Query(default=None, ge=1, le=2**63 - 1),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: BackboneDB = Depends(get_db),
+):
+    """A report's versions; reports have no corrections, so this is the report itself."""
+    return await versions(db, "report", conversation_id, before, limit)
 
 
 @router.get("/{report_id}", response_model=ReportRecord, operation_id="get_progress_report")

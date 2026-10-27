@@ -9,6 +9,7 @@ backbone doctor                      check tmux, runtimes, credentials
 backbone diagnostics                 recorded problems, grouped without message content
 backbone respond --file FILE         save a question, answer and action for later retrieval
 backbone responses [show ID]         read saved answers independently of progress
+backbone conversations [show|reply]  read and answer the conversation on an artifact
 backbone report --file FILE          publish a short structured progress report
 backbone updates [--agent NAME]      read reports, with --history or show ID for depth
 backbone runtimes                    supported CLIs, installed or not, example model ids
@@ -46,6 +47,7 @@ from agent_backbone.cli.agents import (
     cmd_tell,
 )
 from agent_backbone.cli.completion import cmd_completion, complete
+from agent_backbone.cli.conversations import add_conversation_parsers
 from agent_backbone.cli.diagnostics import add_diagnostics_parser
 from agent_backbone.cli.documents import add_document_parsers
 from agent_backbone.cli.fleet import add_fleet_parser
@@ -163,6 +165,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_report_parsers(sub)
     add_response_parsers(sub)
     add_document_parsers(sub)
+    add_conversation_parsers(sub)
 
     p = sub.add_parser("config", help="settings (stored in the database)")
     csub = p.add_subparsers(dest="config_command", required=True)

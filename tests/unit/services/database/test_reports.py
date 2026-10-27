@@ -124,7 +124,7 @@ async def test_rename_and_forget_never_reattribute_old_reports(db):
     assert [entry["record"]["id"] for entry in archive["items"]] == [old["id"]]
 
 
-async def test_retention_preserves_latest_but_marks_it_old_and_inactive(db):
+async def test_old_reports_are_retained_and_marked_stale(db):
     await author(db)
     older = await publish(db)
     last = await publish(
@@ -135,8 +135,7 @@ async def test_retention_preserves_latest_but_marks_it_old_and_inactive(db):
     )
     async with db.engine.begin() as conn:
         await conn.execute(text("UPDATE reports SET created_at = '2020-01-01T00:00:00.000000Z'"))
-    assert await db.reports.prune(30) == 1
-    assert await db.reports.get(older["id"]) is None
+    assert await db.reports.get(older["id"])
     retained = await db.reports.get(last["id"])
     assert retained["stale"] and retained["report"]["status"] == "inactive"
 

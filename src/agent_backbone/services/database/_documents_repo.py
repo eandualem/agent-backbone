@@ -14,6 +14,7 @@ from agent_backbone.models import (
     DOCUMENTS_PER_HOUR,
     PublishDocument,
 )
+from agent_backbone.services.database._conversation_events import append_revision
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 from agent_backbone.services.database.models import AgentORM, DocumentORM, DocumentStorageORM
@@ -148,6 +149,19 @@ class DocumentRepo(Repo):
                 .returning(_D.c.id)
             )
             await conn.execute(update(_S).where(_S.c.id == 1).values(used_bytes=used + admitted))
+            if publication.supersedes_id is not None:
+                count = await conn.scalar(
+                    select(func.count()).select_from(_D).where(_D.c.document_id == root)
+                )
+                await append_revision(
+                    conn,
+                    "document",
+                    root,
+                    revision_id=str(row_id),
+                    label=f"rev {count}",
+                    author_id=identity,
+                    name=publication.author,
+                )
             record = await conn.execute(_selection().where(_D.c.id == row_id))
             return dict(record.mappings().one()), True
 

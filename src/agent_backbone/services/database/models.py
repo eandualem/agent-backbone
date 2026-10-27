@@ -136,6 +136,70 @@ class DocumentStorageORM(Base):
     used_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
+class ConversationEntryORM(Base):
+    """One append-only entry in an artifact's conversation (docs/conversations.md)."""
+
+    __tablename__ = "conversation_entries"
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_id: Mapped[str] = mapped_column(Text, nullable=False)
+    entry_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    """``message``, ``revision`` or ``step``."""
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    author_type: Mapped[str] = mapped_column(Text, nullable=False)
+    author_id: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    """The agent's registration ID; empty for the owner."""
+    author_name: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str | None] = mapped_column(Text)
+    recipient_id: Mapped[str | None] = mapped_column(Text)
+    recipient_name: Mapped[str | None] = mapped_column(Text)
+    in_reply_to: Mapped[int | None] = mapped_column(BigInteger)
+    resulting_revision_id: Mapped[str | None] = mapped_column(Text)
+    anchor: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[str | None] = mapped_column(Text)
+    """The revision or step event, as JSON."""
+    request_id: Mapped[str | None] = mapped_column(Text)
+    request_sha256: Mapped[str | None] = mapped_column(Text)
+    operation_id: Mapped[str | None] = mapped_column(Text)
+    """The current delivery operation of an owner message."""
+    delivery: Mapped[str | None] = mapped_column(Text)
+    """The delivery state last recorded, read when its queue row is gone."""
+    __table_args__ = (
+        Index("idx_conversation_entries", "kind", "artifact_id", "id"),
+        Index(
+            "uq_conversation_request",
+            "kind",
+            "artifact_id",
+            "author_id",
+            "request_id",
+            unique=True,
+        ),
+        Index("idx_conversation_operation", "operation_id"),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class ConversationReadORM(Base):
+    """How far the owner has read each conversation; it never moves backwards."""
+
+    __tablename__ = "conversation_reads"
+    kind: Mapped[str] = mapped_column(Text, primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    read_through: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class ConversationRedeliveryORM(Base):
+    """Redelivery requests by their idempotency key."""
+
+    __tablename__ = "conversation_redeliveries"
+    entry_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    request_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    result: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class AgentWatchORM(Base):
     """Repositories an agent watches (informational notifications + for: routing)."""
 

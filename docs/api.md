@@ -874,7 +874,9 @@ ordinary messaging; this is not a per-agent authentication boundary.
 
 `POST /api/documents` publishes immutable HTML revisions. `GET /api/documents`
 returns paged latest-per-document metadata; `GET /api/documents/{revision_id}`
-returns exact content through authenticated JSON. See [Documents](documents.md)
+returns exact content through authenticated JSON;
+`GET /api/documents/{document_id}/revisions` lists a Document's revisions. See
+[Conversations](conversations.md) for `/api/conversations` and [Documents](documents.md)
 for the response fields, signed publication, byte limits, retries and retention.
 
 

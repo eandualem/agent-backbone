@@ -123,6 +123,8 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "timing.retry_interval_seconds": 300,
     "timing.start_timeout_seconds": 60,
     "timing.delivery_retention_days": 30,
+    "conversations.max_messages": 10_000,
+    "conversations.owner_messages_per_hour": 60,
     "diagnostics.slow_job_seconds": 30,
     "diagnostics.resource_sample_seconds": 300,
     "diagnostics.pressure_swap_percent": 50,
@@ -246,9 +248,12 @@ SETTINGS_HELP: dict[str, str] = {
     "timing.retry_interval_seconds": "delivery-retry job period",
     "timing.start_timeout_seconds": "How long `agent start` waits for the prompt",
     "timing.delivery_retention_days": (
-        "Delivery, event, completed queue, diagnostic and report-history retention in days; "
-        "each author's latest report is kept"
+        "Delivery, event, completed queue and diagnostic retention in days"
     ),
+    "conversations.max_messages": (
+        "Messages one artifact conversation holds; a full one refuses new messages"
+    ),
+    "conversations.owner_messages_per_hour": "Owner messages per conversation per rolling hour",
     "telegram.allowed_chat_ids": "Allowed Telegram chat destinations (JSON list) — required",
     "telegram.allowed_user_ids": (
         "User ids allowed to send instructions and approve actions (JSON list)"

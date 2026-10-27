@@ -869,3 +869,8 @@ use `--validate` for a local check and `--supersedes ID` for a correction.
 `--before` and `--limit` filters. `backbone documents show ID --json` returns the
 complete revision; `--output FILE` saves its exact HTML. See
 [Documents](documents.md) for identity, retries and admission limits.
+
+`backbone conversations` lists the conversations you are part of;
+`backbone conversations show KIND ID` reads one, and
+`backbone conversations reply KIND ID "text" --to ENTRY [--revision ID]` answers
+in it. See [Conversations](conversations.md).
