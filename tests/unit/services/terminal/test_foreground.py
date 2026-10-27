@@ -3,7 +3,7 @@ from unittest.mock import patch
 from agent_backbone.services.terminal import foreground_commands
 
 
-async def test_only_terminal_foreground_process_group_is_returned():
+async def test_only_terminal_foreground_group_leader_is_returned():
     with (
         patch(
             "agent_backbone.services.terminal._foreground.query_format_vars",
@@ -13,7 +13,7 @@ async def test_only_terminal_foreground_process_group_is_returned():
             "agent_backbone.services.terminal._foreground._output",
             return_value=(
                 0,
-                "10 10 20\n20 20 20\n30 30 20\n",
+                "10 10 20\n20 20 20\n21 20 20\n30 30 20\n",
             ),
         ) as ps,
         patch(
