@@ -78,7 +78,7 @@ artifact you published.
 | Call | Purpose |
 |---|---|
 | `GET /api/conversations` | Summaries for badges: `kind`, `artifact_id`, `responsible`, `unread`, `total`, `last_entry_at`. Paged with `after` and `limit` (50, at most 200); `since=CURSOR` returns only conversations changed after a previous `cursor`; filters `kind` and `ids` (up to 50 `kind:artifact_id` keys). |
-| `GET /api/conversations/{kind}/{artifact_id}` | Header (`responsible`, `participants`, `total`, `unread`, `read_through`) and a page of entries, oldest to newest. `before=` pages older entries, `after=` returns newer ones for polling. Sends an `ETag`; an unchanged poll with `If-None-Match` returns 304. |
+| `GET /api/conversations/{kind}/{artifact_id}` | Header (`responsible`, `participants`, `total`, `unread`, `read_through`) and a page of entries, oldest to newest. `before=` pages older entries, `after=` returns newer ones for polling, and `entries=ID,…` (up to 50) returns those entries, oldest to newest, to refresh the delivery of older messages; an ID not in this conversation is left out. Sends an `ETag`; an unchanged poll with `If-None-Match` returns 304. |
 | `POST /api/conversations/{kind}/{artifact_id}/messages` | Append a message: `request_id`, `text`, and optionally `recipient` (registration ID or name), `anchor`; agents add `author`, `in_reply_to`, `resulting_revision_id`. 201 when stored, 200 for an exact retry. |
 | `POST /api/conversations/{kind}/{artifact_id}/read` | `{"read_through": ID}` advances the owner's marker (never backwards) and returns the new counts. |
 | `POST /api/conversations/{kind}/{artifact_id}/messages/{entry_id}/redeliver` | `{"request_id": …}` queues a new delivery for a failed owner message: `queued`, `already_pending` or `refused`. |

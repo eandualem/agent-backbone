@@ -238,6 +238,11 @@ async def test_redeliver_failed_message_without_a_new_entry(
     assert pending.json()["result"] == "already_pending"
     async with db.engine.begin() as conn:
         await conn.execute(text("UPDATE message_queue SET status = 'expired'"))
+    refreshed = await api_client.get(
+        base + f"?entries={entry['id']},999,{entry['id'] + 1000}", headers=auth_headers
+    )
+    assert [e["delivery"] for e in refreshed.json()["entries"]] == ["failed"]
+    assert refreshed.json()["older"] is refreshed.json()["newer"] is None
     first = await api_client.post(again, headers=auth_headers, json={"request_id": "r1"})
     assert first.json()["result"] == "queued" and first.json()["entry"]["delivery"] == "pending"
     repeat = await api_client.post(again, headers=auth_headers, json={"request_id": "r1"})

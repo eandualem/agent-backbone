@@ -334,9 +334,12 @@ class ConversationRepo(Repo):
         before: int | None = None,
         after: int | None = None,
         limit: int = 50,
+        ids: list[int] | None = None,
     ) -> dict:
         """The header and one page of entries, oldest to newest within the page.
-        ``reader`` is the agent asking; None is the owner."""
+        ``reader`` is the agent asking; None is the owner. ``ids`` asks for those
+        entries instead of a page, to refresh their delivery: an ID that is not in
+        this conversation is left out, and no paging cursors are returned."""
         async with self._tx() as conn:
             artifact = await _artifact(conn, kind, artifact_id)
             if reader is not None:
@@ -349,7 +352,9 @@ class ConversationRepo(Repo):
                     )
             counts = await _counts(conn, kind, artifact_id)
             query = _entries().where(_where(kind, artifact_id))
-            if after is not None:
+            if ids is not None:
+                query = query.where(_E.c.id.in_(ids)).order_by(_E.c.id)
+            elif after is not None:
                 query = query.where(_E.c.id > after).order_by(_E.c.id)
             else:
                 if before is not None:
@@ -395,10 +400,10 @@ class ConversationRepo(Repo):
             "read_through": counts["read_through"],
             "entries": entries,
             "older": f"e{entries[0]['id']}"
-            if entries and entries[0]["id"] > counts["first_id"]
+            if ids is None and entries and entries[0]["id"] > counts["first_id"]
             else None,
             "newer": f"e{entries[-1]['id']}"
-            if entries and entries[-1]["id"] < counts["last_id"]
+            if ids is None and entries and entries[-1]["id"] < counts["last_id"]
             else None,
         }
 

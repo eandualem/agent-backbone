@@ -217,10 +217,18 @@ async def conversation(
     before: str | None = Query(default=None, max_length=40),
     after: str | None = Query(default=None, max_length=40),
     limit: int = Query(default=50, ge=1, le=200),
+    entries: str | None = Query(default=None, max_length=1024),
     agent: str | None = Query(default=None, max_length=128),
     db: BackboneDB = Depends(get_db),
 ):
-    """The header and a page of entries; an unchanged poll returns 304."""
+    """The header and a page of entries; an unchanged poll returns 304.
+    ``entries=ID,…`` (up to 50) returns those entries instead, to refresh their
+    delivery state; an ID that is not in this conversation is left out."""
+    ids = None
+    if entries is not None:
+        ids = [_cursor(value, "e") for value in entries.split(",") if value]
+        if not 1 <= len(ids) <= 50:
+            raise HTTPException(422, "entries takes 1 to 50 entry IDs")
     try:
         _kind(kind)
         page = await db.conversations.conversation(
@@ -230,6 +238,7 @@ async def conversation(
             before=_cursor(before, "e"),
             after=_cursor(after, "e"),
             limit=limit,
+            ids=ids,
         )
     except UnknownArtifact as exc:
         return _unknown(exc)
