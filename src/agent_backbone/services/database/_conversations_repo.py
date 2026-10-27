@@ -224,6 +224,19 @@ async def _identity(conn, name: str) -> str | None:
     )
 
 
+async def _locked_name(conn, agent_id: str | None) -> str | None:
+    """The current name of a registration, holding its row until the transaction
+    ends, so a concurrent rename cannot strand a queue row under the old name."""
+    if not agent_id:
+        return None
+    return await conn.scalar(
+        update(_A)
+        .where(_A.c.report_identity == agent_id)
+        .values(name=_A.c.name)
+        .returning(_A.c.name)
+    )
+
+
 async def _registration(conn, name: str) -> str | None:
     return await conn.scalar(select(_A.c.report_identity).where(_A.c.name == name))
 
@@ -676,18 +689,16 @@ class ConversationRepo(Repo):
         Never a new agent that merely has a retired registration's name."""
         if recipient is None:
             agent_id = artifact["latest"]["author_id"]
-            names = await _names(conn, [agent_id])
-            if agent_id not in names:
-                raise ConversationRefused(
-                    422,
-                    "recipient_required",
-                    "The responsible agent is retired; name a recipient.",
-                )
-            return agent_id, names[agent_id]
+            if name := await _locked_name(conn, agent_id):
+                return agent_id, name
+            raise ConversationRefused(
+                422,
+                "recipient_required",
+                "The responsible agent is retired; name a recipient.",
+            )
         if re.fullmatch(r"[0-9a-f]{32}", recipient):
-            names = await _names(conn, [recipient])
-            if recipient in names:
-                return recipient, names[recipient]
+            if name := await _locked_name(conn, recipient):
+                return recipient, name
         elif agent_id := await _identity(conn, recipient):
             return agent_id, recipient
         raise ConversationRefused(422, "unknown_recipient", f"No registered agent {recipient}.")
@@ -726,13 +737,17 @@ class ConversationRepo(Repo):
         entry, session to deliver to)``. The same request_id returns its first result."""
         async with self._tx() as conn:
             artifact = await _artifact(conn, kind, artifact_id)
-            await _lock(conn, kind, artifact_id)
             query = _entries().where(
                 _where(kind, artifact_id),
                 _E.c.id == entry_id,
                 _E.c.entry_kind == "message",
                 _E.c.author_type == "owner",
             )
+            # The recipient never changes on an entry: lock its registration first,
+            # in the same order as sending, then the conversation, then re-read.
+            recipient_id = await conn.scalar(select(_E.c.recipient_id).where(_E.c.id == entry_id))
+            name = await _locked_name(conn, recipient_id)
+            await _lock(conn, kind, artifact_id)
             row = (await conn.execute(query)).first()
             if row is None:
                 raise ConversationRefused(404, "unknown_entry", f"No owner message {entry_id}.")
@@ -751,7 +766,7 @@ class ConversationRepo(Repo):
                 result = "already_pending"
             elif entry["delivery"] == "delivered":
                 result, error = "refused", "already_delivered"
-            elif row.recipient_id not in (names := await _names(conn, [row.recipient_id])):
+            elif name is None:
                 result, error = "refused", "unknown_recipient"
             else:
                 # Claim the failed operation atomically: a concurrent redelivery
@@ -763,7 +778,7 @@ class ConversationRepo(Repo):
                     .values(operation_id=operation_id, delivery="pending")
                 )
                 if claimed.rowcount:
-                    target = names[row.recipient_id]
+                    target = name
                     await _queue(
                         conn,
                         entry=entry,
