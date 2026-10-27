@@ -161,6 +161,16 @@ def _cursor(value: str | None, prefix: str) -> int | None:
     return int(match[1])
 
 
+def _since(value: str | None) -> tuple[int, int | None] | None:
+    """A summaries ``cursor``: ``e<entry ID>[.<µs since the epoch>]``."""
+    if value is None:
+        return None
+    match = re.fullmatch(r"e([0-9]{1,19})(?:\.([0-9]{1,19}))?", value)
+    if not match or int(match[1]) > _MAX_ID:
+        raise HTTPException(422, f"invalid cursor {value[:40]!r}")
+    return int(match[1]), int(match[2]) if match[2] else None
+
+
 def _limits(config) -> Limits:
     return Limits(
         max_messages=config.settings.get("conversations.max_messages", 10_000),
@@ -194,7 +204,7 @@ async def conversations(
         keys=keys,
         reader=_reader(request, agent),
         after=_cursor(after, "c"),
-        since=_cursor(since, "e"),
+        since=_since(since),
         limit=limit,
     )
 

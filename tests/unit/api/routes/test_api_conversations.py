@@ -144,7 +144,7 @@ async def test_ask_reply_and_revise_round_trip(api_app, api_client, auth_headers
             "last_entry_at": page["entries"][-1]["created_at"],
         }
     ]
-    since = summaries["cursor"]
+    since = summaries["cursor"].split(".")[0]  # entries only: no read-marker overlap
     later = (await api_client.get(f"/api/conversations?since={since}", headers=auth_headers)).json()
     assert later["items"] == []
 
@@ -293,3 +293,57 @@ async def test_response_chain_is_one_conversation(api_app, api_client, auth_head
         f"/api/conversations/response/{correction['id']}", headers=auth_headers
     )
     assert not_root.status_code == 404 and str(first["id"]) in not_root.json()["message"]
+
+
+async def test_responsible_agent_lists_conversations_addressed_to_others(
+    api_client, auth_headers, deliver
+):
+    doc = await _document(api_client, auth_headers)
+    await api_client.post(
+        f"/api/conversations/document/{doc['document_id']}/messages",
+        headers=auth_headers,
+        json={"request_id": "a", "text": "Leo, can you check this?", "recipient": "leo"},
+    )
+    for agent in ("ike", "leo"):
+        listed = (await api_client.get(f"/api/conversations?agent={agent}", headers=AGENT)).json()
+        assert [item["artifact_id"] for item in listed["items"]] == [doc["document_id"]]
+
+
+async def test_summary_polling_reports_read_marker_changes(api_client, auth_headers, deliver):
+    doc = await _document(api_client, auth_headers)
+    await _document(api_client, auth_headers, supersedes_id=doc["id"], key="second")
+    first = (await api_client.get("/api/conversations", headers=auth_headers)).json()
+    assert first["items"][0]["unread"] == 1
+    path = f"/api/conversations/document/{doc['document_id']}"
+    page = (await api_client.get(path, headers=auth_headers)).json()
+    await api_client.post(
+        path + "/read", headers=auth_headers, json={"read_through": page["entries"][-1]["id"]}
+    )
+    polled = (
+        await api_client.get(f"/api/conversations?since={first['cursor']}", headers=auth_headers)
+    ).json()
+    assert [item["unread"] for item in polled["items"]] == [0]
+
+
+async def test_concurrent_redeliveries_queue_one_delivery(
+    api_app, api_client, auth_headers, deliver
+):
+    import asyncio
+
+    doc = await _document(api_client, auth_headers)
+    base = f"/api/conversations/document/{doc['document_id']}"
+    entry = (
+        await api_client.post(
+            base + "/messages", headers=auth_headers, json={"request_id": "a", "text": "hi"}
+        )
+    ).json()["entry"]
+    async with api_app.state.db.engine.begin() as conn:
+        await conn.execute(text("UPDATE message_queue SET status = 'expired'"))
+    again = base + f"/messages/{entry['id']}/redeliver"
+    results = await asyncio.gather(
+        *(
+            api_client.post(again, headers=auth_headers, json={"request_id": f"r{i}"})
+            for i in (1, 2)
+        )
+    )
+    assert sorted(r.json()["result"] for r in results) == ["already_pending", "queued"]

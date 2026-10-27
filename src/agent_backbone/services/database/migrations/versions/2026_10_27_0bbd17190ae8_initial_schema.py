@@ -181,6 +181,7 @@ def upgrade() -> None:
         sa.Column("kind", sa.Text(), nullable=False),
         sa.Column("artifact_id", sa.Text(), nullable=False),
         sa.Column("read_through", sa.BigInteger(), nullable=False),
+        sa.Column("updated_at", sa.Text(), server_default="", nullable=False),
         sa.PrimaryKeyConstraint("kind", "artifact_id", name=op.f("pk_conversation_reads")),
     )
     op.create_table(
@@ -321,6 +322,10 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_events")),
     )
     with op.batch_alter_table("events", schema=None) as batch_op:
+        # Autogenerate skips expression indexes: written by hand (#394).
+        batch_op.create_index(
+            "idx_events_delivery_id_lower", [sa.text("lower(delivery_id)")], unique=False
+        )
         batch_op.create_index("idx_events_received", ["received_at"], unique=False)
         batch_op.create_index("idx_events_repo", ["repo"], unique=False)
         batch_op.create_index("uq_events_delivery_id", ["delivery_id"], unique=True)
@@ -777,6 +782,7 @@ def downgrade() -> None:
     op.drop_table("issue_dependencies")
     op.drop_table("fleet_snapshots")
     with op.batch_alter_table("events", schema=None) as batch_op:
+        batch_op.drop_index("idx_events_delivery_id_lower")
         batch_op.drop_index("uq_events_delivery_id")
         batch_op.drop_index("idx_events_repo")
         batch_op.drop_index("idx_events_received")

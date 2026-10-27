@@ -29,6 +29,7 @@ def add_conversation_parsers(subparsers) -> None:
     )
     read.add_argument("--kind", choices=("document", "response", "report"))
     read.add_argument("--limit", type=int, choices=range(1, 201), metavar="1–200", default=50)
+    read.add_argument("--after", help="the next page: the cursor a previous list printed")
     read.add_argument("--agent", help="read as this agent (default: $BACKBONE_AGENT)")
     read.add_argument("--json", action="store_true")
     sub = read.add_subparsers(dest="conversation_command")
@@ -89,6 +90,8 @@ async def _run(args) -> int:
             path = "/api/conversations"
             if args.kind:
                 params["kind"] = args.kind
+            if args.after:
+                params["after"] = args.after
         method, body, path = "GET", None, path + "?" + urlencode(params)
     result = await _common.api(await _common.read_client_config(), method, path, json_body=body)
     if result is None:
@@ -120,6 +123,8 @@ async def _run(args) -> int:
             ),
             empty="No conversations.",
         )
+        if data["next_after"]:
+            print(f"More conversations: repeat with --after {data['next_after']}")
     return 0
 
 

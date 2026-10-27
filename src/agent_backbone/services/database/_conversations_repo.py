@@ -14,13 +14,14 @@ import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, case, func, insert, not_, or_, select, text, update
+from sqlalchemy import Text, and_, case, func, insert, not_, or_, select, text, update
 
 from agent_backbone.services.database._queue_repo import _INSERT_COLUMNS
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._reports_repo import chain_ids, chain_roots
-from agent_backbone.services.database._time import cutoff_iso, now_iso
+from agent_backbone.services.database._time import cutoff_iso, format_iso, now_iso
 from agent_backbone.services.database.models import (
     AgentORM,
     ConversationEntryORM,
@@ -231,6 +232,23 @@ async def _participant(conn, kind, artifact_id, artifact, agent_id: str) -> bool
     )
 
 
+async def _lock(conn, kind: str, artifact_id: str) -> None:
+    """Serialize writers of one conversation on its marker row, so retry keys,
+    limits and redelivery are checked against a state no one else is changing."""
+    await conn.execute(
+        text(
+            "INSERT INTO conversation_reads (kind, artifact_id, read_through, updated_at)"
+            " VALUES (:kind, :artifact_id, 0, '') ON CONFLICT (kind, artifact_id) DO NOTHING"
+        ),
+        {"kind": kind, "artifact_id": artifact_id},
+    )
+    await conn.execute(
+        update(_READ)
+        .where(_READ.c.kind == kind, _READ.c.artifact_id == artifact_id)
+        .values(read_through=_READ.c.read_through)
+    )
+
+
 async def _counts(conn, kind: str, artifact_id: str) -> dict:
     read_through = (
         await conn.scalar(
@@ -278,9 +296,10 @@ async def _counts(conn, kind: str, artifact_id: str) -> dict:
     }
 
 
-async def _queue(conn, *, entry: dict, artifact: dict, recipient: str, compose: Compose) -> str:
-    """Insert one delivery operation for an owner message; returns its ID."""
-    operation_id = uuid.uuid4().hex
+async def _queue(
+    conn, *, entry: dict, artifact: dict, recipient: str, compose: Compose, operation_id: str
+) -> None:
+    """Insert one delivery operation for an owner message."""
     await conn.execute(
         text(f"INSERT INTO message_queue {_INSERT_COLUMNS}"),
         {
@@ -299,7 +318,6 @@ async def _queue(conn, *, entry: dict, artifact: dict, recipient: str, compose: 
             "priority": 0,
         },
     )
-    return operation_id
 
 
 class ConversationRepo(Repo):
@@ -391,10 +409,12 @@ class ConversationRepo(Repo):
         keys: list[tuple[str, str]] = (),
         reader: str | None = None,
         after: int | None = None,
-        since: int | None = None,
+        since: tuple[int, int | None] | None = None,
         limit: int = 50,
     ) -> dict:
-        """Conversations with at least one entry, most recently active first."""
+        """Conversations with at least one entry, most recently active first.
+        ``since`` is a previous cursor: the last entry ID it saw and, when it has
+        one, the time (µs since the epoch) from which read markers have moved."""
         last = func.max(_E.c.id)
         query = (
             select(
@@ -432,16 +452,31 @@ class ConversationRepo(Repo):
         if after is not None:
             query = query.having(last < after)
         if since is not None:
-            query = query.having(last > since)
+            changed = last > since[0]
+            if since[1] is not None:
+                moved = format_iso(datetime.fromtimestamp(since[1] / 1e6, UTC))
+                changed = or_(changed, func.max(_READ.c.updated_at) >= moved)
+            query = query.having(changed)
+        # Read markers that move while this runs are reported again on the next poll.
+        polled = int((datetime.now(UTC) - timedelta(seconds=2)).timestamp() * 1e6)
         async with self._tx() as conn:
+            cursor = await conn.scalar(select(func.max(_E.c.id))) or 0
             if reader is not None:
                 agent_id = await _registration(conn, reader)
                 if agent_id is None:
-                    return {"items": [], "next_after": None, "cursor": "e0"}
+                    return {"items": [], "next_after": None, "cursor": f"e{cursor}.{polled}"}
                 mine = or_(_E.c.author_id == agent_id, _E.c.recipient_id == agent_id)
-                query = query.having(func.sum(case((mine, 1), else_=0)) > 0)
+                latest = select(func.max(_D.c.id)).group_by(_D.c.document_id)
+                documents = select(_D.c.document_id).where(
+                    _D.c.author_id == agent_id, _D.c.id.in_(latest)
+                )
+                authored = select(func.cast(_R.c.id, Text)).where(_R.c.author_id == agent_id)
+                responsible = or_(
+                    and_(_E.c.kind == "document", _E.c.artifact_id.in_(documents)),
+                    and_(_E.c.kind.in_(("response", "report")), _E.c.artifact_id.in_(authored)),
+                )
+                query = query.having(or_(func.sum(case((mine, 1), else_=0)) > 0, responsible))
             rows = (await conn.execute(query.order_by(last.desc()).limit(limit + 1))).all()
-            cursor = await conn.scalar(select(func.max(_E.c.id))) or 0
             items = []
             for row in rows[:limit]:
                 try:
@@ -464,7 +499,7 @@ class ConversationRepo(Repo):
         return {
             "items": items,
             "next_after": f"c{rows[limit - 1].last_id}" if more else None,
-            "cursor": f"e{cursor}",
+            "cursor": f"e{cursor}.{polled}",
         }
 
     async def post(
@@ -496,6 +531,7 @@ class ConversationRepo(Repo):
             author_id = "" if author is None else await _identity(conn, author)
             if author_id is None:
                 raise KeyError(author)
+            await _lock(conn, kind, artifact_id)
             previous = (
                 await conn.execute(
                     _entries().where(
@@ -588,8 +624,14 @@ class ConversationRepo(Repo):
             )
             if target:
                 entry = _entry((await conn.execute(_entries().where(_E.c.id == entry_id))).one())
-                operation_id = await _queue(
-                    conn, entry=entry, artifact=artifact, recipient=target[1], compose=compose
+                operation_id = uuid.uuid4().hex
+                await _queue(
+                    conn,
+                    entry=entry,
+                    artifact=artifact,
+                    recipient=target[1],
+                    compose=compose,
+                    operation_id=operation_id,
                 )
                 await conn.execute(
                     update(_E).where(_E.c.id == entry_id).values(operation_id=operation_id)
@@ -625,9 +667,13 @@ class ConversationRepo(Repo):
             last = await conn.scalar(select(func.max(_E.c.id)).where(_where(kind, artifact_id)))
             await conn.execute(
                 text(
-                    "INSERT INTO conversation_reads (kind, artifact_id, read_through)"
-                    " VALUES (:kind, :artifact_id, :read_through)"
-                    " ON CONFLICT (kind, artifact_id) DO UPDATE SET read_through = CASE"
+                    "INSERT INTO conversation_reads (kind, artifact_id, read_through, updated_at)"
+                    " VALUES (:kind, :artifact_id, :read_through, :now)"
+                    " ON CONFLICT (kind, artifact_id) DO UPDATE SET"
+                    " updated_at = CASE"
+                    " WHEN excluded.read_through > conversation_reads.read_through"
+                    " THEN excluded.updated_at ELSE conversation_reads.updated_at END,"
+                    " read_through = CASE"
                     " WHEN excluded.read_through > conversation_reads.read_through"
                     " THEN excluded.read_through ELSE conversation_reads.read_through END"
                 ),
@@ -635,6 +681,7 @@ class ConversationRepo(Repo):
                     "kind": kind,
                     "artifact_id": artifact_id,
                     "read_through": min(read_through, last or 0),
+                    "now": now_iso(),
                 },
             )
             counts = await _counts(conn, kind, artifact_id)
@@ -647,6 +694,7 @@ class ConversationRepo(Repo):
         entry, session to deliver to)``. The same request_id returns its first result."""
         async with self._tx() as conn:
             artifact = await _artifact(conn, kind, artifact_id)
+            await _lock(conn, kind, artifact_id)
             query = _entries().where(
                 _where(kind, artifact_id),
                 _E.c.id == entry_id,
@@ -674,16 +722,27 @@ class ConversationRepo(Repo):
             elif row.recipient_id not in (names := await _names(conn, [row.recipient_id])):
                 result, error = "refused", "unknown_recipient"
             else:
-                target = names[row.recipient_id]
-                operation_id = await _queue(
-                    conn, entry=entry, artifact=artifact, recipient=target, compose=compose
-                )
-                await conn.execute(
+                # Claim the failed operation atomically: a concurrent redelivery
+                # that already replaced it finds nothing to claim.
+                operation_id = uuid.uuid4().hex
+                claimed = await conn.execute(
                     update(_E)
-                    .where(_E.c.id == entry_id)
+                    .where(_E.c.id == entry_id, _E.c.operation_id == row.operation_id)
                     .values(operation_id=operation_id, delivery="pending")
                 )
-                result = "queued"
+                if claimed.rowcount:
+                    target = names[row.recipient_id]
+                    await _queue(
+                        conn,
+                        entry=entry,
+                        artifact=artifact,
+                        recipient=target,
+                        compose=compose,
+                        operation_id=operation_id,
+                    )
+                    result = "queued"
+                else:
+                    result = "already_pending"
                 entry = _entry((await conn.execute(query)).one())
             await conn.execute(
                 insert(_REDELIVERY).values(
