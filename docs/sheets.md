@@ -82,6 +82,8 @@ Atomic operation tags:
   `delete_tab`: `tab_id`, leaving at least one tab.
 - `insert_rows` / `insert_columns`: `tab_id`, new `ids`, `before_id` (null appends).
 - `delete_rows` / `delete_columns`: `tab_id`, `ids`, leaving at least one axis.
+  A range a formula uses may only lose the deleted records: deleting the first
+  or last record of a range that has others left is refused with `invalid_edit`.
 - `move_rows` / `move_columns`: contiguous canonical `ids`, `before_id` outside
   the selection (null means end). Formula references move with logical records.
   A move that would change the size of a range a formula uses (for example, a

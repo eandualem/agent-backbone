@@ -387,6 +387,8 @@ def create_app(config: BackboneConfig | None = None):
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
+            # Sheet exports report lost views and history in this header.
+            expose_headers=["X-Backbone-Sheet-Warnings"],
         )
 
     @app.exception_handler(httpx.HTTPError)

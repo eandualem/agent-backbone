@@ -38,7 +38,15 @@ def coordinate(tab, row_id, column_id):
         raise SheetError("invalid_reference", "cell axis ID is not in this revision") from exc
 
 
-_QUOTED = re.compile(r'"(?:[^"]|"")*"')
+_QUOTED = re.compile(r"('(?:[^']|'')*')|\"(?:[^\"]|\"\")*\"")
+
+
+def _without_text(formula: str, keep: str = "") -> str:
+    """The formula with string literals replaced by ``keep``; quoted sheet names,
+    which may themselves contain a double quote, are left as they are."""
+    return _QUOTED.sub(lambda m: m[1] or keep, formula)
+
+
 _RANGE = re.compile(
     r"(?:(?:'((?:[^']|'')+)'|([A-Za-z0-9_.]+))!)?"
     r"(?:\$?([A-Z]{1,3})\$?(\d+):\$?([A-Z]{1,3})\$?(\d+)"
@@ -64,7 +72,7 @@ def range_members(workbook, own_tab, formula: str) -> list[tuple]:
     row and column IDs; ``None`` is a whole axis."""
     tabs = {tab["name"]: tab for tab in workbook["tabs"]}
     members = []
-    for m in _RANGE.finditer(_QUOTED.sub('""', formula)):
+    for m in _RANGE.finditer(_without_text(formula, '""')):
         name = m[1].replace("''", "'") if m[1] else m[2]
         tab = tabs.get(name) if name else own_tab
         if tab is None:
@@ -110,7 +118,7 @@ def set_input(model, sheet, row, column, cell):
         kind, content = value["kind"], value["value"]
         if kind == "formula":
             # External workbook/structured references have no retained local identity.
-            if "[" in _QUOTED.sub("", content) or "]" in _QUOTED.sub("", content):
+            if "[" in _without_text(content) or "]" in _without_text(content):
                 raise SheetError(
                     "unsupported_formula", "external and structured references are unsupported"
                 )
@@ -255,7 +263,8 @@ def edit_axes(model, workbook, operation, retired):
         raise SheetError("invalid_reference", "insertion target is not an existing axis")
     user = ic.UserModel.from_bytes(model.to_bytes())
     user.pause_evaluation()
-    before_move = range_memberships(model, workbook) if op.startswith("move") else {}
+    guarded = op.startswith(("move", "delete"))
+    covered = range_memberships(model, workbook) if guarded else {}
     if op.startswith("insert"):
         if set(ids).intersection([*order, *old_ids]):
             raise SheetError("reused_identity", "new axes cannot reuse existing or deleted IDs")
@@ -292,13 +301,25 @@ def edit_axes(model, workbook, operation, retired):
     model = ic.load_from_bytes(user.to_bytes())
     refresh_formulas(model, workbook)
     # The engine can rewrite a range around rows or columns moved across its
-    # edges, so it covers different records: refuse rather than save that.
-    if before_move and range_memberships(model, workbook) != before_move:
-        raise SheetError(
-            "invalid_edit",
-            "this move would change which records a formula range covers; "
-            "edit the formula or move the rows or columns elsewhere",
-        )
+    # edges, or break one whose endpoint is deleted, so it covers different
+    # records: refuse rather than save that. A delete may only remove the
+    # deleted records from a range (or the whole range, when none survive).
+    if guarded:
+        gone = set(ids) if op.startswith("delete") else set()
+        for key, members in range_memberships(model, workbook).items():
+            expected = []
+            for member in covered.get(key, []):
+                if len(member) == 2 and all(isinstance(m, frozenset | None) for m in member):
+                    member = tuple(None if m is None else m - gone for m in member)
+                    if any(m is not None and not m for m in member):
+                        continue
+                expected.append(member)
+            if members != expected:
+                raise SheetError(
+                    "invalid_edit",
+                    "this edit would change which records a formula range covers; "
+                    "edit the formula first or choose other rows or columns",
+                )
     return model
 
 

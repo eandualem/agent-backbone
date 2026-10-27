@@ -394,7 +394,7 @@ async def test_deleted_tab_references_cannot_rebind_to_a_reused_name():
     assert cells[2]["value"]["value"] == "Data!A1"
 
 
-def _column_sheet(values, formula):
+def _column_sheet(values, formula, name="Data"):
     """One tab: column A holds ``values`` from row 2, B1 holds ``formula``."""
     from agent_backbone.sheets import CreateSheet
 
@@ -405,7 +405,7 @@ def _column_sheet(values, formula):
         {"row_id": row, "column_id": columns[0], "input": {"kind": "number", "value": value}}
         for row, value in zip(rows[1:], values, strict=True)
     ]
-    tab = {"tab_id": uuid4().hex, "name": "Data", "row_ids": rows, "column_ids": columns}
+    tab = {"tab_id": uuid4().hex, "name": name, "row_ids": rows, "column_ids": columns}
     body = CreateSheet.model_validate(
         {
             "author": "writer",
@@ -454,3 +454,27 @@ async def test_brackets_inside_text_are_not_external_references():
     external, _ = _column_sheet([1], {"kind": "formula", "value": "=[Book1]Data!A1"})
     with pytest.raises(SheetError, match="external"):
         await calculate(external)
+
+
+async def test_a_delete_may_only_remove_the_deleted_records_from_a_range():
+    body = tracker()
+    tab = body.workbook.tabs[0]  # the summary counts Opportunities!C2:C4
+    base = await calculate(body)
+    with pytest.raises(SheetError, match="which records"):
+        await changed(base, [{"op": "delete_rows", "tab_id": tab.tab_id, "ids": [tab.row_ids[1]]}])
+    inner = await changed(
+        base, [{"op": "delete_rows", "tab_id": tab.tab_id, "ids": [tab.row_ids[2]]}]
+    )
+    assert inner["results"][1]["cells"][0]["input"]["value"] == "=COUNTIF(Opportunities!C2:C3,TRUE)"
+
+
+async def test_a_quoted_sheet_name_with_a_double_quote_keeps_its_ranges_guarded():
+    formula = {"kind": "formula", "value": '=SUM(\'a"b\'!A2:A4)&"x"'}
+    body, tab = _column_sheet([1, 10, 100, 1000], formula, name='a"b')
+    base = await calculate(body)
+    rows = tab["row_ids"]
+    with pytest.raises(SheetError, match="which records"):
+        await changed(
+            base,
+            [{"op": "move_rows", "tab_id": tab["tab_id"], "before_id": None, "ids": [rows[1]]}],
+        )

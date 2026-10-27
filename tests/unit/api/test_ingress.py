@@ -110,3 +110,16 @@ async def test_size_refusal_keeps_configured_cors_headers(config, declared):
     response = send.call_args_list[0].args[0]
     assert response["status"] == 413
     assert (b"access-control-allow-origin", origin.encode()) in response["headers"]
+
+
+async def test_browser_clients_can_read_sheet_export_warnings(config):
+    from httpx import ASGITransport, AsyncClient
+
+    from agent_backbone.api.app import create_app
+
+    origin = "https://console.example"
+    config = replace(config, backbone=replace(config.backbone, cors_origins=(origin,)))
+    transport = ASGITransport(app=create_app(config).other_asgi_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/sheets", headers={"Origin": origin})
+    assert "x-backbone-sheet-warnings" in response.headers["access-control-expose-headers"].lower()
