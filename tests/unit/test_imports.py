@@ -19,6 +19,11 @@ _S = "agent_backbone.services."
 
 # package -> packages it must never load (directly or transitively)
 _FORBIDDEN: dict[str, tuple[str, ...]] = {
+    "agent_backbone.sheets": (
+        "agent_backbone.services",
+        "agent_backbone.api",
+        "agent_backbone.cli",
+    ),
     "agent_backbone.config": (
         "agent_backbone.services",
         "agent_backbone.api",
@@ -133,6 +138,7 @@ def _loaded(module: str) -> list[str]:
 # Function-local imports count (they are still edges); imports under
 # ``if TYPE_CHECKING:`` do not. A package may always import itself.
 _LEAVES = {
+    "sheets",
     "__init__",
     "base",
     "config",

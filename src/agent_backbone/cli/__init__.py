@@ -57,6 +57,7 @@ from agent_backbone.cli.responses import add_response_parsers
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_up
 from agent_backbone.cli.service import cmd_service
 from agent_backbone.cli.setup import cmd_doctor, cmd_init, cmd_runtimes, cmd_secrets
+from agent_backbone.cli.sheets import add_sheet_parsers
 from agent_backbone.cli.signing import cmd_message, cmd_signing
 from agent_backbone.cli.skills import add_skill_commands, expand_shorthand
 from agent_backbone.cli.status import add_status_options, cmd_status
@@ -166,6 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_response_parsers(sub)
     add_document_parsers(sub)
     add_conversation_parsers(sub)
+    add_sheet_parsers(sub)
 
     p = sub.add_parser("config", help="settings (stored in the database)")
     csub = p.add_subparsers(dest="config_command", required=True)

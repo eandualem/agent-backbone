@@ -27,6 +27,7 @@ from starlette.routing import Match
 from agent_backbone import signing
 from agent_backbone.api.auth import credential_role
 from agent_backbone.models import DOCUMENT_WIRE_BYTES
+from agent_backbone.sheets import SHEET_WIRE_BYTES
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +63,10 @@ SENDER_ROUTES: tuple[SenderRoute, ...] = (
     SenderRoute("POST", "/api/responses", "body", "agent"),
     SenderRoute("POST", "/api/documents", "body", "author"),
     SenderRoute("POST", "/api/conversations/{kind}/{artifact_id}/messages", "body", "author"),
+    SenderRoute("POST", "/api/sheets", "body", "author"),
+    SenderRoute("POST", "/api/sheets/import", "body", "author"),
+    SenderRoute("POST", "/api/sheets/{sheet_id}/revisions", "body", "author"),
+    SenderRoute("POST", "/api/sheets/{sheet_id}/feedback", "body", "author"),
     SenderRoute("POST", "/api/swarms", "body", "initiator"),
     SenderRoute("POST", "/api/agents/{session}/state", "path", "session"),
     SenderRoute("POST", "/api/skills", "body", "actor"),
@@ -164,6 +169,8 @@ class SignedSenderMiddleware:
 
         route, path_params = found
         limit = DOCUMENT_WIRE_BYTES if route.template == "/api/documents" else MAX_BODY_BYTES
+        if route.template in {"/api/sheets", "/api/sheets/import"}:
+            limit = SHEET_WIRE_BYTES
         body, complete = await _read(receive, limit)
         if complete is None:
             return

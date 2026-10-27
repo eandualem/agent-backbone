@@ -904,3 +904,9 @@ This transport supports macOS and Linux. It authenticates the OS account, not an
 individual agent, and does not isolate unrestricted processes sharing that account.
 An owned inactive socket is replaced at startup; active sockets and other files
 are preserved and cause startup to fail.
+
+## Sheets
+
+`/api/sheets` provides structured retained workbooks, immutable calculated revisions,
+revision-pinned ranges, import/export and registration-bound contextual feedback.
+See [Sheets](sheets.md) for request shapes, authentication, concurrency and limits.

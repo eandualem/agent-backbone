@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 188f25105365
+Revision ID: 2dd30f70a078
 Revises:
-Create Date: 2026-10-27 21:45:23.625093
+Create Date: 2026-10-28 06:30:09.968509
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "188f25105365"
+revision: str = "2dd30f70a078"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -514,6 +514,67 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("key", name=op.f("pk_settings")),
     )
     op.create_table(
+        "sheet_feedback",
+        sa.Column("feedback_id", sa.Text(), nullable=False),
+        sa.Column("sheet_id", sa.Text(), nullable=False),
+        sa.Column("observed_revision_id", sa.Text(), nullable=False),
+        sa.Column("actor_key", sa.Text(), nullable=False),
+        sa.Column("request_id", sa.Text(), nullable=False),
+        sa.Column("request_sha256", sa.Text(), nullable=False),
+        sa.Column("operation_id", sa.Text(), nullable=False),
+        sa.Column("recipient_id", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("context", sa.LargeBinary(), nullable=False),
+        sa.PrimaryKeyConstraint("feedback_id", name=op.f("pk_sheet_feedback")),
+        sa.UniqueConstraint("operation_id", name=op.f("uq_sheet_feedback_operation_id")),
+    )
+    with op.batch_alter_table("sheet_feedback", schema=None) as batch_op:
+        batch_op.create_index("uq_sheet_feedback_request", ["actor_key", "request_id"], unique=True)
+
+    op.create_table(
+        "sheet_revisions",
+        sa.Column("seq", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("revision_id", sa.Text(), nullable=False),
+        sa.Column("sheet_id", sa.Text(), nullable=False),
+        sa.Column("parent_revision_id", sa.Text(), nullable=True),
+        sa.Column("actor_key", sa.Text(), nullable=False),
+        sa.Column("request_id", sa.Text(), nullable=False),
+        sa.Column("request_sha256", sa.Text(), nullable=False),
+        sa.Column("editor_kind", sa.Text(), nullable=False),
+        sa.Column("editor_id", sa.Text(), nullable=True),
+        sa.Column("editor_name", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("payload", sa.LargeBinary(), nullable=False),
+        sa.Column("tab_metadata", sa.Text(), nullable=False),
+        sa.Column("content_sha256", sa.Text(), nullable=False),
+        sa.Column("calculation_engine", sa.Text(), nullable=False),
+        sa.Column("calculation_version", sa.Text(), nullable=False),
+        sa.Column("warnings", sa.Text(), server_default="[]", nullable=False),
+        sa.PrimaryKeyConstraint("seq", name=op.f("pk_sheet_revisions")),
+        sa.UniqueConstraint("revision_id", name=op.f("uq_sheet_revisions_revision_id")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("sheet_revisions", schema=None) as batch_op:
+        batch_op.create_index("idx_sheet_revision_history", ["sheet_id", "seq"], unique=False)
+        batch_op.create_index("uq_sheet_revision_request", ["actor_key", "request_id"], unique=True)
+
+    op.create_table(
+        "sheet_storage",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("used_bytes", sa.BigInteger(), nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_sheet_storage")),
+    )
+    op.create_table(
+        "sheets",
+        sa.Column("sheet_id", sa.Text(), nullable=False),
+        sa.Column("author_id", sa.Text(), nullable=False),
+        sa.Column("author_name", sa.Text(), nullable=False),
+        sa.Column("title", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("current_revision_id", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("sheet_id", name=op.f("pk_sheets")),
+    )
+    op.create_table(
         "signing_audit",
         sa.Column("seq", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("at", sa.Text(), nullable=False),
@@ -773,6 +834,17 @@ def downgrade() -> None:
         batch_op.drop_index("idx_signing_audit_sender")
 
     op.drop_table("signing_audit")
+    op.drop_table("sheets")
+    op.drop_table("sheet_storage")
+    with op.batch_alter_table("sheet_revisions", schema=None) as batch_op:
+        batch_op.drop_index("uq_sheet_revision_request")
+        batch_op.drop_index("idx_sheet_revision_history")
+
+    op.drop_table("sheet_revisions")
+    with op.batch_alter_table("sheet_feedback", schema=None) as batch_op:
+        batch_op.drop_index("uq_sheet_feedback_request")
+
+    op.drop_table("sheet_feedback")
     op.drop_table("settings")
     op.drop_table("review_lifecycle")
     with op.batch_alter_table("reports", schema=None) as batch_op:

@@ -18,6 +18,7 @@ branch or tag you are viewing. Relative links keep you on that same revision.
 - [Token usage](token-usage.md) — per-agent CLI sessions, model tokens and optional API estimates.
 - [Report audio](report-audio.md) — optional local read-aloud in Telegram.
 - [Saved answers](responses.md) — question, answer and action, retrievable while work continues.
+- [Sheets](sheets.md) — editable workbooks, formulas, immutable revisions and contextual feedback.
 - [Documents](documents.md) — retained HTML with immutable revisions and metadata discovery.
 - [Conversations](conversations.md) — ask about a Document, Response or report and read the reply beside it.
 - [Progress reports](reports.md) — goals, progress, blockers and next steps.

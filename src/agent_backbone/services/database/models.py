@@ -886,3 +886,66 @@ class SigningGrantORM(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="open")
     """``open``, or ``done`` once the agent closed it."""
     closed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class SheetORM(Base):
+    """Stable retained workbook, owned by a registration rather than a reusable name."""
+
+    __tablename__ = "sheets"
+    sheet_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    author_id: Mapped[str] = mapped_column(Text, nullable=False)
+    author_name: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    current_revision_id: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class SheetRevisionORM(Base):
+    """Immutable inputs, calculated values and exact-retry receipt."""
+
+    __tablename__ = "sheet_revisions"
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    revision_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    sheet_id: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_revision_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor_key: Mapped[str] = mapped_column(Text, nullable=False)
+    request_id: Mapped[str] = mapped_column(Text, nullable=False)
+    request_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    editor_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    editor_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    editor_name: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    tab_metadata: Mapped[str] = mapped_column(Text, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    calculation_engine: Mapped[str] = mapped_column(Text, nullable=False)
+    calculation_version: Mapped[str] = mapped_column(Text, nullable=False)
+    warnings: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    __table_args__ = (
+        Index("uq_sheet_revision_request", "actor_key", "request_id", unique=True),
+        Index("idx_sheet_revision_history", "sheet_id", "seq"),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class SheetFeedbackORM(Base):
+    """Durable contextual feedback plus the ordinary queue operation it admitted."""
+
+    __tablename__ = "sheet_feedback"
+    feedback_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    sheet_id: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_revision_id: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_key: Mapped[str] = mapped_column(Text, nullable=False)
+    request_id: Mapped[str] = mapped_column(Text, nullable=False)
+    request_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    operation_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    recipient_id: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    context: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    __table_args__ = (Index("uq_sheet_feedback_request", "actor_key", "request_id", unique=True),)
+
+
+class SheetStorageORM(Base):
+    __tablename__ = "sheet_storage"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    used_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)

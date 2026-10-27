@@ -25,6 +25,7 @@ from agent_backbone.services.database._outbox_repo import OutboxRepo
 from agent_backbone.services.database._queue_repo import QueueRepo
 from agent_backbone.services.database._reports_repo import ReportRepo
 from agent_backbone.services.database._settings_repo import SettingRepo
+from agent_backbone.services.database._sheets_repo import SheetRepo
 from agent_backbone.services.database._signing_repo import SigningRepo
 from agent_backbone.services.database._state_history_repo import StateHistoryRepo
 from agent_backbone.services.database._state_repo import StateRepo
@@ -227,6 +228,7 @@ class BackboneDB:
         self.reports = ReportRepo(engine)
         self.documents = DocumentRepo(engine)
         self.conversations = ConversationRepo(engine)
+        self.sheets = SheetRepo(engine)
         self.acks = AcknowledgementRepo(engine)
         self.dependencies = DependencyRepo(engine)
         self.diagnostics = DiagnosticRepo(engine)

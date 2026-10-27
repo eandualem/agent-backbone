@@ -874,3 +874,9 @@ complete revision; `--output FILE` saves its exact HTML. See
 `backbone conversations show KIND ID` reads one, and
 `backbone conversations reply KIND ID "text" --to ENTRY [--revision ID]` answers
 in it. See [Conversations](conversations.md).
+
+## `backbone sheets`
+
+Create, edit, read, import/export and ask about retained workbooks. Each saved edit
+appends a revision; a stale base is refused. Use `create --schema`, and see
+[Sheets](sheets.md) for examples, typed values and all commands.

@@ -36,6 +36,10 @@ _EXPECTED_TABLES = {
     "conversation_redeliveries",
     "observed_sources",
     "observed_versions",
+    "sheets",
+    "sheet_revisions",
+    "sheet_feedback",
+    "sheet_storage",
     "document_storage",
     "review_lifecycle",
     "settings",
@@ -60,6 +64,9 @@ _EXPECTED_INDEXES = {
     "uq_agents_report_identity",
     "uq_reports_request",
     "uq_documents_request",
+    "uq_sheet_revision_request",
+    "idx_sheet_revision_history",
+    "uq_sheet_feedback_request",
     "uq_documents_predecessor",
     "idx_documents_root",
     "idx_documents_created",
@@ -897,3 +904,23 @@ async def test_existing_acknowledgments_gain_reset_tracking(tmp_path):
         cleared, comment_id = await db.acks.reset_boundary(7, "app", repo="acme/app")
         assert cleared and comment_id == 123
         assert not await db.acks.exists(7, "app", repo="acme/app")
+
+
+async def test_fresh_migration_includes_case_insensitive_event_index(tmp_path):
+    """Autogenerate omits this expression index; verify migration-only initialization."""
+    from sqlalchemy import text
+
+    db = BackboneDB(f"sqlite+aiosqlite:///{tmp_path / 'expression-index.db'}")
+    db._engine = build_engine(db.url)
+    try:
+        await db._run_migrations()
+        async with db.engine.connect() as conn:
+            definition = await conn.scalar(
+                text(
+                    "SELECT sql FROM sqlite_master WHERE type='index' "
+                    "AND name='idx_events_delivery_id_lower'"
+                )
+            )
+        assert definition and "lower(delivery_id)" in definition
+    finally:
+        await db._engine.dispose()
