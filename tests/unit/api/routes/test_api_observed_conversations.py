@@ -195,3 +195,11 @@ async def test_a_failed_snapshot_still_relinks_agents(
     assert tagged.status_code == 200, tagged.text
     assert tagged.json()["warnings"] == ["conversation version not recorded: db down"]
     relink.assert_awaited_once()
+
+
+async def test_a_parent_store_never_marks_a_nested_store_missing(api_app):
+    conversations = api_app.state.db.conversations
+    nested = await conversations.observe("skill", "/s/team", {"review": "x"}, complete=True)
+    await conversations.observe("skill", "/s", {}, complete=True)
+    source = await conversations.observed_source("skill", nested["review"]["artifact_id"])
+    assert source["status"] == "active"

@@ -900,7 +900,9 @@ class ConversationRepo(Repo):
                             _S.c.kind == kind, _S.c.status == "active"
                         )
                     )
+                    # Names hold no "/": a nested store's keys are not this store's.
                     if row.source_key.startswith(prefix)
+                    and "/" not in row.source_key[len(prefix) :]
                     and row.source_key[len(prefix) :] not in items
                 ]
                 if gone:
