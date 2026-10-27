@@ -111,11 +111,13 @@ async def test_structural_moves_copy_and_format_patch():
     assert (
         inserted["results"][1]["cells"][0]["input"]["value"] == "=COUNTIF(Opportunities!C3:C5,TRUE)"
     )
+    # A record from outside the counted range moves above it: the range follows its records.
     moved = await changed(
         inserted,
-        [{"op": "move_rows", "tab_id": tab.tab_id, "before_id": None, "ids": [tab.row_ids[1]]}],
+        [{"op": "move_rows", "tab_id": tab.tab_id, "before_id": new_id, "ids": [tab.row_ids[4]]}],
     )
-    assert moved["workbook"]["tabs"][0]["row_ids"][-1] == tab.row_ids[1]
+    assert moved["workbook"]["tabs"][0]["row_ids"][1] == tab.row_ids[4]
+    assert moved["results"][1]["cells"][0]["input"]["value"] == "=COUNTIF(Opportunities!C4:C6,TRUE)"
     deleted = await changed(moved, [{"op": "delete_rows", "tab_id": tab.tab_id, "ids": [new_id]}])
     with pytest.raises(SheetError, match="reuse"):
         await changed(
@@ -416,14 +418,32 @@ def _column_sheet(values, formula):
 
 
 async def test_a_move_that_would_change_a_summed_range_is_refused():
-    body, tab = _column_sheet([2, 3, 4], {"kind": "formula", "value": "=SUM(A2:A4)"})
+    body, tab = _column_sheet([1, 10, 100, 1000], {"kind": "formula", "value": "=SUM(A2:A4)"})
     base = await calculate(body)
     rows = tab["row_ids"]
-    with pytest.raises(SheetError, match="size of a range"):
-        await changed(
-            base,
-            [{"op": "move_rows", "tab_id": tab["tab_id"], "before_id": rows[3], "ids": [rows[1]]}],
-        )
+    for before in (rows[3], None):  # within the range, and past its end
+        with pytest.raises(SheetError, match="which records"):
+            await changed(
+                base,
+                [
+                    {
+                        "op": "move_rows",
+                        "tab_id": tab["tab_id"],
+                        "before_id": before,
+                        "ids": [rows[1]],
+                    }
+                ],
+            )
+
+
+async def test_a_move_outside_a_range_is_allowed_whatever_its_spelling():
+    body, tab = _column_sheet([2, 3, 4, 5, 6], {"kind": "formula", "value": "=sum(a2 : a4)"})
+    base = await calculate(body)
+    rows = tab["row_ids"]
+    moved = await changed(
+        base, [{"op": "move_rows", "tab_id": tab["tab_id"], "before_id": rows[4], "ids": [rows[5]]}]
+    )
+    assert moved["workbook"]["tabs"][0]["row_ids"][4] == rows[5]
 
 
 async def test_brackets_inside_text_are_not_external_references():

@@ -40,9 +40,10 @@ def coordinate(tab, row_id, column_id):
 
 _QUOTED = re.compile(r'"(?:[^"]|"")*"')
 _RANGE = re.compile(
-    r"\$?([A-Z]{1,3})\$?(\d+):\$?([A-Z]{1,3})\$?(\d+)"
+    r"(?:(?:'((?:[^']|'')+)'|([A-Za-z0-9_.]+))!)?"
+    r"(?:\$?([A-Z]{1,3})\$?(\d+):\$?([A-Z]{1,3})\$?(\d+)"
     r"|(?<![A-Za-z0-9$])\$?(\d+):\$?(\d+)"
-    r"|(?<![A-Za-z0-9$])\$?([A-Z]{1,3}):\$?([A-Z]{1,3})(?![0-9$])"
+    r"|(?<![A-Za-z0-9$])\$?([A-Z]{1,3}):\$?([A-Z]{1,3})(?![0-9$]))"
 )
 
 
@@ -53,26 +54,48 @@ def _column(letters: str) -> int:
     return number
 
 
-def range_sizes(formula: str) -> list[tuple[int, int]]:
-    """The extent of every range a formula names, outside string literals."""
-    sizes = []
+def _span(ids: list[str], first: int, last: int) -> frozenset[str]:
+    first, last = sorted((first, last))
+    return frozenset(ids[first - 1 : last])
+
+
+def range_members(workbook, own_tab, formula: str) -> list[tuple]:
+    """The records every range in an engine-normalized formula covers, by stable
+    row and column IDs; ``None`` is a whole axis."""
+    tabs = {tab["name"]: tab for tab in workbook["tabs"]}
+    members = []
     for m in _RANGE.finditer(_QUOTED.sub('""', formula)):
-        if m[1]:
-            sizes.append((abs(int(m[4]) - int(m[2])), abs(_column(m[3]) - _column(m[1]))))
-        elif m[5]:
-            sizes.append((abs(int(m[6]) - int(m[5])), -1))
+        name = m[1].replace("''", "'") if m[1] else m[2]
+        tab = tabs.get(name) if name else own_tab
+        if tab is None:
+            members.append((name, formula))
+            continue
+        rows, columns = tab["row_ids"], tab["column_ids"]
+        if m[3]:
+            members.append(
+                (
+                    _span(rows, int(m[4]), int(m[6])),
+                    _span(columns, _column(m[3]), _column(m[5])),
+                )
+            )
+        elif m[7]:
+            members.append((_span(rows, int(m[7]), int(m[8])), None))
         else:
-            sizes.append((-1, abs(_column(m[8]) - _column(m[7]))))
-    return sizes
+            members.append((None, _span(columns, _column(m[9]), _column(m[10]))))
+    return members
 
 
-def formulas(workbook) -> dict[tuple[str, str, str], str]:
-    return {
-        (tab["tab_id"], cell["row_id"], cell["column_id"]): cell["input"]["value"]
-        for tab in workbook["tabs"]
-        for cell in tab["cells"]
-        if (cell.get("input") or {}).get("kind") == "formula"
-    }
+def range_memberships(model, workbook) -> dict[tuple[str, str, str], list[tuple]]:
+    """Each formula cell's range members, read from the engine so spelling is normal."""
+    result = {}
+    for sheet, tab in enumerate(workbook["tabs"]):
+        for cell in tab["cells"]:
+            if (cell.get("input") or {}).get("kind") == "formula":
+                row, column = coordinate(tab, cell["row_id"], cell["column_id"])
+                formula = model.get_cell_formula(sheet, row, column) or ""
+                key = (tab["tab_id"], cell["row_id"], cell["column_id"])
+                result[key] = range_members(workbook, tab, formula)
+    return result
 
 
 def cells_by_id(tab):
@@ -232,7 +255,7 @@ def edit_axes(model, workbook, operation, retired):
         raise SheetError("invalid_reference", "insertion target is not an existing axis")
     user = ic.UserModel.from_bytes(model.to_bytes())
     user.pause_evaluation()
-    before_move = formulas(workbook) if op.startswith("move") else {}
+    before_move = range_memberships(model, workbook) if op.startswith("move") else {}
     if op.startswith("insert"):
         if set(ids).intersection([*order, *old_ids]):
             raise SheetError("reused_identity", "new axes cannot reuse existing or deleted IDs")
@@ -268,16 +291,14 @@ def edit_axes(model, workbook, operation, retired):
         order[:] = remaining[:position] + ids + remaining[position:]
     model = ic.load_from_bytes(user.to_bytes())
     refresh_formulas(model, workbook)
-    # The engine can rewrite a range around rows or columns moved within it,
-    # which silently changes what it adds up: refuse rather than save that.
-    after_move = formulas(workbook)
-    for key, formula in before_move.items():
-        if range_sizes(formula) != range_sizes(after_move[key]):
-            raise SheetError(
-                "invalid_edit",
-                "this move would change the size of a range a formula uses; "
-                "edit the formula or move the rows or columns outside that range",
-            )
+    # The engine can rewrite a range around rows or columns moved across its
+    # edges, so it covers different records: refuse rather than save that.
+    if before_move and range_memberships(model, workbook) != before_move:
+        raise SheetError(
+            "invalid_edit",
+            "this move would change which records a formula range covers; "
+            "edit the formula or move the rows or columns elsewhere",
+        )
     return model
 
 
