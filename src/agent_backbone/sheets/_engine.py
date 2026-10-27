@@ -38,6 +38,43 @@ def coordinate(tab, row_id, column_id):
         raise SheetError("invalid_reference", "cell axis ID is not in this revision") from exc
 
 
+_QUOTED = re.compile(r'"(?:[^"]|"")*"')
+_RANGE = re.compile(
+    r"\$?([A-Z]{1,3})\$?(\d+):\$?([A-Z]{1,3})\$?(\d+)"
+    r"|(?<![A-Za-z0-9$])\$?(\d+):\$?(\d+)"
+    r"|(?<![A-Za-z0-9$])\$?([A-Z]{1,3}):\$?([A-Z]{1,3})(?![0-9$])"
+)
+
+
+def _column(letters: str) -> int:
+    number = 0
+    for letter in letters:
+        number = number * 26 + ord(letter) - 64
+    return number
+
+
+def range_sizes(formula: str) -> list[tuple[int, int]]:
+    """The extent of every range a formula names, outside string literals."""
+    sizes = []
+    for m in _RANGE.finditer(_QUOTED.sub('""', formula)):
+        if m[1]:
+            sizes.append((abs(int(m[4]) - int(m[2])), abs(_column(m[3]) - _column(m[1]))))
+        elif m[5]:
+            sizes.append((abs(int(m[6]) - int(m[5])), -1))
+        else:
+            sizes.append((-1, abs(_column(m[8]) - _column(m[7]))))
+    return sizes
+
+
+def formulas(workbook) -> dict[tuple[str, str, str], str]:
+    return {
+        (tab["tab_id"], cell["row_id"], cell["column_id"]): cell["input"]["value"]
+        for tab in workbook["tabs"]
+        for cell in tab["cells"]
+        if (cell.get("input") or {}).get("kind") == "formula"
+    }
+
+
 def cells_by_id(tab):
     return {(c["row_id"], c["column_id"]): c for c in tab["cells"]}
 
@@ -50,7 +87,7 @@ def set_input(model, sheet, row, column, cell):
         kind, content = value["kind"], value["value"]
         if kind == "formula":
             # External workbook/structured references have no retained local identity.
-            if "[" in content or "]" in content:
+            if "[" in _QUOTED.sub("", content) or "]" in _QUOTED.sub("", content):
                 raise SheetError(
                     "unsupported_formula", "external and structured references are unsupported"
                 )
@@ -195,6 +232,7 @@ def edit_axes(model, workbook, operation, retired):
         raise SheetError("invalid_reference", "insertion target is not an existing axis")
     user = ic.UserModel.from_bytes(model.to_bytes())
     user.pause_evaluation()
+    before_move = formulas(workbook) if op.startswith("move") else {}
     if op.startswith("insert"):
         if set(ids).intersection([*order, *old_ids]):
             raise SheetError("reused_identity", "new axes cannot reuse existing or deleted IDs")
@@ -230,6 +268,16 @@ def edit_axes(model, workbook, operation, retired):
         order[:] = remaining[:position] + ids + remaining[position:]
     model = ic.load_from_bytes(user.to_bytes())
     refresh_formulas(model, workbook)
+    # The engine can rewrite a range around rows or columns moved within it,
+    # which silently changes what it adds up: refuse rather than save that.
+    after_move = formulas(workbook)
+    for key, formula in before_move.items():
+        if range_sizes(formula) != range_sizes(after_move[key]):
+            raise SheetError(
+                "invalid_edit",
+                "this move would change the size of a range a formula uses; "
+                "edit the formula or move the rows or columns outside that range",
+            )
     return model
 
 

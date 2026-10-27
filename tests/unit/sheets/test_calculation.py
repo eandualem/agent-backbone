@@ -390,3 +390,47 @@ async def test_deleted_tab_references_cannot_rebind_to_a_reused_name():
     assert cells[0]["value"] == cells[1]["value"] == {"kind": "error", "value": "#REF!"}
     assert cells[2]["input"]["value"] == '=IF(FALSE,#REF!,"Data!A1")'
     assert cells[2]["value"]["value"] == "Data!A1"
+
+
+def _column_sheet(values, formula):
+    """One tab: column A holds ``values`` from row 2, B1 holds ``formula``."""
+    from agent_backbone.sheets import CreateSheet
+
+    rows = [uuid4().hex for _ in range(len(values) + 1)]
+    columns = [uuid4().hex, uuid4().hex]
+    cells = [{"row_id": rows[0], "column_id": columns[1], "input": formula}]
+    cells += [
+        {"row_id": row, "column_id": columns[0], "input": {"kind": "number", "value": value}}
+        for row, value in zip(rows[1:], values, strict=True)
+    ]
+    tab = {"tab_id": uuid4().hex, "name": "Data", "row_ids": rows, "column_ids": columns}
+    body = CreateSheet.model_validate(
+        {
+            "author": "writer",
+            "request_id": uuid4().hex,
+            "title": "Totals",
+            "workbook": {"tabs": [tab | {"cells": cells}]},
+        }
+    )
+    return body, tab
+
+
+async def test_a_move_that_would_change_a_summed_range_is_refused():
+    body, tab = _column_sheet([2, 3, 4], {"kind": "formula", "value": "=SUM(A2:A4)"})
+    base = await calculate(body)
+    rows = tab["row_ids"]
+    with pytest.raises(SheetError, match="size of a range"):
+        await changed(
+            base,
+            [{"op": "move_rows", "tab_id": tab["tab_id"], "before_id": rows[3], "ids": [rows[1]]}],
+        )
+
+
+async def test_brackets_inside_text_are_not_external_references():
+    body, _ = _column_sheet([1], {"kind": "formula", "value": '=IF(TRUE,"[done]","[pending]")'})
+    snapshot = await calculate(body)
+    values = [cell["value"] for cell in snapshot["results"][0]["cells"]]
+    assert {"kind": "text", "value": "[done]"} in values
+    external, _ = _column_sheet([1], {"kind": "formula", "value": "=[Book1]Data!A1"})
+    with pytest.raises(SheetError, match="external"):
+        await calculate(external)
