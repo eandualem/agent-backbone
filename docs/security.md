@@ -327,6 +327,9 @@ not proof that a model still occupies the terminal. Plain shells and unidentifie
 receivers retain notifications as data in `backbone inbox`, without pasting or
 pressing Enter; these held rows require explicit acknowledgement. A runtime
 running through an unrecognized wrapper is also held rather than guessed.
+A native launcher that reports a version number as its process name is
+recognized by its absolute installed launcher path; only the foreground process
+group leader counts, never a launch helper's child process.
 
 
 Owned data and hook-state directories are private (0700); hook records, plans,

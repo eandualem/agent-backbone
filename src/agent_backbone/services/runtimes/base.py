@@ -1103,6 +1103,10 @@ class Runtime:
         for command in await foreground_commands(session_name):
             if not command:
                 continue
+            # A native launcher can report its version as the process name;
+            # its absolute argv[0] is still the installed launcher.
+            if Path(command[0]).is_absolute() and Path(command[0]).resolve() == expected:
+                return True
             executable = Path(command[0]).name
             # A script launcher is valid only when it is the installed CLI's
             # exact entry point; an arbitrary Node/Python process is not a model.

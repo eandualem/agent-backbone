@@ -34,6 +34,8 @@ def _arguments(pid: int) -> list[str]:
 
 
 async def foreground_commands(session_name: str) -> list[list[str]]:
+    """Arguments of the pane's foreground process group leader. Its children are
+    excluded: a launch helper's private server is not the interactive receiver."""
     pane = await query_format_vars(session_name, "tty=#{pane_tty}")
     tty = pane.get("tty", "")
     if not tty.startswith("/dev/"):
@@ -50,7 +52,7 @@ async def foreground_commands(session_name: str) -> list[list[str]]:
         if (
             len(parts) == 3
             and all(part.isdigit() for part in parts)
-            and parts[1] == parts[2]
+            and parts[0] == parts[1] == parts[2]
             and (arguments := _arguments(int(parts[0])))
         ):
             commands.append(arguments)
