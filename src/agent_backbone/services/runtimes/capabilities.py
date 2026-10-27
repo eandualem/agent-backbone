@@ -187,6 +187,9 @@ _INTERRUPTED = "tests/unit/services/agents/test_interrupted_turn.py"
 _PLAN = "tests/unit/services/agents/test_plan_approval.py"
 _INSTRUCTIONS_API = "tests/unit/api/routes/test_api_instructions.py"
 
+_CONVERSATIONS = "tests/unit/api/routes/test_api_conversations.py"
+_CONVERSATION_DELIVERY = _API_BOUNDARY + "; delivered as a queued message, like backbone tell"
+
 _RESPONSE_DELIVERY = (
     _API_BOUNDARY + "; topic delivery: tests/unit/services/integrations/telegram/test_responses.py"
 )
@@ -236,6 +239,20 @@ CAPABILITIES: tuple[Capability, ...] = (
         deepcode=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
         aider=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
         shell=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
+    ),
+    _row(
+        "conversations",
+        "Per-artifact conversations: owner messages delivered through the queue, agent replies",
+        "src/agent_backbone/api/routes/conversations.py",
+        fallback="Ask about an artifact with backbone tell; the answer is not kept with it.",
+        implemented=lambda rt: bool(rt.binary),  # Delivery into the session, as for tell.
+        claude=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
+        codex=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
+        gemini=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
+        opencode=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
+        deepcode=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
+        aider=_unverified(note="message delivery into Aider is not verified live"),
+        shell=_na("no model receiver; owner messages stay in the inbox as data"),
     ),
     _row(
         "responses",

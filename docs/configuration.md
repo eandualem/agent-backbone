@@ -144,7 +144,14 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 | `timing.monitor_interval_seconds` | `60` | `agent-monitor` job period (must be positive) |
 | `timing.retry_interval_seconds` | `300` | `delivery-retry` job period (must be positive) |
 | `timing.start_timeout_seconds` | `60` | How long `agent start` waits for the prompt |
-| `timing.delivery_retention_days` | `30` | Deliveries, events, completed queue messages, diagnostics and report history are pruned every 6 h; diagnostics age from their last observation, queue age from completion; pending/leased messages and each author's latest progress report are retained |
+| `timing.delivery_retention_days` | `30` | Deliveries, events, completed queue messages and diagnostics are pruned every 6 h; diagnostics age from their last observation, queue age from completion; pending/leased messages are retained. Reports, Responses, Documents and [conversations](conversations.md) are never pruned |
+
+### `conversations.*` — artifact conversations
+
+| Key | Default | Meaning |
+|-----|---------|-------------|
+| `conversations.max_messages` | `10000` | Messages one [artifact conversation](conversations.md) holds; a full conversation refuses new messages (`conversation_full`) and never drops old ones. Revision events are never refused |
+| `conversations.owner_messages_per_hour` | `60` | Owner messages per conversation per rolling hour (`rate_limited`) |
 
 ### `diagnostics.*` — performance evidence
 

@@ -66,10 +66,10 @@ ordinary `backbone reply` and progress reports keep their existing behavior.
 
 Author identity survives a rename. Forgotten authors' retained responses remain
 readable by ID and in the unfiltered list. Registering their old name does not
-claim their history. The existing six-hour prune job uses
-`timing.delivery_retention_days` (30 days by default), keeping each author's
-latest response as well as their latest report. Older answers, correction
-targets and retry keys can expire. Store anything needed longer elsewhere.
+claim their history. Responses, their correction chains and retry keys are
+kept: the prune job no longer removes them. Answers pruned by an earlier version
+are gone. Each record carries `conversation_id`, the first response in its
+correction chain, which keys its [conversation](conversations.md).
 
 ## Telegram delivery and audio
 
@@ -88,7 +88,7 @@ Explicit responses continue when `telegram.report_updates=false`; that switch
 pauses progress notifications only. Publication is not proof of Telegram
 delivery: read `telegram_delivery` (`pending`, `sending`, `sent` or
 `not_requested`). Forgotten authors and swarm participants have pending
-deliveries retired. Normal retention still applies to pending answers.
+deliveries retired.
 
 `telegram.report_audio=true` also enables response audio through the existing
 [local speech setup](report-audio.md). It speaks the complete question, answer

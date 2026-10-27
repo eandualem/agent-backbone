@@ -1,5 +1,16 @@
 """Database service — engine lifecycle, ORM models and the persistence API."""
 
+from agent_backbone.services.database._conversations_repo import (
+    KINDS as CONVERSATION_KINDS,
+)
+from agent_backbone.services.database._conversations_repo import (
+    TEXT_CHARACTERS as CONVERSATION_TEXT_CHARACTERS,
+)
+from agent_backbone.services.database._conversations_repo import (
+    ConversationRefused,
+    Limits,
+    UnknownArtifact,
+)
 from agent_backbone.services.database._diagnostics_repo import diagnostic_details
 from agent_backbone.services.database._documents_repo import (
     DocumentCapacity,
@@ -18,15 +29,20 @@ from agent_backbone.services.database.base import Base
 from agent_backbone.services.database.engine import build_engine
 
 __all__ = [
+    "CONVERSATION_KINDS",
+    "CONVERSATION_TEXT_CHARACTERS",
     "RECEIPT_RETENTION_DAYS",
     "BackboneDB",
     "Base",
+    "ConversationRefused",
     "DocumentCapacity",
     "DocumentConflict",
     "DocumentRateLimit",
+    "Limits",
     "ReportConflict",
     "ReportForbidden",
     "ReportRateLimit",
+    "UnknownArtifact",
     "build_engine",
     "diagnostic_details",
     "format_iso",

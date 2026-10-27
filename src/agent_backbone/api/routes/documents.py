@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from agent_backbone.api.auth import require_api_key
 from agent_backbone.api.deps import get_db
+from agent_backbone.api.routes.conversations import versions
 from agent_backbone.models import DOCUMENT_METADATA_BYTES, DOCUMENT_WIRE_BYTES, PublishDocument
 from agent_backbone.services.database import (
     BackboneDB,
@@ -134,6 +135,17 @@ async def documents(
     for record in page["items"]:
         _bounded_metadata(record)
     return page
+
+
+@router.get("/{document_id}/revisions", operation_id="list_document_revisions")
+async def document_revisions(
+    document_id: str = Path(max_length=64),
+    before: int | None = Query(default=None, ge=1, le=2**63 - 1),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: BackboneDB = Depends(get_db),
+):
+    """Revisions newest first; read one exactly with GET /api/documents/{revision_id}."""
+    return await versions(db, "document", document_id, before, limit)
 
 
 @router.get("/{revision_id}", response_model=DocumentDetail, operation_id="get_document")

@@ -11,9 +11,10 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import and_, delete, func, insert, or_, select, update
+from sqlalchemy import and_, func, insert, or_, select, update
 
 from agent_backbone.models import REPORTS_PER_HOUR, PublishReport, PublishResponse, ReportQuery
+from agent_backbone.services.database._conversation_events import append_revision
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 from agent_backbone.services.database.models import AgentORM, ReportORM
@@ -92,6 +93,7 @@ def _record(row: dict) -> dict:
         "age_seconds": age,
         "telegram_delivery": row.get("telegram_delivery", "not_requested"),
         "telegram_audio_delivery": row.get("telegram_audio_delivery", "not_requested"),
+        "conversation_id": row.get("conversation_id", row["id"]),
     }
     if row.get("kind", "report") == "response":
         return record | {
@@ -100,6 +102,46 @@ def _record(row: dict) -> dict:
             "superseded_by": row.get("superseded_by"),
         }
     return record | {"report": json.loads(row["content"]), "stale": age >= STALE_REPORT_SECONDS}
+
+
+async def chain_roots(conn, ids: list[int]) -> dict[int, int]:
+    """Each response's correction-chain root: its earliest retained predecessor,
+    which is its conversation ID. A report has no chain and is its own root."""
+    roots = {i: i for i in ids}
+    frontier = set(ids)
+    while frontier:
+        rows = (
+            await conn.execute(
+                select(_R.c.id, _R.c.supersedes_id).where(
+                    _R.c.id.in_(frontier), _R.c.supersedes_id.is_not(None)
+                )
+            )
+        ).all()
+        parents = {row.id: row.supersedes_id for row in rows}
+        present = set(
+            (await conn.scalars(select(_R.c.id).where(_R.c.id.in_(set(parents.values()))))).all()
+        )
+        moved = {child: parent for child, parent in parents.items() if parent in present}
+        for start, root in roots.items():
+            if root in moved:
+                roots[start] = moved[root]
+        frontier = set(moved.values())
+    return roots
+
+
+async def chain_ids(conn, root: int) -> list[int]:
+    """Every response in the chain that starts at ``root``, oldest first."""
+    found, frontier = [root], [root]
+    while frontier:
+        frontier = list(
+            (
+                await conn.scalars(
+                    select(_R.c.id).where(_R.c.kind == "response", _R.c.supersedes_id.in_(frontier))
+                )
+            ).all()
+        )
+        found.extend(frontier)
+    return sorted(found)
 
 
 class ReportRepo(Repo):
@@ -171,6 +213,9 @@ class ReportRepo(Repo):
                             _R.c.kind == "response", _R.c.supersedes_id == previous["id"]
                         )
                     )
+                    record["conversation_id"] = (await chain_roots(conn, [previous["id"]]))[
+                        previous["id"]
+                    ]
                 return _record(record), False
             if supersedes is not None:
                 previous_author = await conn.scalar(
@@ -239,7 +284,20 @@ class ReportRepo(Repo):
                 .mappings()
                 .one()
             )
-            return _record(dict(row) | {"agent_name": publication.agent}), True
+            root = (await chain_roots(conn, [row["id"]]))[row["id"]]
+            if supersedes is not None:
+                versions = await chain_ids(conn, root)
+                await append_revision(
+                    conn,
+                    "response",
+                    str(root),
+                    revision_id=str(row["id"]),
+                    label=f"rev {versions.index(row['id']) + 1}",
+                    author_id=identity,
+                    name=publication.agent,
+                )
+            record = dict(row) | {"agent_name": publication.agent, "conversation_id": root}
+            return _record(record), True
 
     async def claim_telegram(
         self, *, audio: bool = False, include_reports: bool = True
@@ -370,7 +428,8 @@ class ReportRepo(Repo):
             )
             if row is None:
                 return None
-            record = _record(dict(row))
+            roots = await chain_roots(conn, [report_id])
+            record = _record(dict(row) | {"conversation_id": roots[report_id]})
             if kind == "response":
                 record["superseded_by"] = await conn.scalar(
                     select(func.max(_R.c.id)).where(
@@ -407,7 +466,8 @@ class ReportRepo(Repo):
                 .mappings()
                 .all()
             )
-        items = [_record(dict(row)) for row in rows[:limit]]
+            roots = await chain_roots(conn, [row["id"] for row in rows[:limit]])
+        items = [_record(dict(row) | {"conversation_id": roots[row["id"]]}) for row in rows[:limit]]
         more = len(rows) > limit
         return {
             "items": items,
@@ -505,12 +565,3 @@ class ReportRepo(Repo):
             if has_more
             else None,
         }
-
-    async def prune(self, days: int) -> int:
-        """Prune old history, keeping each author's last account (including inactive)."""
-        latest = select(func.max(_R.c.id)).group_by(_R.c.author_id, _R.c.kind)
-        async with self._tx() as conn:
-            result = await conn.execute(
-                delete(_R).where(_R.c.created_at < cutoff_iso(days=days), _R.c.id.not_in(latest))
-            )
-            return result.rowcount or 0

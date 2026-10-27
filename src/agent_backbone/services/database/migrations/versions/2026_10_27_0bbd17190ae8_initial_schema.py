@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 64ca131dc965
+Revision ID: 0bbd17190ae8
 Revises:
-Create Date: 2026-10-26 02:49:00.943788
+Create Date: 2026-10-27 20:29:53.614588
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "64ca131dc965"
+revision: str = "0bbd17190ae8"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -136,6 +136,64 @@ def upgrade() -> None:
     with op.batch_alter_table("agents", schema=None) as batch_op:
         batch_op.create_index("uq_agents_report_identity", ["report_identity"], unique=True)
 
+    op.create_table(
+        "conversation_entries",
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            autoincrement=True,
+            nullable=False,
+        ),
+        sa.Column("kind", sa.Text(), nullable=False),
+        sa.Column("artifact_id", sa.Text(), nullable=False),
+        sa.Column("entry_kind", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("author_type", sa.Text(), nullable=False),
+        sa.Column("author_id", sa.Text(), server_default="", nullable=False),
+        sa.Column("author_name", sa.Text(), nullable=False),
+        sa.Column("text", sa.Text(), nullable=True),
+        sa.Column("recipient_id", sa.Text(), nullable=True),
+        sa.Column("recipient_name", sa.Text(), nullable=True),
+        sa.Column("in_reply_to", sa.BigInteger(), nullable=True),
+        sa.Column("resulting_revision_id", sa.Text(), nullable=True),
+        sa.Column("anchor", sa.Text(), nullable=True),
+        sa.Column("detail", sa.Text(), nullable=True),
+        sa.Column("request_id", sa.Text(), nullable=True),
+        sa.Column("request_sha256", sa.Text(), nullable=True),
+        sa.Column("operation_id", sa.Text(), nullable=True),
+        sa.Column("delivery", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_conversation_entries")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("conversation_entries", schema=None) as batch_op:
+        batch_op.create_index(
+            "idx_conversation_entries", ["kind", "artifact_id", "id"], unique=False
+        )
+        batch_op.create_index("idx_conversation_operation", ["operation_id"], unique=False)
+        batch_op.create_index(
+            "uq_conversation_request",
+            ["kind", "artifact_id", "author_id", "request_id"],
+            unique=True,
+        )
+
+    op.create_table(
+        "conversation_reads",
+        sa.Column("kind", sa.Text(), nullable=False),
+        sa.Column("artifact_id", sa.Text(), nullable=False),
+        sa.Column("read_through", sa.BigInteger(), nullable=False),
+        sa.Column("updated_at", sa.Text(), server_default="", nullable=False),
+        sa.PrimaryKeyConstraint("kind", "artifact_id", name=op.f("pk_conversation_reads")),
+    )
+    op.create_table(
+        "conversation_redeliveries",
+        sa.Column("entry_id", sa.BigInteger(), nullable=False),
+        sa.Column("request_id", sa.Text(), nullable=False),
+        sa.Column("result", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint(
+            "entry_id", "request_id", name=op.f("pk_conversation_redeliveries")
+        ),
+    )
     op.create_table(
         "deliveries",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -764,6 +822,14 @@ def downgrade() -> None:
         batch_op.drop_index("idx_deliveries_created")
 
     op.drop_table("deliveries")
+    op.drop_table("conversation_redeliveries")
+    op.drop_table("conversation_reads")
+    with op.batch_alter_table("conversation_entries", schema=None) as batch_op:
+        batch_op.drop_index("uq_conversation_request")
+        batch_op.drop_index("idx_conversation_operation")
+        batch_op.drop_index("idx_conversation_entries")
+
+    op.drop_table("conversation_entries")
     with op.batch_alter_table("agents", schema=None) as batch_op:
         batch_op.drop_index("uq_agents_report_identity")
 

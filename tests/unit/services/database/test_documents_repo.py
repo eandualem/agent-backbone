@@ -44,7 +44,6 @@ async def test_identity_retention_and_backup_restore(tmp_path):
         assert (await db.documents.query(author_id=first["author_id"]))["items"][0]["id"] == second[
             "id"
         ]
-        await db.reports.prune(0)
         await db.documents.publish(publication("editor", "new-identity"))
     backup = tmp_path / "restored.db"
     with sqlite3.connect(path) as source, sqlite3.connect(backup) as target:
