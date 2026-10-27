@@ -7,28 +7,40 @@ records an immutable snapshot whenever the content changed.
 
 from __future__ import annotations
 
+import os
+import stat
+from pathlib import Path
+
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.skills import NAME_RE, read_store
-from agent_backbone.templates import list_templates, read_template
+from agent_backbone.templates import list_templates, template_source
 
 POLICY_STORE = "policies"
 """One policy store per installation: an override and the bundled default
 are the same policy."""
 
 
-def _skill(config, name: str) -> str | None:
-    """The skill's SKILL.md: a skill's version is that file."""
+def _regular(path: Path) -> str | None:
+    """A regular file's text; None for anything else, without waiting on a FIFO."""
     try:
-        return (config.skills.store_path / name / "SKILL.md").read_text(encoding="utf-8")
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        with os.fdopen(fd, encoding="utf-8") as file:
+            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+                return None
+            return file.read()
     except (OSError, UnicodeDecodeError):
         return None
 
 
+def _skill(config, name: str) -> str | None:
+    """The skill's SKILL.md: a skill's version is that file."""
+    return _regular(config.skills.store_path / name / "SKILL.md")
+
+
 def _policy(config, name: str) -> str | None:
-    try:
-        return read_template(f"policy:{name}", config.template_dirs)
-    except ValueError:
-        return None
+    """The text agents receive; an empty policy is not readable, as at launch."""
+    text = _regular(template_source(f"policy:{name}", config.template_dirs))
+    return text if text and text.strip() else None
 
 
 def _store(config, kind: str) -> str | None:

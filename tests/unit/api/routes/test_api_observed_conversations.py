@@ -1,5 +1,6 @@
 """Skills and policies as conversation artifacts (docs/conversations.md)."""
 
+import os
 from dataclasses import replace
 from unittest.mock import AsyncMock
 
@@ -104,6 +105,13 @@ async def test_missing_keeps_identity_and_retirement_starts_a_new_one(
     second = (await _skills(api_client, auth_headers))["review"]["artifact_id"]
     assert second != first
     assert (await api_client.get(path, headers=auth_headers)).json()["source_status"] == "retired"
+
+
+async def test_a_fifo_skill_file_is_missing_not_a_hang(api_client, auth_headers, store):
+    (store / "pipe").mkdir()
+    os.mkfifo(store / "pipe" / "SKILL.md")
+    skills = await _skills(api_client, auth_headers)
+    assert skills["pipe"]["artifact_id"] is None and skills["review"]["artifact_id"]
 
 
 async def test_maintainer_mapping_is_explicit_and_operator_only(
