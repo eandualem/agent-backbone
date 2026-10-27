@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
@@ -168,7 +169,13 @@ def _since(value: str | None) -> tuple[int, int | None] | None:
     match = re.fullmatch(r"e([0-9]{1,19})(?:\.([0-9]{1,19}))?", value)
     if not match or int(match[1]) > _MAX_ID:
         raise HTTPException(422, f"invalid cursor {value[:40]!r}")
-    return int(match[1]), int(match[2]) if match[2] else None
+    moved = int(match[2]) if match[2] else None
+    if moved is not None:
+        try:
+            datetime.fromtimestamp(moved / 1e6, UTC)
+        except (OverflowError, ValueError, OSError):
+            raise HTTPException(422, f"invalid cursor {value[:40]!r}") from None
+    return int(match[1]), moved
 
 
 def _limits(config) -> Limits:

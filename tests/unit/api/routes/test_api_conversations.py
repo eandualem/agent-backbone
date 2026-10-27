@@ -217,6 +217,10 @@ async def test_refusals_are_typed(api_app, api_client, auth_headers, deliver):
     )
     assert to_brunel.json()["entry"]["recipient"]["name"] == "brunel"
 
+    bad = await api_client.get(
+        "/api/conversations?since=e1.9999999999999999999", headers=auth_headers
+    )
+    assert bad.status_code == 422
     for missing in ("/api/conversations/document/" + "0" * 32, "/api/conversations/sheet/x"):
         result = await api_client.get(missing, headers=auth_headers)
         assert result.status_code == 404 and result.json()["error"] == "unknown_artifact"

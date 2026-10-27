@@ -37,6 +37,7 @@ def add_conversation_parsers(subparsers) -> None:
     show.add_argument("kind")
     show.add_argument("id")
     show.add_argument("--before", type=_positive_id, help="read entries older than this ID")
+    show.add_argument("--agent", default=argparse.SUPPRESS, help="read as this agent")
     show.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     reply = sub.add_parser("reply", help="post a message in a conversation")
     reply.add_argument("kind")
@@ -46,6 +47,7 @@ def add_conversation_parsers(subparsers) -> None:
     reply.add_argument("--revision", help="the version of the artifact this reply produced")
     reply.add_argument("--anchor", help="the version you were looking at")
     reply.add_argument("--key", help="retry key (default: hash of the reply)")
+    reply.add_argument("--agent", default=argparse.SUPPRESS, help="reply as this agent")
     reply.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     read.set_defaults(func=lambda args: asyncio.run(_run(args)))
 
