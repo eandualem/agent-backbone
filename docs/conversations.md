@@ -49,8 +49,10 @@ entries only reference versions, and every version stays readable.
 
 A skill or policy stays where it lives: the shared skills store, or the policy
 templates edited with `backbone instructions`. Backbone reads it when it is
-listed (`GET /api/skills`, `GET /api/policies`), changed through the store
-(`skills add`, `skills tag`), or when its conversation or versions are read.
+listed (`GET /api/skills`, `GET /api/policies`), changed through the running
+backbone (`skills add`, `skills tag`), or when its conversation or version list
+is read. A change made any other way (an editor, `skills add --local`) is
+recorded at the next of these reads; there is no polling.
 
 - **Identity.** The store and the item's name. How it is distributed (to every
   agent, or by tag) is not part of it, so retagging keeps the conversation, and

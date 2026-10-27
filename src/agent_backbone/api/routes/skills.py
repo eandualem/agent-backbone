@@ -102,9 +102,12 @@ def _registered_source_root(config, path: str) -> Path | None:
 
 async def _changed(skill, config, db, failure: str | None) -> SkillChangeView:
     """The skill, after relinking running agents so the change reaches them now."""
-    await observe_name(config, db, "skill", skill.name)
-    relinked = await relink_skills(config, list(config.agents), skill=skill.name)
     warnings = [f"store history not recorded: {failure}"] if failure else []
+    try:
+        await observe_name(config, db, "skill", skill.name)
+    except Exception as exc:  # the change itself happened; agents still get it
+        warnings.append(f"conversation version not recorded: {exc}")
+    relinked = await relink_skills(config, list(config.agents), skill=skill.name)
     return SkillChangeView(
         **SkillView.from_skill(skill).model_dump(), relinked=relinked, warnings=warnings
     )

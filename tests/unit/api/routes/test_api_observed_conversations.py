@@ -163,3 +163,22 @@ async def test_policy_identity_survives_an_override(api_app, api_client, auth_he
     assert policy["artifact_id"] in {item["artifact_id"] for item in again}
     assert "my--policy" in {item["name"] for item in again}
     assert (await api_client.get(f"{base}/999", headers=auth_headers)).status_code == 404
+
+
+async def test_a_failed_snapshot_still_relinks_agents(
+    api_app, api_client, auth_headers, store, monkeypatch
+):
+    relink = AsyncMock(return_value=[])
+    monkeypatch.setattr("agent_backbone.api.routes.skills.relink_skills", relink)
+    monkeypatch.setattr(
+        "agent_backbone.api.routes.skills.commit_store", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        api_app.state.db.conversations, "observe", AsyncMock(side_effect=RuntimeError("db down"))
+    )
+    tagged = await api_client.put(
+        "/api/skills/review/tags", headers=auth_headers, json={"tags": ["all"], "actor": "ike"}
+    )
+    assert tagged.status_code == 200, tagged.text
+    assert tagged.json()["warnings"] == ["conversation version not recorded: db down"]
+    relink.assert_awaited_once()

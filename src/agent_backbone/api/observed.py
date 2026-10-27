@@ -7,6 +7,7 @@ records an immutable snapshot whenever the content changed.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import stat
 from pathlib import Path
@@ -18,6 +19,10 @@ from agent_backbone.templates import list_templates, template_source
 POLICY_STORE = "policies"
 """One policy store per installation: an override and the bundled default
 are the same policy."""
+
+_LOCKS = {"skill": asyncio.Lock(), "policy": asyncio.Lock()}
+"""Each read and its recording happen together, so an older read can never be
+recorded after a newer one and become the latest version."""
 
 
 def _regular(path: Path) -> str | None:
@@ -74,8 +79,9 @@ async def observe_all(config, db: BackboneDB, kind: str) -> dict[str, dict]:
     store = _store(config, kind)
     if store is None:
         return {}
-    items = {name: _read(config, kind, name) for name in _names(config, kind)}
-    return await db.conversations.observe(kind, store, items, complete=True)
+    async with _LOCKS[kind]:
+        items = {name: _read(config, kind, name) for name in _names(config, kind)}
+        return await db.conversations.observe(kind, store, items, complete=True)
 
 
 async def observe_one(config, db: BackboneDB, kind: str, artifact_id: str) -> None:
@@ -86,8 +92,9 @@ async def observe_one(config, db: BackboneDB, kind: str, artifact_id: str) -> No
         return
     if source["source_key"] != f"{store}/{source['name']}":
         return
-    items = {source["name"]: _read(config, kind, source["name"])}
-    await db.conversations.observe(kind, store, items, complete=False)
+    async with _LOCKS[kind]:
+        items = {source["name"]: _read(config, kind, source["name"])}
+        await db.conversations.observe(kind, store, items, complete=False)
 
 
 async def observe_name(config, db: BackboneDB, kind: str, name: str) -> dict | None:
@@ -95,7 +102,8 @@ async def observe_name(config, db: BackboneDB, kind: str, name: str) -> dict | N
     store = _store(config, kind)
     if store is None:
         return None
-    observed = await db.conversations.observe(
-        kind, store, {name: _read(config, kind, name)}, complete=False
-    )
+    async with _LOCKS[kind]:
+        observed = await db.conversations.observe(
+            kind, store, {name: _read(config, kind, name)}, complete=False
+        )
     return observed.get(name)
