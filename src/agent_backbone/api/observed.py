@@ -29,12 +29,19 @@ def _regular(path: Path) -> str | None:
     """A regular file's text; None for anything else, without waiting on a FIFO."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
         with os.fdopen(fd, encoding="utf-8") as file:
-            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
-                return None
+            fd = -1  # the file object owns and closes it now
             return file.read()
     except (OSError, UnicodeDecodeError):
         return None
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def _skill(config, name: str) -> str | None:
@@ -75,13 +82,16 @@ def _names(config, kind: str) -> list[str]:
 
 
 async def observe_all(config, db: BackboneDB, kind: str) -> dict[str, dict]:
-    """Observe the whole store: name → ``{artifact_id, status, latest_revision_id}``."""
+    """Observe the whole store: name → ``{artifact_id, status, latest_revision_id}``.
+    A name that has never been readable has no identity yet: ``artifact_id`` None."""
     store = _store(config, kind)
     if store is None:
         return {}
     async with _LOCKS[kind]:
         items = {name: _read(config, kind, name) for name in _names(config, kind)}
-        return await db.conversations.observe(kind, store, items, complete=True)
+        observed = await db.conversations.observe(kind, store, items, complete=True)
+    unread = {"artifact_id": None, "status": "missing", "latest_revision_id": None}
+    return {name: observed.get(name, unread) for name in items}
 
 
 async def observe_one(config, db: BackboneDB, kind: str, artifact_id: str) -> None:

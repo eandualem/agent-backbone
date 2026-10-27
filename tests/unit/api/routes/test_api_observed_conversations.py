@@ -5,6 +5,7 @@ from dataclasses import replace
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import text
 
 from agent_backbone.config import SkillsConfig
 from tests.unit.api.routes.test_api_conversations import AGENT, _queued
@@ -115,7 +116,7 @@ async def test_a_fifo_skill_file_is_missing_not_a_hang(api_client, auth_headers,
 
 
 async def test_maintainer_mapping_is_explicit_and_operator_only(
-    api_client, auth_headers, deliver, store
+    api_app, api_client, auth_headers, deliver, store
 ):
     artifact_id = (await _skills(api_client, auth_headers))["review"]["artifact_id"]
     path = f"/api/conversations/skill/{artifact_id}"
@@ -134,11 +135,17 @@ async def test_maintainer_mapping_is_explicit_and_operator_only(
     mine = (await api_client.get("/api/conversations?agent=ike", headers=AGENT)).json()
     assert [item["artifact_id"] for item in mine["items"]] == [artifact_id]
 
-    cursor = (await api_client.get("/api/conversations", headers=auth_headers)).json()["cursor"]
+    async def moved():
+        async with api_app.state.db.engine.begin() as conn:
+            return await conn.scalar(
+                text("SELECT updated_at FROM conversation_reads WHERE artifact_id = :id"),
+                {"id": artifact_id},
+            )
+
+    before = await moved()
     cleared = await api_client.delete(path + "/maintainer", headers=auth_headers)
-    polled = await api_client.get(f"/api/conversations?since={cursor}", headers=auth_headers)
-    assert polled.json()["items"][0]["responsible"]["status"] == "unassigned"
     assert cleared.json()["responsible"]["status"] == "unassigned"
+    assert await moved() > before  # summary polling reports the change
     document = await api_client.put(
         "/api/conversations/document/" + "0" * 32 + "/maintainer", headers=auth_headers, json=body
     )
@@ -162,6 +169,11 @@ async def test_policy_identity_survives_an_override(api_app, api_client, auth_he
     again = (await api_client.get("/api/policies", headers=auth_headers)).json()["items"]
     assert policy["artifact_id"] in {item["artifact_id"] for item in again}
     assert "my--policy" in {item["name"] for item in again}
+    (override.parent / "blank.md").write_text("  \n")
+    blank = (await api_client.get("/api/policies", headers=auth_headers)).json()["items"]
+    assert {"name": "blank", "artifact_id": None, "status": "missing"}.items() <= next(
+        item for item in blank if item["name"] == "blank"
+    ).items()
     assert (await api_client.get(f"{base}/999", headers=auth_headers)).status_code == 404
 
 

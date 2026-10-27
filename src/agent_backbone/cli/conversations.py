@@ -137,6 +137,7 @@ def _print_conversation(data) -> None:
         [
             ("Title", data["title"]),
             ("Latest version", data["latest_revision_id"]),
+            *([("Source", data["source_status"])] if "source_status" in data else []),
             (
                 "Responsible",
                 f"{responsible['name']} ({responsible['status']})"

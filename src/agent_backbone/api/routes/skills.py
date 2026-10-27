@@ -8,6 +8,7 @@ commits the store's history.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -37,6 +38,7 @@ from agent_backbone.skills import (
 )
 
 router = APIRouter(prefix="/api", tags=["skills"])
+log = logging.getLogger(__name__)
 
 
 def _store_or_400(config):
@@ -52,7 +54,11 @@ async def list_skills(config=Depends(get_config), db=Depends(get_db)):
     its conversation ``artifact_id`` (None while it has never been readable)."""
     store = config.skills.store_path
     entries = read_store(store) if store else []
-    observed = await observe_all(config, db, "skill")
+    try:
+        observed = await observe_all(config, db, "skill")
+    except Exception:  # the store was read; list it without conversation identities
+        log.warning("skill observation failed; listing without artifact IDs", exc_info=True)
+        observed = {}
     items = []
     for entry in entries:
         reaches = [
