@@ -36,9 +36,7 @@ def test_cli_discovery_is_one_complete_json_object_without_storage(capsys, tmp_p
     monkeypatch.setenv("BACKBONE_DATA_DIR", str(data))
     with (
         patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=False),
-        patch(
-            "agent_backbone.cli._common.bootstrap_config", side_effect=AssertionError("no config")
-        ),
+        patch("agent_backbone.cli.bootstrap_config", side_effect=AssertionError("no config")),
         pytest.raises(SystemExit) as result,
     ):
         cli.main(["runtimes", "--json"])
@@ -49,3 +47,14 @@ def test_cli_discovery_is_one_complete_json_object_without_storage(capsys, tmp_p
     assert payload["schema_version"] == 1
     assert {row["id"] for row in payload["items"]} == set(RUNTIMES)
     assert not data.exists()
+
+
+def test_discovery_works_with_an_invalid_inherited_credential(capsys, monkeypatch):
+    monkeypatch.setenv("BACKBONE_AGENT_CREDENTIAL", "invalid")
+    with (
+        patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=False),
+        pytest.raises(SystemExit) as result,
+    ):
+        cli.main(["runtimes", "--json"])
+    assert result.value.code == 0
+    assert len(json.loads(capsys.readouterr().out)["items"]) == len(RUNTIMES)

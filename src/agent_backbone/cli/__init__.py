@@ -598,6 +598,10 @@ def main(argv: list[str] | None = None) -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
+    # Adapter discovery is usable before an installation or account exists.
+    # It reads no installation secrets and offers no administrative operation.
+    if args.command == "runtimes":
+        sys.exit(args.func(args))
     try:
         client_key = bootstrap_config().api_key
     except ValueError as exc:
