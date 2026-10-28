@@ -148,7 +148,17 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
         # The upgrade watch asked for new code: become a fresh `backbone up`
         # in place, so the login service or tmux session is unchanged.
         log.warning("restarting onto the new code")
-        os.execv(sys.executable, [sys.executable, "-m", "agent_backbone.cli", *sys.argv[1:]])
+        os.execv(
+            sys.executable,
+            [
+                sys.executable,
+                *(["-I"] if sys.flags.isolated else []),
+                "-B",
+                "-m",
+                "agent_backbone.cli",
+                *sys.argv[1:],
+            ],
+        )
 
 
 def restart_requested(app) -> bool:
@@ -166,7 +176,14 @@ async def _up_detached(config: BackboneConfig, log_file: Path | None = None) -> 
     if await session_exists(session):
         print(f"backbone already running in tmux session '{session}'")
         return 0
-    command = [sys.executable, "-m", "agent_backbone.cli", "up"]
+    command = [
+        sys.executable,
+        *(["-I"] if sys.flags.isolated else []),
+        "-B",
+        "-m",
+        "agent_backbone.cli",
+        "up",
+    ]
     if log_file is not None:
         command += ["--log-file", str(log_file)]
     env = {"BACKBONE_DATA_DIR": str(config.data_dir)}

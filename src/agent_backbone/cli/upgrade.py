@@ -18,7 +18,7 @@ def _fresh_version() -> str:
     """The version a new process would report (this one may predate the upgrade)."""
     probe = "from agent_backbone.release import installed_version as v; print(v())"
     result = subprocess.run(
-        [sys.executable, "-c", probe],
+        [sys.executable, *(["-I"] if sys.flags.isolated else []), "-B", "-c", probe],
         capture_output=True,
         text=True,
         check=False,

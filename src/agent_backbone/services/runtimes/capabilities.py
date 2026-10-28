@@ -200,6 +200,22 @@ _RESPONSE_DELIVERY = (
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
+        "bundle-bytecode",
+        "Owned Python launch helpers preserve the engine inventory",
+        "services/terminal/_sessions.py; services/runtimes/opencode.py; hooks/install.py",
+        fallback=(
+            "Replace an older payload with a corrected build; reinstall saved hook and Chrome "
+            "host commands with that build. Do not edit its inventory."
+        ),
+        implemented=lambda rt: (
+            True
+        ),  # Shared terminal path; native CLIs do not control Python flags.
+        **{
+            runtime: _ok("tests/unit/test_python_children.py")
+            for runtime in ("claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell")
+        },
+    ),
+    _row(
         "installer-first-agent",
         "Explicit first-agent setup with durable retry receipts",
         "services/routing/onboarding.py; cli/onboarding.py; Runtime.prepare_setup_hooks",

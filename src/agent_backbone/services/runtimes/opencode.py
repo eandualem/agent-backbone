@@ -198,6 +198,7 @@ class OpenCode(Runtime):
             return command
         command = [
             hooks.default_python(),
+            "-B",
             str(Path(__file__).with_name("_opencode_v2_launch.py")),
             json.dumps(selection),
             command[0],
@@ -214,6 +215,7 @@ class OpenCode(Runtime):
             return command
         return [
             hooks.default_python(),
+            "-B",
             str(Path(__file__).with_name("_opencode_launch.py")),
             str(plugin) if plugin else "",
             str(Path(brief).resolve()) if brief is not None else "",

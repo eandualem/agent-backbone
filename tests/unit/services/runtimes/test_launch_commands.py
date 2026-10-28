@@ -84,8 +84,11 @@ class TestBuildCommand:
         with _resolve(f"/bin/{runtime}"):
             command = RUNTIMES[runtime].build_command(model=model)
         if runtime == "opencode":
-            assert json.loads(command[2])["model"] == model
-            assert command[3:] == ["/bin/opencode", "--standalone"]
+            assert (
+                json.loads(next(arg for arg in command if arg.startswith('{"model"')))["model"]
+                == model
+            )
+            assert command[command.index("/bin/opencode") :] == ["/bin/opencode", "--standalone"]
         else:
             assert command == [f"/bin/{runtime}", "--model", model]
 
@@ -253,18 +256,27 @@ class TestBuildCommand:
             command = RUNTIMES["opencode"].build_command(
                 model="opencode/big-pickle", brief_file=brief
             )
-        assert command[3] == str(brief.resolve())
-        assert json.loads(command[6])["model"] == "opencode/big-pickle"
-        assert command[7:] == ["/bin/opencode", "--standalone"]
+        assert command[
+            next(i for i, arg in enumerate(command) if arg.endswith("_opencode_launch.py")) + 2
+        ] == str(brief.resolve())
+        assert (
+            json.loads(next(arg for arg in command if arg.startswith('{"model"')))["model"]
+            == "opencode/big-pickle"
+        )
+        assert command[command.index("/bin/opencode") :] == ["/bin/opencode", "--standalone"]
 
     def test_opencode_resume_loads_the_current_native_instructions(self, tmp_path):
         brief = tmp_path / "brief.md"
         brief.write_text("You are agent z.")
         with _resolve("/bin/opencode"):
             command = RUNTIMES["opencode"].build_command(resume=True, brief_file=brief)
-        assert command[3] == str(brief.resolve())
-        assert json.loads(command[6])["resume"] is True
-        assert command[7:] == ["/bin/opencode", "--standalone"]
+        assert command[
+            next(i for i, arg in enumerate(command) if arg.endswith("_opencode_launch.py")) + 2
+        ] == str(brief.resolve())
+        assert (
+            json.loads(next(arg for arg in command if arg.startswith('{"model"')))["resume"] is True
+        )
+        assert command[command.index("/bin/opencode") :] == ["/bin/opencode", "--standalone"]
 
     def test_aider_ignores_the_brief_at_launch(self, tmp_path):
         brief = tmp_path / "brief.md"
@@ -560,7 +572,7 @@ class TestUnattended:
             codex = RUNTIMES["codex"].build_command(writable_dirs=("/a", "/b"))
         assert codex[1:5] == ["--add-dir", "/a", "--add-dir", "/b"]
         with _resolve("/bin/opencode"):
-            assert RUNTIMES["opencode"].build_command(writable_dirs=("/a",))[3:] == [
+            assert RUNTIMES["opencode"].build_command(writable_dirs=("/a",))[-2:] == [
                 "/bin/opencode",
                 "--standalone",
             ]
@@ -571,8 +583,15 @@ class TestUnattended:
             command = RUNTIMES["opencode"].build_command(
                 model="google/gemini-3.8-flash", unattended=True
             )
-            assert command[3:] == ["/bin/opencode", "--standalone", "--auto"]
-            assert json.loads(command[2])["model"] == "google/gemini-3.8-flash"
+            assert command[command.index("/bin/opencode") :] == [
+                "/bin/opencode",
+                "--standalone",
+                "--auto",
+            ]
+            assert (
+                json.loads(next(arg for arg in command if arg.startswith('{"model"')))["model"]
+                == "google/gemini-3.8-flash"
+            )
         with _resolve("/bin/gemini"):
             assert RUNTIMES["gemini"].build_command(unattended=True) == [
                 "/bin/gemini",
@@ -625,7 +644,7 @@ def test_required_runtimes_keep_explicit_model_and_effort_on_launch(monkeypatch,
     with _resolve(f"/bin/{runtime}"), _codex_on_macos():
         command = adapter.build_command(model=model, resume=resume)
     if runtime == "opencode":
-        selected = json.loads(command[2])
+        selected = json.loads(next(arg for arg in command if arg.startswith('{"model"')))
         assert (selected["model"], selected["effort"], selected["resume"]) == (
             "provider/model",
             "high",

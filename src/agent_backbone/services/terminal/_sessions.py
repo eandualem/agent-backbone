@@ -61,7 +61,7 @@ _LOAD_AND_EXEC = (
     "os.environ.update(json.loads(payload))\n"
     "os.execvp(sys.argv[4], sys.argv[4:])\n"
 )
-"""Run by ``python -I -c`` with the environment file first: read it, remove it, exec.
+"""Run by ``python -I -B -c`` with the environment file first: read it, remove it, exec.
 
 Python rather than a shell: a shell refuses read-only names (``UID``), and a
 configured ``PATH`` would decide which ``rm`` removes the file."""
@@ -147,6 +147,7 @@ async def start_session(
         launch = [
             sys.executable,
             "-I",
+            "-B",
             "-c",
             _LOAD_AND_EXEC,
             env_file,

@@ -114,7 +114,7 @@ def test_v2_command_uses_selected_session_and_native_instructions(monkeypatch, t
         state_dir=tmp_path / "state",
         unattended=True,
     )
-    assert command[2] == str(tmp_path / "hooks/opencode-v2")
+    assert command[3] == str(tmp_path / "hooks/opencode-v2")
     plugin = tmp_path / "hooks/opencode-v2/index.js"
     assert plugin.exists()
     selection = next(arg for arg in command if arg.startswith('{"model"'))
@@ -127,7 +127,7 @@ def test_v2_command_uses_selected_session_and_native_instructions(monkeypatch, t
     assert native[:3] == ["/bin/opencode", "--standalone", "--auto"]
     assert "--model" not in native and "--session" not in native
     assert "--prompt" not in native
-    assert command[3] == str(brief.resolve())
+    assert command[4] == str(brief.resolve())
 
 
 @pytest.mark.parametrize("version", ["1.19.4", "2.1.3"])

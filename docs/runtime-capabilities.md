@@ -39,6 +39,7 @@ version differs.
 
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
+| Owned Python launch helpers preserve the engine inventory | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Explicit first-agent setup with durable retry receipts | ✅ working-installation live check pending | ✅ working-installation live check pending | ❌ installer hook preparation is not implemented | ✅ working-installation live check pending | ❌ installer hook preparation is not implemented | ❌ installer hook preparation is not implemented | n/a |
 | Read-only runtime discovery for setup | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Current agent-authored checklists with conditional updates and contextual feedback | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
@@ -99,6 +100,7 @@ version differs.
 
 | Capability | Fallback where it is unavailable |
 |---|---|
+| Owned Python launch helpers preserve the engine inventory | Replace an older payload with a corrected build; reinstall saved hook and Chrome host commands with that build. Do not edit its inventory. |
 | Explicit first-agent setup with durable retry receipts | Use the documented agent-start flow; do not retry an uncertain launch or greeting as a new request. |
 | Read-only runtime discovery for setup | Binary presence is not login; use the runtime's visible sign-in flow. |
 | Current agent-authored checklists with conditional updates and contextual feedback | Keep the current checklist locally until the provider is available. |
