@@ -103,10 +103,14 @@ plan changes or its owner retires. They do not send a second message. Queued,
 uncertain, expired and unknown are distinct; none means the agent answered.
 After uncertain transport, preserve the exact request/key and retry it. Each
 attempt still requires a current registered sender and any enrolled signature.
-If the sender was renamed, the original name returns `author_unavailable`;
-changing the name under the same key returns `request_conflict`. Reconcile delivery
-history before deliberately creating a new operation. Changing the key is not a
-safe automatic retry. Renaming the recipient preserves its registration-bound
+If the sender was renamed and the old name remains unused, the original name
+returns `author_unavailable`; changing to the new name under the same key returns
+`request_conflict`. If another registration takes the old name, a trusted-client
+request can instead resolve to that new sender and queue a new operation: retry
+receipts are scoped to the sender registration. After a sender rename or name
+reuse, reconcile the sender identity and delivery history before retrying or
+deliberately creating a new operation. Changing the key is not a safe automatic
+retry. Renaming the recipient preserves its registration-bound
 context and does not prevent an unchanged sender from retrying.
 
 ## API and retention
