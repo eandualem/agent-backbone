@@ -178,6 +178,13 @@ class ConversationEntryORM(Base):
             unique=True,
         ),
         Index("idx_conversation_operation", "operation_id"),
+        Index(
+            "idx_conversation_revision",
+            "kind",
+            "artifact_id",
+            "entry_kind",
+            "resulting_revision_id",
+        ),
         {"sqlite_autoincrement": True},
     )
 

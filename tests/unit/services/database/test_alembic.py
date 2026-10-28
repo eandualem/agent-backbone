@@ -75,6 +75,7 @@ _EXPECTED_INDEXES = {
     "idx_conversation_entries",
     "uq_conversation_request",
     "idx_conversation_operation",
+    "idx_conversation_revision",
     "uq_observed_source_generation",
     "idx_observed_versions",
     "idx_reports_author",

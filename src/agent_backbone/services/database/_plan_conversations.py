@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 
-from sqlalchemy import insert, select
+from sqlalchemy import func, insert, literal, select
 
 from agent_backbone.services.database._time import now_iso
 from agent_backbone.services.database.models import ConversationEntryORM, CurrentPlanORM
@@ -105,12 +105,34 @@ async def artifact(conn, author_id: str, revision_ids=()) -> dict | None:
     """Load the latest metadata and only the particular revisions a write references."""
     if not re.fullmatch(r"[0-9a-f]{32}", author_id):
         return None
-    current = (await conn.execute(select(_P).where(_P.c.author_id == author_id))).mappings().first()
-    latest = (
-        (await conn.execute(_revisions(author_id).order_by(_E.c.id.desc()).limit(1)))
-        .mappings()
-        .first()
+    # One statement sees one publication snapshot at PostgreSQL READ COMMITTED.
+    # Pin subsequent immutable-event reads to its latest revision sequence.
+    seed = select(literal(author_id).label("identity")).subquery()
+    last_id = (
+        select(func.max(_E.c.id))
+        .where(_E.c.kind == "plan", _E.c.artifact_id == author_id, _E.c.entry_kind == "revision")
+        .correlate(None)
+        .scalar_subquery()
     )
+    row = (
+        (
+            await conn.execute(
+                select(
+                    *(c.label("plan_" + c.name) for c in _P.c),
+                    *(c.label("event_" + c.name) for c in _E.c),
+                ).select_from(
+                    seed.outerjoin(_P, _P.c.author_id == seed.c.identity).outerjoin(
+                        _E, _E.c.id == last_id
+                    )
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+    current = {c.name: row["plan_" + c.name] for c in _P.c} if row["plan_author_id"] else None
+    latest = {c.name: row["event_" + c.name] for c in _E.c} if row["event_id"] is not None else None
+    history_through = latest["id"] if latest else 0
     if current is None and latest is None:
         return None
     rows = {} if latest is None else {latest["id"]: latest}
@@ -119,7 +141,7 @@ async def artifact(conn, author_id: str, revision_ids=()) -> dict | None:
         for row in (
             await conn.execute(
                 _revisions(author_id)
-                .where(_E.c.resulting_revision_id.in_(selected))
+                .where(_E.c.resulting_revision_id.in_(selected), _E.c.id <= history_through)
                 .limit(len(selected))
             )
         ).mappings():
@@ -153,11 +175,12 @@ async def artifact(conn, author_id: str, revision_ids=()) -> dict | None:
         "current": current,
         "plan": plan,
         "unrecorded": unrecorded,
+        "history_through": history_through,
     }
 
 
 async def version_page(conn, artifact, before, limit):
-    query = _revisions(artifact["artifact_id"])
+    query = _revisions(artifact["artifact_id"]).where(_E.c.id <= artifact["history_through"])
     if before is not None:
         query = query.where(_E.c.id < before)
     rows = (await conn.execute(query.order_by(_E.c.id.desc()).limit(limit + 1))).mappings().all()

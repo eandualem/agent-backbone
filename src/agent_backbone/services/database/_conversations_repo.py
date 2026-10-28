@@ -171,8 +171,12 @@ def _plan_anchor(artifact: dict, anchor: dict | None) -> dict | None:
         return None
     if anchor.get("sheet") is not None:
         raise ConversationRefused(422, "invalid_anchor", "A plan cannot have a Sheet anchor.")
+    if not anchor.get("revision_id"):
+        raise ConversationRefused(
+            422, "invalid_anchor", "A plan anchor must name the revision you observed."
+        )
     current = artifact["current"]
-    if current is None or anchor.get("revision_id") not in (None, current["revision_id"]):
+    if current is None or anchor["revision_id"] != current["revision_id"]:
         raise ConversationRefused(
             409,
             "stale_revision",

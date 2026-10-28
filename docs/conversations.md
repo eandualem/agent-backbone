@@ -61,13 +61,14 @@ status within the same plan also appends a `step` event with `item_id`, `title`,
 `status`, `section`, `plan_id` and `revision_id`. New plans and new items do not
 invent earlier status transitions. Events are metadata, not full old checklists.
 For plans already present at upgrade, the current publication is the baseline;
-its metadata is recorded on the first new publication or accepted message.
+its metadata is recorded on the first new publication, accepted message, or
+retirement prune.
 Nothing earlier is reconstructed from retry receipt IDs.
 
-An anchor uses the observed `revision_id`, optional `item_id`, and display-only
+A plan anchor requires the observed `revision_id`, with optional `item_id` and display-only
 `label`. A new anchored message must still match the current revision and item:
 `409 stale_revision` means refresh and reselect; `422 invalid_anchor` means the
-item is absent or the anchor is for another kind. The server stores a bounded
+observed revision is missing, the item is absent, or the anchor is for another kind. The server stores a bounded
 `anchor.context` containing the plan title/ID and the selected item, if any,
 so a delivered question remains interpretable after an update. It never captures
 all checklist items. Existing accepted-message retries return the original entry,

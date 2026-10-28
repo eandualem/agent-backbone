@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from agent_backbone.models import CurrentPlanFeedback, PublishCurrentPlan
 from agent_backbone.services.database._plan_conversations import artifact as plan_artifact
-from agent_backbone.services.database._plan_conversations import published
+from agent_backbone.services.database._plan_conversations import published, record_revision
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 from agent_backbone.services.database.models import (
@@ -317,10 +317,17 @@ class CurrentPlanRepo(Repo):
         async with self._tx() as conn:
             receipts = await conn.execute(delete(_R).where(_R.c.created_at < cutoff_iso(days=days)))
             plans = await conn.execute(
-                delete(_P).where(
+                delete(_P)
+                .where(
                     ~_P.c.author_id.in_(
                         select(_A.c.report_identity).where(_A.c.report_identity.is_not(None))
                     )
                 )
+                .returning(_P)
             )
-            return receipts.rowcount + plans.rowcount
+            retired = plans.mappings().all()
+            # Preserve an untouched pre-adapter baseline in the same transaction.
+            # RETURNING also prevents concurrent pruners from recording it twice.
+            for row in retired:
+                await record_revision(conn, row)
+            return receipts.rowcount + len(retired)
