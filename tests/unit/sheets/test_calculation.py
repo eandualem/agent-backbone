@@ -478,3 +478,69 @@ async def test_a_quoted_sheet_name_with_a_double_quote_keeps_its_ranges_guarded(
             base,
             [{"op": "move_rows", "tab_id": tab["tab_id"], "before_id": None, "ids": [rows[1]]}],
         )
+
+
+def _two_tabs(name, formula, shared_rows=False):
+    """``name`` holds 1..4 in column A rows 2-5 under a header; Summary holds ``formula``."""
+    from agent_backbone.sheets import CreateSheet
+
+    rows, column = [uuid4().hex for _ in range(5)], uuid4().hex
+    data = {
+        "tab_id": uuid4().hex,
+        "name": name,
+        "row_ids": rows,
+        "column_ids": [column],
+        "cells": [
+            {"row_id": row, "column_id": column, "input": {"kind": "number", "value": n}}
+            for n, row in enumerate(rows[1:], 1)
+        ],
+    }
+    summary_rows = rows if shared_rows else [uuid4().hex for _ in rows]
+    summary = {
+        "tab_id": uuid4().hex,
+        "name": "Summary",
+        "row_ids": summary_rows,
+        "column_ids": [column],
+        "cells": [{"row_id": summary_rows[0], "column_id": column, "input": formula}],
+    }
+    body = CreateSheet.model_validate(
+        {
+            "author": "writer",
+            "request_id": uuid4().hex,
+            "title": "Two tabs",
+            "workbook": {"tabs": [data, summary]},
+        }
+    )
+    return body, data, summary
+
+
+async def test_a_unicode_sheet_reference_follows_its_own_tab():
+    formula = {"kind": "formula", "value": "=SUM(数据!A2:A4)"}
+    body, data, _ = _two_tabs("数据", formula)
+    base = await calculate(body)
+    rows = data["row_ids"]
+    moved = await changed(  # the header moves below the counted records
+        base,
+        [{"op": "move_rows", "tab_id": data["tab_id"], "before_id": rows[4], "ids": [rows[0]]}],
+    )
+    assert moved["results"][1]["cells"][0]["input"]["value"] == "=SUM(数据!A1:A3)"
+
+
+async def test_a_delete_on_another_tab_with_shared_ids_leaves_a_range_alone():
+    formula = {"kind": "formula", "value": "=SUM(Data!A2:A4)"}
+    body, _, summary = _two_tabs("Data", formula, shared_rows=True)
+    base = await calculate(body)
+    rows = summary["row_ids"]
+    deleted = await changed(
+        base, [{"op": "delete_rows", "tab_id": summary["tab_id"], "ids": [rows[2]]}]
+    )
+    assert deleted["results"][1]["cells"][0]["input"]["value"] == "=SUM(Data!A2:A4)"
+
+
+async def test_a_range_beyond_the_grid_does_not_block_a_move():
+    body, tab = _column_sheet([1, 2, 3, 4, 5], {"kind": "formula", "value": "=SUM(A8:A9)"})
+    base = await calculate(body)
+    rows = tab["row_ids"]
+    await changed(
+        base, [{"op": "move_rows", "tab_id": tab["tab_id"], "before_id": rows[4], "ids": [rows[5]]}]
+    )

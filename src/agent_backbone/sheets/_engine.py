@@ -48,7 +48,7 @@ def _without_text(formula: str, keep: str = "") -> str:
 
 
 _RANGE = re.compile(
-    r"(?:(?:'((?:[^']|'')+)'|([A-Za-z0-9_.]+))!)?"
+    r"(?:(?:'((?:[^']|'')+)'|([\w.]+))!)?"
     r"(?:\$?([A-Z]{1,3})\$?(\d+):\$?([A-Z]{1,3})\$?(\d+)"
     r"|(?<![A-Za-z0-9$])\$?(\d+):\$?(\d+)"
     r"|(?<![A-Za-z0-9$])\$?([A-Z]{1,3}):\$?([A-Z]{1,3})(?![0-9$]))"
@@ -68,28 +68,29 @@ def _span(ids: list[str], first: int, last: int) -> frozenset[str]:
 
 
 def range_members(workbook, own_tab, formula: str) -> list[tuple]:
-    """The records every range in an engine-normalized formula covers, by stable
-    row and column IDs; ``None`` is a whole axis."""
+    """``(tab ID, rows, columns)`` each range in an engine-normalized formula covers,
+    by stable IDs; ``None`` is a whole axis. An unknown tab keeps its name."""
     tabs = {tab["name"]: tab for tab in workbook["tabs"]}
     members = []
     for m in _RANGE.finditer(_without_text(formula, '""')):
         name = m[1].replace("''", "'") if m[1] else m[2]
         tab = tabs.get(name) if name else own_tab
         if tab is None:
-            members.append((name, formula))
+            members.append((name, None, None))
             continue
         rows, columns = tab["row_ids"], tab["column_ids"]
         if m[3]:
             members.append(
                 (
+                    tab["tab_id"],
                     _span(rows, int(m[4]), int(m[6])),
                     _span(columns, _column(m[3]), _column(m[5])),
                 )
             )
         elif m[7]:
-            members.append((_span(rows, int(m[7]), int(m[8])), None))
+            members.append((tab["tab_id"], _span(rows, int(m[7]), int(m[8])), None))
         else:
-            members.append((None, _span(columns, _column(m[9]), _column(m[10]))))
+            members.append((tab["tab_id"], None, _span(columns, _column(m[9]), _column(m[10]))))
     return members
 
 
@@ -305,14 +306,17 @@ def edit_axes(model, workbook, operation, retired):
     # records: refuse rather than save that. A delete may only remove the
     # deleted records from a range (or the whole range, when none survive).
     if guarded:
-        gone = set(ids) if op.startswith("delete") else set()
+        deleted = set(ids) if op.startswith("delete") else set()
+        axis_index = 1 if axis == "rows" else 2
         for key, members in range_memberships(model, workbook).items():
             expected = []
             for member in covered.get(key, []):
-                if len(member) == 2 and all(isinstance(m, frozenset | None) for m in member):
-                    member = tuple(None if m is None else m - gone for m in member)
-                    if any(m is not None and not m for m in member):
+                records = member[axis_index]
+                if member[0] == tab["tab_id"] and records and deleted & records:
+                    left = records - deleted
+                    if not left:  # the delete removed every record it covered
                         continue
+                    member = (*member[:axis_index], left, *member[axis_index + 1 :])
                 expected.append(member)
             if members != expected:
                 raise SheetError(

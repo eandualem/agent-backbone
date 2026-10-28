@@ -121,7 +121,8 @@ async def test_feedback_pins_deleted_row_and_has_one_registration_bound_queue_ro
         await db.sheets.mutate(
             edit(
                 first["revision_id"],
-                [{"op": "delete_rows", "tab_id": tab.tab_id, "ids": [tab.row_ids[1]]}],
+                # Inside the summary's counted range, not one of its ends.
+                [{"op": "delete_rows", "tab_id": tab.tab_id, "ids": [tab.row_ids[2]]}],
             ),
             sheet_id=first["sheet_id"],
         )
@@ -133,7 +134,7 @@ async def test_feedback_pins_deleted_row_and_has_one_registration_bound_queue_ro
             text="What happened here?",
             anchor={
                 "tab_id": tab.tab_id,
-                "row_ids": [tab.row_ids[1]],
+                "row_ids": [tab.row_ids[2]],
                 "column_ids": [tab.column_ids[0]],
             },
         )
@@ -149,7 +150,7 @@ async def test_feedback_pins_deleted_row_and_has_one_registration_bound_queue_ro
 
         context = json.loads(feedback["context"])
         assert context["cells"][0]["exists_now"] is False
-        assert context["cells"][0]["value"]["value"] == "Community demo"
+        assert context["cells"][0]["value"]["value"] == "Open tools program"
         async with db.engine.connect() as conn:
             queue = (await conn.execute(text("SELECT * FROM message_queue"))).mappings().all()
             assert len(queue) == 1 and queue[0]["registration_id"] == first["author_id"]
