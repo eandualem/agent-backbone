@@ -119,7 +119,9 @@ class AgentRepo(Repo):
                 },
             )
 
-    async def update_fields(self, name: str, changes: dict) -> bool:
+    async def update_fields(
+        self, name: str, changes: dict, *, expected_registration_id: str | None = None
+    ) -> bool:
         """Update only supplied fields, without recreating a forgotten agent."""
         allowed = {
             "dir",
@@ -148,10 +150,11 @@ class AgentRepo(Repo):
                 "unattended = CASE WHEN runtime != :runtime THEN 0 ELSE unattended END"
             )
         assignments.append("updated_at = :now")
+        guard = " AND report_identity = :identity" if expected_registration_id is not None else ""
         async with self._tx() as conn:
             result = await conn.execute(
-                text(f"UPDATE agents SET {', '.join(assignments)} WHERE name = :name"),
-                {**values, "name": name, "now": now_iso()},
+                text(f"UPDATE agents SET {', '.join(assignments)} WHERE name = :name{guard}"),
+                {**values, "name": name, "now": now_iso(), "identity": expected_registration_id},
             )
             return bool(result.rowcount)
 

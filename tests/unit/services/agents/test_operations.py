@@ -197,3 +197,36 @@ async def test_forget_waits_for_a_start_in_progress_and_then_refuses():
         with pytest.raises(RuntimeError):
             await task
     store.forget.assert_not_called()
+
+
+async def test_bound_start_does_not_update_replacement_between_read_and_write(db, tmp_path):
+    store = await registered_store(db, tmp_path)
+    identity = store.agents.get("app").registration_id
+    update_fields = db.agents.update_fields
+
+    async def replace_then_update(name, changes, **options):
+        await db.agents.delete(name)
+        await db.agents.upsert(
+            name,
+            dir=str(tmp_path),
+            runtime="shell",
+            model=None,
+            repo="",
+            tags=[],
+            env={},
+            description="replacement",
+            always_on=False,
+            unattended=False,
+        )
+        return await update_fields(name, changes, **options)
+
+    with patch.object(db.agents, "update_fields", side_effect=replace_then_update):
+        with pytest.raises(ValueError, match="registration changed"):
+            await resolve_agent(
+                store, StartRequest(name="app", runtime="codex", expected_registration_id=identity)
+            )
+    await store.refresh()
+    replacement = store.agents.get("app")
+    assert replacement.registration_id != identity
+    assert replacement.runtime == "shell"
+    assert replacement.model is None

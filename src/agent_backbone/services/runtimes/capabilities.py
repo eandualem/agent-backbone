@@ -971,31 +971,38 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: True,
         claude=_ok(
             "tests/unit/api/test_authority.py",
-            "Shared authority and profile tests; natural self-switch live check pending.",
+            "Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py "
+            "for replacement during restart; natural self-switch live check pending.",
         ),
         codex=_ok(
             "tests/unit/api/test_authority.py",
-            "Shared authority and profile tests; natural self-switch live check pending.",
+            "Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py "
+            "for replacement during restart; natural self-switch live check pending.",
         ),
         gemini=_ok(
             "tests/unit/api/test_authority.py",
-            "Shared authority and profile tests; natural self-switch live check pending.",
+            "Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py "
+            "for replacement during restart; natural self-switch live check pending.",
         ),
         opencode=_ok(
             "tests/unit/api/test_authority.py",
-            "Shared authority and profile tests; natural self-switch live check pending.",
+            "Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py "
+            "for replacement during restart; natural self-switch live check pending.",
         ),
         deepcode=_ok(
             "tests/unit/api/test_authority.py",
-            "Shared authority and profile tests; natural self-switch live check pending.",
+            "Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py "
+            "for replacement during restart; natural self-switch live check pending.",
         ),
         aider=_ok(
             "tests/unit/api/test_authority.py",
-            "Shared authority and profile tests; natural self-switch live check pending.",
+            "Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py "
+            "for replacement during restart; natural self-switch live check pending.",
         ),
         shell=_ok(
             "tests/unit/api/test_authority.py",
-            "Shared authority and profile tests; natural self-switch live check pending.",
+            "Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py "
+            "for replacement during restart; natural self-switch live check pending.",
         ),
     ),
     _row(

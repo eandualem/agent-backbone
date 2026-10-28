@@ -108,25 +108,37 @@ async def chain_roots(conn, ids: list[int]) -> dict[int, int]:
     """Each response's correction-chain root: its earliest retained predecessor,
     which is its conversation ID. A report has no chain and is its own root."""
     roots = {i: i for i in ids}
-    frontier = set(ids)
-    while frontier:
-        rows = (
-            await conn.execute(
-                select(_R.c.id, _R.c.supersedes_id).where(
-                    _R.c.id.in_(frontier), _R.c.supersedes_id.is_not(None)
-                )
-            )
-        ).all()
-        parents = {row.id: row.supersedes_id for row in rows}
-        present = set(
-            (await conn.scalars(select(_R.c.id).where(_R.c.id.in_(set(parents.values()))))).all()
-        )
-        moved = {child: parent for child, parent in parents.items() if parent in present}
-        for start, root in roots.items():
-            if root in moved:
-                roots[start] = moved[root]
-        frontier = set(moved.values())
-    return roots
+    if not ids:
+        return roots
+    lineage = (
+        select(_R.c.id, _R.c.supersedes_id)
+        .where(_R.c.id.in_(ids))
+        .cte("response_lineage", recursive=True)
+    )
+    lineage = lineage.union(
+        select(_R.c.id, _R.c.supersedes_id)
+        .select_from(lineage)
+        .join(_R, _R.c.id == lineage.c.supersedes_id)
+    )
+    # UNION visits shared ancestors once, regardless of the number of requested
+    # corrections, and terminates even if stored data contains a malformed cycle.
+    rows = await conn.execute(select(lineage.c.id, lineage.c.supersedes_id))
+    parents = dict(rows.all())
+    resolved = {}
+    for start in parents:
+        path = set()
+        current = start
+        while current not in resolved and current not in path:
+            path.add(current)
+            parent = parents[current]
+            if parent not in parents:
+                root = current
+                break
+            current = parent
+        else:
+            root = resolved[current] if current in resolved else min(path)
+        resolved.update((node, root) for node in path)
+    return {i: resolved.get(i, i) for i in ids}
 
 
 async def chain_ids(conn, root: int) -> list[int]:

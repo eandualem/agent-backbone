@@ -298,7 +298,9 @@ class AgentStore:
         return self._agents.get(spec.name) or spec
 
     @serialized_mutation
-    async def update(self, name: str, **changes) -> AgentSpec:
+    async def update(
+        self, name: str, *, expected_registration_id: str | None = None, **changes
+    ) -> AgentSpec:
         """Change fields on a known agent (dir, runtime, model, repo, tags, env,
         description, always_on, unattended, inbox_only)."""
         allowed = {
@@ -323,17 +325,31 @@ class AgentStore:
         current = self._agents.get(name)
         if current is None:
             raise KeyError(name)
+        if (
+            expected_registration_id is not None
+            and current.registration_id != expected_registration_id
+        ):
+            raise ValueError("agent registration changed")
         if changes.get("runtime", current.runtime) != current.runtime:
             changes.setdefault("unattended", False)
             changes.setdefault("model", None)
         validate_agent_spec(replace(current, **changes))
         await _refuse_running_inbox_only(name, changes.get("inbox_only") and not current.inbox_only)
-        if not await self._db.agents.update_fields(name, changes):
+        if not await self._db.agents.update_fields(
+            name, changes, expected_registration_id=expected_registration_id
+        ):
+            if expected_registration_id is not None:
+                raise ValueError("agent registration changed")
             raise KeyError(name)
         await self.refresh()
         current = self._agents.get(name)
         if current is None:
             raise KeyError(name)
+        if (
+            expected_registration_id is not None
+            and current.registration_id != expected_registration_id
+        ):
+            raise ValueError("agent registration changed")
         return current
 
     @serialized_mutation
