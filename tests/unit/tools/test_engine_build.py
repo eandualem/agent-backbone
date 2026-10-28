@@ -8,6 +8,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -104,6 +105,59 @@ def test_input_tamper_and_symlinks_refused(tmp_path):
         engine.verify_input(link, expected)
 
 
+@pytest.mark.parametrize(
+    "url,allowed",
+    [
+        ("https://release-assets.githubusercontent.com/asset?signature=example", True),
+        ("https://files.pythonhosted.org/package.whl", True),
+        ("http://github.com/asset", False),
+        ("https://example.com/asset", False),
+        ("https://github.com:8443/asset", False),
+        ("https://user:password@github.com/asset", False),
+        ("https://github.com.example.com/asset", False),
+    ],
+)
+def test_download_redirect_is_checked_before_request(url, allowed):
+    handler = engine.DownloadRedirectHandler()
+    request = engine.urllib.request.Request("https://github.com/release")
+    if allowed:
+        redirected = handler.redirect_request(request, None, 302, "Found", {}, url)
+        assert redirected.full_url == url
+    else:
+        with pytest.raises(ValueError, match="Unexpected download origin"):
+            handler.redirect_request(request, None, 302, "Found", {}, url)
+
+
+@pytest.mark.parametrize("tampered", [False, True])
+def test_download_keeps_hash_check_and_cleans_temporary_files(tmp_path, monkeypatch, tampered):
+    item = {
+        "filename": "input.whl",
+        "url": "https://files.pythonhosted.org/input.whl",
+        "sha256": hashlib.sha256(b"expected").hexdigest(),
+    }
+    monkeypatch.setattr(engine, "input_items", lambda lock: [item])
+
+    class Opener:
+        def open(self, url, timeout):
+            assert url == item["url"] and timeout == 60
+            return io.BytesIO(b"tampered" if tampered else b"expected")
+
+    def opener(handler):
+        assert isinstance(handler, engine.DownloadRedirectHandler)
+        return Opener()
+
+    monkeypatch.setattr(engine.urllib.request, "build_opener", opener)
+    inputs = tmp_path / "inputs"
+    if tampered:
+        with pytest.raises(ValueError, match="Hash mismatch"):
+            engine.fetch_inputs(inputs, {})
+        assert list(inputs.iterdir()) == []
+    else:
+        engine.fetch_inputs(inputs, {})
+        assert (inputs / item["filename"]).read_bytes() == b"expected"
+        assert len(list(inputs.iterdir())) == 1
+
+
 def payload(tmp_path):
     root = tmp_path / "payload"
     root.mkdir()
@@ -183,6 +237,197 @@ def test_manifest_cannot_escape_payload(tmp_path):
     engine.write_json(path, manifest)
     with pytest.raises(ValueError, match="Invalid relative"):
         engine.verify_payload(root)
+
+
+def test_manifest_link_is_rejected_before_reading(tmp_path):
+    root = payload(tmp_path)
+    manifest = root / "engine-manifest.json"
+    external = tmp_path / "external.json"
+    manifest.rename(external)
+    manifest.symlink_to(external)
+    with pytest.raises(ValueError, match="non-symlink"):
+        engine.verify_payload(root)
+    with pytest.raises(ValueError, match="symlinks"):
+        engine.inventory(root)
+
+
+@pytest.mark.parametrize("text", [True, False])
+def test_failed_commands_preserve_both_diagnostic_streams(tmp_path, capsys, text):
+    with pytest.raises(subprocess.CalledProcessError):
+        engine.run(
+            [
+                sys.executable,
+                "-I",
+                "-B",
+                "-c",
+                "import os;os.write(1,b'detail\\xff');os.write(2,b'cause\\xfe');"
+                "raise SystemExit(9)",
+            ],
+            cwd=tmp_path,
+            text=text,
+        )
+    captured = capsys.readouterr()
+    assert "detail" in captured.err and "cause" in captured.err
+
+
+def notice_fixture(tmp_path, monkeypatch, *, missing=False):
+    source = tmp_path / "tooling"
+    (source / "notices").mkdir(parents=True)
+    (source / "notices/LICENSE.txt").write_text("notice")
+    members = [
+        ("python/PYTHON.json", tarfile.REGTYPE, '{"python_version":"3.13"}'),
+        ("python/install/bin/python3", tarfile.REGTYPE, "binary"),
+    ]
+    if not missing:
+        members.append(("python/licenses/LICENSE.txt", tarfile.REGTYPE, "notice"))
+    path = archive(tmp_path, members)
+    metadata = {
+        "python_version": "3.13",
+        "full_archive_sha256": engine.digest(path),
+        "install_only_archive_sha256": "a" * 64,
+        "files": [
+            {
+                "path": "LICENSE.txt",
+                "source": "licenses/LICENSE.txt",
+                "bytes": 6,
+                "sha256": hashlib.sha256(b"notice").hexdigest(),
+            }
+        ],
+        "components": [{"license_paths": ["licenses/LICENSE.txt"]}],
+        "install_only_comparison": [
+            {"path": "bin/python3", "sha256": hashlib.sha256(b"binary").hexdigest()}
+        ],
+    }
+    engine.write_json(source / "python-notices.json", metadata)
+    monkeypatch.setattr(engine, "ROOT", source)
+    return source, path, metadata
+
+
+@pytest.mark.parametrize(
+    "change", [None, "hash", "member", "bytes", "retained", "binary", "version"]
+)
+def test_upstream_notice_archive_verification(tmp_path, monkeypatch, capsys, change):
+    source, path, metadata = notice_fixture(tmp_path, monkeypatch, missing=change == "member")
+    if change == "hash":
+        metadata["full_archive_sha256"] = "0" * 64
+    elif change == "bytes":
+        metadata["files"][0]["bytes"] = 1
+    elif change == "retained":
+        (source / "notices/LICENSE.txt").write_text("changed")
+    elif change == "binary":
+        metadata["install_only_comparison"][0]["sha256"] = "0" * 64
+    elif change == "version":
+        metadata["python_version"] = "different"
+    engine.write_json(source / "python-notices.json", metadata)
+    if change:
+        with pytest.raises((ValueError, subprocess.CalledProcessError)):
+            engine.verify_upstream_notices(path)
+        if change == "member":
+            assert "LICENSE.txt" in capsys.readouterr().err
+    else:
+        assert engine.verify_upstream_notices(path) == {
+            "notices_verified": 1,
+            "binary_samples_verified": 1,
+        }
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_package_notice_inventory_requires_notices(tmp_path, monkeypatch, missing):
+    rows = [
+        {
+            "name": "demo",
+            "version": "1",
+            "license_expression": "MIT",
+            "included_license_paths": [] if missing else [str(tmp_path / "licenses/LICENSE")],
+        }
+    ]
+    monkeypatch.setattr(engine, "python_run", lambda *a, **kw: json.dumps(rows))
+    if missing:
+        with pytest.raises(ValueError, match="Missing package notices: demo"):
+            engine.package_notices(tmp_path, Path("python"), {})
+    else:
+        assert engine.package_notices(tmp_path, Path("python"), {})[0][
+            "included_license_paths"
+        ] == ["licenses/LICENSE"]
+
+
+@pytest.mark.parametrize("change", [None, "hash", "missing", "component"])
+def test_notice_copy_checks_sources_and_component_paths(tmp_path, monkeypatch, change):
+    source, _, metadata = notice_fixture(tmp_path, monkeypatch)
+    if change == "hash":
+        (source / "notices/LICENSE.txt").write_text("tampered")
+    elif change == "missing":
+        (source / "notices/LICENSE.txt").unlink()
+    elif change == "component":
+        metadata["components"][0]["license_paths"] = ["licenses/absent"]
+        engine.write_json(source / "python-notices.json", metadata)
+    root = tmp_path / "payload"
+    root.mkdir()
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    for name in ("LICENSES.txt", "BUILD.json"):
+        (inputs / name).write_text(name)
+    lock = {
+        "python": {"sha256": "a" * 64},
+        "tmux": {n: {"filename": n} for n in ("LICENSES.txt", "BUILD.json")},
+    }
+    monkeypatch.setattr(engine, "package_notices", lambda *a: [])
+    if change:
+        with pytest.raises(ValueError):
+            engine.add_notices(root, inputs, lock, Path("python"), {})
+    else:
+        engine.add_notices(root, inputs, lock, Path("python"), {})
+        result = json.loads((root / "engine-license-inventory.json").read_text())
+        assert result["upstream_python"]["components"][0]["license_paths"] == [
+            "licenses/python/LICENSE.txt"
+        ]
+        assert (root / "licenses/python/LICENSE.txt").read_text() == "notice"
+        assert (root / "licenses/tmux/LICENSES.txt").read_text() == "LICENSES.txt"
+
+
+def test_build_executes_snapshot_when_checkout_changes(tmp_path, monkeypatch, capsys):
+    source, _, _ = notice_fixture(tmp_path, monkeypatch)
+    script = source / "build.py"
+    script.write_text(
+        "from pathlib import Path\ndef main(*, snapshot):\n assert snapshot\n"
+        " print(Path(__file__).with_name('lock.json').read_text())\n"
+    )
+    lock = source / "lock.json"
+    lock.write_text('{"version":"original"}')
+    monkeypatch.setattr(engine, "__file__", str(script))
+    monkeypatch.setattr(engine, "LOCK", lock)
+    original_run = engine.run
+
+    def changed_checkout(argv, **kwargs):
+        script.write_text("raise RuntimeError('new checkout must not execute')")
+        lock.write_text('{"version":"replacement"}')
+        (source / "python-notices.json").write_text("changed")
+        (source / "notices/LICENSE.txt").unlink()
+        copied_script = Path(argv[5])
+        assert (
+            json.loads((copied_script.parent / "python-notices.json").read_text())["python_version"]
+            == "3.13"
+        )
+        assert (copied_script.parent / "notices/LICENSE.txt").read_text() == "notice"
+        return original_run(argv, **kwargs)
+
+    monkeypatch.setattr(engine, "run", changed_checkout)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(script),
+            "build",
+            "--commit",
+            "a" * 40,
+            "--inputs",
+            str(tmp_path),
+            "--output",
+            str(tmp_path / "out"),
+        ],
+    )
+    engine.main()
+    assert json.loads(capsys.readouterr().out) == {"version": "original"}
 
 
 def test_wrong_host_does_not_create_output(tmp_path, monkeypatch):
@@ -273,6 +518,49 @@ def test_atomic_publication_preserves_existing_destination(tmp_path, existing):
         engine.publish_exclusively(source, target)
     assert target.lstat().st_ino == before
     assert (source / "contents").read_text() == "candidate"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="native macOS builder publication")
+def test_atomic_publication_moves_source_to_vacant_destination(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "contents").write_text("candidate")
+    target = tmp_path / "target"
+    engine.publish_exclusively(source, target)
+    assert not source.exists()
+    assert (target / "contents").read_text() == "candidate"
+
+
+@pytest.mark.parametrize(
+    "change", [None, "extra_dependency", "constraint", "version", "edge", "marker"]
+)
+def test_project_requirement_changes_require_relocking(tmp_path, change):
+    project = PATH.parents[2] / "pyproject.toml"
+    lock = PATH.parents[2] / "uv.lock"
+    project_text = project.read_text()
+    lock_text = lock.read_text()
+    if change == "extra_dependency":
+        project_text = project_text.replace(
+            'postgres = ["asyncpg>=0.29"]', 'postgres = ["asyncpg>=0.29", "new-driver>=1"]'
+        )
+    elif change == "constraint":
+        project_text = project_text.replace('"asyncpg>=0.29"', '"asyncpg>=100"')
+    elif change == "version":
+        version = tomllib.loads(project_text)["project"]["version"]
+        project_text = project_text.replace(f'version = "{version}"', 'version = "9.9.9"')
+    elif change == "edge":
+        lock_text = lock_text.replace('    { name = "asyncpg" },\n', "", 1)
+    elif change == "marker":
+        project_text = project_text.replace(
+            '"asyncpg>=0.29"', "\"asyncpg>=0.29; python_version > '3.11'\""
+        )
+    (tmp_path / "pyproject.toml").write_text(project_text)
+    (tmp_path / "uv.lock").write_text(lock_text)
+    if change:
+        with pytest.raises(ValueError):
+            engine.validate_project_lock(tmp_path)
+    else:
+        engine.validate_project_lock(tmp_path)
 
 
 def test_missing_record_file_fails_instead_of_disappearing(tmp_path, monkeypatch):

@@ -15,21 +15,30 @@ python3 -I -B tools/engine/build.py verify /path/to/new-engine
 ```
 
 The cache is disposable. Fetch verifies SHA-256 before accepting files; existing
-mismatched files fail rather than being silently overwritten. The application
-builder supplies the locked tmux binary, its `BUILD.json` and license notices.
+mismatched files fail rather than being silently overwritten.
+Download redirects must retain HTTPS and use an allowed public host, including
+GitHub's release asset host; validation happens before following each redirect.
+The application builder supplies the locked tmux binary, its `BUILD.json` and license notices.
 The lock names their exact filenames and hashes. CPython notices in `notices/`
 come from the full upstream archive identified in `python-notices.json`, whose
 install-only archive is also pinned. Runtime wheels follow `uv.lock`, including
 the optional PostgreSQL driver; build tools are separately pinned.
 The source commit must contain matching runtime wheel versions/hashes in `uv.lock`, with the complete
-runtime dependency closure including selected extras. Dependencies across marker
-branches are retained conservatively; forked package versions are refused until
+runtime dependency closure including selected extras.
+The project's root requirements, version, extras and dependency edges must also
+match the lock. Root environment markers and direct-URL requirements are refused
+until this fixed-input tooling is updated to support them.
+Dependencies across marker branches are retained conservatively; forked package versions are refused until
 the input handling is explicitly updated. Updating inputs
 requires reviewing the new hashes, origins, notices and native platform behavior.
 
 The source commit must already exist in the repository. Uncommitted project files are
 excluded. Builder code, input lock and retained notice metadata come from the
-builder checkout; their hashes are recorded in the payload receipt. Git archive container bytes are not part of payload identity. Source files
+builder checkout; their hashes are recorded in the payload receipt.
+The build runs a private snapshot of the builder, lock and notices, so changing the
+checkout during a build cannot change the executed tooling or its receipt hashes.
+Failed subprocesses print their captured diagnostics before staging is removed.
+Git archive container bytes are not part of payload identity. Source files
 are compared with Git blob identities so local archive filters cannot change them.
 Source links and submodules are refused. Build tools run in a separately extracted interpreter, with an isolated
 home and a minimal environment. Runtime installation is separate and offline.

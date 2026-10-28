@@ -20,6 +20,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import tomllib
@@ -159,15 +160,25 @@ def isolated_env(home, epoch):
     }
 
 
-def run(argv, *, cwd, env):
-    result = subprocess.run(
-        [str(a) for a in argv],
-        cwd=cwd,
-        env=env,
-        check=True,
-        text=True,
-        capture_output=True,
-    )
+def run(argv, *, cwd=None, env=None, text=True):
+    try:
+        result = subprocess.run(
+            [str(a) for a in argv],
+            cwd=cwd,
+            env=env,
+            check=True,
+            text=text,
+            errors="replace" if text else None,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as error:
+        # Keep native/pip/Git diagnostics visible after temporary staging cleanup.
+        for output in (error.stdout, error.stderr):
+            if output:
+                if isinstance(output, bytes):
+                    output = output.decode("utf-8", errors="replace")
+                print(output, file=sys.stderr, end="" if output.endswith("\n") else "\n")
+        raise
     return result.stdout
 
 
@@ -290,9 +301,10 @@ def verify_wheel_package(payload, wheel):
 def inventory(payload):
     entries = []
     for path in sorted(payload.rglob("*")):
-        if path.parent == payload and path.name in EXCLUDED:
-            continue
         require(not path.is_symlink(), "Payload must not contain symlinks")
+        if path.parent == payload and path.name in EXCLUDED:
+            require(path.is_file(), "Payload metadata must be regular files")
+            continue
         row = {
             "path": path.relative_to(payload).as_posix(),
             "mode": stat.S_IMODE(path.stat().st_mode),
@@ -307,7 +319,12 @@ def inventory(payload):
 
 
 def verify_payload(payload):
-    manifest = json.loads((payload / "engine-manifest.json").read_text())
+    manifest_path = payload / "engine-manifest.json"
+    require(
+        manifest_path.is_file() and not manifest_path.is_symlink(),
+        "Manifest must be a regular non-symlink file",
+    )
+    manifest = json.loads(manifest_path.read_text())
     for key in ("files", "licenses"):
         item = manifest[key]
         verify_input(payload / str(relative_path(item["path"])), item)
@@ -452,6 +469,27 @@ def validate_inputs(inputs, lock):
         verify_input(inputs / name, item)
 
 
+def validate_download_url(url, *, redirect=False):
+    parsed = urllib.parse.urlsplit(url)
+    hosts = {"github.com", "files.pythonhosted.org"}
+    if redirect:
+        hosts.add("release-assets.githubusercontent.com")
+    require(
+        parsed.scheme == "https"
+        and parsed.hostname in hosts
+        and parsed.port in {None, 443}
+        and parsed.username is None
+        and parsed.password is None,
+        "Unexpected download origin",
+    )
+
+
+class DownloadRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        validate_download_url(newurl, redirect=True)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def fetch_inputs(inputs, lock):
     """Download public locked archives/wheels; tmux is supplied by the app builder."""
     inputs.mkdir(parents=True, exist_ok=True)
@@ -465,16 +503,12 @@ def fetch_inputs(inputs, lock):
         if not url:
             print(f"Supply separately: {name}")
             continue
-        parsed = urllib.parse.urlsplit(url)
-        require(
-            parsed.scheme == "https"
-            and parsed.hostname in {"github.com", "files.pythonhosted.org"},
-            "Unexpected download origin",
-        )
+        validate_download_url(url)
         with tempfile.NamedTemporaryFile(dir=inputs, prefix=".download-", delete=False) as out:
             temporary = Path(out.name)
             try:
-                with urllib.request.urlopen(url, timeout=60) as incoming:
+                opener = urllib.request.build_opener(DownloadRedirectHandler())
+                with opener.open(url, timeout=60) as incoming:
                     shutil.copyfileobj(incoming, out)
                 out.close()
                 verify_input(temporary, item)
@@ -483,6 +517,69 @@ def fetch_inputs(inputs, lock):
             finally:
                 temporary.unlink(missing_ok=True)
         print(f"Verified: {name}")
+
+
+def validate_project_lock(source):
+    """Refuse stale project requirements before trusting the resolved closure.
+
+    This fixed-input builder supports the project's plain requirements/extras.
+    New direct URLs or root environment markers need an explicit tooling update.
+    """
+    project = tomllib.loads((source / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    packages = tomllib.loads((source / "uv.lock").read_text(encoding="utf-8"))["package"]
+    roots = [p for p in packages if p["name"] == project["name"]]
+    require(
+        len(roots) == 1 and roots[0]["version"] == project["version"], "Stale project lock identity"
+    )
+    root = roots[0]
+
+    def key(name, extras, specifier, group):
+        def normalize(value):
+            return re.sub(r"[-_.]+", "-", value).lower()
+
+        return (
+            normalize(name),
+            tuple(sorted(normalize(e) for e in extras)),
+            tuple(sorted(specifier.replace(" ", "").split(","))) if specifier else (),
+            group,
+        )
+
+    declared = set()
+    groups = {"": project.get("dependencies", []), **project.get("optional-dependencies", {})}
+    for group, requirements in groups.items():
+        for requirement in requirements:
+            match = re.fullmatch(
+                r"([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[([A-Za-z0-9_,.-]+)\])?([<>=!~][^;@\s]+)?",
+                requirement.replace(" ", ""),
+            )
+            require(match is not None, "Unsupported root requirement; update portable tooling")
+            name, extras, specifier = match.groups()
+            declared.add(key(name, extras.split(",") if extras else [], specifier or "", group))
+    recorded = set()
+    for requirement in root["metadata"]["requires-dist"]:
+        marker = requirement.get("marker", "")
+        match = re.fullmatch(r"extra == ['\"]([^'\"]+)['\"]", marker) if marker else None
+        require(not marker or match is not None, "Unsupported root lock marker")
+        recorded.add(
+            key(
+                requirement["name"],
+                requirement.get("extras", []),
+                requirement.get("specifier", ""),
+                match[1] if match else "",
+            )
+        )
+    require(declared == recorded, "Project requirements differ from source lock metadata")
+    require(
+        set(groups) - {""} == set(root.get("optional-dependencies", {})),
+        "Project extras differ from source lock",
+    )
+    for group in groups:
+        dependencies = (
+            root.get("dependencies", []) if not group else root["optional-dependencies"][group]
+        )
+        edges = {key(d["name"], d.get("extra", []), "", group) for d in dependencies}
+        expected = {(name, extras, (), g) for name, extras, _, g in declared if g == group}
+        require(edges == expected, "Project dependencies differ from source lock edges")
 
 
 def validate_source_lock(source, lock):
@@ -535,13 +632,12 @@ def validate_source_lock(source, lock):
 
 def verify_source_tree(source, repository, commit, git, env):
     """Detect archive filters/attributes or local configuration changing Git blobs."""
-    tree = subprocess.run(
+    tree = run(
         [git, "-C", str(repository), "ls-tree", "-rz", "--full-tree", commit],
         cwd=source,
         env=env,
-        capture_output=True,
-        check=True,
-    ).stdout
+        text=False,
+    )
     expected = set()
     for entry in tree.split(b"\0"):
         if not entry:
@@ -597,11 +693,10 @@ def verify_upstream_notices(archive):
 
     def member(name):
         relative_path(name)
-        return subprocess.run(
+        return run(
             ["/usr/bin/tar", "-xOf", str(archive), "python/" + name],
-            capture_output=True,
-            check=True,
-        ).stdout
+            text=False,
+        )
 
     metadata = json.loads(member("PYTHON.json"))
     require(
@@ -683,6 +778,7 @@ def build(repository, commit, inputs, output, lock):
         source = stage / "source"
         extract_archive(source_archive, source)
         verify_source_tree(source, repository, commit, git, env)
+        validate_project_lock(source)
         validate_source_lock(source, lock)
         project = tomllib.loads((source / "pyproject.toml").read_text(encoding="utf-8"))["project"]
         require(project["name"] == "agent-backbone", "Wrong source project")
@@ -849,7 +945,30 @@ def build(repository, commit, inputs, output, lock):
         return manifest
 
 
-def main():
+def snapshot_builder(destination):
+    """Copy the executed builder and all local inputs into private immutable staging."""
+    destination.mkdir(mode=0o700)
+    metadata = (ROOT / "python-notices.json").read_bytes()
+    files = {
+        "build.py": Path(__file__).read_bytes(),
+        LOCK.name: LOCK.read_bytes(),
+        "python-notices.json": metadata,
+    }
+    for item in json.loads(metadata)["files"]:
+        name = str(relative_path(item["path"]))
+        source = ROOT / "notices" / name
+        verify_input(source, item)
+        data = source.read_bytes()
+        require(hashlib.sha256(data).hexdigest() == item["sha256"], "Notice changed while copying")
+        files["notices/" + name] = data
+    for name, data in files.items():
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    return destination / "build.py"
+
+
+def main(*, snapshot=False):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     fetch = commands.add_parser("fetch", help="fetch hash-locked public binary inputs")
@@ -866,6 +985,24 @@ def main():
     verify = commands.add_parser("verify", help="verify exact immutable payload inventory")
     verify.add_argument("payload", type=Path)
     args = parser.parse_args()
+    if args.command == "build" and not snapshot:
+        # Execute the copied script itself: the receipt hashes exactly the code,
+        # lock and notices used even if the caller checks out another revision.
+        with tempfile.TemporaryDirectory(prefix="engine-tooling-") as directory:
+            script = snapshot_builder(Path(directory) / "tooling")
+            output = run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-B",
+                    "-c",
+                    "import runpy,sys; runpy.run_path(sys.argv.pop(1))['main'](snapshot=True)",
+                    script,
+                    *sys.argv[1:],
+                ]
+            )
+            print(output, end="")
+        return
     lock = json.loads(LOCK.read_text())
     if args.command == "fetch":
         fetch_inputs(args.inputs.resolve(), lock)
