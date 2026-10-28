@@ -6,6 +6,7 @@ checks source correspondence, not how an upstream binary wheel was compiled.
 
 import argparse
 import hashlib
+import io
 import json
 import re
 import runpy
@@ -19,26 +20,53 @@ builder = runpy.run_path(str(Path(__file__).with_name("build.py")))
 native_notice_material = builder["native_notice_material"]
 relative_path = builder["relative_path"]
 require = builder["require"]
-verify_input = builder["verify_input"]
 
 
 def verify_sources(cache):
     material = native_notice_material(json.loads(builder["LOCK"].read_text()))
     document = json.loads(material["native-notices.json"])
     sources = {row["id"]: row for row in document["sources"]}
+    snapshots = {}
+    total = 0
     for source in sources.values():
         name = str(relative_path(source["filename"]))
         require(name == Path(name).name, "Source name must be a filename")
-        verify_input(cache / name, source)
+        path = cache / name
+        require(path.is_file() and not path.is_symlink(), "Missing regular source input")
+        with path.open("rb") as stream:
+            data = stream.read(64 * 1024 * 1024 + 1)
+        total += len(data)
+        require(
+            len(data) <= 64 * 1024 * 1024 and total <= 256 * 1024 * 1024,
+            "Source verification memory budget exceeded",
+        )
+        require(hashlib.sha256(data).hexdigest() == source["sha256"], "Source input hash mismatch")
+        snapshots[source["id"]] = data
+
+    def open_archive(source_id):
+        return tarfile.open(fileobj=io.BytesIO(snapshots[source_id]))
+
+    def notice_members(archive, license_file=None):
+        return {
+            m.name
+            for m in archive
+            if m.isfile()
+            and (
+                Path(m.name)
+                .name.upper()
+                .startswith(("LICENSE", "COPYING", "NOTICE", "COPYRIGHT", "UNLICENSE"))
+                or any(p.upper() == "LICENSES" for p in Path(m.name).parts[:-1])
+                or m.name == license_file
+            )
+        }
 
     def read(source_id, member):
         source = sources[source_id]
-        path = cache / source["filename"]
         if source.get("format") == "raw":
             require(member is None, "Raw source must not have archive member")
-            return path.read_bytes()
+            return snapshots[source_id]
         relative_path(member)
-        with tarfile.open(path) as archive:
+        with open_archive(source_id) as archive:
             entries = [entry for entry in archive if entry.name == member]
             require(len(entries) == 1 and entries[0].isfile(), "Invalid source member")
             require(entries[0].size <= 4 * 1024 * 1024, "Source notice member too large")
@@ -48,7 +76,7 @@ def verify_sources(cache):
     found_roots = set()
     for wheel in document["wheels"]:
         source = sources[wheel["source_id"]]
-        with tarfile.open(cache / source["filename"]) as archive:
+        with open_archive(wheel["source_id"]) as archive:
             members = archive.getmembers()
             infos = [
                 m
@@ -63,6 +91,16 @@ def verify_sources(cache):
                 "Source distribution identity mismatch",
             )
             prefix = infos[0].name.rsplit("/", 1)[0]
+            required = notice_members(archive)
+            retained = {
+                c.get("source_member")
+                for c in document["components"]
+                if c["source_id"] == wheel["source_id"]
+            }
+            require(
+                required <= retained,
+                f"Wheel source notice members missing: {sorted(required - retained)}",
+            )
             if prefix + "/Cargo.lock" in {m.name for m in members}:
                 found_roots.add(wheel["source_id"])
                 require(
@@ -98,19 +136,8 @@ def verify_sources(cache):
                 and package.get("license") == component["declared_license"],
                 "Crate package identity/license differs",
             )
-            with tarfile.open(cache / source["filename"]) as archive:
-                required = {
-                    member.name
-                    for member in archive
-                    if member.isfile()
-                    and (
-                        Path(member.name)
-                        .name.upper()
-                        .startswith(("LICENSE", "COPYING", "NOTICE", "COPYRIGHT", "UNLICENSE"))
-                        or any(p.upper() == "LICENSES" for p in Path(member.name).parts[:-1])
-                        or member.name == prefix + "/" + package.get("license-file", "")
-                    )
-                }
+            with open_archive(sid) as archive:
+                required = notice_members(archive, prefix + "/" + package.get("license-file", ""))
             retained = {n["source_member"] for n in component["notices"] if n["source_id"] == sid}
             require(
                 required <= retained, f"Crate notice members missing: {sorted(required - retained)}"

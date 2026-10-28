@@ -10128,13 +10128,133 @@
       ],
       "selected_license": "Apache-2.0",
       "source_id": "crate:zopfli-0.8.4"
+    },
+    {
+      "component": "ironcalc source base/LICENSE-Apache-2.0",
+      "notice": {
+        "bytes": 10849,
+        "file": "NATIVE-NOTICES.txt",
+        "offset": 131426,
+        "sha256": "e6c204bab9c7970ebe8069e6b68caafbdd992bc508d56bcf38fa2f1e5eef9f43"
+      },
+      "selection": "file",
+      "source_id": "ironcalc",
+      "source_member": "ironcalc-0.9.1/base/LICENSE-Apache-2.0"
+    },
+    {
+      "component": "ironcalc source base/LICENSE-MIT",
+      "notice": {
+        "bytes": 1150,
+        "file": "NATIVE-NOTICES.txt",
+        "offset": 142498,
+        "sha256": "92d835ee649fdfc82e3a34f66e520e4e526a2a38dfcb14c7c8fbd520506e78df"
+      },
+      "selection": "file",
+      "source_id": "ironcalc",
+      "source_member": "ironcalc-0.9.1/base/LICENSE-MIT"
+    },
+    {
+      "component": "ironcalc source bindings/python/LICENSE-Apache-2.0.md",
+      "notice": {
+        "bytes": 10848,
+        "file": "NATIVE-NOTICES.txt",
+        "offset": 143892,
+        "sha256": "f44a7d3463f1264dab3e0980529311a6f99c9a2e72d30bf1e944cee2165b48ce"
+      },
+      "selection": "file",
+      "source_id": "ironcalc",
+      "source_member": "ironcalc-0.9.1/bindings/python/LICENSE-Apache-2.0.md"
+    },
+    {
+      "component": "ironcalc source bindings/python/LICENSE-MIT.md",
+      "notice": {
+        "bytes": 1151,
+        "file": "NATIVE-NOTICES.txt",
+        "offset": 154977,
+        "sha256": "d7e21df75f149a9c8dccbafdd903e4ef53a68fe3c86d92c0bd8e42a5f82b3773"
+      },
+      "selection": "file",
+      "source_id": "ironcalc",
+      "source_member": "ironcalc-0.9.1/bindings/python/LICENSE-MIT.md"
+    },
+    {
+      "component": "ironcalc source xlsx/LICENSE-Apache-2.0",
+      "notice": {
+        "bytes": 10848,
+        "file": "NATIVE-NOTICES.txt",
+        "offset": 156358,
+        "sha256": "f44a7d3463f1264dab3e0980529311a6f99c9a2e72d30bf1e944cee2165b48ce"
+      },
+      "selection": "file",
+      "source_id": "ironcalc",
+      "source_member": "ironcalc-0.9.1/xlsx/LICENSE-Apache-2.0"
+    },
+    {
+      "component": "ironcalc source xlsx/LICENSE-MIT",
+      "notice": {
+        "bytes": 1150,
+        "file": "NATIVE-NOTICES.txt",
+        "offset": 167429,
+        "sha256": "92d835ee649fdfc82e3a34f66e520e4e526a2a38dfcb14c7c8fbd520506e78df"
+      },
+      "selection": "file",
+      "source_id": "ironcalc",
+      "source_member": "ironcalc-0.9.1/xlsx/LICENSE-MIT"
+    },
+    {
+      "component": "markupsafe source docs/license.rst",
+      "notice": {
+        "bytes": 100,
+        "file": "NATIVE-NOTICES.txt",
+        "offset": 168806,
+        "sha256": "6fc7e80b75b5999783a328d90976a2585e0956c4a348c3c888453938ceca742d"
+      },
+      "selection": "file",
+      "source_id": "markupsafe",
+      "source_member": "markupsafe-3.0.3/docs/license.rst"
+    },
+    {
+      "component": "sqlalchemy source doc/build/copyright.rst",
+      "notice": {
+        "bytes": 1282,
+        "file": "NATIVE-NOTICES.txt",
+        "offset": 169141,
+        "sha256": "4a0179c4ef9fb2c7464215c8c48686fe326a3dfcf34752ab41cd91e93a7cac87"
+      },
+      "selection": "file",
+      "source_id": "sqlalchemy",
+      "source_member": "sqlalchemy-2.0.48/doc/build/copyright.rst"
+    },
+    {
+      "component": "sqlalchemy source doc/copyright.html",
+      "notice": {
+        "bytes": 7984,
+        "file": "NATIVE-NOTICES.txt",
+        "offset": 170653,
+        "sha256": "65a849b66d8a638bf7a8ec24287c5d4f1ab5a7be4947518a0ad3c3b06eea1ff2"
+      },
+      "selection": "file",
+      "source_id": "sqlalchemy",
+      "source_member": "sqlalchemy-2.0.48/doc/copyright.html"
+    },
+    {
+      "component": "uvloop source vendor/libuv/LICENSE-docs",
+      "notice": {
+        "bytes": 18652,
+        "file": "NATIVE-NOTICES.txt",
+        "offset": 178866,
+        "sha256": "cce5d01fa4a83b794271bd2c28cffdf99afd43c803e6ddefddae39b591ea7448"
+      },
+      "selection": "file",
+      "source_id": "uvloop",
+      "source_member": "uvloop-0.22.1/vendor/libuv/LICENSE-docs"
     }
   ],
   "files": [
     {
-      "bytes": 131197,
+      "bytes": 197519,
       "path": "NATIVE-NOTICES.txt",
-      "sha256": "b091ceb342f5ff63071ab8c881432a210a69fd00b6667c5cbde360f917120a58"
+      "sha256": "f28e347c5bf64a42b0c3bf982561c6c2b7a939aec79dcd19d246260ff095520e"
     },
     {
       "bytes": 574584,

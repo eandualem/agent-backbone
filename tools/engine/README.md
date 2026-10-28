@@ -107,8 +107,12 @@ source comparison offline:
 python3 -I -B tools/engine/verify_native_sources.py /path/to/source-cache
 ```
 
-This checks all 320 source files by hash, all 574 notice excerpts byte-for-byte,
-and every registry package/checksum against the four source Cargo locks. It
+This checks all 320 source files by hash, all 584 notice excerpts byte-for-byte,
+and every registry package/checksum against the four source Cargo locks. Wheel
+source and crate license/NOTICE membership, source versions and supplemental
+notice commit/repository correspondence are checked too. Sources are read into
+a bounded, hash-verified snapshot before inspection, so a concurrent cache update
+cannot replace verified bytes. It
 does not download, execute source, resolve dependencies or compile anything.
 tmux provenance remains the supplied hashed build receipt and notices.
 

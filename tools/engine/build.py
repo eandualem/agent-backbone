@@ -490,6 +490,11 @@ def native_notice_material(lock=None):
         len(components) == len(set(components)) and set(components) == expected_crates,
         "Missing or duplicate Rust component notices",
     )
+    require(
+        {w["source_id"] for w in document["wheels"]}
+        <= {c["source_id"] for c in document["components"]},
+        "Missing wheel source component notices",
+    )
     for component in document["components"]:
         require(component["source_id"] in sources, "Missing native notice source")
         notices = component.get("notices", [component.get("notice")])

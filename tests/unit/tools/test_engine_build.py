@@ -493,6 +493,7 @@ def test_native_notice_inventory_cannot_follow_changed_binary_inputs(change):
         "source_version",
         "empty_notices",
         "missing_crate",
+        "missing_wheel",
     ],
 )
 def test_native_notice_tampering_refused_before_snapshot(tmp_path, monkeypatch, change):
@@ -516,6 +517,8 @@ def test_native_notice_tampering_refused_before_snapshot(tmp_path, monkeypatch, 
         metadata["wheels"][0]["version"] = "999"
     elif change == "empty_notices":
         metadata["components"][0] = {**metadata["components"][0], "notices": []}
+    elif change == "missing_wheel":
+        metadata["components"] = [c for c in metadata["components"] if c["source_id"] != "asyncpg"]
     else:
         metadata["components"] = [
             c
@@ -528,7 +531,9 @@ def test_native_notice_tampering_refused_before_snapshot(tmp_path, monkeypatch, 
         engine.native_notice_material()
 
 
-@pytest.mark.parametrize("change", [None, "commit", "repository", "omitted_notice"])
+@pytest.mark.parametrize(
+    "change", [None, "commit", "repository", "omitted_notice", "concurrent_cache_change"]
+)
 def test_source_verifier_checks_upstream_crate_notice_correspondence(tmp_path, monkeypatch, change):
     import runpy
 
@@ -613,7 +618,17 @@ def test_source_verifier_checks_upstream_crate_notice_correspondence(tmp_path, m
         "native_notice_material",
         lambda lock: {"native-notices.json": json.dumps(data).encode()},
     )
-    if change:
+    if change == "concurrent_cache_change":
+        original_open = tarfile.open
+
+        def changed_cache(*args, **kwargs):
+            raw.write_text("unverified replacement")
+            return original_open(*args, **kwargs)
+
+        monkeypatch.setattr(tarfile, "open", changed_cache)
+        assert verify(tmp_path)["notices_verified"] == 1
+        assert raw.read_text() == "unverified replacement"
+    elif change:
         with pytest.raises(ValueError, match="notice"):
             verify(tmp_path)
     else:
