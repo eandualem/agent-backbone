@@ -189,3 +189,11 @@ service and configuration. Removing the app must not delete engine or user data.
 
 The spreadsheet subprocess uses isolated Python imports and disables bytecode
 writes, so native calculations cannot add cache files to a verified engine payload.
+
+## Building the bundled engine
+
+The source repository includes an [offline portable engine builder](../tools/engine/README.md).
+It builds an exact source commit with pinned interpreter and wheel inputs and
+produces the immutable manifest/inventory consumed by the combined installer.
+The current lock is for native Apple Silicon; build success does not establish
+installer, first-agent, minimum-OS or other-platform acceptance.
