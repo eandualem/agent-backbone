@@ -514,16 +514,17 @@ def _two_tabs(name, formula, shared_rows=False):
     return body, data, summary
 
 
-async def test_a_unicode_sheet_reference_follows_its_own_tab():
-    formula = {"kind": "formula", "value": "=SUM(数据!A2:A4)"}
-    body, data, _ = _two_tabs("数据", formula)
+@pytest.mark.parametrize("name", ["数据", "मराठी"])
+async def test_a_unicode_sheet_reference_follows_its_own_tab(name):
+    formula = {"kind": "formula", "value": f"=SUM({name}!A2:A4)"}
+    body, data, _ = _two_tabs(name, formula)
     base = await calculate(body)
     rows = data["row_ids"]
     moved = await changed(  # the header moves below the counted records
         base,
         [{"op": "move_rows", "tab_id": data["tab_id"], "before_id": rows[4], "ids": [rows[0]]}],
     )
-    assert moved["results"][1]["cells"][0]["input"]["value"] == "=SUM(数据!A1:A3)"
+    assert moved["results"][1]["cells"][0]["input"]["value"] == f"=SUM({name}!A1:A3)"
 
 
 async def test_a_delete_on_another_tab_with_shared_ids_leaves_a_range_alone():

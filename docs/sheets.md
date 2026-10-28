@@ -86,8 +86,8 @@ Atomic operation tags:
   or last record of a range that has others left is refused with `invalid_edit`.
 - `move_rows` / `move_columns`: contiguous canonical `ids`, `before_id` outside
   the selection (null means end). Formula references move with logical records.
-  A move that would change the size of a range a formula uses (for example, a
-  row moved within `A2:A4`) is refused with `invalid_edit`; edit the formula or
+  A move that would change which records a formula range covers, even if its
+  size stays the same, is refused with `invalid_edit`; edit the formula or
   move outside the range.
 - `copy_cells`: source/target `tab_id`, `row_ids`, `column_ids`, prefixed with
   `source_` or `target_`. Shapes must match. Sources are captured before any
