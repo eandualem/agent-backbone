@@ -212,6 +212,15 @@ need the operator credential. An agent credential reads as the agent it names
 `unread` counts agent messages and events after `read_through`; the owner's own
 messages never count. `total` counts messages only.
 
+On PostgreSQL, a summary poll briefly holds shared locks on the conversation
+markers and entries while reading its page and watermark. It waits for existing
+writers, so a lower entry ID that commits after a higher one cannot disappear
+behind the returned cursor. Writes resume when the bounded poll completes.
+SQLite already serializes its writers. Response correction-chain roots are
+resolved in one query, including when earlier revisions have been pruned.
+An explicit recipient matches an existing registration ID first, then a name;
+a name made entirely of hexadecimal characters remains usable.
+
 A refused send returns `{"result": "refused", "error": CODE, "message": …}`:
 
 | Code | Meaning |

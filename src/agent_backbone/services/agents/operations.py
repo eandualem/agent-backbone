@@ -60,6 +60,8 @@ class StartRequest:
     wait: bool = True
     inbox_only: bool = False
     operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    expected_registration_id: str | None = None
+    """An accepted delayed operation must never resolve a replacement by name."""
 
 
 async def resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
@@ -113,6 +115,8 @@ async def _record_start_failure(
 
 
 async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
+    if req.expected_registration_id is not None and (req.directory or req.watch or req.tags):
+        raise ValueError("a registration-bound start cannot discover or change associations")
     refuse_case_twin(store.agents, req.name)
     if req.inbox_only and req.watch:
         raise ValueError("an inbox-only agent takes no part in GitHub routing: drop the watches")
@@ -135,6 +139,11 @@ async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
     spec = store.agents.get(req.name)
     if spec is None:
         raise KeyError(req.name)
+    if (
+        req.expected_registration_id is not None
+        and spec.registration_id != req.expected_registration_id
+    ):
+        raise ValueError("agent registration changed")
     for repo in req.watch:
         spec = await store.watch(req.name, repo)
     changes: dict = {}
@@ -145,7 +154,9 @@ async def _resolve_agent(store: AgentStore, req: StartRequest) -> AgentSpec:
     if req.inbox_only and not spec.inbox_only:
         changes["inbox_only"] = True
     if changes:
-        spec = await store.update(spec.name, **changes)
+        spec = await store.update(
+            spec.name, expected_registration_id=req.expected_registration_id, **changes
+        )
     if req.tags:
         spec = await store.tag(spec.name, list(req.tags))
     return spec
@@ -234,6 +245,11 @@ async def start_resolved(
     started = time.monotonic()
     runtime = req.runtime or spec.runtime
     try:
+        if (
+            req.expected_registration_id is not None
+            and spec.registration_id != req.expected_registration_id
+        ):
+            raise ValueError("agent registration changed")
         if spec.inbox_only and not req.inbox_only:
             raise ValueError(
                 f"'{spec.name}' is inbox-only: it is never launched "

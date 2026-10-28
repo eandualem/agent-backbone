@@ -108,24 +108,24 @@ async def chain_roots(conn, ids: list[int]) -> dict[int, int]:
     """Each response's correction-chain root: its earliest retained predecessor,
     which is its conversation ID. A report has no chain and is its own root."""
     roots = {i: i for i in ids}
-    frontier = set(ids)
-    while frontier:
-        rows = (
-            await conn.execute(
-                select(_R.c.id, _R.c.supersedes_id).where(
-                    _R.c.id.in_(frontier), _R.c.supersedes_id.is_not(None)
-                )
-            )
-        ).all()
-        parents = {row.id: row.supersedes_id for row in rows}
-        present = set(
-            (await conn.scalars(select(_R.c.id).where(_R.c.id.in_(set(parents.values()))))).all()
+    if not ids:
+        return roots
+    lineage = (
+        select(_R.c.id.label("start_id"), _R.c.id, _R.c.supersedes_id)
+        .where(_R.c.id.in_(ids))
+        .cte("response_lineage", recursive=True)
+    )
+    lineage = lineage.union(
+        select(lineage.c.start_id, _R.c.id, _R.c.supersedes_id).join(
+            _R, _R.c.id == lineage.c.supersedes_id
         )
-        moved = {child: parent for child, parent in parents.items() if parent in present}
-        for start, root in roots.items():
-            if root in moved:
-                roots[start] = moved[root]
-        frontier = set(moved.values())
+    )
+    # A correction can only reference an already-published predecessor. UNION
+    # also terminates on a malformed cycle instead of looping in Python.
+    rows = await conn.execute(
+        select(lineage.c.start_id, func.min(lineage.c.id)).group_by(lineage.c.start_id)
+    )
+    roots.update(rows.all())
     return roots
 
 

@@ -209,3 +209,48 @@ async def test_cursor_expires_after_restart_but_reports_remain(tmp_path):
             await db.reports.query(ReportQuery(history=True, cursor=page["next_cursor"]))
         fresh = await db.reports.query(ReportQuery(history=True))
         assert len(fresh["items"]) == 2
+
+
+async def test_response_chain_roots_have_bounded_round_trips(db):
+    from sqlalchemy import event, insert
+
+    from agent_backbone.services.database._reports_repo import chain_roots
+    from agent_backbone.services.database.models import ReportORM
+
+    rows = [
+        dict(
+            id=i,
+            kind="response",
+            supersedes_id=i - 1 if i > 1 else None,
+            author_id="writer",
+            author_name="writer",
+            request_id=str(i),
+            created_at="2026-10-28T00:00:00.000000Z",
+            source="api",
+            content="{}",
+            priority=0,
+            swarm_member=0,
+        )
+        for i in range(1, 102)
+    ]
+    async with db.engine.begin() as conn:
+        await conn.execute(insert(ReportORM.__table__), rows)
+        # A pruned predecessor leaves the earliest retained correction as root.
+        await conn.execute(text("DELETE FROM reports WHERE id=10"))
+        requests = []
+
+        def observe(_conn, _cursor, statement, _parameters, _context, _many):
+            requests.append(statement)
+
+        event.listen(db.engine.sync_engine, "before_cursor_execute", observe)
+        try:
+            assert await chain_roots(conn, [1, 9, 50, 101, 999]) == {
+                1: 1,
+                9: 1,
+                50: 11,
+                101: 11,
+                999: 999,
+            }
+        finally:
+            event.remove(db.engine.sync_engine, "before_cursor_execute", observe)
+        assert len(requests) <= 2  # independent of correction depth and number of roots

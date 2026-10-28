@@ -380,3 +380,87 @@ async def test_delivery_stays_bound_to_the_checked_registration(
     await db.queue.mark_delivered(row["id"], reason="registration_changed")
     page = (await api_client.get(path, headers=auth_headers)).json()
     assert page["entries"][0]["delivery"] == "failed"
+
+
+async def test_hexadecimal_recipient_name_and_id_precedence(
+    api_app, api_client, auth_headers, deliver
+):
+    db = api_app.state.db
+    doc = await _document(api_client, auth_headers)
+    hex_name = "a" * 32
+    await db.agents.rename("brunel", hex_name)
+    path = f"/api/conversations/document/{doc['document_id']}/messages"
+    request = {"request_id": "hex-name", "text": "Please check", "recipient": hex_name}
+    named = await api_client.post(path, headers=auth_headers, json=request)
+    assert named.status_code == 201, named.text
+    assert named.json()["entry"]["recipient"]["name"] == hex_name
+    # If the input identifies both a registration and a name, the ID wins.
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE agents SET report_identity=:id WHERE name='ada'"), {"id": hex_name}
+        )
+    by_id = await api_client.post(
+        path, headers=auth_headers, json=request | {"request_id": "hex-id"}
+    )
+    assert by_id.status_code == 201, by_id.text
+    assert by_id.json()["entry"]["recipient"]["name"] == "ada"
+
+
+async def test_summary_watermark_waits_for_lower_id_writer(db, monkeypatch):
+    """Model PostgreSQL's reverse commit order; the live two-connection receipt
+    additionally verifies the server's SHARE barrier, without requiring a service
+    for the unit suite."""
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    from sqlalchemy import insert
+
+    from agent_backbone.services.database.models import ConversationEntryORM
+
+    entries = ConversationEntryORM.__table__
+    value = dict(
+        kind="fixture",
+        entry_kind="message",
+        author_type="agent",
+        author_name="worker",
+        created_at="2026-10-28T00:00:00.000000Z",
+        text="reply",
+    )
+    async with db.engine.begin() as conn:
+        await conn.execute(insert(entries).values(id=2, artifact_id="fast", **value))
+    pending = True
+    transaction = db.conversations._tx
+
+    @asynccontextmanager
+    async def postgres_transaction():
+        nonlocal pending
+        async with transaction() as conn:
+
+            async def commit_pending():
+                nonlocal pending
+                if pending:
+                    await conn.execute(insert(entries).values(id=1, artifact_id="slow", **value))
+                    pending = False
+
+            class Connection:
+                dialect = SimpleNamespace(name="postgresql")
+
+                def __getattr__(self, name):
+                    return getattr(conn, name)
+
+                async def execute(self, statement, *args, **kwargs):
+                    if str(statement).startswith("LOCK TABLE "):
+                        await commit_pending()
+                        return None
+                    return await conn.execute(statement, *args, **kwargs)
+
+            yield Connection()
+            # Without a barrier, the lower ID becomes visible only after the poll.
+            await commit_pending()
+
+    monkeypatch.setattr(db.conversations, "_tx", postgres_transaction)
+    first = await db.conversations.summaries()
+    sequence, timestamp = first["cursor"][1:].split(".")
+    second = await db.conversations.summaries(since=(int(sequence), int(timestamp)))
+    seen = {item["artifact_id"] for page in (first, second) for item in page["items"]}
+    assert seen == {"slow", "fast"}

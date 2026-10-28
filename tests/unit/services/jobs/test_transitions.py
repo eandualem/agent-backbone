@@ -658,3 +658,52 @@ async def test_registration_bound_restart_never_reaches_replacement(
     stop.assert_not_awaited()
     start.assert_not_awaited()
     deliver.assert_not_awaited()
+
+
+@pytest.mark.parametrize("runtime", sorted(RUNTIMES))
+@pytest.mark.parametrize("already_stopped", [False, True])
+async def test_bound_restart_refuses_replacement_during_refresh(
+    db, config, store, seams, runtime, already_stopped
+):
+    stop, start, deliver = seams
+    original = store.agents.get("ike")
+    row = await db.transitions.create(
+        agent_name="ike",
+        registration_id=original.registration_id,
+        runtime=runtime,
+        model="requested-model",
+        message="original continuation",
+    )
+    if already_stopped:
+        await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    refresh = store.refresh
+    replaced = False
+
+    async def replace_before_refresh():
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            await db.agents.delete("ike")
+            await db.agents.upsert(
+                "ike",
+                dir=original.dir,
+                runtime="shell",
+                model="replacement-model",
+                repo="",
+                tags=[],
+                env={},
+                description="replacement",
+                always_on=False,
+                unattended=False,
+            )
+        return await refresh()
+
+    with patch.object(store, "refresh", side_effect=replace_before_refresh):
+        assert await _run(config, store, db) == {"ike": "failed"}
+    replacement = store.agents.get("ike")
+    assert replacement.registration_id != original.registration_id
+    assert (replacement.runtime, replacement.model) == ("shell", "replacement-model")
+    stop.assert_not_awaited()
+    start.assert_not_awaited()
+    deliver.assert_not_awaited()
+    assert (await db.transitions.get(row["id"]))["result"]["reason"] == "agent registration changed"

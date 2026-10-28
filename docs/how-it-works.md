@@ -151,7 +151,10 @@ backbone restart in between changes nothing. The transition ends `completed`
 with the launch's readiness, or `failed` with the reason — including a
 session someone started by hand during the wait, which is never claimed as
 this transition's work. An agent with a pending transition is not reported
-as unexpectedly offline.
+as unexpectedly offline. Registration-bound transitions keep the accepted identity
+through shutdown, settings updates and launch. Forgetting and re-registering a
+name cannot transfer an older restart request or its runtime/model changes to
+the replacement, including when a separate direct CLI process makes the change.
 
 When the backbone is down, the CLI does the same thing directly against the
 database and tmux, and says so. A brief sent as the first message (Aider) is
