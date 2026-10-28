@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "profile": "core-v1",
+  "policies": [
+    "starter-collaboration",
+    "starter-continuity",
+    "starter-learning",
+    "starter-artifacts",
+    "starter-authority"
+  ],
+  "skills": [
+    "backbone-documents",
+    "backbone-reports",
+    "backbone-responses",
+    "backbone-sheets",
+    "backbone-conversations"
+  ],
+  "briefs": {
+    "orchestrator-v1": "orchestrator-v1.md"
+  }
+}

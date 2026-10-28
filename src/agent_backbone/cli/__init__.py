@@ -53,6 +53,7 @@ from agent_backbone.cli.diagnostics import add_diagnostics_parser
 from agent_backbone.cli.documents import add_document_parsers
 from agent_backbone.cli.fleet import add_fleet_parser
 from agent_backbone.cli.instructions import add_instruction_commands
+from agent_backbone.cli.onboarding import add_setup_parser
 from agent_backbone.cli.reports import add_report_parsers
 from agent_backbone.cli.responses import add_response_parsers
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_up
@@ -83,6 +84,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     parser.add_argument("--version", action="version", version=f"backbone {__version__}")
     sub = parser.add_subparsers(dest="command", required=True, title="commands", metavar="COMMAND")
+
+    add_setup_parser(sub)
 
     p = sub.add_parser("init", help="create the data directory, .env and database")
     p.add_argument(
@@ -600,7 +603,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     # Adapter discovery is usable before an installation or account exists.
     # It reads no installation secrets and offers no administrative operation.
-    if args.command == "runtimes":
+    if args.command in {"runtimes", "setup"}:
         sys.exit(args.func(args))
     try:
         client_key = bootstrap_config().api_key

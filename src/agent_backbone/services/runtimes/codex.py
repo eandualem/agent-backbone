@@ -122,6 +122,8 @@ _MODEL_CHANGED = re.compile(
 
 
 class Codex(Runtime):
+    setup_hooks = True
+
     supports_exact_resume = True
     id = "codex"
     skill_dirs = (".agents/skills",)

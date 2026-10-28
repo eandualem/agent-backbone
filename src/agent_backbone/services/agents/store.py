@@ -111,6 +111,10 @@ def check_agent_tags(tags) -> None:
         )
 
 
+class AgentRegistrationConflict(ValueError):
+    """New-only registration found an existing owner before writing anything."""
+
+
 class AgentStore:
     """Known agents + settings snapshot, with change notification."""
 
@@ -271,11 +275,18 @@ class AgentStore:
                     return await self.register(current.with_watches(*watches))
 
     @serialized_mutation
-    async def register(self, spec: AgentSpec) -> AgentSpec:
+    async def register(self, spec: AgentSpec, *, only_new: bool = False) -> AgentSpec:
         """Insert or update an agent and publish the new snapshot."""
         validate_agent_spec(spec)
         async with profile_lock(self._data_dir):
-            current = agents_from_rows(await self._db.agents.list()).get(spec.name)
+            agents = agents_from_rows(await self._db.agents.list())
+            if only_new and any(
+                other.name.casefold() == spec.name.casefold()
+                or other.path.resolve() == spec.path.resolve()
+                for other in agents
+            ):
+                raise AgentRegistrationConflict("An agent already owns this name or directory.")
+            current = agents.get(spec.name)
             await _refuse_running_inbox_only(
                 spec.name, spec.inbox_only and not (current and current.inbox_only)
             )

@@ -48,6 +48,8 @@ def _has_session_projection(conn: sqlite3.Connection) -> bool:
 
 
 class OpenCode(Runtime):
+    setup_hooks = True
+
     supports_exact_resume = True
     id = "opencode"
     skill_dirs = (".agents/skills",)
@@ -206,14 +208,8 @@ class OpenCode(Runtime):
         brief = kwargs.get("brief_file")
         plugin = None
         if data_dir is not None and state_dir is not None:
-            try:
-                plugin = hooks.install_hook_files(Path(data_dir)) / "opencode-v2"
-                plugin.mkdir(exist_ok=True)
-                atomic_write_text(
-                    plugin / "index.js", hooks.hook_source("opencode_v2_hook.js").read_text()
-                )
-            except OSError as exc:
-                raise RuntimeError("Could not install OpenCode launch hooks") from exc
+            self.prepare_setup_hooks(Path(data_dir), Path(state_dir))
+            plugin = Path(data_dir) / "hooks/opencode-v2"
         if plugin is None and brief is None:
             return command
         return [
@@ -223,6 +219,16 @@ class OpenCode(Runtime):
             str(Path(brief).resolve()) if brief is not None else "",
             *command,
         ]
+
+    def prepare_setup_hooks(self, data_dir: Path, state_dir: Path) -> None:
+        try:
+            plugin = hooks.install_hook_files(data_dir) / "opencode-v2"
+            plugin.mkdir(exist_ok=True)
+            atomic_write_text(
+                plugin / "index.js", hooks.hook_source("opencode_v2_hook.js").read_text()
+            )
+        except OSError as exc:
+            raise RuntimeError("Could not install OpenCode launch hooks") from exc
 
     def startup_error(self, state_dir, agent, launch_id):
         try:

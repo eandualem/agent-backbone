@@ -16,6 +16,7 @@ from agent_backbone.services.agents._inference import (
     note_submission,
 )
 from agent_backbone.services.agents._locks import lifecycle_lock
+from agent_backbone.services.agents._validation import validate_agent_spec
 from agent_backbone.services.agents.acknowledgement import (
     find_outgoing_comment,
     find_outgoing_pull_request,
@@ -37,10 +38,11 @@ from agent_backbone.services.agents.launch import (
 )
 from agent_backbone.services.agents.models import AgentState, StateSnapshot, prompt_id
 from agent_backbone.services.agents.skills_preview import skills_preview
-from agent_backbone.services.agents.store import AgentStore, case_twin
+from agent_backbone.services.agents.store import AgentRegistrationConflict, AgentStore, case_twin
 
 __all__ = [
     "AgentConfigView",
+    "AgentRegistrationConflict",
     "AgentState",
     "AgentStore",
     "EnrichedAgent",
@@ -77,6 +79,7 @@ __all__ = [
     "stop_agent",
     "subscription_views",
     "usage_view",
+    "validate_agent_spec",
     "wait_until_ready",
     "write_starting_marker",
     "write_state_file",

@@ -450,6 +450,7 @@ class Runtime:
             "id": self.id,
             "display_name": self.display_name,
             "available": self.available(),
+            "setup_supported": self.setup_hooks,
             "reports_state": self.reports_state,
             "models": list(self.models),
             "efforts": list(self.efforts),
@@ -466,6 +467,14 @@ class Runtime:
     ) -> list[str]:
         """Extra CLI args that wire the runtime's state hooks to the backbone."""
         return []
+
+    setup_hooks = False
+    """Whether the finite installer can prepare isolated launch hooks."""
+
+    def prepare_setup_hooks(self, data_dir: Path, state_dir: Path) -> None:
+        """Prepare only installation-owned hooks; never edit global CLI settings."""
+        if not self.setup_hooks or not self.hook_launch_args(data_dir, state_dir):
+            raise RuntimeError("Installer launch hooks are unavailable for this runtime.")
 
     def startup_error(self, state_dir: Path, agent: str, launch_id: str) -> str | None:
         """A launcher failure retained after its terminal exits, if available."""

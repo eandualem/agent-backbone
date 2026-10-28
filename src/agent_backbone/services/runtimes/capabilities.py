@@ -200,6 +200,32 @@ _RESPONSE_DELIVERY = (
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
+        "installer-first-agent",
+        "Explicit first-agent setup with durable retry receipts",
+        "services/routing/onboarding.py; cli/onboarding.py; Runtime.prepare_setup_hooks",
+        fallback=(
+            "Use the documented agent-start flow; do not retry an uncertain launch "
+            "or greeting as a new request."
+        ),
+        implemented=lambda rt: rt.setup_hooks,
+        claude=_ok(
+            "tests/unit/services/routing/test_onboarding.py",
+            "working-installation live check pending",
+        ),
+        codex=_ok(
+            "tests/unit/services/routing/test_onboarding.py",
+            "working-installation live check pending",
+        ),
+        opencode=_ok(
+            "tests/unit/services/routing/test_onboarding.py",
+            "working-installation live check pending",
+        ),
+        gemini=_gap(note="installer hook preparation is not implemented"),
+        deepcode=_gap(note="installer hook preparation is not implemented"),
+        aider=_gap(note="installer hook preparation is not implemented"),
+        shell=_na("a plain shell has no first-agent conversation"),
+    ),
+    _row(
         "runtime-discovery",
         "Read-only runtime discovery for setup",
         "services/runtimes/base.py Runtime.discovery; cli/setup.py cmd_runtimes",
