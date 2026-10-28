@@ -25,7 +25,7 @@ from agent_backbone.services.agents.acknowledgement import (
     rotate_action_log,
 )
 from agent_backbone.services.agents.audit import record_answer
-from agent_backbone.services.agents.credentials import agent_profile_readiness
+from agent_backbone.services.agents.credentials import agent_profile_readiness, profile_lock
 from agent_backbone.services.agents.instructions import instruction_preview
 from agent_backbone.services.agents.launch import (
     StartResult,
@@ -68,6 +68,7 @@ __all__ = [
     "listable_sessions",
     "note_submission",
     "plan_control",
+    "profile_lock",
     "prompt_id",
     "read_comment_receipts",
     "read_plan",
