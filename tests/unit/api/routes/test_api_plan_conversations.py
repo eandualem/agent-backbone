@@ -293,3 +293,121 @@ def test_cli_displays_plan_step_event(capsys):
     )
     out = capsys.readouterr().out
     assert "Verify the fix: done (now)" in out
+
+
+async def test_plan_reads_parse_only_a_bounded_page_of_revision_history(
+    api_app, api_client, auth_headers, deliver, monkeypatch
+):
+    import json
+
+    from sqlalchemy import insert
+
+    from agent_backbone.services.database.models import ConversationEntryORM
+
+    identity = (await discover(api_client, auth_headers))["author_id"]
+    body = publication(identity)
+    first = await publish(api_client, auth_headers, body)
+    old_ids = [uuid4().hex for _ in range(500)]
+    rows = [
+        {
+            "kind": "plan",
+            "artifact_id": identity,
+            "entry_kind": "revision",
+            "created_at": first["updated_at"],
+            "author_type": "agent",
+            "author_id": identity,
+            "author_name": "ike",
+            "resulting_revision_id": rid,
+            "detail": json.dumps(
+                {
+                    "revision_id": rid,
+                    "label": f"rev {rid}",
+                    "published_at": first["updated_at"],
+                    "plan_id": body["plan"]["plan_id"],
+                }
+            ),
+        }
+        for rid in old_ids + [first["revision_id"]]
+    ]
+    async with api_app.state.db.engine.begin() as conn:
+        await conn.execute(text("DELETE FROM conversation_entries"))
+        await conn.execute(insert(ConversationEntryORM.__table__), rows)
+    loads = json.loads
+    parsed = []
+
+    def counted(value, *args, **kwargs):
+        if isinstance(value, str) and '"published_at"' in value:
+            parsed.append(value)
+        return loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", counted)
+    path = f"/api/conversations/plan/{identity}"
+    page = (await api_client.get(path + "?limit=5", headers=auth_headers)).json()
+    assert len(page["entries"]) == 5
+    versions = (
+        await api_client.get(
+            f"/api/current-plans/{identity}/versions?limit=5", headers=auth_headers
+        )
+    ).json()
+    assert len(versions["items"]) == 5 and versions["has_more"]
+    old = await api_client.get(
+        f"/api/current-plans/{identity}/versions/{old_ids[0]}", headers=auth_headers
+    )
+    assert old.status_code == 410
+    reply = await api_client.post(
+        path + "/messages",
+        headers=AGENT,
+        json={
+            "request_id": "old-result",
+            "author": "ike",
+            "text": "That earlier update was mine.",
+            "resulting_revision_id": old_ids[0],
+        },
+    )
+    assert reply.status_code == 201, reply.text
+    # Amount decoded is bounded by the requested page/references, not 501 revisions per call.
+    assert len(parsed) < 30
+
+
+async def test_redelivered_plan_question_labels_its_observed_revision(
+    api_app, api_client, auth_headers, deliver
+):
+    db = api_app.state.db
+    identity = (await discover(api_client, auth_headers))["author_id"]
+    body = publication(identity)
+    first = await publish(api_client, auth_headers, body)
+    path = f"/api/conversations/plan/{identity}"
+    ask = {
+        "request_id": "old-question",
+        "text": "What remains?",
+        "anchor": {
+            "revision_id": first["revision_id"],
+            "item_id": body["plan"]["items"][0]["item_id"],
+        },
+    }
+    entry = (await api_client.post(path + "/messages", headers=auth_headers, json=ask)).json()[
+        "entry"
+    ]
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE message_queue SET status='expired' WHERE source='conversation'")
+        )
+    changed = deepcopy(body)
+    changed.update(request_id=uuid4().hex, base_revision_id=first["revision_id"])
+    changed["plan"]["title"] = "Later work"
+    changed["plan"]["items"][0]["status"] = "done"
+    await publish(api_client, auth_headers, changed)
+    sent = await api_client.post(
+        path + f"/messages/{entry['id']}/redeliver",
+        headers=auth_headers,
+        json={"request_id": "resend"},
+    )
+    assert sent.json()["result"] == "queued"
+    queued = await _queued(db, entry["id"])
+    assert f"(rev {first['revision_id']})" in queued["message"]
+    assert 'On "Current work"' in queued["message"]
+    assert '"status": "in_progress"' in queued["message"]
+    versions = (
+        await api_client.get(f"/api/current-plans/{identity}/versions", headers=auth_headers)
+    ).json()
+    assert all(v["label"] == f"rev {v['revision_id']}" for v in versions["items"])

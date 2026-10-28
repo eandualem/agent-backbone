@@ -6,6 +6,12 @@ completed items. The person reads it and sends questions or requests to change
 priorities. It is separate from runtime status, native plan-approval dialogs,
 progress reports and longer-lived spreadsheet trackers.
 
+Use a title of a few words and roughly three to seven steps, each two to five
+words. Keep `detail` empty or one short clause. Name a blocked step’s dependency
+briefly, such as “reviewer · review” or “you · scope decision”. Put explanations
+and evidence in a report or conversation, rather than expanding the checklist.
+These are authoring guidelines, not new schema limits.
+
 Refresh when work changes and daily when useful. Carry unfinished items and their
 IDs forward. Remove completed items when moving to new work; use a new plan ID for
 a new plan. Nothing clears at midnight, and Backbone does not choose, schedule,

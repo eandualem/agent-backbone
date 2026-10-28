@@ -20,7 +20,7 @@ from sqlalchemy import Text, and_, case, func, insert, not_, or_, select, text, 
 
 from agent_backbone.services.database._conversation_events import append_revision
 from agent_backbone.services.database._plan_conversations import artifact as plan_artifact
-from agent_backbone.services.database._plan_conversations import record_revision
+from agent_backbone.services.database._plan_conversations import record_revision, version_page
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._reports_repo import chain_ids, chain_roots
 from agent_backbone.services.database._time import cutoff_iso, format_iso, now_iso
@@ -104,10 +104,10 @@ def _title(value: str) -> str:
     return value if len(value) <= _TITLE_CHARACTERS else value[: _TITLE_CHARACTERS - 1] + "…"
 
 
-async def _artifact(conn, kind: str, artifact_id: str) -> dict:
+async def _artifact(conn, kind: str, artifact_id: str, revision_ids=()) -> dict:
     """Its title and versions (oldest first), each with its author."""
     if kind == "plan":
-        if plan := await plan_artifact(conn, artifact_id):
+        if plan := await plan_artifact(conn, artifact_id, revision_ids):
             return plan
         raise UnknownArtifact(f"No plan {artifact_id}.")
     if kind == "document":
@@ -676,7 +676,12 @@ class ConversationRepo(Repo):
                     .where(_P.c.author_id == artifact_id)
                     .values(revision_id=_P.c.revision_id)
                 )
-                artifact = await _artifact(conn, kind, artifact_id)
+                artifact = await _artifact(
+                    conn,
+                    kind,
+                    artifact_id,
+                    ((anchor or {}).get("revision_id"), resulting_revision_id),
+                )
             await _lock(conn, kind, artifact_id)
             previous = (
                 await conn.execute(
@@ -914,13 +919,17 @@ class ConversationRepo(Repo):
         """Versions newest first; exact content stays with each kind's own read."""
         async with self._tx() as conn:
             artifact = await _artifact(conn, kind, artifact_id)
-            names = await _names(conn, [v["author_id"] for v in artifact["versions"]])
-        versions = [
-            v | {"agent_name": names.get(v["author_id"])}
-            for v in reversed(artifact["versions"])
-            if before is None
-            or (v["sequence"] if kind == "plan" else int(v["revision_id"])) < before
-        ]
+            candidates = (
+                await version_page(conn, artifact, before, limit)
+                if kind == "plan"
+                else [
+                    v
+                    for v in reversed(artifact["versions"])
+                    if before is None or int(v["revision_id"]) < before
+                ]
+            )
+            names = await _names(conn, [v["author_id"] for v in candidates])
+        versions = [v | {"agent_name": names.get(v["author_id"])} for v in candidates]
         more = len(versions) > limit
         items = versions[:limit]
         return {

@@ -166,7 +166,7 @@ class CurrentPlanRepo(Repo):
 
     async def version(self, author_id, revision_id):
         async with self._tx() as conn:
-            artifact = await plan_artifact(conn, author_id)
+            artifact = await plan_artifact(conn, author_id, (revision_id,))
             if artifact is None:
                 raise CurrentPlanError(
                     "plan_not_found", "no observed plan for this registration", 404

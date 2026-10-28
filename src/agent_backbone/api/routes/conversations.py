@@ -116,7 +116,12 @@ def compose(entry: dict, artifact: dict) -> str:
         (v for v in artifact["versions"] if v["revision_id"] == anchor.get("revision_id")),
         artifact["latest"],
     )
-    where = ", ".join(part for part in (version["label"], anchor.get("label")) if part)
+    version_label = (
+        f"rev {anchor['revision_id']}"
+        if artifact["kind"] == "plan" and anchor.get("revision_id")
+        else version["label"]
+    )
+    where = ", ".join(part for part in (version_label, anchor.get("label")) if part)
     kind, artifact_id = artifact["kind"], artifact["artifact_id"]
     context = ""
     title = artifact["title"]
