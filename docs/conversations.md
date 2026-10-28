@@ -215,7 +215,8 @@ messages never count. `total` counts messages only.
 On PostgreSQL, a summary poll briefly holds shared locks on the conversation
 markers and entries while reading its page and watermark. It waits for existing
 writers, so a lower entry ID that commits after a higher one cannot disappear
-behind the returned cursor. Writes resume when the bounded poll completes.
+behind the returned cursor. Writes resume as soon as the page and watermark
+are captured, before the poll looks up artifact metadata and responsible agents.
 SQLite already serializes its writers. Response correction-chain roots are
 resolved in one query, including when earlier revisions have been pruned.
 An explicit recipient matches an existing registration ID first, then a name;

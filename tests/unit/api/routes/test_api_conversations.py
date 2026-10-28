@@ -464,3 +464,64 @@ async def test_summary_watermark_waits_for_lower_id_writer(db, monkeypatch):
     second = await db.conversations.summaries(since=(int(sequence), int(timestamp)))
     seen = {item["artifact_id"] for page in (first, second) for item in page["items"]}
     assert seen == {"slow", "fast"}
+
+
+async def test_summary_releases_writer_barrier_before_artifact_lookup(db, monkeypatch):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    from sqlalchemy import insert
+
+    from agent_backbone.services.database import _conversations_repo as conversations
+    from agent_backbone.services.database.models import ConversationEntryORM
+
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            insert(ConversationEntryORM).values(
+                kind="fixture",
+                artifact_id="thread",
+                entry_kind="message",
+                author_type="agent",
+                author_name="worker",
+                created_at="2026-10-28T00:00:00.000000Z",
+                text="reply",
+            )
+        )
+    transaction = db.conversations._tx
+    writer_blocked = False
+    looked_up = False
+
+    @asynccontextmanager
+    async def postgres_transaction():
+        nonlocal writer_blocked
+        async with transaction() as conn:
+
+            class Connection:
+                dialect = SimpleNamespace(name="postgresql")
+
+                def __getattr__(self, name):
+                    return getattr(conn, name)
+
+                async def execute(self, statement, *args, **kwargs):
+                    nonlocal writer_blocked
+                    if str(statement).startswith("LOCK TABLE "):
+                        writer_blocked = True
+                        return None
+                    return await conn.execute(statement, *args, **kwargs)
+
+            try:
+                yield Connection()
+            finally:
+                writer_blocked = False
+
+    async def lookup(conn, kind, artifact_id):
+        nonlocal looked_up
+        looked_up = True
+        assert not writer_blocked, "Artifact lookup must not delay conversation writers"
+        raise conversations.UnknownArtifact(artifact_id)
+
+    monkeypatch.setattr(db.conversations, "_tx", postgres_transaction)
+    monkeypatch.setattr(conversations, "_artifact", lookup)
+    result = await db.conversations.summaries()
+    assert looked_up
+    assert result["items"][0]["artifact_id"] == "thread"
