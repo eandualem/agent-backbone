@@ -23,6 +23,9 @@ from agent_backbone.services.database._plan_conversations import artifact as pla
 from agent_backbone.services.database._plan_conversations import record_revision, version_page
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._reports_repo import chain_ids, chain_roots
+from agent_backbone.services.database._sheet_conversations import artifact as sheet_artifact
+from agent_backbone.services.database._sheet_conversations import record_revision as sheet_revision
+from agent_backbone.services.database._sheet_conversations import validate_anchor as sheet_anchor
 from agent_backbone.services.database._time import cutoff_iso, format_iso, now_iso
 from agent_backbone.services.database.models import (
     AgentORM,
@@ -36,7 +39,9 @@ from agent_backbone.services.database.models import (
     ObservedSourceORM,
     ObservedVersionORM,
     ReportORM,
+    SheetORM,
 )
+from agent_backbone.sheets import SheetError
 
 _A = AgentORM.__table__
 _D = DocumentORM.__table__
@@ -48,9 +53,10 @@ _R = ReportORM.__table__
 _READ = ConversationReadORM.__table__
 _REDELIVERY = ConversationRedeliveryORM.__table__
 _S = ObservedSourceORM.__table__
+_SHEET = SheetORM.__table__
 _V = ObservedVersionORM.__table__
 
-KINDS = ("document", "response", "report", "skill", "policy", "plan")
+KINDS = ("document", "response", "report", "skill", "policy", "plan", "sheet")
 """Kinds with an adapter in this release."""
 OBSERVED = ("skill", "policy")
 """Kinds whose versions are snapshots Backbone takes when it reads their source."""
@@ -106,6 +112,10 @@ def _title(value: str) -> str:
 
 async def _artifact(conn, kind: str, artifact_id: str, revision_ids=()) -> dict:
     """Its title and versions (oldest first), each with its author."""
+    if kind == "sheet":
+        if sheet := await sheet_artifact(conn, artifact_id, revision_ids):
+            return sheet
+        raise UnknownArtifact(f"No sheet {artifact_id}.")
     if kind == "plan":
         if plan := await plan_artifact(conn, artifact_id, revision_ids):
             return plan
@@ -607,6 +617,12 @@ class ConversationRepo(Repo):
                     and_(_E.c.kind.in_(("response", "report")), _E.c.artifact_id.in_(authored)),
                     and_(_E.c.kind.in_(OBSERVED), _E.c.artifact_id.in_(maintained)),
                     and_(_E.c.kind == "plan", _E.c.artifact_id == agent_id),
+                    and_(
+                        _E.c.kind == "sheet",
+                        _E.c.artifact_id.in_(
+                            select(_SHEET.c.sheet_id).where(_SHEET.c.author_id == agent_id)
+                        ),
+                    ),
                 )
                 query = query.having(or_(func.sum(case((mine, 1), else_=0)) > 0, responsible))
             rows = (await conn.execute(query.order_by(last.desc()).limit(limit + 1))).all()
@@ -686,6 +702,19 @@ class ConversationRepo(Repo):
                     artifact_id,
                     ((anchor or {}).get("revision_id"), resulting_revision_id),
                 )
+            if kind == "sheet":
+                # As in Sheet publication: registration before workbook, then conversation.
+                await conn.execute(
+                    update(_SHEET)
+                    .where(_SHEET.c.sheet_id == artifact_id)
+                    .values(current_revision_id=_SHEET.c.current_revision_id)
+                )
+                artifact = await _artifact(
+                    conn,
+                    kind,
+                    artifact_id,
+                    ((anchor or {}).get("revision_id"), resulting_revision_id),
+                )
             await _lock(conn, kind, artifact_id)
             previous = (
                 await conn.execute(
@@ -718,6 +747,12 @@ class ConversationRepo(Repo):
                 anchor = _plan_anchor(artifact, anchor)
                 if artifact["current"] is not None:
                     await record_revision(conn, artifact["current"])
+            if kind == "sheet":
+                try:
+                    await sheet_anchor(conn, artifact, anchor)
+                except SheetError as exc:
+                    raise ConversationRefused(exc.status, exc.detail["code"], str(exc)) from None
+                await sheet_revision(conn, artifact_id, artifact["latest"]["revision_id"])
             if anchor and anchor.get("revision_id") not in (None, *versions):
                 raise ConversationRefused(
                     422, "invalid_revision", "The anchor names no version of this artifact."
@@ -727,6 +762,7 @@ class ConversationRepo(Repo):
                     select(func.count()).where(
                         _where(kind, artifact_id),
                         _E.c.author_type == "owner",
+                        _E.c.entry_kind == "message",
                         _E.c.created_at >= cutoff_iso(hours=1),
                     )
                 )

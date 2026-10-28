@@ -10,6 +10,7 @@ from uuid import uuid4
 from sqlalchemy import func, insert, select, text, update
 
 from agent_backbone.services.database._repo import Repo
+from agent_backbone.services.database._sheet_conversations import record_revision
 from agent_backbone.services.database._time import now_iso
 from agent_backbone.services.database.models import (
     AgentORM,
@@ -321,6 +322,9 @@ class SheetRepo(Repo):
             )
             if changed.rowcount != 1:
                 raise SheetError("stale_revision", "sheet changed during calculation", 409)
+            if parent:
+                await record_revision(conn, sheet_id, parent)
+            await record_revision(conn, sheet_id, revision_id)
             return {
                 "record": _metadata(await self._record(conn, sheet_id)),
                 "created": True,
