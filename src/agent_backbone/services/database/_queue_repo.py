@@ -620,6 +620,7 @@ class QueueRepo(Repo):
 
         Leased rows are not considered: ``expire_stale_leases`` returns them to
         ``pending`` long before this cutoff, so they expire on the next sweep.
+        Direct messages wait for delivery or inbox acknowledgment, regardless of age.
         Subscription batches never expire: they are facts, not conversation.
         Nor does a restart's continuation message (source ``agent-restart``):
         it belongs to the transition and waits for its replacement session.
@@ -650,7 +651,7 @@ class QueueRepo(Repo):
                          AND ((session_name IN :inbox
                                AND delivery_kind NOT IN ('direct_message', 'escalation'))
                          OR (session_name NOT IN :inbox
-                         AND delivery_kind != 'subscription'
+                         AND delivery_kind NOT IN ('subscription', 'direct_message')
                          AND source NOT IN ('agent-restart', 'queue-expiry', :brief)
                          AND session_name NOT IN (
                              SELECT session_name FROM message_queue WHERE status = 'uncertain')

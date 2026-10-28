@@ -27,10 +27,12 @@ Changing runtime without specifying a model clears the previous runtime's model.
 Starting from a directory reuses its registered name, even after a rename;
 if several agents share that directory, specify a name.
 
-Any agent may start other agents; you do not need a human for this.
+An agent credential may start an already registered peer with its saved settings.
+New registrations and start-time overrides require an operator credential.
+Use `agent restart` below to change your own runtime or model.
 
 `backbone fleet save --stop` saves every running agent with its current
-conversation and stops the idle ones; `backbone fleet resume` later starts each
+conversation and stops the idle ones; `backbone fleet resume` (operator credential required) later starts each
 on exactly that conversation and reports the agents it could not resume, with
 the reason (`backbone docs cli` has the outcomes).
 
@@ -123,6 +125,13 @@ backbone agent inspect $BACKBONE_AGENT                 # the transition's status
 - The wait is between the stop and the start; the stop itself is immediate.
 - `--resume` needs the same CLI; a cross-CLI resume is refused with the reason.
 - `--runtime` and `--model` are recorded on the agent, as with `agent start`.
+  A registration-bound collaboration credential may select them for its own
+  current registration; changing a peer requires an operator credential.
+  Older shared credentials retain their existing authority and cannot select
+  runtime/model, even when explicitly passing the saved value. The managed CLI
+  picks up its current private profile without restarting. If the profile is
+  unavailable, ask an operator to restore it; do not load the operator key.
+  Switching runtime clears the previous runtime’s unattended permission.
 - One open transition per agent; a second request is refused until it ends.
 - The result is `pending`, `completed` (with the launch's readiness and the
   message outcome) or `failed` with the reason. A session someone started by

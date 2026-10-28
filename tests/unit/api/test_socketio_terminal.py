@@ -73,3 +73,15 @@ class TestTerminalMalformedPayloads:
         ns.emit.assert_not_awaited()
         ns._attach_subscription_client.assert_not_awaited()
         assert ns._subscriptions == {}
+
+
+async def test_registration_credential_socket_connect_requires_current_registration(api_app):
+    from agent_backbone.config import agent_api_key
+
+    spec = next(iter(api_app.state.agent_store.agents))
+    ns = _namespace(api_app.state.config)
+    ns.server.fastapi_app = api_app
+    auth = {"api_key": agent_api_key(api_app.state.config.api_key, spec.registration_id)}
+    assert await ns.on_connect("sid1", {}, auth)
+    await api_app.state.db.agents.delete(spec.name)
+    assert not await ns.on_connect("sid2", {}, auth)

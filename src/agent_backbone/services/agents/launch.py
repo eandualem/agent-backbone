@@ -409,7 +409,7 @@ async def _start_agent(
     )
     from agent_backbone.config import agent_api_key
 
-    environment["BACKBONE_API_KEY"] = agent_api_key(config.api_key)
+    environment["BACKBONE_API_KEY"] = agent_api_key(config.api_key, spec.registration_id)
     # Runtimes may strip *KEY*, *TOKEN* and *SECRET* from tool environments.
     # This alias carries only the collaboration credential through that filter.
     environment["BACKBONE_AGENT_CREDENTIAL"] = environment["BACKBONE_API_KEY"]

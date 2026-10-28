@@ -257,7 +257,7 @@ class TestDeliveryRetryQueueDrain:
         assert {row["outcome"] for row in receipts} == {"offline", "delivered"}
         assert {row["operation_id"] for row in receipts} == {receipt.operation_id}
 
-    async def test_offline_drain_still_expires_ordinary_messages(self, db, tmp_path):
+    async def test_offline_drain_still_expires_notifications(self, db, tmp_path):
         from sqlalchemy import text
 
         config = make_config(
@@ -265,7 +265,7 @@ class TestDeliveryRetryQueueDrain:
         )
         await register_config_agents(db, config)
         queued = await db.queue.enqueue(
-            session_name="app", message="ordinary message", delivery_kind="direct_message"
+            session_name="app", message="ordinary notification", delivery_kind="comment"
         )
         async with db.queue._tx() as conn:
             await conn.execute(
@@ -416,7 +416,7 @@ class TestDeliveryRetryQueueDrain:
         await db.queue.enqueue(
             session_name="ike",
             message="[via:backbone from:leo] are you there?",
-            delivery_kind="direct_message",
+            delivery_kind="comment",
             source="backbone",
         )
         async with db.queue._tx() as conn:  # age the row past the expiry
@@ -425,7 +425,7 @@ class TestDeliveryRetryQueueDrain:
             )
         expired = await db.queue.expire_pending(max_age_minutes=30)
         assert len(expired) == 1 and expired[0]["session_name"] == "ike"
-        rows = await db.deliveries.query(session_name="ike", limit=5, kind="direct_message")
+        rows = await db.deliveries.query(session_name="ike", limit=5, kind="comment")
         assert rows and rows[0]["outcome"] == "expired"
         assert rows[0]["preview"].startswith("[via:backbone from:leo]")
         assert await db.queue.pending_count("ike") == 0
@@ -444,7 +444,7 @@ class TestDeliveryRetryQueueDrain:
             await db.queue.enqueue(
                 session_name=row["session_name"],
                 message=row["message"],
-                delivery_kind="direct_message",
+                delivery_kind="comment",
                 sender=row.get("sender", ""),
                 source=row.get("source", ""),
                 source_key=uuid.uuid4().hex,
@@ -502,7 +502,7 @@ class TestDeliveryRetryQueueDrain:
             target_entity="ike",
             session_name="ike",
             outcome="unattended_copy_mode",
-            kind="direct_message",
+            kind="comment",
         )
         await self._expire(
             db,
@@ -523,7 +523,7 @@ class TestDeliveryRetryQueueDrain:
                 target_entity="ike",
                 session_name="ike",
                 outcome=outcome,
-                kind="direct_message",
+                kind="comment",
             )
         await self._expire(
             db,
@@ -541,7 +541,7 @@ class TestDeliveryRetryQueueDrain:
                 target_entity="ike",
                 session_name="ike",
                 outcome=outcome,
-                kind="direct_message",
+                kind="comment",
                 source="backbone",
             )
         await self._expire(
@@ -579,7 +579,7 @@ class TestDeliveryRetryQueueDrain:
         from sqlalchemy import text
 
         await db.queue.enqueue(
-            session_name="ike", message="old", delivery_kind="direct_message", sender="leo"
+            session_name="ike", message="old", delivery_kind="comment", sender="leo"
         )
         async with db.engine.begin() as conn:
             await conn.execute(
@@ -751,7 +751,7 @@ class TestDrainKeepsTheRowIdentity:
             "agent_backbone.services.routing._delivery.get_session_intelligence",
             AsyncMock(return_value=profile),
         ):
-            for minutes in (3, 4, 5):
+            for minutes in (31, 60, 180):
                 async with db.engine.begin() as conn:
                     await conn.execute(
                         text("UPDATE message_queue SET enqueued_at = :t"),
@@ -774,7 +774,7 @@ class TestDrainKeepsTheRowIdentity:
             await drain_message_queue(config, db, None, active_sessions={"ike"})
             await drain_message_queue(config, db, None, active_sessions={"ike"})
         send.assert_awaited_once()
-        assert "(queued 5 min ago)" in send.await_args.args[1]
+        assert "(queued 3 h ago)" in send.await_args.args[1]
 
     async def test_concurrent_drains_do_not_pass_a_blocked_batch(self, config, db):
         import asyncio

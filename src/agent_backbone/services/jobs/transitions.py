@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -65,6 +66,22 @@ async def run_transitions(
 
 
 async def _advance(config: BackboneConfig, store: AgentStore, db: BackboneDB, row: dict) -> str:
+    name = row["agent_name"]
+    if row.get("registration_id"):
+        async with lifecycle_lock(name):
+            if not await db.agents.registration_matches(name, row["registration_id"]):
+                await db.transitions.finish(
+                    row["id"], "failed", {"reason": "agent registration changed"}
+                )
+                return "failed"
+            await store.refresh()
+            return await _advance_current(replace(config, agents=store.agents), store, db, row)
+    return await _advance_current(config, store, db, row)
+
+
+async def _advance_current(
+    config: BackboneConfig, store: AgentStore, db: BackboneDB, row: dict
+) -> str:
     name = row["agent_name"]
     spec = config.agents.get(name)
     if spec is None:

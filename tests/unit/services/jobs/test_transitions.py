@@ -638,3 +638,23 @@ async def test_an_unexpected_error_fails_the_row_and_continues(db, config, store
         "reason": "unexpected error: RuntimeError"
     }
     assert (await db.transitions.get(second["id"]))["status"] == "completed"
+
+
+@pytest.mark.parametrize("already_stopped", [False, True])
+async def test_registration_bound_restart_never_reaches_replacement(
+    db, config, store, seams, already_stopped
+):
+    stop, start, deliver = seams
+    spec = store.agents.get("ike")
+    row = await db.transitions.create(
+        agent_name="ike", registration_id=spec.registration_id, runtime="codex"
+    )
+    if already_stopped:
+        await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.agents.delete("ike")
+    await store.register(replace(spec, registration_id=""))
+    assert await _run(config, store, db) == {"ike": "failed"}
+    assert (await db.transitions.get(row["id"]))["result"]["reason"] == "agent registration changed"
+    stop.assert_not_awaited()
+    start.assert_not_awaited()
+    deliver.assert_not_awaited()

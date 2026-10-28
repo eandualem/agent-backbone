@@ -8,6 +8,9 @@ directory your CLI reads (`.claude/skills` for Claude Code, `.agents/skills`
 for Codex, Gemini and OpenCode). You never copy a skill; you use it through
 the link.
 
+**Shared skill changes require an operator credential.** Agents can prepare a
+local draft and hand it to the operator for `skills add` or `skills tag`.
+
 **The store is written only through the backbone.** Its directory is outside
 your repository on purpose, and a sandbox that refuses a write through a link
 is enforcing that design, not blocking you. `backbone skills add` and

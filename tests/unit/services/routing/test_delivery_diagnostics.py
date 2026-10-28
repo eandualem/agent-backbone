@@ -161,9 +161,7 @@ async def test_delivery_exceptions_leave_evidence_without_claiming_submission(
 
 @pytest.mark.parametrize("legacy", [False, True])
 async def test_expiry_is_correlated_and_never_a_submission(config, db, legacy):
-    queued = await db.queue.enqueue(
-        session_name="ike", message=_SECRET, delivery_kind="direct_message"
-    )
+    queued = await db.queue.enqueue(session_name="ike", message=_SECRET, delivery_kind="comment")
     async with db.queue._tx() as conn:
         await conn.execute(
             text("UPDATE message_queue SET enqueued_at = '2000-01-01T00:00:00+00:00'")
@@ -314,7 +312,7 @@ async def test_unidentified_receiver_keeps_notification_as_inbox_data(config, db
         )
     from agent_backbone.services.routing import queue_detail
 
-    detail = queue_detail(report, "ike", 30)
+    detail = queue_detail(report, "ike")
     assert "without automatic delivery or expiry" in detail
     assert "backbone inbox" in detail
     row = await queue_row(db, report.queue_id)

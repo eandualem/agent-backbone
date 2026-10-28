@@ -10,9 +10,17 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   agent can call the API if you give it the key.
 - **Separate operator and collaboration credentials.** The `.env`
   `BACKBONE_API_KEY` is the operator credential. New launches receive a derived
-  agent credential in that variable instead. It allows discovery, messages,
-  terminal reads and peer lifecycle using saved settings. Settings, new agent
-  registrations, runtime/model/directory/environment changes, tags, shared
+  registration-bound agent credential in that variable instead. It allows discovery, messages,
+  terminal reads and peer lifecycle using saved settings. It also allows runtime/model
+  selection through `agent restart` for its own current registration. This identity
+  is authenticated by the credential, not by a sender name or registration header.
+  The restart remains bound to that registration while waiting; replacing the
+  registration invalidates it. Changing runtime clears unattended permission.
+  Older shared collaboration credentials keep their previous authority and cannot
+  select runtime/model. Private profiles provide upgraded credentials to existing
+  managed CLI launches without a restart; no operator key is exposed.
+  Settings, new agent
+  registrations, other runtime/model changes, directory/environment changes, tags, shared
   skills and policies, owner enrollment and externally pushed state require
   the operator credential. Swarms may use stored runtime defaults; member
   runtime/model overrides, forgetting an agent and fleet snapshot restoration require the operator.

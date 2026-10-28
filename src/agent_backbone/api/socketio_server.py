@@ -19,7 +19,7 @@ from pathlib import Path
 
 import socketio
 
-from agent_backbone.api.auth import credential_role
+from agent_backbone.api.auth import credential_registration, credential_role
 from agent_backbone.api.session_updates import SESSIONS_NAMESPACE
 from agent_backbone.services.terminal import (
     PtyManager,
@@ -77,17 +77,24 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
         app = getattr(self.server, "fastapi_app", None)
         return getattr(getattr(app, "state", None), "config", None)
 
-    def _auth_valid(self, auth: dict | None) -> bool:
+    async def _auth_valid(self, auth: dict | None) -> bool:
         config = self._config()
         if config is None:
             return False
         if not config.api_key:
             return config.security.allow_unauthenticated
         raw = auth.get("api_key") if isinstance(auth, dict) else None
-        return credential_role(raw if isinstance(raw, str) else None, config.api_key) is not None
+        candidate = raw if isinstance(raw, str) else None
+        if credential_role(candidate, config.api_key) is None:
+            return False
+        if registration := credential_registration(candidate, config.api_key):
+            app = getattr(self.server, "fastapi_app", None)
+            db = getattr(getattr(app, "state", None), "db", None)
+            return bool(db and await db.agents.registration_name(registration))
+        return True
 
     async def on_connect(self, sid: str, environ: dict, auth: dict | None = None) -> bool:
-        if not self._auth_valid(auth):
+        if not await self._auth_valid(auth):
             log.warning(
                 "Socket.IO %s connection rejected — invalid auth (sid=%s)", self.namespace, sid
             )

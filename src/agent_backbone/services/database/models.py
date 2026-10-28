@@ -448,6 +448,8 @@ class AgentTransitionORM(Base):
 
     __tablename__ = "agent_transitions"
 
+    registration_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Target identity for registration-scoped requests; legacy requests remain unbound."""
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     agent_name: Mapped[str] = mapped_column(Text, nullable=False)
     requested_by: Mapped[str] = mapped_column(Text, nullable=False, server_default="")

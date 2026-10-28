@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 2dd30f70a078
+Revision ID: d767f363bf02
 Revises:
-Create Date: 2026-10-28 06:30:09.968509
+Create Date: 2026-10-28 07:54:30.732574
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "2dd30f70a078"
+revision: str = "d767f363bf02"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -77,6 +77,7 @@ def upgrade() -> None:
 
     op.create_table(
         "agent_transitions",
+        sa.Column("registration_id", sa.Text(), nullable=True),
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("agent_name", sa.Text(), nullable=False),
         sa.Column("requested_by", sa.Text(), server_default="", nullable=False),
@@ -322,7 +323,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_events")),
     )
     with op.batch_alter_table("events", schema=None) as batch_op:
-        # Autogenerate skips expression indexes: written by hand (#394).
+        # Autogenerate skips expression indexes.
         batch_op.create_index(
             "idx_events_delivery_id_lower", [sa.text("lower(delivery_id)")], unique=False
         )
