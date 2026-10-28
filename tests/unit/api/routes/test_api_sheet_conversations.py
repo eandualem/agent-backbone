@@ -344,3 +344,37 @@ async def test_first_message_records_only_current_pre_adapter_baseline(
     assert [e["kind"] for e in page["entries"]] == ["revision", "message"]
     assert page["entries"][0]["revision"]["revision_id"] == second["revision_id"]
     assert page["entries"][1]["anchor"]["revision_id"] == first["revision_id"]
+
+
+async def test_operator_revisions_do_not_use_owner_message_allowance(
+    api_app, api_client, auth_headers, deliver
+):
+    api_app.state.config.settings["conversations.owner_messages_per_hour"] = 1
+    body, first = await create(api_client, auth_headers)
+    second = await change(
+        api_client,
+        auth_headers,
+        first,
+        edit(first["revision_id"], [set_cell(body, "Operator update")], author=None),
+    )
+    path = f"/api/conversations/sheet/{first['sheet_id']}"
+    ask = {"request_id": "first-question", "text": "Explain the update"}
+    first_question = await api_client.post(path + "/messages", headers=auth_headers, json=ask)
+    assert first_question.status_code == 201, first_question.text
+    retry = await api_client.post(path + "/messages", headers=auth_headers, json=ask)
+    assert retry.status_code == 200
+    refused = await api_client.post(
+        path + "/messages", headers=auth_headers, json=ask | {"request_id": "second-question"}
+    )
+    assert refused.status_code == 429 and refused.json()["error"] == "rate_limited"
+    deliver.assert_awaited_once()
+    # Publishing stays available even when the owner's messaging allowance is exhausted.
+    await change(
+        api_client,
+        auth_headers,
+        second,
+        edit(second["revision_id"], [set_cell(body, "Another update")], author=None),
+    )
+    page = (await api_client.get(path, headers=auth_headers)).json()
+    assert [e["kind"] for e in page["entries"]] == ["revision", "revision", "message", "revision"]
+    assert page["entries"][-1]["author"]["type"] == "owner"

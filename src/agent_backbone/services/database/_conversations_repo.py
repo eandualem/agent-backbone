@@ -762,6 +762,7 @@ class ConversationRepo(Repo):
                     select(func.count()).where(
                         _where(kind, artifact_id),
                         _E.c.author_type == "owner",
+                        _E.c.entry_kind == "message",
                         _E.c.created_at >= cutoff_iso(hours=1),
                     )
                 )
