@@ -230,6 +230,8 @@ class Runtime:
     """Other spellings ``get_runtime`` accepts for this runtime."""
     binary: str | None = None
     """Command to launch; ``None`` starts the login shell instead."""
+    authentication: Literal["unknown", "not_applicable"] = "unknown"
+    """Discovery never probes account credentials or infers login from binary presence."""
     brief_mode: BriefMode = "message"
     """How the agent brief reaches the runtime at launch: appended to the
     system prompt or hook context, passed as the first (initial) prompt, delivered as the
@@ -439,6 +441,24 @@ class Runtime:
     def reports_state(self) -> str:
         """How the backbone learns this runtime's state (for ``backbone runtimes``)."""
         return "hooks + terminal" if self.hook_script else "terminal"
+
+    def discovery(self) -> dict:
+        """Read-only onboarding metadata; no process launch, login or model call."""
+        supported = self.unattended_args is not None
+        return {
+            "id": self.id,
+            "display_name": self.display_name,
+            "available": self.available(),
+            "reports_state": self.reports_state,
+            "models": list(self.models),
+            "efforts": list(self.efforts),
+            "unattended": {
+                "supported": supported,
+                "args": list(self.unattended_args or ()),
+                "sandboxed": self.sandboxed if supported else None,
+            },
+            "authentication": self.authentication,
+        }
 
     def hook_launch_args(
         self, data_dir: Path | str | None, state_dir: Path | str | None

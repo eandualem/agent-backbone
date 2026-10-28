@@ -97,6 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("runtimes", help="supported runtimes, whether installed, example model ids")
+    p.add_argument("--json", action="store_true", help="versioned runtime discovery for setup")
     p.set_defaults(func=cmd_runtimes)
 
     p = sub.add_parser("completion", help="enable Tab completion (see docs cli)")

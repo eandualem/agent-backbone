@@ -200,6 +200,20 @@ _RESPONSE_DELIVERY = (
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
+        "runtime-discovery",
+        "Read-only runtime discovery for setup",
+        "services/runtimes/base.py Runtime.discovery; cli/setup.py cmd_runtimes",
+        fallback="Binary presence is not login; use the runtime's visible sign-in flow.",
+        implemented=lambda rt: callable(rt.discovery),
+        claude=_ok("tests/unit/services/runtimes/test_discovery.py"),
+        codex=_ok("tests/unit/services/runtimes/test_discovery.py"),
+        opencode=_ok("tests/unit/services/runtimes/test_discovery.py"),
+        gemini=_ok("tests/unit/services/runtimes/test_discovery.py"),
+        deepcode=_ok("tests/unit/services/runtimes/test_discovery.py"),
+        aider=_ok("tests/unit/services/runtimes/test_discovery.py"),
+        shell=_ok("tests/unit/services/runtimes/test_discovery.py"),
+    ),
+    _row(
         "current-plan",
         "Current agent-authored checklists with conditional updates and contextual feedback",
         "src/agent_backbone/api/routes/current_plans.py",

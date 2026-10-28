@@ -269,6 +269,21 @@ Codex shows in its status line, Deep Code's two models). The list is a
 starting point for agents choosing a model for another agent or a swarm
 member; the runtime's own model picker is the authority.
 
+`backbone runtimes --json` returns one object with `schema_version: 1` and
+an `items` array containing every shipped runtime, including unavailable ones.
+Each item has `id`, `display_name`, `available`, `reports_state`, `models`,
+`efforts`, `unattended` and `authentication`. The model and effort fields are
+string arrays. `unattended` contains `supported`, the adapter's `args` array,
+and `sandboxed` (a boolean when supported, otherwise null). These describe
+launch options; discovery never selects unattended operation.
+
+`authentication` is `unknown` for agent CLIs and `not_applicable` for plain
+shells. Finding an executable does not prove account sign-in or capability
+coverage. Use the runtime's visible sign-in flow and the existing
+[capability contract](runtime-capabilities.md). Discovery does not launch a
+process, call a model, read account credentials or initialize an installation.
+Consumers accept additive response fields and check the major schema version.
+
 Each line also prints the reasoning-effort levels that runtime accepts —
 `low, medium, high, xhigh, max` for Claude Code, the same plus `ultra`
 for Codex, `low, high, max` for Deep Code, `-` for a CLI with no effort
