@@ -67,6 +67,8 @@ SENDER_ROUTES: tuple[SenderRoute, ...] = (
     SenderRoute("POST", "/api/sheets/import", "body", "author"),
     SenderRoute("POST", "/api/sheets/{sheet_id}/revisions", "body", "author"),
     SenderRoute("POST", "/api/sheets/{sheet_id}/feedback", "body", "author"),
+    SenderRoute("POST", "/api/current-plans", "body", "author"),
+    SenderRoute("POST", "/api/current-plans/{author_id}/feedback", "body", "author"),
     SenderRoute("POST", "/api/swarms", "body", "initiator"),
     SenderRoute("POST", "/api/agents/{session}/state", "path", "session"),
     SenderRoute("POST", "/api/skills", "body", "actor"),

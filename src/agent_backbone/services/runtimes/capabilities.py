@@ -196,6 +196,20 @@ _RESPONSE_DELIVERY = (
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
+        "current-plan",
+        "Current agent-authored checklists with conditional updates and contextual feedback",
+        "src/agent_backbone/api/routes/current_plans.py",
+        fallback="Keep the current checklist locally until the provider is available.",
+        implemented=lambda rt: True,
+        claude=_ok("tests/unit/api/routes/test_api_current_plans.py", _API_BOUNDARY),
+        codex=_ok("tests/unit/api/routes/test_api_current_plans.py", _API_BOUNDARY),
+        opencode=_ok("tests/unit/api/routes/test_api_current_plans.py", _API_BOUNDARY),
+        gemini=_ok("tests/unit/api/routes/test_api_current_plans.py", _API_BOUNDARY),
+        deepcode=_ok("tests/unit/api/routes/test_api_current_plans.py", _API_BOUNDARY),
+        aider=_ok("tests/unit/api/routes/test_api_current_plans.py", _API_BOUNDARY),
+        shell=_ok("tests/unit/api/routes/test_api_current_plans.py", _API_BOUNDARY),
+    ),
+    _row(
         "comment-receipts",
         "GitHub acknowledgements bound to registration and successful publication",
         "src/agent_backbone/hooks/backbone_state.py",

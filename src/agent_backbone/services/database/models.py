@@ -951,3 +951,27 @@ class SheetStorageORM(Base):
     __tablename__ = "sheet_storage"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     used_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class CurrentPlanORM(Base):
+    """Only the latest authored checklist for one stable agent registration."""
+
+    __tablename__ = "current_plans"
+    author_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    author_name: Mapped[str] = mapped_column(Text, nullable=False)
+    plan_id: Mapped[str] = mapped_column(Text, nullable=False)
+    revision_id: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class CurrentPlanRequestORM(Base):
+    """Bounded-lifetime retry metadata; never historical checklist content."""
+
+    __tablename__ = "current_plan_requests"
+    actor_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    request_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    request_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    receipt: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (Index("idx_current_plan_requests_created", "created_at"),)

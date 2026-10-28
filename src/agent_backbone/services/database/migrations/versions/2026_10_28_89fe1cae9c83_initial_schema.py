@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: d767f363bf02
+Revision ID: 89fe1cae9c83
 Revises:
-Create Date: 2026-10-28 07:54:30.732574
+Create Date: 2026-10-28 10:02:31.605360
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "d767f363bf02"
+revision: str = "89fe1cae9c83"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -194,6 +194,28 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint(
             "entry_id", "request_id", name=op.f("pk_conversation_redeliveries")
         ),
+    )
+    op.create_table(
+        "current_plan_requests",
+        sa.Column("actor_key", sa.Text(), nullable=False),
+        sa.Column("request_id", sa.Text(), nullable=False),
+        sa.Column("request_sha256", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("receipt", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("actor_key", "request_id", name=op.f("pk_current_plan_requests")),
+    )
+    with op.batch_alter_table("current_plan_requests", schema=None) as batch_op:
+        batch_op.create_index("idx_current_plan_requests_created", ["created_at"], unique=False)
+
+    op.create_table(
+        "current_plans",
+        sa.Column("author_id", sa.Text(), nullable=False),
+        sa.Column("author_name", sa.Text(), nullable=False),
+        sa.Column("plan_id", sa.Text(), nullable=False),
+        sa.Column("revision_id", sa.Text(), nullable=False),
+        sa.Column("updated_at", sa.Text(), nullable=False),
+        sa.Column("content", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("author_id", name=op.f("pk_current_plans")),
     )
     op.create_table(
         "deliveries",
@@ -940,6 +962,11 @@ def downgrade() -> None:
         batch_op.drop_index("idx_deliveries_created")
 
     op.drop_table("deliveries")
+    op.drop_table("current_plans")
+    with op.batch_alter_table("current_plan_requests", schema=None) as batch_op:
+        batch_op.drop_index("idx_current_plan_requests_created")
+
+    op.drop_table("current_plan_requests")
     op.drop_table("conversation_redeliveries")
     op.drop_table("conversation_reads")
     with op.batch_alter_table("conversation_entries", schema=None) as batch_op:

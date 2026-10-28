@@ -36,6 +36,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
             prune=AsyncMock(return_value=4), active_ids=AsyncMock(return_value=set())
         ),
         diagnostics=SimpleNamespace(prune=AsyncMock(return_value=6)),
+        current_plans=SimpleNamespace(prune=AsyncMock(return_value=11)),
         signing=SimpleNamespace(
             prune=AsyncMock(return_value=8), prune_receipts=AsyncMock(return_value=9)
         ),
@@ -65,6 +66,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
             "queue": 4,
             "context_receipts": 1,
             "diagnostics": 6,
+            "current_plans": 11,
             "signing_audit": 8,
             "signing_receipts": 9,
             "action_log_lines": 5,
@@ -74,6 +76,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
         app.state.db.events,
         app.state.db.queue,
         app.state.db.diagnostics,
+        app.state.db.current_plans,
         app.state.db.signing,
     ):
         repo.prune.assert_awaited_once_with(9)

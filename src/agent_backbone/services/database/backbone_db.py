@@ -15,6 +15,7 @@ import agent_backbone.services.database.models  # noqa: F401  (registers the ORM
 from agent_backbone.services.database._acks_repo import AcknowledgementRepo
 from agent_backbone.services.database._agents_repo import AgentRepo
 from agent_backbone.services.database._conversations_repo import ConversationRepo
+from agent_backbone.services.database._current_plans_repo import CurrentPlanRepo
 from agent_backbone.services.database._delivery_repo import DeliveryRepo
 from agent_backbone.services.database._dependencies_repo import DependencyRepo
 from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
@@ -229,6 +230,7 @@ class BackboneDB:
         self.documents = DocumentRepo(engine)
         self.conversations = ConversationRepo(engine)
         self.sheets = SheetRepo(engine)
+        self.current_plans = CurrentPlanRepo(engine)
         self.acks = AcknowledgementRepo(engine)
         self.dependencies = DependencyRepo(engine)
         self.diagnostics = DiagnosticRepo(engine)

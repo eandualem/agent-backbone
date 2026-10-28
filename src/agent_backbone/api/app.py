@@ -124,6 +124,7 @@ def _register_jobs(app: FastAPI):
             "context_receipts": await _prune_receipts(),
             "queue": await state.db.queue.prune(days),
             "diagnostics": await state.db.diagnostics.prune(days),
+            "current_plans": await state.db.current_plans.prune(days),
             "signing_audit": await state.db.signing.prune(days),
             "signing_receipts": receipts,
             "action_log_lines": await asyncio.to_thread(
@@ -432,6 +433,7 @@ def create_app(config: BackboneConfig | None = None):
     from agent_backbone.api.routes.agents import router as agents_router
     from agent_backbone.api.routes.config import router as config_router
     from agent_backbone.api.routes.conversations import router as conversations_router
+    from agent_backbone.api.routes.current_plans import router as current_plans_router
     from agent_backbone.api.routes.deliveries import router as deliveries_router
     from agent_backbone.api.routes.diagnostics import router as diagnostics_router
     from agent_backbone.api.routes.documents import router as documents_router
@@ -474,6 +476,7 @@ def create_app(config: BackboneConfig | None = None):
         documents_router,
         conversations_router,
         sheets_router,
+        current_plans_router,
         signing_router,
         skills_router,
         swarms_router,
