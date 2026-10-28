@@ -60,7 +60,10 @@ async def test_runtime_launch_children_leave_interpreter_uncached(
     brief.write_text("Test instructions")
     command = runtime.build_command(
         data_dir=tmp_path / "data", state_dir=tmp_path / "state", brief_file=brief
-    ) or ["/usr/bin/true"]
+    )
+    if command is None:
+        assert runtime_id == "shell", f"{runtime_id} returned no launch command"
+        command = ["/usr/bin/true"]
     monkeypatch.setattr(_sessions, "sys", SimpleNamespace(executable=child_python))
     monkeypatch.setattr(_sessions, "session_exists", AsyncMock(return_value=False))
     # tmux quoting is exercised by the smoke suite. Here capture the actual
