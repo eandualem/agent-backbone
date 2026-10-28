@@ -545,3 +545,13 @@ async def test_a_range_beyond_the_grid_does_not_block_a_move():
     await changed(
         base, [{"op": "move_rows", "tab_id": tab["tab_id"], "before_id": rows[4], "ids": [rows[5]]}]
     )
+
+
+async def test_worker_imports_are_isolated_from_callers_directory(tmp_path, monkeypatch):
+    (tmp_path / "pydantic.py").write_text("raise RuntimeError('unrelated caller module')\n")
+    monkeypatch.chdir(tmp_path)
+    result = await SheetCalculator().run(
+        {"action": "create", "workbook": tracker().workbook.model_dump()}
+    )
+    assert "snapshot" in result
+    assert not (tmp_path / "__pycache__").exists()

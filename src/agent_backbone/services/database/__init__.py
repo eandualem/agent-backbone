@@ -23,6 +23,7 @@ from agent_backbone.services.database._reports_repo import (
     ReportForbidden,
     ReportRateLimit,
 )
+from agent_backbone.services.database._setup_receipts import SetupReceipt, SetupReceiptError
 from agent_backbone.services.database._signing_repo import RECEIPT_RETENTION_DAYS
 from agent_backbone.services.database._time import format_iso, now_iso, parse_iso
 from agent_backbone.services.database.backbone_db import BackboneDB
@@ -44,6 +45,8 @@ __all__ = [
     "ReportConflict",
     "ReportForbidden",
     "ReportRateLimit",
+    "SetupReceipt",
+    "SetupReceiptError",
     "UnknownArtifact",
     "build_engine",
     "diagnostic_details",

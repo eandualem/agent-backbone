@@ -20,6 +20,7 @@ def test_discovery_never_treats_binary_presence_as_login(runtime, available):
         row = runtime.discovery()
     assert row["id"] == runtime.id
     assert row["available"] is available
+    assert row["setup_supported"] is (runtime.id in {"claude", "codex", "opencode"})
     assert row["authentication"] == ("not_applicable" if runtime.id == "shell" else "unknown")
     assert row["models"] == list(runtime.models)
     assert row["efforts"] == list(runtime.efforts)

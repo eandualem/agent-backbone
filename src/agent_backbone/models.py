@@ -6,6 +6,7 @@ import json
 import re
 import unicodedata
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -19,9 +20,89 @@ _FROM_TAG_PATTERN = re.compile(r"^\[from:([A-Za-z0-9][A-Za-z0-9_.-]*)\]")
 # not just to how much a UI happens to show.
 REPORT_BODY_BYTES = 16_384
 RESPONSE_BODY_BYTES = 65_536
+SETUP_BODY_BYTES = 32_768
 REPORT_TEXT_CHARACTERS = 1_500
 REPORT_LINKS = 6
 REPORTS_PER_HOUR = 30
+
+
+def _setup_path(value: str) -> str:
+    if not Path(value).is_absolute() or ".." in Path(value).parts:
+        raise ValueError("use an absolute path without parent traversal")
+    if any(unicodedata.category(c) in {"Cc", "Cs", "Zl", "Zp"} for c in value):
+        raise ValueError("path must not contain control characters")
+    return value
+
+
+SetupPath = Annotated[str, Field(min_length=1, max_length=4096), AfterValidator(_setup_path)]
+SetupRuntime = Annotated[str, Field(min_length=1, max_length=40, pattern=r"^[a-z][a-z0-9-]*$")]
+
+
+class SetupBase(BaseModel):
+    """Transient operator input, never a required file in an agent's repository."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    schema_version: Literal[1]
+    request_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+    data_dir: SetupPath
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def integer_version(cls, value):
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+
+class SetupInitialize(SetupBase):
+    action: Literal["initialize"]
+    service: Literal["user", "none"]
+    starter_profile: Literal["core-v1"]
+
+
+class SetupTemplateBrief(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    template: Literal["orchestrator-v1"]
+
+
+class SetupCustomBrief(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    text: str = Field(min_length=1, max_length=16_000)
+
+    @field_validator("text")
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("brief must contain text")
+        return value
+
+
+class SetupAgent(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    name: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    directory: SetupPath
+    create_directory: bool
+    runtime: SetupRuntime
+    model: str | None = Field(max_length=500)
+    brief: SetupTemplateBrief | SetupCustomBrief
+
+
+class SetupFirstAgent(SetupBase):
+    action: Literal["first_agent"]
+    hooks: list[SetupRuntime] = Field(min_length=1, max_length=7)
+    agent: SetupAgent
+    start_greeting: bool
+
+    @model_validator(mode="after")
+    def selected_hooks(self) -> SetupFirstAgent:
+        if len(set(self.hooks)) != len(self.hooks):
+            raise ValueError("hooks must contain unique runtime IDs")
+        if self.agent.runtime not in self.hooks:
+            raise ValueError("hooks must include the selected agent runtime")
+        return self
+
+
+SetupRequest = Annotated[SetupInitialize | SetupFirstAgent, Field(discriminator="action")]
 
 
 def report_error_details(errors: list[dict]) -> list[dict]:
@@ -676,3 +757,34 @@ class CurrentPlanFeedback(BaseModel):
         if len(set(value)) != len(value):
             raise ValueError("selected item IDs must be unique")
         return value
+
+
+class SetupResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    action: Literal["initialize", "first_agent", "validate"]
+    status: Literal["completed", "action_required", "failed"]
+    code: str = Field(min_length=1, max_length=100)
+    message: str = Field(max_length=2000)
+    data: dict
+    completed_steps: list[str] = Field(max_length=30)
+    retry: Literal["same_request", "new_request", "none"]
+
+
+def setup_result(
+    action, code, message, *, status="action_required", data=None, steps=(), retry=None
+):
+    return {
+        "action": action,
+        "status": status,
+        "code": code,
+        "message": message,
+        "data": data or {},
+        "completed_steps": list(steps),
+        "retry": retry
+        or {
+            "invalid_request": "new_request",
+            "request_conflict": "new_request",
+            "agent_conflict": "new_request",
+            "launch_failed": "none",
+        }.get(code, "same_request"),
+    }

@@ -205,3 +205,10 @@ Name the selected policies, show where to edit or remove them, and explain where
 the team will retain context. Report what the first collaboration produced and
 what remains untested. If it has not happened yet, leave it as the next step rather
 than claiming that running agents or installing policies demonstrates a working team.
+
+## Installer integration
+
+For a desktop installer, use `backbone setup --schema` and
+`backbone docs installer-setup`. The finite JSONL initialize and first-agent
+actions require an operator process and retain retry identities. They are
+optional; the interactive commands in this playbook remain available.

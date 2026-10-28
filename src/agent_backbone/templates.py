@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +42,28 @@ def bundled_dir(kind: str) -> Path:
     if (root / "pyproject.toml").is_file() and (root / kind).is_dir():
         return root / kind
     return Path(__file__).with_name("_resources") / kind
+
+
+def core_starter_content() -> tuple[dict, dict[Path, str]]:
+    """The opt-in fresh-install profile, with editable paths below its data dir."""
+    root = bundled_dir("templates")
+    profile = json.loads((root / "onboarding/core-v1.json").read_text())
+    files = {
+        Path("templates/policies") / f"{name}.md": (root / "policies" / f"{name}.md").read_text()
+        for name in profile["policies"]
+    }
+    files.update(
+        {
+            Path("skills") / name / "SKILL.md": (
+                root / "onboarding/skills" / name / "SKILL.md"
+            ).read_text()
+            for name in profile["skills"]
+        }
+    )
+    files[Path("templates/onboarding/orchestrator-v1.md")] = (
+        root / "onboarding/orchestrator-v1.md"
+    ).read_text()
+    return profile, files
 
 
 def render(text: str, facts: dict[str, str]) -> str:

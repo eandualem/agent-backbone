@@ -54,3 +54,5 @@ branch or tag you are viewing. Relative links keep you on that same revision.
 [Help](../help/) contains short playbooks agents request with `backbone help`.
 [Templates](../templates/) contains instructions injected at launch.
 [Media](media/) contains documentation illustrations and recordings.
+
+- [Installer setup](installer-setup.md) — finite operator initialization, first-agent creation and retry receipts.
