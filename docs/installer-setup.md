@@ -95,7 +95,7 @@ Use exactly one brief shape: `{"template":"orchestrator-v1"}` or
 `{"text":"Your custom instructions"}` (up to 16,000 characters). The model field
 is required and nullable. Hooks must contain unique canonical runtime IDs and
 include the selected runtime. Claude Code, Codex and OpenCode support this action;
-other adapters report an unavailable installer path with their normal agent-start
+OpenCode must be version 2.1.4 or newer before registration. Other adapters report an unavailable installer path with their normal agent-start
 flow as fallback. See the generated [capability contract](runtime-capabilities.md).
 
 The running service executes first-agent setup through operator-only
@@ -141,16 +141,20 @@ agent start after inspection. Replay never restarts it.
 Result codes include `initialized`, `existing_preserved`, `agent_ready`,
 `validated`, `invalid_request`, `operator_required`, `installation_conflict`,
 `starter_conflict`, `agent_conflict`, `runtime_missing`, `runtime_permission`,
-`service_unavailable`, `launch_failed`, `launch_timeout`, `outcome_unknown` and
-`request_conflict`. `retry` is `same_request`, `new_request` or `none`.
+`service_unavailable`, `launch_failed`, `launch_timeout`, `outcome_unknown`,
+`request_conflict` and `filesystem_unsupported`. `retry` is `same_request`, `new_request` or `none`.
 
 Private receipts under `setup-receipts` bind each request ID to its full input
 fingerprint. A changed request with the same ID conflicts. One nonblocking lock
 serializes setup against setup; concurrent invocation returns an action
 requirement. Atomic receipts record ownership before effects; complete files are published
-without overwriting existing paths and retain actual
+without overwriting existing paths. The data directory filesystem must support
+hard links; setup reports `filesystem_unsupported` rather than using a partial or
+overwriting fallback. Abandoned temporary receipt files are removed under the
+exclusive setup lock; accepted request identities are retained. Receipts retain actual
 registration, launch-operation, launch and greeting-delivery identities. A partial
-setup resumes only its own verified files. If registration or a send was interrupted
+setup resumes only its own verified files and local database, even if the invoking
+environment changes between retries. If registration or a send was interrupted
 without enough evidence, setup reports uncertainty and does not blindly repeat it.
 
 Accepted IDs are retained indefinitely, with a limit of 1,024 receipts and 65,536
@@ -179,3 +183,6 @@ not write `active.json`. Verify the payload at its final path before initializat
 then atomically activate only after successful fresh initialization. Preserve the
 previous payload/activation for rollback and keep existing installations' CLI,
 service and configuration. Removing the app must not delete engine or user data.
+
+The spreadsheet subprocess uses isolated Python imports and disables bytecode
+writes, so native calculations cannot add cache files to a verified engine payload.

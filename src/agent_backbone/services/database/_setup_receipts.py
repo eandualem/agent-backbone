@@ -59,6 +59,9 @@ class SetupReceipt:
             if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
                 raise ValueError("not a private regular lock")
             fcntl.flock(self._lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            for temporary in self.directory.glob(".receipt-*"):
+                if stat.S_ISREG(temporary.lstat().st_mode):
+                    temporary.unlink()
             if self.path.exists() or self.path.is_symlink():
                 fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                 with os.fdopen(fd, "rb") as stream:

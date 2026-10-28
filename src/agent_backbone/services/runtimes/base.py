@@ -471,6 +471,10 @@ class Runtime:
     setup_hooks = False
     """Whether the finite installer can prepare isolated launch hooks."""
 
+    def setup_error(self) -> str | None:
+        """Return a deterministic installer preflight refusal, before registration."""
+        return None
+
     def prepare_setup_hooks(self, data_dir: Path, state_dir: Path) -> None:
         """Prepare only installation-owned hooks; never edit global CLI settings."""
         if not self.setup_hooks or not self.hook_launch_args(data_dir, state_dir):

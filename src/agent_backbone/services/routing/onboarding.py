@@ -6,12 +6,14 @@ unrelated agent, weakens runtime trust, or guesses that a lost send was unsent.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
 from agent_backbone.config import AgentSpec
-from agent_backbone.fs import atomic_create_text
+from agent_backbone.fs import AtomicCreateUnsupported, atomic_create_text
+from agent_backbone.git import detect_repo
 from agent_backbone.models import (
     SUCCESS_OUTCOMES,
     SetupFirstAgent,
@@ -31,6 +33,8 @@ from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.terminal import query_environment_var, session_exists
 from agent_backbone.skills import read_store, select_skills
 from agent_backbone.templates import core_starter_content, read_template
+
+log = logging.getLogger(__name__)
 
 GREETING = (
     "Introduce yourself briefly as my orchestration agent. Explain how you can help me "
@@ -108,7 +112,17 @@ async def first_agent(request: SetupFirstAgent, config, store, db):
                 return await _first(request, receipt, store, db)
     except SetupReceiptError as exc:
         return setup_result("first_agent", exc.code, str(exc))
-    except Exception:
+    except AtomicCreateUnsupported:
+        return setup_result(
+            "first_agent",
+            "filesystem_unsupported",
+            "Setup requires a filesystem with hard-link support; choose another data directory.",
+            retry="new_request",
+        )
+    except Exception as exc:
+        log.error(
+            "First-agent setup failed request=%s error=%s", request.request_id, type(exc).__name__
+        )
         return setup_result(
             "first_agent",
             "outcome_unknown",
@@ -124,6 +138,7 @@ async def _first(request, receipt, store, db):
         dir=request.agent.directory,
         runtime=request.agent.runtime,
         model=request.agent.model,
+        repo=await detect_repo(Path(request.agent.directory)),
     )
     if receipt.record.get("result", {}).get("status") == "completed":
         return await _completed_replay(receipt, config, store)
@@ -152,6 +167,11 @@ async def _first(request, receipt, store, db):
             "runtime_missing",
             "Install the selected runtime and make it available to this service.",
         )
+    if not any(
+        receipt.record.get(key)
+        for key in ("registration_id", "registration_pending", "launch_operation")
+    ) and (error := selected.setup_error()):
+        return _answer(receipt, "runtime_permission", error)
     path = spec.path
     if path.resolve() != path or (path.exists() and not path.is_dir()):
         return _answer(

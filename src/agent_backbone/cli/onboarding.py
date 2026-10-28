@@ -20,6 +20,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from agent_backbone.cli import _common, service
 from agent_backbone.config import agent_credential, bootstrap_config, sqlite_url
+from agent_backbone.fs import AtomicCreateUnsupported
 from agent_backbone.fs import atomic_create_text as _exclusive_file
 from agent_backbone.models import (
     SETUP_BODY_BYTES,
@@ -147,6 +148,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
         record = asyncio.run(_execute(request, output))
     except SetupReceiptError as exc:
         record = result(request.action, exc.code, str(exc))
+    except AtomicCreateUnsupported:
+        record = result(
+            request.action,
+            "filesystem_unsupported",
+            "Setup requires a filesystem with hard-link support; choose another data directory.",
+            retry="new_request",
+        )
     except _common.OperatorFileUnavailable:
         record = result(
             request.action,
@@ -354,6 +362,10 @@ async def _initialize(request: SetupInitialize, output):
                 )
             fresh = not existing
             receipt.save(fresh=fresh)
+        if fresh and boot.database_url != sqlite_url(data_dir):
+            raise SetupReceiptError(
+                "installation_conflict", "Fresh setup retries require their own local database."
+            )
         output.step("preflight", "completed")
         if "preflight" not in receipt.record["completed_steps"]:
             receipt.completed("preflight")
@@ -440,7 +452,8 @@ async def _initialize(request: SetupInitialize, output):
             receipt.save(database_started=True)
             config = bootstrap_config(data_dir)
             async with _common.Direct(config) as direct:
-                await direct.store.set_setting("backbone.port", config.backbone.port)
+                if "backbone.port" not in await direct.db.settings.all():
+                    await direct.store.set_setting("backbone.port", config.backbone.port)
             receipt.completed("data")
             output.step("data", "completed")
         if "starters" not in receipt.record["completed_steps"]:
@@ -473,7 +486,7 @@ async def _initialize(request: SetupInitialize, output):
             path, content = Path(definition["path"]), definition["content"]
             _owned_file(receipt, path, content)
             receipt.save(pending="service")
-            if not service.start_setup_service():
+            if not service.start_setup_service(data_dir):
                 return result(
                     "initialize",
                     "service_unavailable",

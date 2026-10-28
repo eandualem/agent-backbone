@@ -220,6 +220,14 @@ class OpenCode(Runtime):
             *command,
         ]
 
+    def setup_error(self) -> str | None:
+        version = self._version()
+        if not version or version < (2, 1, 4):
+            return (
+                "OpenCode setup requires @opencode/cli 2.1.4 or newer; update it before retrying."
+            )
+        return None
+
     def prepare_setup_hooks(self, data_dir: Path, state_dir: Path) -> None:
         try:
             plugin = hooks.install_hook_files(data_dir) / "opencode-v2"

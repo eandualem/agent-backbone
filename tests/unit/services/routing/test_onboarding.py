@@ -72,11 +72,13 @@ async def scenario(request, db, tmp_path, monkeypatch):
     async def snapshot(config, name):
         return StateSnapshot(state["state"], source="push", evidence=["private terminal text"])
 
+    monkeypatch.setattr(onboarding, "detect_repo", AsyncMock(return_value=""))
     monkeypatch.setattr(onboarding, "start_agent", AsyncMock(side_effect=launch))
     monkeypatch.setattr(onboarding, "session_exists", exists)
     monkeypatch.setattr(onboarding, "query_environment_var", environment)
     monkeypatch.setattr(onboarding, "agent_state", snapshot)
     monkeypatch.setattr(type(RUNTIMES[request.param]), "available", lambda self: True)
+    monkeypatch.setattr(type(RUNTIMES[request.param]), "installed_version", lambda self: "2.1.4")
     monkeypatch.setattr(
         onboarding,
         "safe_deliver",
@@ -280,5 +282,93 @@ async def test_interrupted_brief_publication_can_resume_before_registration(
     assert (await run(scenario, db))["code"] == "outcome_unknown"
     assert scenario[1].agents.get("guide") is None
     monkeypatch.setattr(onboarding, "atomic_create_text", publish)
+    assert (await run(scenario, db))["code"] == "agent_ready"
+    assert onboarding.start_agent.await_count == 1
+
+
+@pytest.mark.parametrize("outcome", ["delivered", "agent_working", "uncertain"])
+async def test_lost_greeting_response_recovers_real_saved_delivery(scenario, db, outcome):
+    saved = {}
+
+    async def accepted_then_interrupted(name, message, config, **kwargs):
+        operation = kwargs["operation_id"]
+        saved["id"] = await db.deliveries.record(
+            issue_number=None,
+            target_entity=name,
+            session_name=name,
+            outcome=outcome,
+            source="setup",
+            kind="direct",
+            operation_id=operation,
+        )
+        if outcome != "delivered":
+            await db.queue.enqueue(
+                session_name=name,
+                message=message,
+                target_entity=name,
+                delivery_kind="direct",
+                source="setup",
+                sender="setup",
+                source_key=operation,
+                operation_id=operation,
+                uncertain=outcome == "uncertain",
+            )
+        raise OSError("response lost after saved record")
+
+    onboarding.safe_deliver.side_effect = accepted_then_interrupted
+    assert (await run(scenario, db))["code"] == "outcome_unknown"
+    result = await run(scenario, db)
+    if outcome == "uncertain":
+        assert result["code"] == "outcome_unknown"
+        assert result["data"]["greeting_delivery_id"] is None
+    else:
+        assert result["code"] == "agent_ready"
+        assert result["data"]["greeting_delivery_id"] == saved["id"]
+    assert onboarding.safe_deliver.await_count == 1
+    assert onboarding.start_agent.await_count == 1
+
+
+async def test_first_agent_detects_checkout_repository(scenario, db):
+    onboarding.detect_repo.return_value = "acme/project"
+    assert (await run(scenario, db))["code"] == "agent_ready"
+    assert scenario[1].agents.get("guide").repo == "acme/project"
+
+
+async def test_runtime_preflight_refuses_before_registration(scenario, db, monkeypatch):
+    runtime = RUNTIMES[scenario[0].agent.runtime]
+    monkeypatch.setattr(type(runtime), "setup_error", lambda self: "Update the selected runtime.")
+    result = await run(scenario, db)
+    assert result["code"] == "runtime_permission"
+    assert not scenario[1].agents.get("guide")
+    assert not Path(scenario[0].agent.directory).exists()
+    onboarding.start_agent.assert_not_awaited()
+
+
+@pytest.mark.parametrize("version,refused", [(None, True), ("1.18.32", True), ("2.1.4", False)])
+def test_opencode_setup_version_gate(version, refused, monkeypatch):
+    runtime = RUNTIMES["opencode"]
+    monkeypatch.setattr(type(runtime), "installed_version", lambda self: version)
+    assert bool(runtime.setup_error()) is refused
+
+
+async def test_setup_failure_log_is_classified_without_exception_content(scenario, db, caplog):
+    onboarding.start_agent.side_effect = RuntimeError("private-credential-content")
+    assert (await run(scenario, db))["code"] == "outcome_unknown"
+    assert "RuntimeError" in caplog.text and "first-1" in caplog.text
+    assert "private-credential-content" not in caplog.text
+
+
+async def test_registered_retry_does_not_repeat_runtime_version_preflight(
+    scenario, db, monkeypatch
+):
+    scenario[2]["state"] = AgentState.WAITING_FOR_HUMAN
+    assert (await run(scenario, db))["code"] == "runtime_permission"
+    runtime = RUNTIMES[scenario[0].agent.runtime]
+
+    def unavailable(self):
+        raise AssertionError("version probe must not block an already registered launch")
+
+    monkeypatch.setattr(type(runtime), "setup_error", unavailable)
+    scenario[2]["state"] = AgentState.IDLE
     assert (await run(scenario, db))["code"] == "agent_ready"
     assert onboarding.start_agent.await_count == 1

@@ -35,6 +35,8 @@ class SheetCalculator:
             scratch = tempfile.TemporaryDirectory(prefix="backbone-sheet-worker-")
             process = await create_subprocess_exec(
                 sys.executable,
+                "-I" if sys.flags.isolated else "-P",
+                "-B",
                 "-m",
                 "agent_backbone.sheets._worker",
                 stdin=asyncio.subprocess.PIPE,

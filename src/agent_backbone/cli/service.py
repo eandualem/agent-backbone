@@ -214,13 +214,54 @@ def setup_service_state() -> str:
     return "running" if response.returncode == 0 and running else "installed"
 
 
-def start_setup_service() -> bool:
+def loaded_setup_service_owner() -> Path | None:
+    """Inspect the loaded unit, which may differ from its current definition file."""
+    mac = platform.system() == "Darwin"
+    command = (
+        ("launchctl", "print", f"{_gui_domain()}/{LABEL}")
+        if mac
+        else (
+            "systemctl",
+            "--user",
+            "show",
+            "agent-backbone.service",
+            "--property=Environment",
+            "--value",
+        )
+    )
+    try:
+        response = subprocess.run(command, capture_output=True, text=True, timeout=3, check=False)
+        if response.returncode:
+            return None
+        if mac:
+            values = [
+                line.partition("=>")[2].strip()
+                for line in response.stdout.splitlines()
+                if line.strip().startswith("BACKBONE_DATA_DIR =>")
+            ]
+        else:
+            values = [
+                item.partition("=")[2]
+                for item in shlex.split(response.stdout)
+                if item.startswith("BACKBONE_DATA_DIR=")
+            ]
+        if len(values) != 1 or not Path(values[0]).is_absolute():
+            return None
+        return Path(values[0]).resolve()
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
+def start_setup_service(data_dir: Path) -> bool:
     """Start a newly owned definition. Never boot out or replace a service."""
     path = setup_service_path()
     if path is None:
         return False
+    owner = loaded_setup_service_owner()
+    if owner is not None and owner != data_dir.resolve():
+        return False
     if setup_service_state() == "running":
-        return True
+        return owner == data_dir.resolve()
     commands = (
         [("launchctl", "bootstrap", _gui_domain(), str(path))]
         if platform.system() == "Darwin"

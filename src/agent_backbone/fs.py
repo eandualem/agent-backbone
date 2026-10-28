@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import stat
 import tempfile
@@ -49,6 +50,10 @@ def atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
+class AtomicCreateUnsupported(OSError):
+    """The destination cannot publish complete files without overwrites."""
+
+
 def atomic_create_text(path, text):
     """Publish complete bytes without overwriting a file that appeared meanwhile."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -58,7 +63,14 @@ def atomic_create_text(path, text):
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
-        os.link(temporary, path)
+        try:
+            os.link(temporary, path)
+        except OSError as exc:
+            if exc.errno in {errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV}:
+                raise AtomicCreateUnsupported(
+                    "Atomic no-overwrite publication is unavailable"
+                ) from exc
+            raise
         parent = os.open(path.parent, os.O_RDONLY)
         try:
             os.fsync(parent)

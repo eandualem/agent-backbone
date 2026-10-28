@@ -266,7 +266,8 @@ def test_service_start_never_stops_or_replaces_existing_session(tmp_path, monkey
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(service.subprocess, "run", execute)
-    assert service.start_setup_service()
+    monkeypatch.setattr(service, "loaded_setup_service_owner", lambda: None)
+    assert service.start_setup_service(tmp_path / "data")
     assert not any(
         word in {"bootout", "restart", "kickstart", "stop"} for call in calls for word in call
     )
@@ -514,3 +515,122 @@ async def test_explicit_external_database_still_uses_readonly_existing_flow(tmp_
     assert await onboarding._inspect_existing(boot) is boot
     reader.assert_awaited_once_with(data, strict=True, operator_file=True)
     assert list(data.iterdir()) == [data / ".env"]
+
+
+@pytest.mark.parametrize("finished", [False, True])
+def test_fresh_retry_never_follows_an_inherited_external_database(
+    tmp_path, capsys, offline, monkeypatch, finished
+):
+    body = payload(tmp_path)
+    real = onboarding._exclusive_file
+    if not finished:
+
+        def interrupted(path, text):
+            real(path, text)
+            raise OSError("interrupted after publication")
+
+        monkeypatch.setattr(onboarding, "_exclusive_file", interrupted)
+    assert invoke(tmp_path, capsys, body)[0] == (0 if finished else 3)
+    monkeypatch.setattr(onboarding, "_exclusive_file", real)
+    external = tmp_path / "unrelated.db"
+    external.write_bytes(b"unrelated existing bytes")
+    monkeypatch.setenv("BACKBONE_DATABASE_URL", "sqlite+aiosqlite:///" + str(external))
+    direct = Mock(side_effect=AssertionError("must not migrate external database"))
+    monkeypatch.setattr(onboarding._common, "Direct", direct)
+    code, result = invoke(tmp_path, capsys, body)
+    assert code == 3 and result["code"] == "installation_conflict"
+    assert external.read_bytes() == b"unrelated existing bytes"
+    direct.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "state,owner", [("running", "foreign"), ("installed", "foreign"), ("running", None)]
+)
+def test_loaded_foreign_or_unknown_running_service_is_never_started(
+    tmp_path, monkeypatch, state, owner
+):
+    monkeypatch.setattr(service, "setup_service_path", lambda: tmp_path / "service")
+    monkeypatch.setattr(service, "setup_service_state", lambda: state)
+    monkeypatch.setattr(
+        service, "loaded_setup_service_owner", lambda: tmp_path / owner if owner else None
+    )
+    command = Mock(side_effect=AssertionError("must not reload or replace foreign service"))
+    monkeypatch.setattr(service.subprocess, "run", command)
+    assert service.start_setup_service(tmp_path / "selected") is False
+    command.assert_not_called()
+
+
+@pytest.mark.parametrize("system", ["Darwin", "Linux"])
+def test_loaded_service_owner_comes_from_manager_not_definition(tmp_path, monkeypatch, system):
+    directory = tmp_path / "loaded data"
+    output = (
+        f" environment = {{\n  BACKBONE_DATA_DIR => {directory}\n }}"
+        if system == "Darwin"
+        else f'"BACKBONE_DATA_DIR={directory}" PATH=/usr/bin'
+    )
+    monkeypatch.setattr(service.platform, "system", lambda: system)
+    monkeypatch.setattr(
+        service.subprocess, "run", Mock(return_value=Mock(returncode=0, stdout=output))
+    )
+    assert service.loaded_setup_service_owner() == directory
+    monkeypatch.setattr(service, "setup_service_path", lambda: tmp_path / "new-definition")
+    monkeypatch.setattr(service, "setup_service_state", lambda: "running")
+    assert service.start_setup_service(directory) is True
+
+
+def test_data_retry_preserves_port_written_before_interruption(
+    tmp_path, capsys, offline, monkeypatch
+):
+    import sqlite3
+
+    body = payload(tmp_path)
+    original = SetupReceipt.completed
+
+    def interrupted(self, step):
+        if step == "data":
+            raise OSError("lost after database settings commit")
+        return original(self, step)
+
+    monkeypatch.setattr(SetupReceipt, "completed", interrupted)
+    assert invoke(tmp_path, capsys, body)[0] == 3
+    database = Path(body["data_dir"]) / "backbone.db"
+    with sqlite3.connect(database) as conn:
+        conn.execute("UPDATE settings SET value=? WHERE key='backbone.port'", ("49001",))
+    monkeypatch.setattr(SetupReceipt, "completed", original)
+    assert invoke(tmp_path, capsys, body)[0] == 0
+    with sqlite3.connect(database) as conn:
+        assert (
+            conn.execute("SELECT value FROM settings WHERE key='backbone.port'").fetchone()[0]
+            == "49001"
+        )
+
+
+def test_receipt_cleanup_runs_only_under_exclusive_lock(tmp_path):
+    body = payload(tmp_path)
+    data = Path(body["data_dir"])
+    with SetupReceipt(data, body):
+        temporary = data / "setup-receipts/.receipt-abandoned"
+        temporary.write_text("incomplete")
+        with pytest.raises(SetupReceiptError):
+            with SetupReceipt(data, body):
+                pass
+        assert temporary.exists()
+    with SetupReceipt(data, body) as receipt:
+        assert not temporary.exists()
+        assert receipt.path.exists()
+
+
+def test_unsupported_hardlinks_have_actionable_result_without_partial_file(
+    tmp_path, capsys, offline, monkeypatch
+):
+    import errno
+
+    from agent_backbone import fs
+
+    body = payload(tmp_path)
+    monkeypatch.setattr(fs.os, "link", Mock(side_effect=OSError(errno.ENOTSUP, "unsupported")))
+    code, result = invoke(tmp_path, capsys, body)
+    assert code == 3 and result["code"] == "filesystem_unsupported"
+    assert result["retry"] == "new_request"
+    assert not (Path(body["data_dir"]) / ".env").exists()
+    assert not list(Path(body["data_dir"]).glob(".setup-*"))
