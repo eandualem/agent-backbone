@@ -77,8 +77,40 @@ python3 -I -B tools/engine/build.py verify-notices /path/to/full-archive.tar.zst
 This verifies the entire archive hash, reads `python/PYTHON.json`, compares all
 14 retained notice files byte-for-byte, and checks the three recorded installed
 binary samples. The wheel notice inventory covers license texts provided by each
-wheel; a complete audit of bundled native third-party components is still a
-publication step. tmux provenance is the supplied hashed build receipt and notices.
+wheel. Additional native notices are retained in `licenses/native/`, with a
+hashed `native-notices.json` index. This index is bound to the exact Python
+archive and all 13 native wheel inputs; changing those inputs requires updating
+the source correspondence. The builder validates each retained notice and each
+component's byte range before taking its private tooling snapshot.
+
+The additional notices include libuv (including its incorporated tree and network
+code), llhttp, http-parser, Tk, Tcl Thread, Itcl, HACL* and CPython's incorporated
+component notices, including mimalloc. The Rust inventory retains all 295 registry
+packages in the four matching-version source locks for cryptography,
+pydantic-core, watchfiles and ironcalc. It records declared and selected licenses,
+including the additional Unicode terms where required, and retains all supplied
+license/notice texts. Missing crate notice files are taken from the upstream
+commit identified by that crate's `.cargo_vcs_info.json`; r-efi's notice is in
+its `AUTHORS` file.
+
+This is deliberately a conservative source inventory: build, development and
+other-target packages are included. It is **not** proof that an upstream wheel
+was built from that exact source archive, with those enabled features, or that
+every listed crate is linked. Exact compiled closure and upstream compiler /
+standard-library provenance remain unverified. These limits are also recorded
+in the payload metadata; `release_ready` remains false.
+
+Retain the cached upstream files named in `native-notices.json` to reproduce the
+source comparison offline:
+
+```sh
+python3 -I -B tools/engine/verify_native_sources.py /path/to/source-cache
+```
+
+This checks all 320 source files by hash, all 574 notice excerpts byte-for-byte,
+and every registry package/checksum against the four source Cargo locks. It
+does not download, execute source, resolve dependencies or compile anything.
+tmux provenance remains the supplied hashed build receipt and notices.
 
 `verify` checks internal consistency, not authenticity of an untrusted download.
 The installer must verify its trusted archive/manifest checksum and use the full

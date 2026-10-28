@@ -299,6 +299,17 @@ def notice_fixture(tmp_path, monkeypatch, *, missing=False):
         ],
     }
     engine.write_json(source / "python-notices.json", metadata)
+    native = {
+        "schema_version": 1,
+        "complete_compiled_component_attestation": False,
+        "target": "aarch64-apple-darwin",
+        "python_archive_sha256": "a" * 64,
+        "wheels": [],
+        "sources": [],
+        "components": [],
+        "files": [],
+    }
+    engine.write_json(source / "native-notices.json", native)
     monkeypatch.setattr(engine, "ROOT", source)
     return source, path, metadata
 
@@ -368,6 +379,8 @@ def test_notice_copy_checks_sources_and_component_paths(tmp_path, monkeypatch, c
     for name in ("LICENSES.txt", "BUILD.json"):
         (inputs / name).write_text(name)
     lock = {
+        "target": "aarch64-apple-darwin",
+        "runtime_wheels": [],
         "python": {"sha256": "a" * 64},
         "tmux": {n: {"filename": n} for n in ("LICENSES.txt", "BUILD.json")},
     }
@@ -435,6 +448,58 @@ def test_wrong_host_does_not_create_output(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="native Apple Silicon"):
         engine.build(tmp_path, "a" * 40, tmp_path, tmp_path / "output", {})
     assert not (tmp_path / "output").exists()
+
+
+def test_retained_native_notices_cover_pinned_native_wheels():
+    lock = json.loads(engine.LOCK.read_text())
+    files = engine.native_notice_material(lock)
+    metadata = json.loads(files["native-notices.json"])
+    components = {item["component"] for item in metadata["components"]}
+    assert {"libuv", "llhttp", "Tk", "Tcl Thread", "Itcl", "HACL*"} <= components
+    assert metadata["complete_compiled_component_attestation"] is False
+    assert {r["source_id"] for r in metadata["rust_roots"]} == {
+        "cryptography",
+        "pydantic-core",
+        "watchfiles",
+        "ironcalc",
+    }
+
+
+@pytest.mark.parametrize("change", ["wheel", "added", "target", "python"])
+def test_native_notice_inventory_cannot_follow_changed_binary_inputs(change):
+    lock = json.loads(engine.LOCK.read_text())
+    if change == "wheel":
+        next(w for w in lock["runtime_wheels"] if w["name"] == "uvloop")["sha256"] = "0" * 64
+    elif change == "added":
+        lock["runtime_wheels"].append({"name": "new-native", "filename": "new-native.so.whl"})
+    elif change == "target":
+        lock["target"] = "x86_64-apple-darwin"
+    else:
+        lock["python"]["sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="Native notice"):
+        engine.native_notice_material(lock)
+
+
+@pytest.mark.parametrize("change", ["bytes", "slice", "source", "attestation"])
+def test_native_notice_tampering_refused_before_snapshot(tmp_path, monkeypatch, change):
+    import shutil
+
+    metadata = json.loads((engine.ROOT / "native-notices.json").read_text())
+    (tmp_path / "notices").mkdir()
+    for item in metadata["files"]:
+        shutil.copyfile(engine.ROOT / "notices" / item["path"], tmp_path / "notices" / item["path"])
+    if change == "bytes":
+        (tmp_path / "notices" / metadata["files"][0]["path"]).write_bytes(b"changed")
+    elif change == "slice":
+        metadata["components"][0]["notice"]["offset"] += 1
+    elif change == "source":
+        metadata["components"][0]["source_id"] = "absent"
+    else:
+        metadata["complete_compiled_component_attestation"] = True
+    engine.write_json(tmp_path / "native-notices.json", metadata)
+    monkeypatch.setattr(engine, "ROOT", tmp_path)
+    with pytest.raises(ValueError):
+        engine.native_notice_material()
 
 
 def test_build_refuses_runtime_input_drift_from_source_lock(tmp_path):

@@ -411,6 +411,81 @@ print(json.dumps(rows))"""
     return sorted(rows, key=lambda row: row["name"].lower())
 
 
+def native_notice_material(lock=None):
+    """Validate source attribution and retained bytes before copying any notices.
+
+    This is a conservative source inventory, not a compiled dependency SBOM.
+    Binding it to exact inputs prevents silently reusing it after wheel upgrades.
+    """
+    metadata = (ROOT / "native-notices.json").read_bytes()
+    document = json.loads(metadata)
+    require(document["schema_version"] == 1, "Unsupported native notice schema")
+    require(
+        document["complete_compiled_component_attestation"] is False,
+        "Source inventory must not claim compiled component attestation",
+    )
+    if lock is not None:
+        require(
+            document["target"] == lock["target"]
+            and document["python_archive_sha256"] == lock["python"]["sha256"],
+            "Native notice target/Python input mismatch",
+        )
+        wheels = {item["name"]: item for item in lock["runtime_wheels"]}
+        require(
+            {item["name"] for item in document["wheels"]}
+            == {
+                item["name"]
+                for item in wheels.values()
+                if not item["filename"].endswith("-none-any.whl")
+            },
+            "Native notice wheel membership mismatch",
+        )
+        for item in document["wheels"]:
+            require(
+                item["name"] in wheels
+                and all(wheels[item["name"]].get(k) == v for k, v in item.items()),
+                "Native notice wheel input mismatch",
+            )
+    files = {"native-notices.json": metadata}
+    for item in document["files"]:
+        name = str(relative_path(item["path"]))
+        require(name == Path(name).name and name not in files, "Invalid native notice filename")
+        source = ROOT / "notices" / name
+        verify_input(source, item)
+        data = source.read_bytes()
+        require(
+            len(data) == item["bytes"] and hashlib.sha256(data).hexdigest() == item["sha256"],
+            "Native notice changed while reading",
+        )
+        files[name] = data
+    sources = {item["id"] for item in document["sources"]}
+    require(len(sources) == len(document["sources"]), "Duplicate native notice source")
+    for component in document["components"]:
+        require(component["source_id"] in sources, "Missing native notice source")
+        for notice in component.get("notices", [component.get("notice")]):
+            require(isinstance(notice, dict), "Missing native component notice")
+            require(
+                notice.get("source_id", component["source_id"]) in sources,
+                "Missing native notice source",
+            )
+            name, offset, size = notice["file"], notice["offset"], notice["bytes"]
+            require(
+                name in files
+                and name != "native-notices.json"
+                and type(offset) is int
+                and type(size) is int
+                and offset >= 0
+                and size > 0,
+                "Invalid native notice location",
+            )
+            data = files[name][offset : offset + size]
+            require(
+                len(data) == size and hashlib.sha256(data).hexdigest() == notice["sha256"],
+                "Native component notice mismatch",
+            )
+    return files
+
+
 def add_notices(payload, inputs, lock, python, env):
     upstream = json.loads((ROOT / "python-notices.json").read_text())
     require(
@@ -438,6 +513,10 @@ def add_notices(payload, inputs, lock, python, env):
     tmux_notices.mkdir()
     for name in ("LICENSES.txt", "BUILD.json"):
         shutil.copyfile(inputs / lock["tmux"][name]["filename"], tmux_notices / name)
+    native = payload / "licenses/native"
+    native.mkdir()
+    for name, data in native_notice_material(lock).items():
+        (native / name).write_bytes(data)
     write_json(
         payload / "engine-license-inventory.json",
         {
@@ -446,6 +525,11 @@ def add_notices(payload, inputs, lock, python, env):
             "python_notices": "licenses/python",
             "tmux_notices": "licenses/tmux",
             "upstream_python": upstream,
+            "native_components": {
+                "path": "licenses/native/native-notices.json",
+                "sha256": digest(native / "native-notices.json"),
+                "scope": "conservative source notices; not a compiled-component attestation",
+            },
         },
     )
 
@@ -875,6 +959,7 @@ def build(repository, commit, inputs, output, lock):
                 "input_lock_sha256": digest(LOCK),
                 "builder_sha256": digest(Path(__file__)),
                 "python_notice_metadata_sha256": digest(ROOT / "python-notices.json"),
+                "native_notice_metadata_sha256": digest(ROOT / "native-notices.json"),
                 "wheel": {
                     "filename": wheel.name,
                     "sha256": digest(wheel),
@@ -961,6 +1046,8 @@ def snapshot_builder(destination):
         data = source.read_bytes()
         require(hashlib.sha256(data).hexdigest() == item["sha256"], "Notice changed while copying")
         files["notices/" + name] = data
+    for name, data in native_notice_material().items():
+        files[name if name == "native-notices.json" else "notices/" + name] = data
     for name, data in files.items():
         target = destination / name
         target.parent.mkdir(parents=True, exist_ok=True)
