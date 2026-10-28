@@ -113,6 +113,10 @@ deliberately creating a new operation. Changing the key is not a safe automatic
 retry. Renaming the recipient preserves its registration-bound
 context and does not prevent an unchanged sender from retrying.
 
+For a retained discussion and agent replies, use the shared
+[plan conversation](conversations.md#current-plans), keyed by the same `author_id`.
+The feedback endpoint above remains available; it does not create a thread entry.
+
 ## API and retention
 
 All routes use the existing authenticated transport:
@@ -140,6 +144,9 @@ Malformed requests return bounded 422 details without echoing rejected content.
 Authentication and signing keep their existing error shapes.
 
 The provider retains only the current checklist, not lifetime completed plans.
+Conversation revision/step events retain metadata, and anchored messages retain
+only their selected context; they do not retain historical full checklists.
+Known replaced version content is explicitly reported as `version_not_retained`.
 Retry receipts contain hashes and IDs, not old plan snapshots. They follow
 `timing.delivery_retention_days` (30 days by default); retired current records
 are removed at normal pruning. Active plans remain until explicitly replaced,

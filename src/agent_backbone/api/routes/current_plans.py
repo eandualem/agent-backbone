@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from agent_backbone.api.auth import require_operator
 from agent_backbone.api.deps import get_config, get_db
 from agent_backbone.api.models import MessageResponse
+from agent_backbone.api.routes.conversations import versions
 from agent_backbone.api.routes.reports import _ReportRoute
 from agent_backbone.models import CURRENT_PLAN_BODY_BYTES, CurrentPlanFeedback, PublishCurrentPlan
 from agent_backbone.services.database import CurrentPlanError
@@ -68,6 +69,21 @@ async def listing(
 @router.get("/{author_id}", operation_id="get_current_plan")
 async def get(author_id: Identity, db=Depends(get_db)):
     return await db.current_plans.get(author_id)
+
+
+@router.get("/{author_id}/versions", operation_id="list_current_plan_versions")
+async def plan_versions(
+    author_id: Identity,
+    before: int | None = Query(default=None, ge=1, le=2**63 - 1),
+    limit: int = Query(default=50, ge=1, le=200),
+    db=Depends(get_db),
+):
+    return await versions(db, "plan", author_id, before, limit)
+
+
+@router.get("/{author_id}/versions/{revision_id}", operation_id="get_current_plan_version")
+async def plan_version(author_id: Identity, revision_id: Identity, db=Depends(get_db)):
+    return await db.current_plans.version(author_id, revision_id)
 
 
 @router.post("/{author_id}/feedback", operation_id="current_plan_feedback")

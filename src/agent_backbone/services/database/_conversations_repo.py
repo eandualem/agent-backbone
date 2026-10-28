@@ -19,6 +19,8 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import Text, and_, case, func, insert, not_, or_, select, text, update
 
 from agent_backbone.services.database._conversation_events import append_revision
+from agent_backbone.services.database._plan_conversations import artifact as plan_artifact
+from agent_backbone.services.database._plan_conversations import record_revision
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._reports_repo import chain_ids, chain_roots
 from agent_backbone.services.database._time import cutoff_iso, format_iso, now_iso
@@ -27,6 +29,7 @@ from agent_backbone.services.database.models import (
     ConversationEntryORM,
     ConversationReadORM,
     ConversationRedeliveryORM,
+    CurrentPlanORM,
     DiagnosticORM,
     DocumentORM,
     MessageQueueORM,
@@ -39,6 +42,7 @@ _A = AgentORM.__table__
 _D = DocumentORM.__table__
 _DG = DiagnosticORM.__table__
 _E = ConversationEntryORM.__table__
+_P = CurrentPlanORM.__table__
 _Q = MessageQueueORM.__table__
 _R = ReportORM.__table__
 _READ = ConversationReadORM.__table__
@@ -46,7 +50,7 @@ _REDELIVERY = ConversationRedeliveryORM.__table__
 _S = ObservedSourceORM.__table__
 _V = ObservedVersionORM.__table__
 
-KINDS = ("document", "response", "report", "skill", "policy")
+KINDS = ("document", "response", "report", "skill", "policy", "plan")
 """Kinds with an adapter in this release."""
 OBSERVED = ("skill", "policy")
 """Kinds whose versions are snapshots Backbone takes when it reads their source."""
@@ -102,6 +106,10 @@ def _title(value: str) -> str:
 
 async def _artifact(conn, kind: str, artifact_id: str) -> dict:
     """Its title and versions (oldest first), each with its author."""
+    if kind == "plan":
+        if plan := await plan_artifact(conn, artifact_id):
+            return plan
+        raise UnknownArtifact(f"No plan {artifact_id}.")
     if kind == "document":
         if not re.fullmatch(r"[0-9a-f]{32}", artifact_id):
             raise UnknownArtifact(f"No document {artifact_id}.")
@@ -155,6 +163,31 @@ async def _artifact(conn, kind: str, artifact_id: str) -> dict:
         "responsible_id": versions[-1]["author_id"],
         "responsible_name": versions[-1]["author_name"],
     }
+
+
+def _plan_anchor(artifact: dict, anchor: dict | None) -> dict | None:
+    """Capture just selected context while the checked current row is locked."""
+    if not anchor:
+        return None
+    if anchor.get("sheet") is not None:
+        raise ConversationRefused(422, "invalid_anchor", "A plan cannot have a Sheet anchor.")
+    current = artifact["current"]
+    if current is None or anchor.get("revision_id") not in (None, current["revision_id"]):
+        raise ConversationRefused(
+            409,
+            "stale_revision",
+            "This plan changed. Refresh and reselect the item before sending.",
+        )
+    plan = artifact["plan"]
+    context = {"plan_id": plan["plan_id"], "title": plan["title"]}
+    if item_id := anchor.get("item_id"):
+        item = next((i for i in plan["items"] if i["item_id"] == item_id), None)
+        if item is None:
+            raise ConversationRefused(
+                422, "invalid_anchor", "The item is not in the observed plan."
+            )
+        context["item"] = item
+    return anchor | {"revision_id": current["revision_id"], "context": context}
 
 
 async def _observed(conn, kind: str, artifact_id: str) -> dict:
@@ -569,6 +602,7 @@ class ConversationRepo(Repo):
                     and_(_E.c.kind == "document", _E.c.artifact_id.in_(documents)),
                     and_(_E.c.kind.in_(("response", "report")), _E.c.artifact_id.in_(authored)),
                     and_(_E.c.kind.in_(OBSERVED), _E.c.artifact_id.in_(maintained)),
+                    and_(_E.c.kind == "plan", _E.c.artifact_id == agent_id),
                 )
                 query = query.having(or_(func.sum(case((mine, 1), else_=0)) > 0, responsible))
             rows = (await conn.execute(query.order_by(last.desc()).limit(limit + 1))).all()
@@ -634,6 +668,15 @@ class ConversationRepo(Repo):
                     target = await self._recipient(conn, recipient, artifact)
                 except ConversationRefused as exc:
                     refused = exc
+            if kind == "plan":
+                # Serialize against replacement/pruning after registration locks,
+                # matching publication's registration -> current row order.
+                await conn.execute(
+                    update(_P)
+                    .where(_P.c.author_id == artifact_id)
+                    .values(revision_id=_P.c.revision_id)
+                )
+                artifact = await _artifact(conn, kind, artifact_id)
             await _lock(conn, kind, artifact_id)
             previous = (
                 await conn.execute(
@@ -662,6 +705,10 @@ class ConversationRepo(Repo):
                     f"This conversation has reached {limits.max_messages:,} messages.",
                 )
             versions = {v["revision_id"]: v for v in artifact["versions"]}
+            if kind == "plan":
+                anchor = _plan_anchor(artifact, anchor)
+                if artifact["current"] is not None:
+                    await record_revision(conn, artifact["current"])
             if anchor and anchor.get("revision_id") not in (None, *versions):
                 raise ConversationRefused(
                     422, "invalid_revision", "The anchor names no version of this artifact."
@@ -871,14 +918,19 @@ class ConversationRepo(Repo):
         versions = [
             v | {"agent_name": names.get(v["author_id"])}
             for v in reversed(artifact["versions"])
-            if before is None or int(v["revision_id"]) < before
+            if before is None
+            or (v["sequence"] if kind == "plan" else int(v["revision_id"])) < before
         ]
         more = len(versions) > limit
         items = versions[:limit]
         return {
             "items": items,
             "has_more": more,
-            "next_before_id": int(items[-1]["revision_id"]) if more else None,
+            "next_before_id": (
+                items[-1]["sequence"] if kind == "plan" else int(items[-1]["revision_id"])
+            )
+            if more
+            else None,
         }
 
     async def observe(
