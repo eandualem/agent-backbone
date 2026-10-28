@@ -660,6 +660,31 @@ async def test_registration_bound_restart_never_reaches_replacement(
     deliver.assert_not_awaited()
 
 
+@pytest.mark.parametrize("runtime", tuple(RUNTIMES))
+async def test_continuation_cannot_reach_registration_replaced_after_start(
+    db, config, store, seams, runtime
+):
+    _, start, deliver = seams
+    original = store.agents.get("ike")
+    row = await db.transitions.create(
+        agent_name="ike",
+        registration_id=original.registration_id,
+        runtime=runtime,
+        message="original continuation",
+    )
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+
+    async def replace_after_start(*args, **kwargs):
+        await db.agents.delete("ike")
+        await store.register(replace(original, registration_id=""))
+        return StartResult(ok=True, ready="ready")
+
+    start.side_effect = replace_after_start
+    assert await _run(config, store, db) == {"ike": "failed"}
+    deliver.assert_not_awaited()
+    assert (await db.transitions.get(row["id"]))["result"]["reason"] == "agent registration changed"
+
+
 @pytest.mark.parametrize("runtime", sorted(RUNTIMES))
 @pytest.mark.parametrize("already_stopped", [False, True])
 async def test_bound_restart_refuses_replacement_during_refresh(
@@ -703,6 +728,49 @@ async def test_bound_restart_refuses_replacement_during_refresh(
     replacement = store.agents.get("ike")
     assert replacement.registration_id != original.registration_id
     assert (replacement.runtime, replacement.model) == ("shell", "replacement-model")
+    stop.assert_not_awaited()
+    start.assert_not_awaited()
+    deliver.assert_not_awaited()
+    assert (await db.transitions.get(row["id"]))["result"]["reason"] == "agent registration changed"
+
+
+async def test_continuation_serializes_with_profile_writers(db, config, store, seams):
+    import fcntl
+
+    _, _, deliver = seams
+    row = await db.transitions.create(
+        agent_name="ike",
+        registration_id=store.agents.get("ike").registration_id,
+        message="continue",
+    )
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+
+    async def guarded_delivery(*args, **kwargs):
+        # An independent descriptor cannot acquire the replacement guard while
+        # the continuation is being pasted or stored for this registration.
+        with (config.data_dir / "agent-credentials" / ".lock").open("r+") as lock:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return DeliveryReport(outcome=DeliveryOutcome.DELIVERED)
+
+    deliver.side_effect = guarded_delivery
+    assert await _run(config, store, db) == {"ike": "started"}
+    deliver.assert_awaited_once()
+
+
+async def test_bound_stop_rechecks_after_waiting_for_profile_guard(db, config, store, seams):
+    stop, start, deliver = seams
+    original = store.agents.get("ike")
+    row = await db.transitions.create(agent_name="ike", registration_id=original.registration_id)
+
+    @asynccontextmanager
+    async def replacement_before_lock(data_dir):
+        await db.agents.delete("ike")
+        await store.register(replace(original, registration_id=""))
+        yield
+
+    with patch(f"{_JOB}.profile_lock", replacement_before_lock):
+        assert await _run(config, store, db) == {"ike": "failed"}
     stop.assert_not_awaited()
     start.assert_not_awaited()
     deliver.assert_not_awaited()

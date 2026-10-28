@@ -449,7 +449,9 @@ async def test_summary_watermark_waits_for_lower_id_writer(db, monkeypatch):
                     return getattr(conn, name)
 
                 async def execute(self, statement, *args, **kwargs):
-                    if str(statement).startswith("LOCK TABLE "):
+                    if str(statement) == (
+                        "LOCK TABLE conversation_reads, conversation_entries IN SHARE MODE"
+                    ):
                         await commit_pending()
                         return None
                     return await conn.execute(statement, *args, **kwargs)
@@ -504,7 +506,9 @@ async def test_summary_releases_writer_barrier_before_artifact_lookup(db, monkey
 
                 async def execute(self, statement, *args, **kwargs):
                     nonlocal writer_blocked
-                    if str(statement).startswith("LOCK TABLE "):
+                    if str(statement) == (
+                        "LOCK TABLE conversation_reads, conversation_entries IN SHARE MODE"
+                    ):
                         writer_blocked = True
                         return None
                     return await conn.execute(statement, *args, **kwargs)

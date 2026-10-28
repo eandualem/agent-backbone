@@ -188,19 +188,28 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         return "failed"
     if row["message"]:
         sender = row["requested_by"] or "backbone"
-        report = await safe_deliver(
-            name,
-            envelope(sender, row["message"]),
-            config,
-            db=db,
-            delivery_kind="direct_message",
-            source=SOURCE,
-            sender=sender,
-            # One identity per transition: what an earlier process delivered
-            # to this conversation before exiting is not delivered again.
-            operation_id=uuid.uuid5(uuid.NAMESPACE_URL, f"backbone:transition:{row['id']}").hex,
-            once=True,
-        )
+        # Registration replacement uses this same cross-process guard. Hold it
+        # through delivery/queueing so the continuation cannot change recipients.
+        async with profile_lock(config.data_dir):
+            if row.get("registration_id") and not await db.agents.registration_matches(
+                name, row["registration_id"]
+            ):
+                outcome["reason"] = "agent registration changed"
+                await db.transitions.finish(row["id"], "failed", outcome)
+                return "failed"
+            report = await safe_deliver(
+                name,
+                envelope(sender, row["message"]),
+                config,
+                db=db,
+                delivery_kind="direct_message",
+                source=SOURCE,
+                sender=sender,
+                # One identity per transition: what an earlier process delivered
+                # to this conversation before exiting is not delivered again.
+                operation_id=uuid.uuid5(uuid.NAMESPACE_URL, f"backbone:transition:{row['id']}").hex,
+                once=True,
+            )
         outcome["message"] = report.outcome.value
         if report.queue is not None:
             outcome["message_queue"] = report.queue
