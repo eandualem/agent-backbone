@@ -58,3 +58,33 @@ def test_discovery_works_with_an_invalid_inherited_credential(capsys, monkeypatc
         cli.main(["runtimes", "--json"])
     assert result.value.code == 0
     assert len(json.loads(capsys.readouterr().out)["items"]) == len(RUNTIMES)
+
+
+@pytest.mark.parametrize(
+    "runtime", [rt for rt in RUNTIMES.values() if rt.binary], ids=lambda rt: rt.id
+)
+def test_discovery_requires_executable_fallback(runtime, tmp_path, monkeypatch):
+    from agent_backbone.services.runtimes import base
+
+    monkeypatch.setattr(base, "_FALLBACK_DIRS", (tmp_path,))
+    monkeypatch.setattr(base.shutil, "which", lambda name: None)
+    candidate = tmp_path / runtime.binary
+    candidate.write_text("#!/bin/sh\nexit 0\n")
+    candidate.chmod(0o600)
+    assert runtime.discovery()["available"] is False
+    candidate.chmod(0o700)
+    assert runtime.discovery()["available"] is True
+
+
+def test_nonexecutable_fallback_does_not_hide_later_executable(tmp_path, monkeypatch):
+    from agent_backbone.services.runtimes import base
+
+    first, second = tmp_path / "first", tmp_path / "second"
+    for directory in (first, second):
+        directory.mkdir()
+        (directory / "tool").write_text("#!/bin/sh\nexit 0\n")
+    (first / "tool").chmod(0o600)
+    (second / "tool").chmod(0o700)
+    monkeypatch.setattr(base, "_FALLBACK_DIRS", (first, second))
+    monkeypatch.setattr(base.shutil, "which", lambda name: None)
+    assert base.resolve_command("tool") == str(second / "tool")

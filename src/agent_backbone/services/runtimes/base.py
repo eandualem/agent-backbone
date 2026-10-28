@@ -16,6 +16,7 @@ import codecs
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -118,7 +119,7 @@ def resolve_command(name: str) -> str | None:
         return path
     for directory in _FALLBACK_DIRS:
         candidate = directory / name
-        if candidate.is_file():
+        if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
     return None
 
