@@ -387,6 +387,8 @@ def create_app(config: BackboneConfig | None = None):
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
+            # Sheet exports report lost views and history in this header.
+            expose_headers=["X-Backbone-Sheet-Warnings"],
         )
 
     @app.exception_handler(httpx.HTTPError)
@@ -443,6 +445,7 @@ def create_app(config: BackboneConfig | None = None):
     from agent_backbone.api.routes.policies import router as policies_router
     from agent_backbone.api.routes.reports import router as reports_router
     from agent_backbone.api.routes.responses import router as responses_router
+    from agent_backbone.api.routes.sheets import router as sheets_router
     from agent_backbone.api.routes.signing import router as signing_router
     from agent_backbone.api.routes.skills import router as skills_router
     from agent_backbone.api.routes.status import router as status_router
@@ -470,6 +473,7 @@ def create_app(config: BackboneConfig | None = None):
         responses_router,
         documents_router,
         conversations_router,
+        sheets_router,
         signing_router,
         skills_router,
         swarms_router,

@@ -33,6 +33,7 @@ dependencies = [
     "alembic>=1.13",
     "rich>=14.1",
     "cryptography>=44.0",
+    "ironcalc==0.9.1",
 ]
 
 [project.optional-dependencies]

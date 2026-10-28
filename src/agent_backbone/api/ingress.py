@@ -10,6 +10,7 @@ from starlette.responses import JSONResponse
 
 from agent_backbone.api.signed import MAX_BODY_BYTES, _read
 from agent_backbone.models import DOCUMENT_WIRE_BYTES
+from agent_backbone.sheets import SHEET_WIRE_BYTES
 
 
 class IngressMiddleware:
@@ -50,6 +51,8 @@ class IngressMiddleware:
         if prefix and path.startswith(prefix + "/"):
             path = path[len(prefix) :]
         limit = DOCUMENT_WIRE_BYTES if path.rstrip("/") == "/api/documents" else MAX_BODY_BYTES
+        if path.rstrip("/") in {"/api/sheets", "/api/sheets/import"}:
+            limit = SHEET_WIRE_BYTES
         try:
             declared = int(headers.get("content-length", "0"))
         except ValueError:

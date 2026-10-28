@@ -1,0 +1,248 @@
+{
+  "author": "example-agent",
+  "request_id": "ab30024344315a39bf23ad03e3081702",
+  "title": "Opportunity tracker",
+  "workbook": {
+    "tabs": [
+      {
+        "tab_id": "dd01fcfa08e254d49cdd3d91819966ed",
+        "name": "Opportunities",
+        "row_ids": [
+          "f07649606b1c53d489f4ff7f9f333993",
+          "754a529cad9b5ddcbf68287f2fc35f14",
+          "0d06e9b73b685348bfce7d5ebb6f3348",
+          "9cc15604e9a5535c8b07a143c088249b",
+          "db25767913e35de889ce4cfdbb5545c7"
+        ],
+        "column_ids": [
+          "d8739daf54455ee985e9fa172f1fad96",
+          "91bd155629085c8a8ea32b37068ecfdd",
+          "c7137ba4645457f1bd56198dc4c4939a",
+          "213aaa1a59955085a90ef0b438432177",
+          "d32e35fe926656e69661340fc438024b",
+          "0780d6cd56a4540c82177357e1545eb7"
+        ],
+        "cells": [
+          {
+            "row_id": "f07649606b1c53d489f4ff7f9f333993",
+            "column_id": "d8739daf54455ee985e9fa172f1fad96",
+            "input": {
+              "kind": "text",
+              "value": "Opportunity"
+            }
+          },
+          {
+            "row_id": "f07649606b1c53d489f4ff7f9f333993",
+            "column_id": "91bd155629085c8a8ea32b37068ecfdd",
+            "input": {
+              "kind": "text",
+              "value": "Stage"
+            }
+          },
+          {
+            "row_id": "f07649606b1c53d489f4ff7f9f333993",
+            "column_id": "c7137ba4645457f1bd56198dc4c4939a",
+            "input": {
+              "kind": "text",
+              "value": "Applied"
+            }
+          },
+          {
+            "row_id": "f07649606b1c53d489f4ff7f9f333993",
+            "column_id": "213aaa1a59955085a90ef0b438432177",
+            "input": {
+              "kind": "text",
+              "value": "Initial response"
+            }
+          },
+          {
+            "row_id": "f07649606b1c53d489f4ff7f9f333993",
+            "column_id": "d32e35fe926656e69661340fc438024b",
+            "input": {
+              "kind": "text",
+              "value": "Next action"
+            }
+          },
+          {
+            "row_id": "f07649606b1c53d489f4ff7f9f333993",
+            "column_id": "0780d6cd56a4540c82177357e1545eb7",
+            "input": {
+              "kind": "text",
+              "value": "Updated"
+            }
+          },
+          {
+            "row_id": "754a529cad9b5ddcbf68287f2fc35f14",
+            "column_id": "d8739daf54455ee985e9fa172f1fad96",
+            "input": {
+              "kind": "text",
+              "value": "Community demo"
+            }
+          },
+          {
+            "row_id": "754a529cad9b5ddcbf68287f2fc35f14",
+            "column_id": "91bd155629085c8a8ea32b37068ecfdd",
+            "input": {
+              "kind": "text",
+              "value": "Research"
+            }
+          },
+          {
+            "row_id": "754a529cad9b5ddcbf68287f2fc35f14",
+            "column_id": "c7137ba4645457f1bd56198dc4c4939a",
+            "input": {
+              "kind": "boolean",
+              "value": false
+            }
+          },
+          {
+            "row_id": "754a529cad9b5ddcbf68287f2fc35f14",
+            "column_id": "213aaa1a59955085a90ef0b438432177",
+            "input": {
+              "kind": "text",
+              "value": ""
+            }
+          },
+          {
+            "row_id": "754a529cad9b5ddcbf68287f2fc35f14",
+            "column_id": "d32e35fe926656e69661340fc438024b",
+            "input": {
+              "kind": "text",
+              "value": "Prepare a demo"
+            }
+          },
+          {
+            "row_id": "754a529cad9b5ddcbf68287f2fc35f14",
+            "column_id": "0780d6cd56a4540c82177357e1545eb7",
+            "input": {
+              "kind": "date",
+              "value": "2026-10-27"
+            }
+          },
+          {
+            "row_id": "0d06e9b73b685348bfce7d5ebb6f3348",
+            "column_id": "d8739daf54455ee985e9fa172f1fad96",
+            "input": {
+              "kind": "text",
+              "value": "Open tools program"
+            }
+          },
+          {
+            "row_id": "0d06e9b73b685348bfce7d5ebb6f3348",
+            "column_id": "91bd155629085c8a8ea32b37068ecfdd",
+            "input": {
+              "kind": "text",
+              "value": "Application"
+            }
+          },
+          {
+            "row_id": "0d06e9b73b685348bfce7d5ebb6f3348",
+            "column_id": "c7137ba4645457f1bd56198dc4c4939a",
+            "input": {
+              "kind": "boolean",
+              "value": true
+            }
+          },
+          {
+            "row_id": "0d06e9b73b685348bfce7d5ebb6f3348",
+            "column_id": "213aaa1a59955085a90ef0b438432177",
+            "input": {
+              "kind": "text",
+              "value": "Received"
+            }
+          },
+          {
+            "row_id": "0d06e9b73b685348bfce7d5ebb6f3348",
+            "column_id": "d32e35fe926656e69661340fc438024b",
+            "input": {
+              "kind": "text",
+              "value": "Review requirements"
+            }
+          },
+          {
+            "row_id": "0d06e9b73b685348bfce7d5ebb6f3348",
+            "column_id": "0780d6cd56a4540c82177357e1545eb7",
+            "input": {
+              "kind": "date",
+              "value": "2026-10-27"
+            }
+          },
+          {
+            "row_id": "9cc15604e9a5535c8b07a143c088249b",
+            "column_id": "d8739daf54455ee985e9fa172f1fad96",
+            "input": {
+              "kind": "text",
+              "value": "Partner workshop"
+            }
+          },
+          {
+            "row_id": "9cc15604e9a5535c8b07a143c088249b",
+            "column_id": "91bd155629085c8a8ea32b37068ecfdd",
+            "input": {
+              "kind": "text",
+              "value": "Conversation"
+            }
+          },
+          {
+            "row_id": "9cc15604e9a5535c8b07a143c088249b",
+            "column_id": "c7137ba4645457f1bd56198dc4c4939a",
+            "input": {
+              "kind": "boolean",
+              "value": false
+            }
+          },
+          {
+            "row_id": "9cc15604e9a5535c8b07a143c088249b",
+            "column_id": "213aaa1a59955085a90ef0b438432177",
+            "input": {
+              "kind": "text",
+              "value": "Interested"
+            }
+          },
+          {
+            "row_id": "9cc15604e9a5535c8b07a143c088249b",
+            "column_id": "d32e35fe926656e69661340fc438024b",
+            "input": {
+              "kind": "text",
+              "value": "Draft agenda"
+            }
+          },
+          {
+            "row_id": "9cc15604e9a5535c8b07a143c088249b",
+            "column_id": "0780d6cd56a4540c82177357e1545eb7",
+            "input": {
+              "kind": "date",
+              "value": "2026-10-27"
+            }
+          }
+        ],
+        "view": {
+          "header_row_id": "f07649606b1c53d489f4ff7f9f333993",
+          "sort": [],
+          "filters": []
+        }
+      },
+      {
+        "tab_id": "ae6e262b083c5562b8a279943bb70ec6",
+        "name": "Summary",
+        "row_ids": [
+          "bde28131369e5841bf0048120a879af7"
+        ],
+        "column_ids": [
+          "c2113bd00c3453579a189b0c6e978141"
+        ],
+        "cells": [
+          {
+            "row_id": "bde28131369e5841bf0048120a879af7",
+            "column_id": "c2113bd00c3453579a189b0c6e978141",
+            "input": {
+              "kind": "formula",
+              "value": "=COUNTIF(Opportunities!C2:C4,TRUE)"
+            },
+            "number_format": "0"
+          }
+        ]
+      }
+    ]
+  }
+}
