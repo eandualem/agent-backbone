@@ -447,8 +447,10 @@ def test_build_executes_snapshot_when_checkout_changes(tmp_path, monkeypatch, ca
 
 def test_wrong_host_does_not_create_output(tmp_path, monkeypatch):
     monkeypatch.setattr(engine.platform, "system", lambda: "Linux")
-    with pytest.raises(ValueError, match="native Apple Silicon"):
-        engine.build(tmp_path, "a" * 40, tmp_path, tmp_path / "output", {})
+    with pytest.raises(ValueError, match="matching native build host"):
+        engine.build(
+            tmp_path, "a" * 40, tmp_path, tmp_path / "output", {"target": "aarch64-apple-darwin"}
+        )
     assert not (tmp_path / "output").exists()
 
 
@@ -698,7 +700,7 @@ def test_archive_rejects_case_and_unicode_collisions(tmp_path, first, second):
         engine.extract_archive(path, tmp_path / "out")
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="native macOS builder publication")
+@pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="native atomic publication")
 @pytest.mark.parametrize("existing", ["directory", "symlink", "file"])
 def test_atomic_publication_preserves_existing_destination(tmp_path, existing):
     source = tmp_path / "source"
@@ -718,7 +720,7 @@ def test_atomic_publication_preserves_existing_destination(tmp_path, existing):
     assert (source / "contents").read_text() == "candidate"
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="native macOS builder publication")
+@pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="native atomic publication")
 def test_atomic_publication_moves_source_to_vacant_destination(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
@@ -837,3 +839,114 @@ def test_source_lock_requires_optional_runtime_dependency_closure(tmp_path, miss
         engine.validate_source_lock(
             tmp_path, {"runtime_wheels": [w for w in wheels if w["name"] != missing]}
         )
+
+
+@pytest.mark.parametrize("target", sorted(engine.TARGETS))
+def test_target_requires_native_host_and_complete_inputs(monkeypatch, target):
+    system, machine = engine.TARGETS[target]
+    monkeypatch.setattr(engine.platform, "system", lambda: system)
+    monkeypatch.setattr(engine.platform, "machine", lambda: machine)
+    lock = {"target": target, "prepared_only": True, "missing_inputs": ["native receipts"]}
+    with pytest.raises(ValueError, match="prepared only"):
+        engine.require_native_target(lock)
+    monkeypatch.setattr(engine.platform, "machine", lambda: "other")
+    with pytest.raises(ValueError, match="matching native"):
+        engine.require_native_target(lock)
+
+
+def test_prepared_locks_match_source_and_cannot_build(tmp_path):
+    for target in engine.TARGETS:
+        lock = json.loads((engine.ROOT / (target + ".json")).read_text())
+        engine.validate_source_lock(PATH.parents[2], lock)
+        if target == "aarch64-apple-darwin":
+            continue
+        assert lock["prepared_only"] is True
+        assert all(lock["tmux"][name] is None for name in ("binary", "BUILD.json", "LICENSES.txt"))
+        with pytest.raises(ValueError, match="prepared only"):
+            engine.validate_inputs(tmp_path, lock)
+        assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("architecture", ["x86_64", "aarch64"])
+@pytest.mark.parametrize("change", [None, "arch", "dependency", "rpath", "escape", "interpreter"])
+def test_elf_inspection_rejects_wrong_architecture_and_host_dependencies(
+    tmp_path, monkeypatch, architecture, change
+):
+    header = bytearray(20)
+    header[:6] = b"\x7fELF\x02\x01"
+    machine = {"x86_64": 62, "aarch64": 183}[architecture]
+    header[18:20] = (1 if change == "arch" else machine).to_bytes(2, "little")
+    for name in ["python/bin/python3", "libexec/tmux"]:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(header)
+    interpreter = {
+        "x86_64": "/lib64/ld-linux-x86-64.so.2",
+        "aarch64": "/lib/ld-linux-aarch64.so.1",
+    }[architecture]
+
+    def run(argv, **kwargs):
+        if "--dynamic" in argv:
+            needed = "libunshipped.so" if change == "dependency" else "libc.so.6"
+            result = f"(NEEDED) Shared library: [{needed}]\n"
+            if change in {"rpath", "escape"}:
+                path = "/opt/local/lib" if change == "rpath" else "$ORIGIN/../../../outside"
+                result += f"(RPATH) Library rpath: [{path}]\n"
+            return result
+        if "--program-headers" in argv:
+            value = "/wrong/loader" if change == "interpreter" else interpreter
+            return f"[Requesting program interpreter: {value}]"
+        return "Name: GLIBC_2.17\nName: GLIBCXX_3.4.19\n"
+
+    monkeypatch.setattr(engine, "run", run)
+    if change:
+        with pytest.raises(ValueError):
+            engine.inspect_native_payload(tmp_path, architecture + "-unknown-linux-gnu", {})
+    else:
+        report = engine.inspect_native_payload(tmp_path, architecture + "-unknown-linux-gnu", {})
+        assert len(report["binaries"]) == 2
+        assert report["actual_minimum_os_execution"] is False
+        assert report["binaries"][0]["symbol_version_requirements"] == [
+            "GLIBCXX_3.4.19",
+            "GLIBC_2.17",
+        ]
+
+
+@pytest.mark.parametrize("change", [None, "arch", "dependency", "rpath", "minimum"])
+def test_macho_inspection_distinguishes_install_name_from_dependency(tmp_path, monkeypatch, change):
+    for name in ["python/bin/python3", "libexec/tmux", "python/lib/extra.dylib"]:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\xcf\xfa\xed\xfe")
+
+    def run(argv, **kwargs):
+        path = argv[-1]
+        if "lipo" in str(argv[0]):
+            return "x86_64" if change == "arch" else "arm64"
+        if "-D" in argv:
+            return str(path) + ("\nextra.dylib\n" if path.name == "extra.dylib" else "\n")
+        if "-L" in argv:
+            prefix = (
+                "\textra.dylib (compatibility version 1.0)\n" if path.name == "extra.dylib" else ""
+            )
+            dependency = (
+                "/opt/homebrew/lib/libextra.dylib"
+                if change == "dependency"
+                else "/usr/lib/libSystem.B.dylib"
+            )
+            return str(path) + ":\n" + prefix + "\t" + dependency + " (compatibility version 1.0)\n"
+        if change == "minimum":
+            return ""
+        result = "    cmd LC_BUILD_VERSION\n    minos 11.0\n"
+        if change == "rpath":
+            result += "    cmd LC_RPATH\n    cmdsize 32\n    path /opt/local/lib (offset 12)\n"
+        return result
+
+    monkeypatch.setattr(engine, "run", run)
+    if change:
+        with pytest.raises(ValueError):
+            engine.inspect_native_payload(tmp_path, "aarch64-apple-darwin", {})
+    else:
+        report = engine.inspect_native_payload(tmp_path, "aarch64-apple-darwin", {})
+        assert len(report["binaries"]) == 3
+        assert all(b["dependencies"] == ["/usr/lib/libSystem.B.dylib"] for b in report["binaries"])

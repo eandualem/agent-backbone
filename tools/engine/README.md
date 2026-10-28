@@ -1,7 +1,10 @@
 # Portable engine builder
 
-This native Apple Silicon builder produces the immutable engine consumed by the
-combined application installer. It builds Backbone from an exact Git commit and
+This native builder produces the immutable engine consumed by the combined
+application installer. The complete current input lock is Apple Silicon macOS.
+Intel macOS and both glibc Linux architecture locks are **prepared only**: they
+cannot build until their missing native inputs and notice metadata are reviewed.
+It builds Backbone from an exact Git commit and
 uses pinned CPython, runtime wheels, build-backend wheels and tmux inputs. It never
 copies a development environment. Python 3.11+ and Git are build-host prerequisites.
 No dependency resolution or download happens during `build`.
@@ -63,6 +66,42 @@ acceptance against the exact candidate. A successful build sets
 `release_ready: false`: it does not establish minimum-OS, other-platform, real
 first-agent or publication acceptance. Other Mac/Linux targets need their own
 reviewed inputs and native verification; this lock does not claim their support.
+
+## Target preparation and native inspection
+
+`--target` selects a lock before the command, for example
+`python3 -I -B tools/engine/build.py --target x86_64-unknown-linux-gnu fetch --inputs /path/to/cache`.
+The three prepared locks pin all 44 runtime wheels, seven build wheels and the
+published CPython asset digest. A digest from the release API is not a local
+download or execution receipt. The locks retain null tmux binary/build/notice
+hashes and list the missing inputs; there is no placeholder hash or fallback to
+another target. `build` refuses a prepared lock before staging or execution.
+Fetching its public inputs does not change that status.
+
+Completing a target requires the native tmux binary, `BUILD.json` and notices;
+target-specific Python notice metadata and binary correspondence; and a native
+wheel source-notice reconciliation. Locks can name `python_notice_metadata` and
+`native_notice_metadata` files beside the builder. Their native inputs must be
+verified on a matching host before changing `prepared_only`. Native build-host
+architecture is checked, Rosetta translation is refused, and GNU targets require
+glibc. These requirements do not create or provision a runner.
+
+The builder checks every Mach-O or ELF binary and retains
+`engine-native-report.json` in the immutable inventory. Mach-O inspection records
+the selected architecture, minimum-OS load commands and dependency/search paths;
+ELF inspection checks class, byte order, architecture, interpreter, SONAMEs and
+payload-relative search paths, recording GLIBC/GLIBCXX/CXXABI requirements.
+tmux may use only system dependencies. Other binaries can resolve shipped
+dependencies through payload-relative loader paths. These are static checks,
+not execution on the minimum supported OS. The selected Linux wheel tags allow
+up to glibc 2.39; actual ABI requirements come from the produced binaries, and
+no Linux minimum is claimed from filenames alone.
+
+Linux output publication uses `renameat2(RENAME_NOREPLACE)` and fails if the host
+libc, kernel or filesystem does not support it. macOS retains
+`renamex_np(RENAME_EXCL)`. Neither path falls back to an overwrite-prone
+check followed by ordinary rename. Platform unit tests exercise the native
+operation on the host running them; they are not combined-installer acceptance.
 
 ## Rechecking CPython notice provenance
 

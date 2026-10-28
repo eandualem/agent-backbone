@@ -22,8 +22,11 @@ relative_path = builder["relative_path"]
 require = builder["require"]
 
 
-def verify_sources(cache):
-    material = native_notice_material(json.loads(builder["LOCK"].read_text()))
+def verify_sources(cache, target="aarch64-apple-darwin"):
+    require(target in builder["TARGETS"], "Unknown native notice target")
+    lock = json.loads((builder["ROOT"] / (target + ".json")).read_text())
+    require(lock.get("prepared_only") is not True, "Target notice sources are not prepared")
+    material = native_notice_material(lock)
     document = json.loads(material["native-notices.json"])
     sources = {row["id"]: row for row in document["sources"]}
     snapshots = {}
@@ -204,5 +207,8 @@ def verify_sources(cache):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("cache", type=Path)
+    parser.add_argument(
+        "--target", choices=sorted(builder["TARGETS"]), default="aarch64-apple-darwin"
+    )
     args = parser.parse_args()
-    print(json.dumps(verify_sources(args.cache), indent=2))
+    print(json.dumps(verify_sources(args.cache, args.target), indent=2))
