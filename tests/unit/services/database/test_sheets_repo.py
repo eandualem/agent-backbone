@@ -81,7 +81,8 @@ async def test_cas_after_calculation_and_capacity_rollback(tmp_path, monkeypatch
             if request["edit"]["operations"][0]["cells"][0]["input"]["value"] == "Slow":
                 entered.set()
                 await release.wait()
-            return {"snapshot": copy.deepcopy(base_snapshot)}
+                return {"snapshot": copy.deepcopy(base_snapshot)}
+            return await calculator(request)
 
         monkeypatch.setattr(db.sheets.calculator, "run", delayed)
         pending = asyncio.create_task(
@@ -97,6 +98,14 @@ async def test_cas_after_calculation_and_capacity_rollback(tmp_path, monkeypatch
         with pytest.raises(SheetError) as lost:
             await pending
         assert lost.value.detail["code"] == "stale_revision"
+        current = (await db.sheets.stored(first["sheet_id"]))[1]
+        tab = body.workbook.tabs[0]
+        cell = next(
+            cell
+            for cell in current["workbook"]["tabs"][0]["cells"]
+            if cell["row_id"] == tab.row_ids[1] and cell["column_id"] == tab.column_ids[0]
+        )
+        assert cell["input"]["value"] == "Fast"
         assert len((await db.sheets.query(sheet_id=first["sheet_id"]))["items"]) == 2
         monkeypatch.setattr(db.sheets.calculator, "run", calculator)
         monkeypatch.setattr("agent_backbone.services.database._sheets_repo.SHEET_STORAGE_BYTES", 1)

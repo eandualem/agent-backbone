@@ -112,7 +112,7 @@ async def test_size_refusal_keeps_configured_cors_headers(config, declared):
     assert (b"access-control-allow-origin", origin.encode()) in response["headers"]
 
 
-async def test_browser_clients_can_read_sheet_export_warnings(config):
+async def test_cors_exposes_sheet_export_warning_header(config):
     from httpx import ASGITransport, AsyncClient
 
     from agent_backbone.api.app import create_app

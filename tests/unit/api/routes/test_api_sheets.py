@@ -103,6 +103,7 @@ async def test_auth_validation_import_export_and_pinned_range(api_client, auth_h
         exported.status_code == 200
         and exported.json()["tabs"][0]["cells"][2]["input"]["value"] == "=1+2"
     )
+    assert "x-backbone-sheet-warnings" in exported.headers
     path = root + "/tabs/" + record["tabs"][0]["tab_id"] + "/range"
     assert (await api_client.get(path, headers=auth_headers)).status_code == 422
     assert (
