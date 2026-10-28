@@ -64,6 +64,7 @@
     "target CPython full-archive notices and binary correspondence",
     "target native-wheel notice reconciliation"
   ],
+  "native_notice_metadata": null,
   "preparation_evidence": {
     "actual_minimum_os_verified": false,
     "native_host_acceptance": false,
@@ -80,6 +81,7 @@
     "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.13.18%2B20261026-x86_64-apple-darwin-install_only.tar.gz",
     "version": "3.13.18"
   },
+  "python_notice_metadata": null,
   "runtime_wheels": [
     {
       "filename": "aiosqlite-0.22.1-py3-none-any.whl",

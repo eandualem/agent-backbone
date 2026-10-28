@@ -83,13 +83,18 @@ target-specific Python notice metadata and binary correspondence; and a native
 wheel source-notice reconciliation. Locks can name `python_notice_metadata` and
 `native_notice_metadata` files beside the builder. Their native inputs must be
 verified on a matching host before changing `prepared_only`. Native build-host
-architecture is checked, Rosetta translation is refused, and GNU targets require
-glibc. These requirements do not create or provision a runner.
+architecture is checked, Darwin Rosetta translation is refused, and GNU targets
+require glibc. Linux user-mode emulation cannot be reliably excluded by these
+local checks: native acceptance needs independently confirmed runner provenance.
+The receipt records that limitation. These checks do not provision a runner.
 
 The builder checks every Mach-O or ELF binary and retains
 `engine-native-report.json` in the immutable inventory. Mach-O inspection records
 the selected architecture, minimum-OS load commands and dependency/search paths;
-ELF inspection checks class, byte order, architecture, interpreter, SONAMEs and
+Relocatable object files are classified separately from executable entrypoints.
+Static ELF engine entrypoints are refused because their glibc/NSS requirements
+cannot be inferred from dynamic symbol versions. ELF inspection checks class,
+byte order, architecture, interpreter, SONAMEs and
 payload-relative search paths, recording GLIBC/GLIBCXX/CXXABI requirements.
 tmux may use only system dependencies. Other binaries can resolve shipped
 dependencies through payload-relative loader paths. These are static checks,
@@ -146,10 +151,11 @@ source comparison offline:
 python3 -I -B tools/engine/verify_native_sources.py /path/to/source-cache
 ```
 
-This checks all 320 source files by hash, all 584 notice excerpts byte-for-byte,
+This checks all 320 source files by hash, all 585 notice excerpts byte-for-byte,
 and every registry package/checksum against the four source Cargo locks. Wheel
 source and crate license/NOTICE membership, source versions and supplemental
-notice commit/repository correspondence are checked too. Sources are read into
+notice commit/repository correspondence are checked too. Declared PKG-INFO
+License-File and Cargo license-file paths are included, as is the LICENCE spelling. Sources are read into
 a bounded, hash-verified snapshot before inspection, so a concurrent cache update
 cannot replace verified bytes. It
 does not download, execute source, resolve dependencies or compile anything.

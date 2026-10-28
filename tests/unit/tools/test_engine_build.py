@@ -282,6 +282,7 @@ def notice_fixture(tmp_path, monkeypatch, *, missing=False):
         members.append(("python/licenses/LICENSE.txt", tarfile.REGTYPE, "notice"))
     path = archive(tmp_path, members)
     metadata = {
+        "target": "aarch64-apple-darwin",
         "python_version": "3.13",
         "full_archive_sha256": engine.digest(path),
         "install_only_archive_sha256": "a" * 64,
@@ -313,6 +314,11 @@ def notice_fixture(tmp_path, monkeypatch, *, missing=False):
     }
     engine.write_json(source / "native-notices.json", native)
     monkeypatch.setattr(engine, "ROOT", source)
+    engine.write_json(
+        source / "aarch64-apple-darwin.json",
+        {"target": "aarch64-apple-darwin", "python": {"sha256": "a" * 64, "version": "3.13"}},
+    )
+    monkeypatch.setattr(engine, "LOCK", source / "aarch64-apple-darwin.json")
     return source, path, metadata
 
 
@@ -339,6 +345,7 @@ def test_upstream_notice_archive_verification(tmp_path, monkeypatch, capsys, cha
             assert "LICENSE.txt" in capsys.readouterr().err
     else:
         assert engine.verify_upstream_notices(path) == {
+            "target": "aarch64-apple-darwin",
             "notices_verified": 1,
             "binary_samples_verified": 1,
         }
@@ -480,7 +487,7 @@ def test_native_notice_inventory_cannot_follow_changed_binary_inputs(change):
         lock["target"] = "x86_64-apple-darwin"
     else:
         lock["python"]["sha256"] = "0" * 64
-    with pytest.raises(ValueError, match="Native notice"):
+    with pytest.raises(ValueError, match="[Nn]otice"):
         engine.native_notice_material(lock)
 
 
@@ -534,7 +541,19 @@ def test_native_notice_tampering_refused_before_snapshot(tmp_path, monkeypatch, 
 
 
 @pytest.mark.parametrize(
-    "change", [None, "commit", "repository", "omitted_notice", "concurrent_cache_change"]
+    "change",
+    [
+        None,
+        "commit",
+        "repository",
+        "omitted_notice",
+        "concurrent_cache_change",
+        "wheel_declared",
+        "wheel_workspace",
+        "wheel_spelling",
+        "wheel_maturin_ok",
+        "prepared_ok",
+    ],
 )
 def test_source_verifier_checks_upstream_crate_notice_correspondence(tmp_path, monkeypatch, change):
     import runpy
@@ -566,6 +585,46 @@ def test_source_verifier_checks_upstream_crate_notice_correspondence(tmp_path, m
     ]
     if change == "omitted_notice":
         crate_members.append(("demo-1.0.0/NOTICE", tarfile.REGTYPE, "required attribution"))
+    wheel_case = bool(change and change.startswith("wheel_"))
+    member = "demo-1.0.0/docs/terms.txt"
+    if wheel_case:
+        info = "Name: demo\nVersion: 1.0.0\n"
+        if change == "wheel_declared":
+            info += "License-File: docs/terms.txt\n"
+        elif change == "wheel_workspace":
+            member = "demo-1.0.0/inner/LEGAL.md"
+            crate_members.append(
+                (
+                    "demo-1.0.0/inner/Cargo.toml",
+                    tarfile.REGTYPE,
+                    '[package]\nname="inner"\nversion="1"\nlicense-file="LEGAL.md"\n',
+                )
+            )
+        elif change == "wheel_spelling":
+            member = "demo-1.0.0/LICENCE"
+        else:
+            member = "demo-1.0.0/inner/LEGAL.md"
+            info += "License-File: LEGAL.md\n"
+            crate_members.extend(
+                [
+                    (
+                        "demo-1.0.0/pyproject.toml",
+                        tarfile.REGTYPE,
+                        '[tool.maturin]\nmanifest-path="inner/Cargo.toml"\n',
+                    ),
+                    (
+                        "demo-1.0.0/inner/Cargo.toml",
+                        tarfile.REGTYPE,
+                        '[package]\nname="inner"\nversion="1"\n',
+                    ),
+                ]
+            )
+        crate_members.extend(
+            [
+                ("demo-1.0.0/PKG-INFO", tarfile.REGTYPE, info),
+                (member, tarfile.REGTYPE, "required attribution"),
+            ]
+        )
     crate = archive(tmp_path, crate_members)
     crate.rename(tmp_path / "crate.tar")
     data = {
@@ -620,6 +679,27 @@ def test_source_verifier_checks_upstream_crate_notice_correspondence(tmp_path, m
         "native_notice_material",
         lambda lock: {"native-notices.json": json.dumps(data).encode()},
     )
+    if wheel_case:
+        data["wheels"] = [{"name": "demo", "version": "1.0.0", "source_id": "crate:demo-1.0.0"}]
+    if change == "wheel_maturin_ok":
+        data["components"].append(
+            {
+                "component": "workspace notice",
+                "source_id": "crate:demo-1.0.0",
+                "source_member": member,
+                "notice": {
+                    "bytes": len(b"required attribution"),
+                    "sha256": hashlib.sha256(b"required attribution").hexdigest(),
+                },
+            }
+        )
+        assert verify(tmp_path)["notices_verified"] == 2
+        return
+    if change == "prepared_ok":
+        engine.write_json(tmp_path / "x86_64-apple-darwin.json", {"prepared_only": True})
+        monkeypatch.setitem(verify.__globals__["builder"], "ROOT", tmp_path)
+        assert verify(tmp_path, "x86_64-apple-darwin")["notices_verified"] == 1
+        return
     if change == "concurrent_cache_change":
         original_open = tarfile.open
 
@@ -868,12 +948,15 @@ def test_prepared_locks_match_source_and_cannot_build(tmp_path):
 
 
 @pytest.mark.parametrize("architecture", ["x86_64", "aarch64"])
-@pytest.mark.parametrize("change", [None, "arch", "dependency", "rpath", "escape", "interpreter"])
+@pytest.mark.parametrize(
+    "change", [None, "arch", "dependency", "rpath", "escape", "interpreter", "static"]
+)
 def test_elf_inspection_rejects_wrong_architecture_and_host_dependencies(
     tmp_path, monkeypatch, architecture, change
 ):
     header = bytearray(20)
     header[:6] = b"\x7fELF\x02\x01"
+    header[16:18] = (3).to_bytes(2, "little")
     machine = {"x86_64": 62, "aarch64": 183}[architecture]
     header[18:20] = (1 if change == "arch" else machine).to_bytes(2, "little")
     for name in ["python/bin/python3", "libexec/tmux"]:
@@ -887,6 +970,8 @@ def test_elf_inspection_rejects_wrong_architecture_and_host_dependencies(
 
     def run(argv, **kwargs):
         if "--dynamic" in argv:
+            if change == "static":
+                return ""
             needed = "libunshipped.so" if change == "dependency" else "libc.so.6"
             result = f"(NEEDED) Shared library: [{needed}]\n"
             if change in {"rpath", "escape"}:
@@ -894,6 +979,8 @@ def test_elf_inspection_rejects_wrong_architecture_and_host_dependencies(
                 result += f"(RPATH) Library rpath: [{path}]\n"
             return result
         if "--program-headers" in argv:
+            if change == "static":
+                return ""
             value = "/wrong/loader" if change == "interpreter" else interpreter
             return f"[Requesting program interpreter: {value}]"
         return "Name: GLIBC_2.17\nName: GLIBCXX_3.4.19\n"
@@ -923,6 +1010,10 @@ def test_macho_inspection_distinguishes_install_name_from_dependency(tmp_path, m
         path = argv[-1]
         if "lipo" in str(argv[0]):
             return "x86_64" if change == "arch" else "arm64"
+        if "-hv" in argv:
+            return "MH_MAGIC_64 ARM64 ALL 0x00 " + (
+                "DYLIB" if path.name == "extra.dylib" else "EXECUTE"
+            )
         if "-D" in argv:
             return str(path) + ("\nextra.dylib\n" if path.name == "extra.dylib" else "\n")
         if "-L" in argv:
@@ -950,3 +1041,45 @@ def test_macho_inspection_distinguishes_install_name_from_dependency(tmp_path, m
         report = engine.inspect_native_payload(tmp_path, "aarch64-apple-darwin", {})
         assert len(report["binaries"]) == 3
         assert all(b["dependencies"] == ["/usr/lib/libSystem.B.dylib"] for b in report["binaries"])
+
+
+@pytest.mark.parametrize("target", [t for t in engine.TARGETS if t != "aarch64-apple-darwin"])
+def test_unprepared_target_notice_commands_never_fall_back(target, tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "LOCK", engine.ROOT / (target + ".json"))
+    with pytest.raises(ValueError, match="not prepared"):
+        engine.verify_upstream_notices(tmp_path / "not-read.tar")
+    with pytest.raises(ValueError, match="not prepared"):
+        engine.native_notice_material(json.loads(engine.LOCK.read_text()))
+
+
+def test_object_files_are_reported_without_requiring_loader_metadata(tmp_path, monkeypatch):
+    for name in ["python/bin/python3", "libexec/tmux", "python/lib/python.o"]:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\xcf\xfa\xed\xfe")
+
+    def run(argv, **kwargs):
+        path = argv[-1]
+        if "lipo" in str(argv[0]):
+            return "arm64"
+        if "-hv" in argv:
+            return "MH_MAGIC_64 ARM64 ALL 0x00 " + ("OBJECT" if path.suffix == ".o" else "EXECUTE")
+        if "-D" in argv:
+            return str(path) + "\n"
+        if "-L" in argv:
+            return (
+                str(path)
+                + ":\n"
+                + (
+                    ""
+                    if path.suffix == ".o"
+                    else "\t/usr/lib/libSystem.B.dylib (compatibility version 1.0)\n"
+                )
+            )
+        return "" if path.suffix == ".o" else "    cmd LC_BUILD_VERSION\n    minos 11.0\n"
+
+    monkeypatch.setattr(engine, "run", run)
+    report = engine.inspect_native_payload(tmp_path, "aarch64-apple-darwin", {})
+    obj = next(row for row in report["binaries"] if row["path"].endswith(".o"))
+    assert obj["file_type"] == "OBJECT"
+    assert obj["dependencies"] == obj["minimum_os"] == []

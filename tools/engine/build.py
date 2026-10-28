@@ -44,7 +44,10 @@ TARGETS = {
 
 def notice_metadata_path(kind, lock=None):
     lock = json.loads(LOCK.read_text()) if lock is None else lock
-    name = lock.get(kind + "_notice_metadata", kind + "-notices.json")
+    default = (
+        kind + "-notices.json" if lock.get("target") in {None, "aarch64-apple-darwin"} else None
+    )
+    name = lock.get(kind + "_notice_metadata", default)
     require(isinstance(name, str), "Target notice metadata is not prepared")
     require(str(relative_path(name)) == Path(name).name, "Invalid notice metadata filename")
     return ROOT / name
@@ -55,7 +58,8 @@ def require_native_target(lock):
     require(target in TARGETS, "Unknown engine target")
     require(
         (platform.system(), platform.machine()) == TARGETS[target],
-        "Engine target requires a matching native build host",
+        "Engine target requires a matching native build host OS/architecture; "
+        "Linux emulation is not detected",
     )
     require(
         lock.get("prepared_only") is not True,
@@ -891,10 +895,21 @@ def inspect_native_payload(payload, target, env):
             continue
         name = path.relative_to(payload).as_posix()
         row = {"path": name, "sha256": digest(path)}
+        entrypoint = name in {
+            "libexec/tmux",
+            "python/bin/python",
+            "python/bin/python3",
+            "python/bin/python3.13",
+        }
         if system == "Darwin":
             require(magic in macho, "Non-Mach-O native input on macOS")
             arches = run(["/usr/bin/lipo", "-archs", path], env=env).split()
             require(architecture in arches, f"Native architecture mismatch: {name}")
+            header_text = run(["/usr/bin/otool", "-arch", architecture, "-hv", path], env=env)
+            kinds = re.findall(r"\b(OBJECT|EXECUTE|DYLIB|BUNDLE)\b", header_text)
+            require(len(kinds) == 1, "Unsupported Mach-O file type")
+            kind = kinds[0]
+            require(not entrypoint or kind == "EXECUTE", "Engine entrypoint is not executable")
             linkage = run(["/usr/bin/otool", "-arch", architecture, "-L", path], env=env)
             dependencies = [
                 line.strip().split(" (", 1)[0] for line in linkage.splitlines()[1:] if line.strip()
@@ -910,7 +925,7 @@ def inspect_native_payload(payload, target, env):
                 all(not name.startswith("/") for name in identities), "Absolute Mach-O install name"
             )
             dependencies = [name for name in dependencies if name not in identities]
-            require(dependencies, f"Missing native linkage: {name}")
+            require(dependencies or not entrypoint, f"Missing native linkage: {name}")
             for dependency in dependencies:
                 if dependency.startswith(("/usr/lib/", "/System/Library/")):
                     continue
@@ -946,12 +961,13 @@ def inspect_native_payload(payload, target, env):
                 minimums = re.findall(
                     r"cmd LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version ([\d.]+)", commands
                 )
-            require(minimums, f"Missing native minimum-OS metadata: {name}")
+            require(minimums or kind == "OBJECT", f"Missing native minimum-OS metadata: {name}")
             row.update(
                 architectures=arches,
                 dependencies=dependencies,
                 minimum_os=minimums,
                 search_paths=rpaths,
+                file_type=kind,
             )
         else:
             require(
@@ -959,6 +975,11 @@ def inspect_native_payload(payload, target, env):
                 "Expected little-endian ELF64",
             )
             machine = int.from_bytes(header[18:20], "little")
+            kind = {1: "REL", 2: "EXEC", 3: "DYN"}.get(int.from_bytes(header[16:18], "little"))
+            require(kind is not None, "Unsupported ELF file type")
+            require(
+                not entrypoint or kind in {"EXEC", "DYN"}, "Engine entrypoint is not executable"
+            )
             require(
                 machine == {"x86_64": 62, "aarch64": 183}[architecture],
                 f"Native architecture mismatch: {name}",
@@ -1007,6 +1028,10 @@ def inspect_native_payload(payload, target, env):
                 "aarch64": "/lib/ld-linux-aarch64.so.1",
             }[architecture]
             require(not interpreters or interpreters == [expected], "Unexpected ELF interpreter")
+            require(
+                not entrypoint or (interpreters == [expected] and bool(needed)),
+                "Static ELF engine entrypoints are unsupported",
+            )
             versions = run(["/usr/bin/readelf", "--wide", "--version-info", path], env=env)
             requirements = sorted(set(re.findall(r"\b(?:GLIBC|GLIBCXX|CXXABI)_[\d.]+", versions)))
             row.update(
@@ -1015,6 +1040,8 @@ def inspect_native_payload(payload, target, env):
                 search_paths=rpaths,
                 interpreters=interpreters,
                 symbol_version_requirements=requirements,
+                file_type=kind,
+                linkage="dynamic" if needed or interpreters else "no_dynamic_dependencies",
             )
         rows.append(row)
     require(
@@ -1026,6 +1053,7 @@ def inspect_native_payload(payload, target, env):
         "target": target,
         "binaries": rows,
         "actual_minimum_os_execution": False,
+        "static_component_abi_verified": False,
     }
 
 
@@ -1062,6 +1090,12 @@ def publish_exclusively(source, destination):
 def verify_upstream_notices(archive):
     """Compare retained notices and binary samples with the pinned full archive."""
     upstream = json.loads(notice_metadata_path("python").read_text(encoding="utf-8"))
+    lock = json.loads(LOCK.read_text())
+    require(
+        upstream["target"] == lock["target"]
+        and upstream["install_only_archive_sha256"] == lock["python"]["sha256"],
+        "Python notice target/input mismatch",
+    )
     verify_input(archive, {"sha256": upstream["full_archive_sha256"]})
 
     def member(name):
@@ -1091,6 +1125,7 @@ def verify_upstream_notices(archive):
             "Upstream binary sample mismatch",
         )
     return {
+        "target": lock["target"],
         "notices_verified": len(upstream["files"]),
         "binary_samples_verified": len(upstream["install_only_comparison"]),
     }
@@ -1234,6 +1269,11 @@ def build(repository, commit, inputs, output, lock):
                 "schema_version": 1,
                 "source_commit": commit,
                 "target": lock["target"],
+                "host_checks": {
+                    "system": platform.system(),
+                    "machine": platform.machine(),
+                    "linux_emulation_independently_excluded": False,
+                },
                 "source_tree": run(
                     [git, "-C", repository, "rev-parse", commit + "^{tree}"], cwd=stage, env=env
                 ).strip(),

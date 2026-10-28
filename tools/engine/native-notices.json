@@ -10248,13 +10248,25 @@
       "selection": "file",
       "source_id": "uvloop",
       "source_member": "uvloop-0.22.1/vendor/libuv/LICENSE-docs"
+    },
+    {
+      "component": "cffi distribution AUTHORS",
+      "notice": {
+        "bytes": 208,
+        "file": "NATIVE-NOTICES.txt",
+        "offset": 197755,
+        "sha256": "2a67a60bbfb33759d67d645ff131b8e6d6bc4cafc232d751fcac3eda4d314cc8"
+      },
+      "selection": "file",
+      "source_id": "cffi",
+      "source_member": "cffi-2.0.0/AUTHORS"
     }
   ],
   "files": [
     {
-      "bytes": 197519,
+      "bytes": 197964,
       "path": "NATIVE-NOTICES.txt",
-      "sha256": "f28e347c5bf64a42b0c3bf982561c6c2b7a939aec79dcd19d246260ff095520e"
+      "sha256": "7cc311531f00527a77bb9a8baf3f1a8397ddbc7bfa633eabbc05d2c42da253fc"
     },
     {
       "bytes": 574584,

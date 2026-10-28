@@ -8,13 +8,14 @@ import argparse
 import hashlib
 import io
 import json
+import posixpath
 import re
 import runpy
 import tarfile
 import tomllib
 import urllib.parse
 from email.parser import BytesParser
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 builder = runpy.run_path(str(Path(__file__).with_name("build.py")))
 native_notice_material = builder["native_notice_material"]
@@ -25,7 +26,6 @@ require = builder["require"]
 def verify_sources(cache, target="aarch64-apple-darwin"):
     require(target in builder["TARGETS"], "Unknown native notice target")
     lock = json.loads((builder["ROOT"] / (target + ".json")).read_text())
-    require(lock.get("prepared_only") is not True, "Target notice sources are not prepared")
     material = native_notice_material(lock)
     document = json.loads(material["native-notices.json"])
     sources = {row["id"]: row for row in document["sources"]}
@@ -57,7 +57,7 @@ def verify_sources(cache, target="aarch64-apple-darwin"):
             and (
                 Path(m.name)
                 .name.upper()
-                .startswith(("LICENSE", "COPYING", "NOTICE", "COPYRIGHT", "UNLICENSE"))
+                .startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT", "UNLICENSE"))
                 or any(p.upper() == "LICENSES" for p in Path(m.name).parts[:-1])
                 or m.name == license_file
             )
@@ -77,6 +77,20 @@ def verify_sources(cache, target="aarch64-apple-darwin"):
 
     root_sources = {root["source_id"] for root in document["rust_roots"]}
     found_roots = set()
+
+    def source_path(prefix, directory, value):
+        require(
+            isinstance(value, str)
+            and value
+            and not PurePosixPath(value).is_absolute()
+            and "\\" not in value,
+            "Invalid declared source notice path",
+        )
+        name = posixpath.normpath(directory + "/" + value)
+        relative_path(name)
+        require(name.startswith(prefix + "/"), "Declared source notice escapes source root")
+        return name
+
     for wheel in document["wheels"]:
         source = sources[wheel["source_id"]]
         with open_archive(wheel["source_id"]) as archive:
@@ -95,6 +109,43 @@ def verify_sources(cache, target="aarch64-apple-darwin"):
             )
             prefix = infos[0].name.rsplit("/", 1)[0]
             required = notice_members(archive)
+            names = {m.name for m in members if m.isfile()}
+            # Maturin reports license paths relative to its selected crate,
+            # which can live below the pyproject directory in an sdist.
+            bases = {prefix}
+            pyproject = prefix + "/pyproject.toml"
+            if pyproject in names:
+                project = tomllib.loads(read(wheel["source_id"], pyproject).decode())
+                manifest = project.get("tool", {}).get("maturin", {}).get("manifest-path")
+                if manifest:
+                    bases.add(posixpath.dirname(source_path(prefix, prefix, manifest)))
+            for declared in info.get_all("License-File", []):
+                matches = {source_path(prefix, base, declared) for base in bases} & names
+                require(len(matches) == 1, "Missing or ambiguous declared distribution notice")
+                required.update(matches)
+            cargo = {
+                m.name: tomllib.loads(read(wheel["source_id"], m.name).decode())
+                for m in members
+                if m.isfile() and m.name.endswith("/Cargo.toml")
+            }
+            for path, manifest in cargo.items():
+                value = manifest.get("package", {}).get("license-file")
+                if value is None:
+                    continue
+                directory = posixpath.dirname(path)
+                if value == {"workspace": True}:
+                    ancestors = [
+                        p
+                        for p in cargo
+                        if directory == posixpath.dirname(p)
+                        or directory.startswith(posixpath.dirname(p) + "/")
+                    ]
+                    workspaces = [p for p in ancestors if "workspace" in cargo[p]]
+                    require(workspaces, "Missing workspace for inherited license file")
+                    workspace = max(workspaces, key=len)
+                    directory = posixpath.dirname(workspace)
+                    value = cargo[workspace]["workspace"].get("package", {}).get("license-file")
+                required.add(source_path(prefix, directory, value))
             retained = {
                 c.get("source_member")
                 for c in document["components"]

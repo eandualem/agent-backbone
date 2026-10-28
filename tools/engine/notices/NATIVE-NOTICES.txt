@@ -3910,3 +3910,17 @@ public licenses.
 Creative Commons may be contacted at creativecommons.org.
 
 
+
+==============================================================================
+cffi distribution AUTHORS (declared License-File)
+Source: cffi-2.0.0/AUTHORS
+==============================================================================
+This package has been mostly done by Armin Rigo with help from
+Maciej Fijałkowski. The idea is heavily based (although not directly
+copied) from LuaJIT ffi by Mike Pall.
+
+
+Other contributors:
+
+  Google Inc.
+
