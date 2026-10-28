@@ -775,3 +775,42 @@ async def test_bound_stop_rechecks_after_waiting_for_profile_guard(db, config, s
     start.assert_not_awaited()
     deliver.assert_not_awaited()
     assert (await db.transitions.get(row["id"]))["result"]["reason"] == "agent registration changed"
+
+
+async def test_unbound_continuation_and_registration_mutation_do_not_deadlock(
+    db, config, store, seams
+):
+    _, _, deliver = seams
+    row = await db.transitions.create(agent_name="ike", message="continue")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    profile = asyncio.Lock()
+    continuation_has_profile = asyncio.Event()
+    mutation_entering = asyncio.Event()
+
+    @asynccontextmanager
+    async def guard(_):
+        async with profile:
+            continuation_has_profile.set()
+            await mutation_entering.wait()
+            yield
+
+    async def mutation():
+        await continuation_has_profile.wait()
+        mutation_entering.set()
+        async with lifecycle_lock("ike"), profile:
+            pass
+
+    async def delivery(*args, **kwargs):
+        async with lifecycle_lock("ike"):
+            return DeliveryReport(outcome=DeliveryOutcome.DELIVERED)
+
+    deliver.side_effect = delivery
+    with patch(f"{_JOB}.profile_lock", guard):
+        tasks = [asyncio.create_task(_run(config, store, db)), asyncio.create_task(mutation())]
+        try:
+            results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=1)
+            assert results[0] == {"ike": "started"}
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)

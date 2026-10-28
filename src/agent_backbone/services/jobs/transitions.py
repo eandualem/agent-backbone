@@ -190,7 +190,7 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         sender = row["requested_by"] or "backbone"
         # Registration replacement uses this same cross-process guard. Hold it
         # through delivery/queueing so the continuation cannot change recipients.
-        async with profile_lock(config.data_dir):
+        async with lifecycle_lock(name), profile_lock(config.data_dir):
             if row.get("registration_id") and not await db.agents.registration_matches(
                 name, row["registration_id"]
             ):
