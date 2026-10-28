@@ -24,6 +24,7 @@ from agent_backbone.services.agents import (
     AgentRegistrationConflict,
     agent_state,
     lifecycle_lock,
+    profile_lock,
     start_agent,
     validate_agent_spec,
 )
@@ -96,6 +97,18 @@ def _answer(
             "greeting_delivery_id": receipt.record.get("greeting_delivery_id"),
             "evidence": list(evidence),
         },
+    )
+
+
+def _matches_registration(current, spec, registration):
+    return (
+        current is not None
+        and current.registration_id == registration
+        and current.dir == spec.dir
+        and current.runtime == spec.runtime
+        and current.model == spec.model
+        and not current.unattended
+        and not current.inbox_only
     )
 
 
@@ -189,15 +202,7 @@ async def _first(request, receipt, store, db):
     current = store.agents.get(spec.name)
     registration = receipt.record.get("registration_id")
     if registration:
-        if (
-            current is None
-            or current.registration_id != registration
-            or current.dir != spec.dir
-            or current.runtime != spec.runtime
-            or current.model != spec.model
-            or current.unattended
-            or current.inbox_only
-        ):
+        if not _matches_registration(current, spec, registration):
             return _answer(
                 receipt, "agent_conflict", "The recorded agent changed; it was preserved."
             )
@@ -233,7 +238,22 @@ async def _first(request, receipt, store, db):
         receipt.save(registration_pending=True)
         try:
             spec = await store.register(spec, only_new=True)
-        except AgentRegistrationConflict:
+        except AgentRegistrationConflict as exc:
+            if exc.registration_id is not None:
+                receipt.save(registration_id=exc.registration_id, registration_pending=False)
+                receipt.completed("agent")
+                if not _matches_registration(
+                    store.agents.get(spec.name), spec, exc.registration_id
+                ):
+                    return _answer(
+                        receipt, "agent_conflict", "The recorded agent changed; it was preserved."
+                    )
+                return _answer(
+                    receipt,
+                    "agent_conflict",
+                    "The created agent changed; inspect it before retrying this request.",
+                    retry="same_request",
+                )
             receipt.save(registration_pending=False)
             return _answer(
                 receipt, "agent_conflict", "An agent already owns this name or directory."
@@ -308,7 +328,19 @@ async def _first(request, receipt, store, db):
         )
     receipt.completed("ready")
     if request.start_greeting and receipt.record.get("greeting_delivery_id") is None:
-        accepted = await _greet(receipt, spec, config, db)
+        # Other CLI processes do not share lifecycle_lock. Keep the profile
+        # guard from the final identity check through delivery or durable queueing.
+        async with profile_lock(config.data_dir):
+            if not await db.agents.registration_matches(spec.name, spec.registration_id):
+                return _answer(receipt, "agent_conflict", "The greeting recipient changed.")
+            for key, field in (
+                ("BACKBONE_OPERATION_ID", "launch_operation"),
+                ("BACKBONE_REGISTRATION_ID", "registration_id"),
+                ("BACKBONE_LAUNCH_ID", "launch_id"),
+            ):
+                if await query_environment_var(spec.name, key) != receipt.record.get(field):
+                    return _answer(receipt, "agent_conflict", "The greeting launch changed.")
+            accepted = await _greet(receipt, spec, config, db)
         if not accepted:
             return _answer(
                 receipt,
@@ -375,7 +407,7 @@ async def _greet(receipt, spec, config, db):
     if operation:
         rows = await db.deliveries.query(session_name=spec.name, operation_id=operation)
         held = await db.queue.held_receipt(
-            spec.name, message, "setup", operation, "", None, "direct"
+            spec.name, message, "setup", operation, "", None, "direct_message"
         )
         # A queued uncertain delivery is not confirmation. Keep it for inspection.
         delivered = next((row for row in rows if row["outcome"] in SUCCESS_OUTCOMES), None)
@@ -401,7 +433,7 @@ async def _greet(receipt, spec, config, db):
         source="setup",
         sender="setup",
         source_key=operation,
-        delivery_kind="direct",
+        delivery_kind="direct_message",
         operation_id=operation,
         once=True,
     )

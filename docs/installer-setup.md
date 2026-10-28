@@ -110,8 +110,11 @@ conflict. There is no automatic suffix or takeover.
 `start_greeting: true` means the person explicitly requested a greeting on Finish
 or Start. After measured readiness, setup sends a bounded greeting task through
 the ordinary safe-delivery path. This may incur model usage. False starts without
-submitting that task. The brief alone is not proof of a greeting; a delivery receipt
-means submitted or queued, never that the model answered. Readiness checks make no
+submitting that task. Setup rechecks the exact registration and launch under the
+shared cross-process guard and holds it through submission or queueing. A queued
+greeting is a durable direct message visible in `backbone inbox`; ordinary
+notification expiry does not discard it. The brief alone is not proof of a greeting;
+a delivery receipt means submitted or queued, never that the model answered. Readiness checks make no
 model calls. Permission/login prompts remain visible; retry the same request after
 handling them in the terminal. Ambiguous startup is not reported as authentication
 failure. A custom brief applies to this first launch; ordinary later starts use

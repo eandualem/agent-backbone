@@ -112,7 +112,11 @@ def check_agent_tags(tags) -> None:
 
 
 class AgentRegistrationConflict(ValueError):
-    """New-only registration found an existing owner before writing anything."""
+    """New-only registration collided with an owner or changed before publication."""
+
+    def __init__(self, message: str, *, registration_id: str | None = None):
+        super().__init__(message)
+        self.registration_id = registration_id
 
 
 class AgentStore:
@@ -305,7 +309,21 @@ class AgentStore:
             )
             for repo in spec.watches:
                 await self._db.agents.add_watch(spec.name, repo)
+            # Capture our insert before another process can replace this name.
+            inserted = (
+                agents_from_rows(await self._db.agents.list()).get(spec.name) if only_new else None
+            )
+            if only_new and (inserted is None or not inserted.registration_id):
+                raise RuntimeError("The new agent registration could not be read.")
         await self.refresh()
+        if only_new:
+            current = self._agents.get(spec.name)
+            if current != inserted:
+                raise AgentRegistrationConflict(
+                    "The new agent changed during registration.",
+                    registration_id=inserted.registration_id,
+                )
+            return inserted
         return self._agents.get(spec.name) or spec
 
     @serialized_mutation

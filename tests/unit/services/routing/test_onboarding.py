@@ -298,7 +298,7 @@ async def test_lost_greeting_response_recovers_real_saved_delivery(scenario, db,
             session_name=name,
             outcome=outcome,
             source="setup",
-            kind="direct",
+            kind="direct_message",
             operation_id=operation,
         )
         if outcome != "delivered":
@@ -306,7 +306,7 @@ async def test_lost_greeting_response_recovers_real_saved_delivery(scenario, db,
                 session_name=name,
                 message=message,
                 target_entity=name,
-                delivery_kind="direct",
+                delivery_kind="direct_message",
                 source="setup",
                 sender="setup",
                 source_key=operation,
@@ -371,4 +371,150 @@ async def test_registered_retry_does_not_repeat_runtime_version_preflight(
     monkeypatch.setattr(type(runtime), "setup_error", unavailable)
     scenario[2]["state"] = AgentState.IDLE
     assert (await run(scenario, db))["code"] == "agent_ready"
+    assert onboarding.start_agent.await_count == 1
+
+
+async def test_setup_refuses_registration_replaced_during_store_refresh(scenario, db, monkeypatch):
+    body, store, _ = scenario
+    refresh = store.refresh
+    replaced = False
+
+    async def replace_before_refresh():
+        nonlocal replaced
+        rows = await db.agents.list()
+        if any(row["name"] == body.agent.name for row in rows) and not replaced:
+            replaced = True
+            # Simulate another operator between register's guard and refresh.
+            await db.agents.delete(body.agent.name)
+            await db.agents.upsert(
+                body.agent.name,
+                dir=body.agent.directory + "-replacement",
+                runtime=body.agent.runtime,
+                model=None,
+                repo="",
+                tags=[],
+                env={},
+                description="",
+                unattended=False,
+            )
+        return await refresh()
+
+    monkeypatch.setattr(store, "refresh", replace_before_refresh)
+    result = await run(scenario, db)
+    assert result["code"] == "agent_conflict" and result["retry"] == "new_request"
+    with SetupReceipt(store.config.data_dir, body.model_dump()) as receipt:
+        assert (
+            receipt.record["registration_id"] != store.agents.get(body.agent.name).registration_id
+        )
+        assert not receipt.record["registration_pending"]
+    assert (await run(scenario, db))["code"] == "agent_conflict"
+    assert store.agents.get(body.agent.name).dir.endswith("-replacement")
+    onboarding.start_agent.assert_not_awaited()
+    onboarding.safe_deliver.assert_not_awaited()
+
+
+@pytest.mark.parametrize("replace_registration", [True, False])
+async def test_setup_rechecks_recipient_after_readiness(
+    scenario, db, monkeypatch, replace_registration
+):
+    body, store, state = scenario
+    snapshot = onboarding.agent_state
+
+    async def replace_after_readiness(config, name):
+        result = await snapshot(config, name)
+        if replace_registration:
+            await db.agents.delete(name)
+            await db.agents.upsert(
+                name,
+                dir=body.agent.directory,
+                runtime=body.agent.runtime,
+                model=None,
+                repo="",
+                tags=[],
+                env={},
+                description="",
+                unattended=False,
+            )
+        else:
+            state["env"]["BACKBONE_LAUNCH_ID"] = "another-launch"
+        return result
+
+    monkeypatch.setattr(onboarding, "agent_state", replace_after_readiness)
+    assert (await run(scenario, db))["code"] == "agent_conflict"
+    onboarding.safe_deliver.assert_not_awaited()
+
+
+async def test_greeting_holds_cross_process_guard_through_submission(scenario, db):
+    import fcntl
+    import os
+
+    async def submit(*args, **kwargs):
+        path = scenario[1].config.data_dir / "agent-credentials/.lock"
+        fd = os.open(path, os.O_RDWR)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+        return DeliveryReport(DeliveryOutcome.DELIVERED, delivery_id=123)
+
+    onboarding.safe_deliver.side_effect = submit
+    assert (await run(scenario, db))["code"] == "agent_ready"
+
+
+async def test_queued_greeting_survives_expiry_and_is_visible_in_inbox(scenario, db):
+    saved = {}
+
+    async def enqueue(name, message, config, **kwargs):
+        saved["id"] = await db.queue.enqueue(
+            session_name=name,
+            message=message,
+            target_entity=name,
+            delivery_kind=kwargs["delivery_kind"],
+            source=kwargs["source"],
+            sender=kwargs["sender"],
+            source_key=kwargs["source_key"],
+            operation_id=kwargs["operation_id"],
+        )
+        return DeliveryReport(DeliveryOutcome.AGENT_WORKING, delivery_id=123, queue="stored")
+
+    onboarding.safe_deliver.side_effect = enqueue
+    assert (await run(scenario, db))["code"] == "agent_ready"
+    # Negative age makes this fresh row eligible for ordinary notification expiry.
+    assert await db.queue.expire_pending(max_age_minutes=-1) == []
+    inbox = await db.queue.checkpoint("guide")
+    assert len(inbox) == 1 and inbox[0]["id"] == saved["id"].id
+    assert inbox[0]["delivery_kind"] == "direct_message"
+    assert (await run(scenario, db))["code"] == "agent_ready"
+    assert onboarding.safe_deliver.await_count == 1
+
+
+async def test_post_insert_metadata_change_retains_owned_registration_for_retry(
+    scenario, db, monkeypatch
+):
+    body, store, _ = scenario
+    refresh = store.refresh
+    edited = False
+
+    async def edit_before_refresh():
+        nonlocal edited
+        rows = await db.agents.list()
+        if any(row["name"] == body.agent.name for row in rows) and not edited:
+            edited = True
+            await db.agents.update_fields(body.agent.name, {"tags": ["selected"]})
+        return await refresh()
+
+    monkeypatch.setattr(store, "refresh", edit_before_refresh)
+    result = await run(scenario, db)
+    assert result["code"] == "agent_conflict" and result["retry"] == "same_request"
+    onboarding.start_agent.assert_not_awaited()
+    with SetupReceipt(store.config.data_dir, body.model_dump()) as receipt:
+        assert (
+            receipt.record["registration_id"] == store.agents.get(body.agent.name).registration_id
+        )
+    assert (await run(scenario, db))["code"] == "agent_ready"
+    assert store.agents.get(body.agent.name).tags == ("selected",)
+    with SetupReceipt(store.config.data_dir, body.model_dump()) as receipt:
+        assert "agent" in receipt.record["completed_steps"]
+        assert "agent" in receipt.record["result"]["completed_steps"]
     assert onboarding.start_agent.await_count == 1
