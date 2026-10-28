@@ -408,6 +408,9 @@ async def test_concurrent_starts_do_not_rebind_the_surviving_session(db, tmp_pat
     await store.refresh()
     for key, value in live_environment.items():
         monkeypatch.setenv(key, value)
+    assert live_environment["BACKBONE_API_KEY"] == agent_api_key(
+        store.config.api_key, spec.registration_id
+    )
     assert (
         load_secrets(tmp_path)["BACKBONE_API_KEY"]
         == read_agent_profile(tmp_path, "worker")["credential"]
@@ -460,6 +463,9 @@ async def test_resumed_launch_cannot_overwrite_its_replacement_binding(db, tmp_p
     await store.refresh()
     for key, value in live_environment.items():
         monkeypatch.setenv(key, value)
+    assert live_environment["BACKBONE_API_KEY"] == agent_api_key(
+        store.config.api_key, spec.registration_id
+    )
     assert (
         load_secrets(tmp_path)["BACKBONE_API_KEY"]
         == read_agent_profile(tmp_path, "worker")["credential"]

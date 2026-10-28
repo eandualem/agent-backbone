@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from agent_backbone.api.socketio_server import TerminalNamespace
 
 _MOD = "agent_backbone.api.socketio_server"
@@ -85,3 +87,90 @@ async def test_registration_credential_socket_connect_requires_current_registrat
     assert await ns.on_connect("sid1", {}, auth)
     await api_app.state.db.agents.delete(spec.name)
     assert not await ns.on_connect("sid2", {}, auth)
+
+
+async def _scoped_connection(api_app, namespace):
+    from agent_backbone.api.socketio_server import create_sio
+    from agent_backbone.config import agent_api_key
+
+    sio = create_sio([])
+    sio.fastapi_app = SimpleNamespace(
+        state=SimpleNamespace(config=api_app.state.config, db=api_app.state.db)
+    )
+    sio._send_packet = AsyncMock()
+    sio._send_eio_packet = AsyncMock()
+    sid = await sio.manager.connect("engine", namespace)
+    ns = sio.namespace_handlers[namespace]
+    spec = next(iter(api_app.state.agent_store.agents))
+    auth = {"api_key": agent_api_key(api_app.state.config.api_key, spec.registration_id)}
+    assert await ns.on_connect(sid, {}, auth)
+    return sio, ns, sid, spec
+
+
+async def test_retired_socket_cannot_join_another_terminal(api_app):
+    sio, ns, sid, spec = await _scoped_connection(api_app, "/terminal")
+    await api_app.state.db.agents.delete(spec.name)
+    with patch.object(ns, "_attach_subscription_client", new_callable=AsyncMock) as attach:
+        await ns.trigger_event("join", sid, {"session": "bell"})
+    attach.assert_not_awaited()
+    assert not sio.manager.is_connected(sid, "/terminal")
+    assert sid not in ns._registrations
+
+
+async def test_retirement_stops_existing_terminal_stream_without_emitting_its_data(api_app):
+    import asyncio
+
+    sio, ns, sid, spec = await _scoped_connection(api_app, "/terminal")
+    queue = asyncio.Queue()
+    task = asyncio.create_task(ns._forward_pty_output(sid, spec.name, queue))
+    ns._subscriptions[sid] = {spec.name: task}
+    manager = SimpleNamespace(remove=AsyncMock(side_effect=lambda *_: queue.put_nowait(None)))
+    with patch(f"{_MOD}.get_pty_manager", return_value=manager):
+        await api_app.state.db.agents.delete(spec.name)
+        await queue.put("must not be sent")
+        await asyncio.wait_for(task, timeout=1)
+    manager.remove.assert_awaited_once_with(sid, spec.name)
+    assert not sio.manager.is_connected(sid, "/terminal")
+    assert sid not in ns._subscriptions and sid not in ns._registrations
+    # Only the namespace disconnect packet is sent, never terminal output.
+    assert all(call.args[1].packet_type == 1 for call in sio._send_packet.await_args_list)
+    sio._send_eio_packet.assert_not_awaited()
+
+
+async def test_retirement_removes_session_feed_subscriber_before_next_broadcast(api_app):
+    from agent_backbone.api.session_updates import SessionFeed
+
+    sio, ns, sid, spec = await _scoped_connection(api_app, "/sessions")
+    feed = SessionFeed(lambda: api_app.state.config, sio)
+    await api_app.state.db.agents.delete(spec.name)
+    with patch.object(feed, "snapshot", new_callable=AsyncMock, return_value=[]):
+        assert await feed.emit()
+    assert not sio.manager.is_connected(sid, "/sessions")
+    assert sid not in ns._registrations
+    assert all(call.args[1].packet_type == 1 for call in sio._send_packet.await_args_list)
+    sio._send_eio_packet.assert_not_awaited()
+
+
+@pytest.mark.parametrize("credential", ["shared", "operator"])
+async def test_retirement_preserves_existing_shared_socket_authority(api_app, credential):
+    from agent_backbone.api.socketio_server import create_sio
+    from agent_backbone.config import agent_api_key
+
+    sio = create_sio([])
+    sio.fastapi_app = SimpleNamespace(
+        state=SimpleNamespace(config=api_app.state.config, db=api_app.state.db)
+    )
+    sio._send_packet = AsyncMock()
+    sio._send_eio_packet = AsyncMock()
+    sid = await sio.manager.connect("engine", "/sessions")
+    ns = sio.namespace_handlers["/sessions"]
+    key = api_app.state.config.api_key
+    if credential == "shared":
+        key = agent_api_key(key)
+    assert await ns.on_connect(sid, {}, {"api_key": key})
+    spec = next(iter(api_app.state.agent_store.agents))
+    await api_app.state.db.agents.delete(spec.name)
+    await sio.emit("sessions:update", [], namespace="/sessions")
+    assert sio.manager.is_connected(sid, "/sessions")
+    sio._send_eio_packet.assert_awaited_once()
+    assert "sessions:update" in sio._send_eio_packet.await_args.args[1].data

@@ -15,7 +15,8 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   selection through `agent restart` for its own current registration. This identity
   is authenticated by the credential, not by a sender name or registration header.
   The restart remains bound to that registration while waiting; replacing the
-  registration invalidates it. Changing runtime clears unattended permission.
+  registration invalidates it. Scoped Socket.IO connections are disconnected before
+  further events or data when their registration is retired. Changing runtime clears unattended permission.
   Older shared collaboration credentials keep their previous authority and cannot
   select runtime/model. Private profiles provide upgraded credentials to existing
   managed CLI launches without a restart; no operator key is exposed.

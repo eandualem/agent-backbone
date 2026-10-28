@@ -235,3 +235,52 @@ async def test_restart_acceptance_does_not_wait_for_an_in_flight_launch(api_clie
     finally:
         release.set()
         await task
+
+
+async def test_retired_caller_during_refresh_cannot_restart_replacement(
+    api_client, api_app, monkeypatch
+):
+    store, db = api_app.state.agent_store, api_app.state.db
+    spec = next(iter(store.agents))
+    key = agent_api_key(api_app.state.config.api_key, spec.registration_id)
+    refresh = store.refresh
+
+    async def replace_before_refresh():
+        await db.agents.delete(spec.name)
+        await db.agents.upsert(
+            spec.name,
+            dir=spec.dir,
+            runtime=spec.runtime,
+            model=spec.model,
+            repo=spec.repo,
+            tags=list(spec.tags),
+            env=dict(spec.env),
+            description=spec.description,
+            unattended=spec.unattended,
+        )
+        await refresh()
+
+    monkeypatch.setattr(store, "refresh", replace_before_refresh)
+    response = await api_client.post(
+        f"/api/agents/{spec.name}/restart",
+        json={},
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    assert response.status_code == 403
+    assert await db.transitions.pending() == []
+    assert store.agents.get(spec.name).registration_id != spec.registration_id
+
+
+async def test_scoped_peer_restart_binds_target_not_callers_registration(api_client, api_app):
+    caller, target = list(api_app.state.agent_store.agents)[:2]
+    key = agent_api_key(api_app.state.config.api_key, caller.registration_id)
+    with patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True):
+        response = await api_client.post(
+            f"/api/agents/{target.name}/restart",
+            json={},
+            headers={"Authorization": f"Bearer {key}"},
+        )
+    assert response.status_code == 200, response.text
+    row = await api_app.state.db.transitions.get(response.json()["id"])
+    assert row["registration_id"] == target.registration_id
+    assert row["requested_by"] == caller.name

@@ -54,7 +54,7 @@ def get_pty_manager() -> PtyManager:
 
 def create_sio(cors_origins: list[str]) -> socketio.AsyncServer:
     """Create and configure the Socket.IO async server."""
-    sio = socketio.AsyncServer(
+    sio = RegistrationAwareServer(
         async_mode="asgi",
         cors_allowed_origins=cors_origins or None,
         max_http_buffer_size=1_048_576,
@@ -70,8 +70,66 @@ async def _restore_dynamic_window_size(session_name: str) -> None:
         log.error("Failed to restore tmux window-size latest for '%s'", session_name)
 
 
+class RegistrationAwareServer(socketio.AsyncServer):
+    """Retire scoped connections before they receive another broadcast or stream."""
+
+    async def emit(
+        self,
+        event,
+        data=None,
+        to=None,
+        room=None,
+        skip_sid=None,
+        namespace=None,
+        callback=None,
+        ignore_queue=False,
+    ):
+        ns = self.namespace_handlers.get(namespace or "/")
+        if isinstance(ns, _AuthenticatedNamespace):
+            for sid in tuple(ns._registrations):
+                if not await ns.registration_current(sid) and (to or room) == sid:
+                    return
+        return await super().emit(
+            event,
+            data,
+            to=to,
+            room=room,
+            skip_sid=skip_sid,
+            namespace=namespace,
+            callback=callback,
+            ignore_queue=ignore_queue,
+        )
+
+
 class _AuthenticatedNamespace(socketio.AsyncNamespace):
     """Namespace base that validates ``auth["api_key"]`` against the app config."""
+
+    def __init__(self, namespace: str) -> None:
+        super().__init__(namespace)
+        self._registrations: dict[str, str] = {}
+
+    async def registration_current(self, sid: str) -> bool:
+        registration = self._registrations.get(sid)
+        if registration is None:  # operator and legacy shared credentials retain their authority
+            return True
+        app = getattr(self.server, "fastapi_app", None)
+        db = getattr(getattr(app, "state", None), "db", None)
+        if db is not None and await db.agents.registration_name(registration):
+            return True
+        await self.disconnect(sid)
+        return False
+
+    async def trigger_event(self, event, *args):
+        if (
+            event not in {"connect", "disconnect"}
+            and args
+            and not await self.registration_current(args[0])
+        ):
+            return None
+        return await super().trigger_event(event, *args)
+
+    async def on_disconnect(self, sid: str) -> None:
+        self._registrations.pop(sid, None)
 
     def _config(self):
         app = getattr(self.server, "fastapi_app", None)
@@ -99,6 +157,10 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
                 "Socket.IO %s connection rejected — invalid auth (sid=%s)", self.namespace, sid
             )
             return False
+        config = self._config()
+        raw = auth.get("api_key") if isinstance(auth, dict) else None
+        if registration := credential_registration(raw, config.api_key):
+            self._registrations[sid] = registration
         return True
 
 
@@ -168,7 +230,7 @@ class TerminalNamespace(_AuthenticatedNamespace):
             return
 
         task = sid_subs.get(session_name)
-        if isinstance(task, asyncio.Task):
+        if isinstance(task, asyncio.Task) and task is not asyncio.current_task():
             task.cancel()
             try:
                 await task
@@ -291,6 +353,7 @@ class TerminalNamespace(_AuthenticatedNamespace):
         for session_name in sessions:
             await self._cleanup_session(sid, session_name)
         self._subscriptions.pop(sid, None)
+        await super().on_disconnect(sid)
         log.info("sid=%s disconnected, cleaned up %d sessions", sid, len(sessions))
 
     async def _cleanup_session(self, sid: str, session_name: str) -> None:

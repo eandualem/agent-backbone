@@ -400,6 +400,8 @@ async def restart_agent(
     spec = registered_agent_or_404(store.config, session)
     body = body or AgentRestartRequest()
     registration = getattr(request.state, "credential_registration", None)
+    if registration and not await db.agents.registration_name(registration):
+        raise HTTPException(status_code=403, detail="Agent credential registration is retired")
     if (body.runtime is not None or body.model is not None) and (
         not registration or not await db.agents.registration_matches(session, registration)
     ):
@@ -414,6 +416,7 @@ async def restart_agent(
             start_at=parse_start_at(body.start_at) if body.start_at else None,
             message=body.message or None,
             requested_by=getattr(request.state, "credential_agent", None) or body.from_entity,
+            # Saved-setting peer restarts bind the target, not the caller.
             registration_id=spec.registration_id if registration else None,
         )
         row = await request_transition(db, config, spec, req)
