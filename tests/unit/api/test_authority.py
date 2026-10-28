@@ -4,6 +4,7 @@ This API boundary applies equally to claude, codex, opencode, gemini,
 deepcode, aider and shell; required-runtime launch exports are tested separately.
 """
 
+import asyncio
 from dataclasses import replace
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ import pytest
 from agent_backbone.api.app import create_app
 from agent_backbone.api.auth import credential_role
 from agent_backbone.config import agent_api_key, load_secrets
+from agent_backbone.services.agents import lifecycle_lock
 from agent_backbone.services.agents.launch import StartResult
 
 
@@ -202,3 +204,34 @@ async def test_own_restart_accepts_omitted_and_explicit_saved_selection(
     assert response.status_code == 200, response.text
     row = await api_app.state.db.transitions.get(response.json()["id"])
     assert row["registration_id"] == spec.registration_id
+
+
+async def test_restart_acceptance_does_not_wait_for_an_in_flight_launch(api_client, api_app):
+    spec = next(iter(api_app.state.agent_store.agents))
+    key = agent_api_key(api_app.state.config.api_key, spec.registration_id)
+    locked, release = asyncio.Event(), asyncio.Event()
+
+    async def starting_agent():
+        async with lifecycle_lock(spec.name):
+            locked.set()
+            await release.wait()
+
+    task = asyncio.create_task(starting_agent())
+    await locked.wait()
+    try:
+        with patch("agent_backbone.services.runtimes.base.Runtime.available", return_value=True):
+            response = await asyncio.wait_for(
+                api_client.post(
+                    f"/api/agents/{spec.name}/restart",
+                    json={"runtime": spec.runtime},
+                    headers={"Authorization": f"Bearer {key}"},
+                ),
+                timeout=1,
+            )
+        assert response.status_code == 200, response.text
+        row = await api_app.state.db.transitions.get(response.json()["id"])
+        assert row["registration_id"] == spec.registration_id
+        assert row["stopped_at"] is None
+    finally:
+        release.set()
+        await task

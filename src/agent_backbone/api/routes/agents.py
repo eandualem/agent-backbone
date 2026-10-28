@@ -51,7 +51,6 @@ from agent_backbone.services.agents import (
     approve_agent,
     deny_agent,
     instruction_preview,
-    lifecycle_lock,
     read_state_file,
     record_answer,
     subscription_views,
@@ -395,33 +394,34 @@ async def restart_agent(
     """Accept a one-time stop/restart. Validated and persisted here; the
     ``agent-transitions`` job stops the session and starts the replacement,
     so a caller asking for its own session cannot lose the start."""
-    async with lifecycle_lock(session):
-        await store.refresh()
-        spec = registered_agent_or_404(store.config, session)
-        body = body or AgentRestartRequest()
-        registration = getattr(request.state, "credential_registration", None)
-        if (body.runtime is not None or body.model is not None) and (
-            not registration or not await db.agents.registration_matches(session, registration)
-        ):
-            await require_operator(request)
-        try:
-            req = TransitionRequest(
-                runtime=body.runtime,
-                model=body.model,
-                resume=body.resume,
-                start=body.start,
-                delay_seconds=body.delay_seconds,
-                start_at=parse_start_at(body.start_at) if body.start_at else None,
-                message=body.message or None,
-                requested_by=getattr(request.state, "credential_agent", None) or body.from_entity,
-                registration_id=spec.registration_id if registration else None,
-            )
-            row = await request_transition(db, config, spec, req)
-        except TransitionPending as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from None
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from None
-        return AgentTransitionView.from_row(row)
+    # Accept promptly even during a launch. The job rechecks the persisted
+    # registration under the lifecycle lock before stopping or starting anything.
+    await store.refresh()
+    spec = registered_agent_or_404(store.config, session)
+    body = body or AgentRestartRequest()
+    registration = getattr(request.state, "credential_registration", None)
+    if (body.runtime is not None or body.model is not None) and (
+        not registration or not await db.agents.registration_matches(session, registration)
+    ):
+        await require_operator(request)
+    try:
+        req = TransitionRequest(
+            runtime=body.runtime,
+            model=body.model,
+            resume=body.resume,
+            start=body.start,
+            delay_seconds=body.delay_seconds,
+            start_at=parse_start_at(body.start_at) if body.start_at else None,
+            message=body.message or None,
+            requested_by=getattr(request.state, "credential_agent", None) or body.from_entity,
+            registration_id=spec.registration_id if registration else None,
+        )
+        row = await request_transition(db, config, spec, req)
+    except TransitionPending as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return AgentTransitionView.from_row(row)
 
 
 @router.get("/agents/{session}/restarts", response_model=list[AgentTransitionView])
