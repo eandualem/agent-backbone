@@ -151,6 +151,20 @@ async def test_retirement_removes_session_feed_subscriber_before_next_broadcast(
     sio._send_eio_packet.assert_not_awaited()
 
 
+async def test_disconnect_cleanup_failure_still_removes_scoped_reader(api_app):
+    sio, ns, sid, spec = await _scoped_connection(api_app, "/terminal")
+    ns._subscriptions[sid] = {spec.name: None, "another": None}
+    with patch.object(
+        ns, "_cleanup_session", side_effect=[RuntimeError("detach failed"), None]
+    ) as cleanup:
+        await sio.disconnect(sid, namespace=ns.namespace)
+    assert cleanup.await_count == 2
+    assert sid not in ns._subscriptions and sid not in ns._registrations
+    assert not list(sio.manager.get_participants(ns.namespace, None))
+    await sio.emit("terminal_output", "must not be sent", namespace=ns.namespace)
+    sio._send_eio_packet.assert_not_awaited()
+
+
 @pytest.mark.parametrize("credential", ["shared", "operator"])
 async def test_retirement_preserves_existing_shared_socket_authority(api_app, credential):
     from agent_backbone.api.socketio_server import create_sio
@@ -202,6 +216,9 @@ async def test_targeted_output_checks_only_its_recipient(api_app):
         lookup.reset_mock()
         await sio.emit("terminal_output", "two", to=operator, namespace=ns.namespace)
         lookup.assert_not_awaited()
+    sent = [call.args for call in sio._send_eio_packet.await_args_list]
+    assert any(eio_sid == "engine" and "one" in packet.data for eio_sid, packet in sent)
+    assert not any(eio_sid == "engine" and "two" in packet.data for eio_sid, packet in sent)
 
 
 async def test_registration_lookup_failure_excludes_scoped_reader_without_failing_feed(api_app):

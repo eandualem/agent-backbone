@@ -363,7 +363,12 @@ class TerminalNamespace(_AuthenticatedNamespace):
     async def on_disconnect(self, sid: str) -> None:
         sessions = list(self._subscriptions.get(sid, {}).keys())
         for session_name in sessions:
-            await self._cleanup_session(sid, session_name)
+            try:
+                await self._cleanup_session(sid, session_name)
+            except Exception:
+                # Let Socket.IO finish removing the client from its rooms even
+                # if a PTY fails to detach, and still clean up other sessions.
+                log.exception("Could not clean up disconnected terminal subscription")
         self._subscriptions.pop(sid, None)
         await super().on_disconnect(sid)
         log.info("sid=%s disconnected, cleaned up %d sessions", sid, len(sessions))

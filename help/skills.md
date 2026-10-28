@@ -73,7 +73,7 @@ skill directory: `.claude/skills` for Claude Code, `.agents/skills` for Codex
 and OpenCode. This example uses `.agents/skills`:
 
 ```bash
-cp -r .agents/skills/my-skill ./my-skill-draft
+cp -RL .agents/skills/my-skill ./my-skill-draft
 # edit ./my-skill-draft/SKILL.md
 ```
 
