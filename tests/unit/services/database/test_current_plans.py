@@ -41,8 +41,7 @@ async def test_rename_reuse_and_current_only_retention(db):
     identity = (await db.current_plans.query(agent="ike"))["items"][0]["author_id"]
     body = publication(identity)
     first = await db.current_plans.publish(PublishCurrentPlan.model_validate(body))
-    async with db.engine.begin() as conn:
-        await conn.execute(text("UPDATE agents SET name='renamed' WHERE name='ike'"))
+    await db.agents.rename("ike", "renamed")
     assert (await db.current_plans.get(identity))["agent_name"] == "renamed"
     with pytest.raises(CurrentPlanError, match="registration"):
         await db.current_plans.publish(PublishCurrentPlan.model_validate(body))
@@ -116,3 +115,42 @@ async def test_publication_losing_receipt_race_to_feedback_rolls_back(db, monkey
     current = await db.current_plans.get(identities["ike"])
     assert current["revision_id"] == initial["receipt"]["revision_id"]
     assert current["plan"]["title"] == "Current work"
+
+
+async def test_feedback_recipient_rename_and_sender_retry_limits(db):
+    for name in ("writer", "worker"):
+        await author(db, name)
+    identity = (await db.current_plans.query(agent="worker"))["items"][0]["author_id"]
+    published = await db.current_plans.publish(
+        PublishCurrentPlan.model_validate(publication(identity, author="worker"))
+    )
+    body = CurrentPlanFeedback(
+        author="writer",
+        request_id=uuid4().hex,
+        observed_plan_id=published["receipt"]["plan_id"],
+        observed_revision_id=published["receipt"]["revision_id"],
+        kind="question",
+        text="What remains?",
+    )
+    receipt = await db.current_plans.feedback(identity, body, lambda sender, text: text)
+    await db.agents.rename("worker", "renamed-worker")
+    current = await db.current_plans.get(identity)
+    assert current["agent_name"] == "renamed-worker"
+    assert current["plan_id"] == body.observed_plan_id
+    assert current["revision_id"] == body.observed_revision_id
+    assert await db.current_plans.feedback(identity, body, lambda sender, text: text) == receipt
+    async with db.engine.begin() as conn:
+        queued = (await conn.execute(text("SELECT * FROM message_queue"))).mappings().one()
+    assert queued["session_name"] == queued["target_entity"] == "renamed-worker"
+    assert queued["registration_id"] == identity
+    assert queued["operation_id"] == receipt["operation_id"]
+    await db.agents.rename("writer", "renamed-writer")
+    with pytest.raises(CurrentPlanError) as unavailable:
+        await db.current_plans.feedback(identity, body, lambda sender, text: text)
+    assert unavailable.value.detail["code"] == "author_unavailable"
+    renamed = body.model_copy(update={"author": "renamed-writer"})
+    with pytest.raises(CurrentPlanError) as conflict:
+        await db.current_plans.feedback(identity, renamed, lambda sender, text: text)
+    assert conflict.value.detail["code"] == "request_conflict"
+    async with db.engine.begin() as conn:
+        assert await conn.scalar(text("SELECT count(*) FROM message_queue")) == 1

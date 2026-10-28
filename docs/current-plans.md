@@ -101,7 +101,13 @@ The result has `feedback_id`, `author_id`, `plan_id`, `observed_revision_id`,
 feedback/operation identity and return current delivery status, even after the
 plan changes or its owner retires. They do not send a second message. Queued,
 uncertain, expired and unknown are distinct; none means the agent answered.
-After uncertain transport, preserve the exact request/key and retry it.
+After uncertain transport, preserve the exact request/key and retry it. Each
+attempt still requires a current registered sender and any enrolled signature.
+If the sender was renamed, the original name returns `author_unavailable`;
+changing the name under the same key returns `request_conflict`. Reconcile delivery
+history before deliberately creating a new operation. Changing the key is not a
+safe automatic retry. Renaming the recipient preserves its registration-bound
+context and does not prevent an unchanged sender from retrying.
 
 ## API and retention
 
