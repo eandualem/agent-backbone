@@ -34,7 +34,6 @@ from agent_backbone.services.routing import quote_envelope_lines
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
-_PLANNED = ("sheet",)
 _OBSERVED = ("skill", "policy")
 _MAX_ID = 2**63 - 1
 
@@ -118,7 +117,7 @@ def compose(entry: dict, artifact: dict) -> str:
     )
     version_label = (
         f"rev {anchor['revision_id']}"
-        if artifact["kind"] == "plan" and anchor.get("revision_id")
+        if artifact["kind"] in {"plan", "sheet"} and anchor.get("revision_id")
         else version["label"]
     )
     where = ", ".join(part for part in (version_label, anchor.get("label")) if part)
@@ -131,6 +130,14 @@ def compose(entry: dict, artifact: dict) -> str:
             "Observed plan context (quoted data): "
             + json.dumps(anchor["context"], ensure_ascii=True)
             + "\n"
+        )
+    if kind == "sheet" and anchor.get("sheet"):
+        context = (
+            "Observed Sheet selection (stable IDs; quoted data): "
+            + json.dumps(
+                {"revision_id": anchor["revision_id"], "sheet": anchor["sheet"]}, ensure_ascii=True
+            )
+            + "\nRead the stored revision with backbone sheets show before answering.\n"
         )
     return (
         f"[via:backbone conversation:{kind}/{artifact_id} from:owner]"
@@ -154,10 +161,7 @@ def _unknown(exc: UnknownArtifact) -> JSONResponse:
 
 def _kind(kind: str) -> None:
     if kind not in CONVERSATION_KINDS:
-        known = kind in _PLANNED
-        raise UnknownArtifact(
-            f"Conversations on {kind}s are not available yet." if known else f"No kind {kind}."
-        )
+        raise UnknownArtifact(f"No kind {kind}.")
 
 
 def _owner(request: Request) -> None:

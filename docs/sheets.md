@@ -173,6 +173,16 @@ these diagnostics when saving or displaying a receipt.
 
 ## Questions and feedback
 
+For a retained thread, use [Sheet conversations](conversations.md#sheets):
+`backbone conversations show sheet SHEET_ID` and
+`backbone conversations reply sheet SHEET_ID "…" --to ENTRY`.
+Owner questions carry the observed revision and stable selection IDs; agent
+replies may link a revision they published. Workbook edits append revision
+events atomically. Conversation participation grants no edit rights.
+
+The following older feedback command delivers contextual messages separately;
+it does not append a conversation entry.
+
 ```bash
 backbone sheets feedback SHEET_ID --schema
 backbone sheets feedback SHEET_ID --file feedback.json --json

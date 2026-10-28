@@ -8,8 +8,7 @@ Shared skills and policies have conversations too, so you can ask an agent to
 explain one even though no agent published it.
 
 Conversations exist today for Documents, Responses, progress reports, skills,
-policies and current plans. Sheets follow; until then their routes return
-`404 {"error": "unknown_artifact"}`.
+policies, current plans and Sheets.
 
 ## Identity
 
@@ -23,6 +22,7 @@ A conversation is keyed by the artifact's kind and stable ID:
 | `skill` | Assigned when Backbone first reads the skill ([below](#skills-and-policies)) | The maintainer the operator mapped, if any |
 | `policy` | Assigned when Backbone first reads the policy | The maintainer the operator mapped, if any |
 | `plan` | The agent registration’s `author_id` | That registration |
+| `sheet` | `sheet_id` | The workbook’s registered owner |
 
 Responses and reports carry `conversation_id` in their list and show output.
 Reading a conversation that has never been used returns an empty list with its
@@ -47,6 +47,40 @@ Any message can carry an `anchor`: the version the author was viewing
 (`revision_id`) and a display `label`. Artifact content stays in its own store;
 entries reference versions. Current plans are the exception to historical content
 reads: only the current checklist remains readable, as described below.
+
+## Sheets
+
+Read `backbone conversations show sheet SHEET_ID` and answer with
+`backbone conversations reply sheet SHEET_ID "…" --to ENTRY`. The registered
+workbook owner remains responsible even when an operator edits it. An addressed
+agent may discuss it, but only the existing owner or operator can edit it.
+Retiring or renaming that registration preserves the thread; name reuse never
+transfers ownership.
+
+A selected-cell anchor includes the observed `revision_id` and
+`sheet: {tab_id, row_ids, column_ids}`. IDs must exist in that immutable revision,
+be unique, and select at most 100 cells with nonempty row and column lists.
+`label` is display-only. Later moves, sorts and deletions do not change what an
+older selection means. Missing revisions return `invalid_revision`; absent or
+malformed selections return `invalid_anchor`, before any message is queued.
+Exact retries return the original entry.
+
+Delivery includes the observed revision and stable selection IDs as quoted data.
+Read the pinned workbook with `backbone sheets show SHEET_ID --revision REVISION_ID
+--tab TAB_ID --json`, using range offsets as needed, before answering. Cell
+payloads remain in the Sheet's immutable store; conversation entries do not copy
+workbooks or recalculate old values. `backbone sheets history SHEET_ID` and
+`GET /api/sheets/{sheet_id}/revisions` provide paginated history, and existing
+revision-pinned metadata, range and export reads retrieve old content.
+
+Successful create/import/edit transactions append revision events attributed to
+the actual editor: agent or owner. An agent reply may link only a revision that
+agent published, never an operator's edit. Events include the revision ID and
+label, without inferring which message caused the edit. For existing Sheets,
+the current revision becomes a baseline on the first accepted message or next
+edit; older retained revisions stay readable without invented conversation events.
+The older `/api/sheets/{sheet_id}/feedback` endpoint remains separate and does not
+create a shared conversation entry.
 
 ## Current plans
 
