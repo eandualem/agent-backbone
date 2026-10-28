@@ -97,6 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("runtimes", help="supported runtimes, whether installed, example model ids")
+    p.add_argument("--json", action="store_true", help="versioned runtime discovery for setup")
     p.set_defaults(func=cmd_runtimes)
 
     p = sub.add_parser("completion", help="enable Tab completion (see docs cli)")
@@ -597,6 +598,10 @@ def main(argv: list[str] | None = None) -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
+    # Adapter discovery is usable before an installation or account exists.
+    # It reads no installation secrets and offers no administrative operation.
+    if args.command == "runtimes":
+        sys.exit(args.func(args))
     try:
         client_key = bootstrap_config().api_key
     except ValueError as exc:

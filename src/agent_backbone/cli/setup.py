@@ -211,6 +211,12 @@ def cmd_runtimes(args: argparse.Namespace) -> int:
     """Every runtime, whether its binary is installed, and example model ids."""
     from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
 
+    if getattr(args, "json", False):
+        _common.print_json(
+            {"schema_version": 1, "items": [rt.discovery() for rt in REGISTRY.values()]}
+        )
+        return 0
+
     rows = []
     for rt in REGISTRY.values():
         installed = "installed" if rt.available() else "not found"
