@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import text
 
-from agent_backbone.models import PublishCurrentPlan
+from agent_backbone.models import CurrentPlanFeedback, PublishCurrentPlan
 from agent_backbone.services.database import BackboneDB, CurrentPlanError
 from tests.report_support import author
 from tests.unit.api.routes.test_api_current_plans import publication
@@ -69,3 +69,50 @@ async def test_rename_reuse_and_current_only_retention(db):
     with pytest.raises(CurrentPlanError):
         await db.current_plans.publish(PublishCurrentPlan.model_validate(body))
     assert await db.current_plans.prune(30) == 1
+
+
+async def test_publication_losing_receipt_race_to_feedback_rolls_back(db, monkeypatch):
+    for name in ("ike", "target"):
+        await author(db, name)
+    identities = {
+        row["agent_name"]: row["author_id"] for row in (await db.current_plans.query())["items"]
+    }
+    body = publication(identities["ike"])
+    initial = await db.current_plans.publish(PublishCurrentPlan.model_validate(body))
+    target = await db.current_plans.publish(
+        PublishCurrentPlan.model_validate(publication(identities["target"], author="target"))
+    )
+    request_id = uuid4().hex
+    await db.current_plans.feedback(
+        identities["target"],
+        CurrentPlanFeedback(
+            author="ike",
+            request_id=request_id,
+            observed_plan_id=target["receipt"]["plan_id"],
+            observed_revision_id=target["receipt"]["revision_id"],
+            kind="question",
+            text="What remains?",
+        ),
+        lambda sender, text: text,
+    )
+    original_retry = db.current_plans._retry
+    reads = 0
+
+    async def retry_after_feedback_commit(*args):
+        nonlocal reads
+        reads += 1
+        # Model PostgreSQL's interleaving: the first read preceded feedback's
+        # commit; the receipt insertion then sees its real uniqueness conflict.
+        return None if reads == 1 else await original_retry(*args)
+
+    monkeypatch.setattr(db.current_plans, "_retry", retry_after_feedback_commit)
+    body.update(request_id=request_id, base_revision_id=initial["receipt"]["revision_id"])
+    body["plan"]["title"] = "This change must roll back"
+    with pytest.raises(CurrentPlanError) as refused:
+        await db.current_plans.publish(PublishCurrentPlan.model_validate(body))
+    assert refused.value.status == 409
+    assert refused.value.detail["code"] == "request_conflict"
+    assert reads == 2
+    current = await db.current_plans.get(identities["ike"])
+    assert current["revision_id"] == initial["receipt"]["revision_id"]
+    assert current["plan"]["title"] == "Current work"

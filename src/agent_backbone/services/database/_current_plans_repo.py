@@ -94,44 +94,53 @@ class CurrentPlanRepo(Repo):
         body = PublishCurrentPlan.model_validate(publication.model_dump())
         digest = _digest({"publish": body.model_dump()})
         actor = "agent:" + body.author_id
-        async with self._tx() as conn:
-            # Lock the registration before reading state: serializes writes, rename and forget
-            # on PostgreSQL and acquires SQLite's writer lock before any read.
-            name = await conn.scalar(
-                update(_A)
-                .where(_A.c.name == body.author, _A.c.report_identity == body.author_id)
-                .values(report_identity=_A.c.report_identity)
-                .returning(_A.c.name)
-            )
-            if name is None:
-                raise CurrentPlanError(
-                    "author_unavailable", "author name and registration must still match"
+        try:
+            async with self._tx() as conn:
+                # Lock the registration before reading state: serializes writes, rename and forget
+                # on PostgreSQL and acquires SQLite's writer lock before any read.
+                name = await conn.scalar(
+                    update(_A)
+                    .where(_A.c.name == body.author, _A.c.report_identity == body.author_id)
+                    .values(report_identity=_A.c.report_identity)
+                    .returning(_A.c.name)
                 )
-            previous = await self._retry(conn, actor, body.request_id, digest)
-            if previous:
-                return {"receipt": previous, "created": False}
-            current = (
-                (await conn.execute(select(_P).where(_P.c.author_id == body.author_id)))
-                .mappings()
-                .first()
-            )
-            if body.base_revision_id != (current["revision_id"] if current else None):
-                raise self._stale(current)
-            receipt = {
-                "author_id": body.author_id,
-                "plan_id": body.plan.plan_id,
-                "revision_id": uuid4().hex,
-                "updated_at": now_iso(),
-            }
-            values = receipt | {"author_name": name, "content": _json(body.plan.model_dump())}
-            if current:
-                await conn.execute(
-                    update(_P).where(_P.c.author_id == body.author_id).values(**values)
+                if name is None:
+                    raise CurrentPlanError(
+                        "author_unavailable", "author name and registration must still match"
+                    )
+                previous = await self._retry(conn, actor, body.request_id, digest)
+                if previous:
+                    return {"receipt": previous, "created": False}
+                current = (
+                    (await conn.execute(select(_P).where(_P.c.author_id == body.author_id)))
+                    .mappings()
+                    .first()
                 )
-            else:
-                await conn.execute(insert(_P).values(**values))
-            await self._save_receipt(conn, actor, body.request_id, digest, receipt)
-            return {"receipt": receipt, "created": True}
+                if body.base_revision_id != (current["revision_id"] if current else None):
+                    raise self._stale(current)
+                receipt = {
+                    "author_id": body.author_id,
+                    "plan_id": body.plan.plan_id,
+                    "revision_id": uuid4().hex,
+                    "updated_at": now_iso(),
+                }
+                values = receipt | {"author_name": name, "content": _json(body.plan.model_dump())}
+                if current:
+                    await conn.execute(
+                        update(_P).where(_P.c.author_id == body.author_id).values(**values)
+                    )
+                else:
+                    await conn.execute(insert(_P).values(**values))
+                await self._save_receipt(conn, actor, body.request_id, digest, receipt)
+                return {"receipt": receipt, "created": True}
+        except IntegrityError:
+            # Feedback may claim this actor/key while locking a different recipient.
+            # The failed publication has rolled back before checking the winner.
+            async with self._tx() as conn:
+                previous = await self._retry(conn, actor, body.request_id, digest)
+                if previous:
+                    return {"receipt": previous, "created": False}
+            raise
 
     async def get(self, author_id):
         async with self._tx() as conn:
