@@ -254,3 +254,25 @@ async def test_response_chain_roots_have_bounded_round_trips(db):
         finally:
             event.remove(db.engine.sync_engine, "before_cursor_execute", observe)
         assert len(requests) <= 2  # independent of correction depth and number of roots
+        # A full page shares its ancestry instead of expanding it once per item.
+        lineage_sizes = []
+
+        class ObservedConnection:
+            async def execute(self, statement):
+                from sqlalchemy import func, select
+
+                lineage_sizes.append(
+                    await conn.scalar(
+                        select(func.count()).select_from(statement.get_final_froms()[0])
+                    )
+                )
+                return await conn.execute(statement)
+
+        ids = list(range(1, 102)) + [999]
+        assert await chain_roots(ObservedConnection(), ids) == {
+            i: (i if i in (10, 999) else 1 if i < 10 else 11) for i in ids
+        }
+        assert lineage_sizes == [100]  # every retained ancestor exactly once
+        # Malformed legacy cycles terminate; missing predecessors still stop a chain.
+        await conn.execute(text("UPDATE reports SET supersedes_id=9 WHERE id=1"))
+        assert await chain_roots(conn, [1, 9, 101]) == {1: 1, 9: 1, 101: 11}

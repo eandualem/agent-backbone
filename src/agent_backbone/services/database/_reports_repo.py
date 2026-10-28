@@ -111,22 +111,34 @@ async def chain_roots(conn, ids: list[int]) -> dict[int, int]:
     if not ids:
         return roots
     lineage = (
-        select(_R.c.id.label("start_id"), _R.c.id, _R.c.supersedes_id)
+        select(_R.c.id, _R.c.supersedes_id)
         .where(_R.c.id.in_(ids))
         .cte("response_lineage", recursive=True)
     )
     lineage = lineage.union(
-        select(lineage.c.start_id, _R.c.id, _R.c.supersedes_id).join(
-            _R, _R.c.id == lineage.c.supersedes_id
-        )
+        select(_R.c.id, _R.c.supersedes_id)
+        .select_from(lineage)
+        .join(_R, _R.c.id == lineage.c.supersedes_id)
     )
-    # A correction can only reference an already-published predecessor. UNION
-    # also terminates on a malformed cycle instead of looping in Python.
-    rows = await conn.execute(
-        select(lineage.c.start_id, func.min(lineage.c.id)).group_by(lineage.c.start_id)
-    )
-    roots.update(rows.all())
-    return roots
+    # UNION visits shared ancestors once, regardless of the number of requested
+    # corrections, and terminates even if stored data contains a malformed cycle.
+    rows = await conn.execute(select(lineage.c.id, lineage.c.supersedes_id))
+    parents = dict(rows.all())
+    resolved = {}
+    for start in parents:
+        path = set()
+        current = start
+        while current not in resolved and current not in path:
+            path.add(current)
+            parent = parents[current]
+            if parent not in parents:
+                root = current
+                break
+            current = parent
+        else:
+            root = resolved[current] if current in resolved else min(path)
+        resolved.update((node, root) for node in path)
+    return {i: resolved.get(i, i) for i in ids}
 
 
 async def chain_ids(conn, root: int) -> list[int]:

@@ -218,7 +218,8 @@ writers, so a lower entry ID that commits after a higher one cannot disappear
 behind the returned cursor. Writes resume as soon as the page and watermark
 are captured, before the poll looks up artifact metadata and responsible agents.
 SQLite already serializes its writers. Response correction-chain roots are
-resolved in one query, including when earlier revisions have been pruned.
+resolved in one query that visits shared ancestors once, including when earlier
+revisions have been pruned.
 An explicit recipient matches an existing registration ID first, then a name;
 a name made entirely of hexadecimal characters remains usable.
 
