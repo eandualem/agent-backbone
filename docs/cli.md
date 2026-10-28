@@ -577,9 +577,9 @@ A resumed conversation carries what the runtime itself recorded: the messages,
 tool calls and results in its transcript. It does not carry a tool call or
 command that was running at the stop, an unanswered permission prompt or
 dialog, the terminal screen and scrollback, or text typed but not sent.
-Messages sent to an agent while it was stopped wait in the queue and expire
-as usual (`timing.queue_expiry_minutes`, 30 by default), so overnight messages
-are reported as expired rather than delivered at the resume. Whether a resumed agent receives
+Direct messages sent while an agent was stopped wait for delivery or inbox
+acknowledgment, including overnight. Other queued notifications follow
+`timing.queue_expiry_minutes` (30 by default). Whether a resumed agent receives
 the current brief depends on its runtime ([runtime capabilities](runtime-capabilities.md)).
 
 ## `backbone swarm create|list|status|disband`
@@ -679,7 +679,8 @@ message through while a human is typing or the agent is settling; it never
 interrupts a busy agent — that is an invariant, not a gap. A message that
 cannot be delivered now (`agent_working`, `offline`, …) is stored in the
 queue and the monitor delivers it when the agent is ready, oldest first;
-ordinary queued messages expire after `timing.queue_expiry_minutes` (default 30);
+direct messages remain pending until delivery, inbox acknowledgment or registration
+retirement. Other notifications expire after `timing.queue_expiry_minutes` (default 30);
 active swarm coordination and inbox holds are retained, and nothing behind an
 unconfirmed (`uncertain`) delivery expires while that hold stands. When messages
 expire, the recipient and each registered agent that sent one get a
@@ -842,10 +843,11 @@ reads, including after a lost response/restart. Do not repeat work for an
 Uncertain submissions pause automatic terminal delivery for that session until
 resolved, preventing blind retries from duplicating accepted assignments.
 
-The normal queue expiry remains `timing.queue_expiry_minutes` (30 minutes).
+Direct messages remain pending until delivery, inbox acknowledgment or registration
+retirement. Other notifications use `timing.queue_expiry_minutes` (30 minutes).
 Messages to or from active swarm members are exempt while that swarm is active;
 checkpoint and uncertain holds remain until acknowledged. Ending the swarm
-removes the active-swarm exemption for ordinary pending rows. These are retention
+removes the active-swarm exemption for other pending notifications. These are retention
 rules, not a promise of timely steering: busy agents are never interrupted,
 including by priority messages. Workers must check their inbox between meaningful
 steps and before integration. See [messaging help](../help/messaging.md).

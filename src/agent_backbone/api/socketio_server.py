@@ -19,7 +19,7 @@ from pathlib import Path
 
 import socketio
 
-from agent_backbone.api.auth import credential_role
+from agent_backbone.api.auth import credential_registration, credential_role
 from agent_backbone.api.session_updates import SESSIONS_NAMESPACE
 from agent_backbone.services.terminal import (
     PtyManager,
@@ -54,7 +54,7 @@ def get_pty_manager() -> PtyManager:
 
 def create_sio(cors_origins: list[str]) -> socketio.AsyncServer:
     """Create and configure the Socket.IO async server."""
-    sio = socketio.AsyncServer(
+    sio = RegistrationAwareServer(
         async_mode="asgi",
         cors_allowed_origins=cors_origins or None,
         max_http_buffer_size=1_048_576,
@@ -70,28 +70,109 @@ async def _restore_dynamic_window_size(session_name: str) -> None:
         log.error("Failed to restore tmux window-size latest for '%s'", session_name)
 
 
+class RegistrationAwareServer(socketio.AsyncServer):
+    """Retire scoped connections before they receive another broadcast or stream."""
+
+    async def emit(
+        self,
+        event,
+        data=None,
+        to=None,
+        room=None,
+        skip_sid=None,
+        namespace=None,
+        callback=None,
+        ignore_queue=False,
+    ):
+        ns = self.namespace_handlers.get(namespace or "/")
+        excluded = [skip_sid] if isinstance(skip_sid, str) else list(skip_sid or [])
+        if isinstance(ns, _AuthenticatedNamespace):
+            recipients = tuple(self.manager.get_participants(ns.namespace, to or room))
+            for sid, _ in recipients:
+                if (
+                    sid not in excluded
+                    and sid in ns._registrations
+                    and not await ns.registration_current(sid)
+                ):
+                    # Also exclude a connection whose disconnect is already in progress.
+                    excluded.append(sid)
+        return await super().emit(
+            event,
+            data,
+            to=to,
+            room=room,
+            skip_sid=excluded or None,
+            namespace=namespace,
+            callback=callback,
+            ignore_queue=ignore_queue,
+        )
+
+
 class _AuthenticatedNamespace(socketio.AsyncNamespace):
     """Namespace base that validates ``auth["api_key"]`` against the app config."""
+
+    def __init__(self, namespace: str) -> None:
+        super().__init__(namespace)
+        self._registrations: dict[str, str] = {}
+
+    async def registration_current(self, sid: str) -> bool:
+        registration = self._registrations.get(sid)
+        if registration is None:  # operator and legacy shared credentials retain their authority
+            return True
+        app = getattr(self.server, "fastapi_app", None)
+        db = getattr(getattr(app, "state", None), "db", None)
+        try:
+            if db is not None and await db.agents.registration_name(registration):
+                return True
+        except Exception as exc:
+            log.warning(
+                "Scoped socket registration check failed (%s); disconnecting", type(exc).__name__
+            )
+        await self.disconnect(sid)
+        return False
+
+    async def trigger_event(self, event, *args):
+        if (
+            event not in {"connect", "disconnect"}
+            and args
+            and not await self.registration_current(args[0])
+        ):
+            return None
+        return await super().trigger_event(event, *args)
+
+    async def on_disconnect(self, sid: str) -> None:
+        self._registrations.pop(sid, None)
 
     def _config(self):
         app = getattr(self.server, "fastapi_app", None)
         return getattr(getattr(app, "state", None), "config", None)
 
-    def _auth_valid(self, auth: dict | None) -> bool:
+    async def _auth_valid(self, auth: dict | None) -> bool:
         config = self._config()
         if config is None:
             return False
         if not config.api_key:
             return config.security.allow_unauthenticated
         raw = auth.get("api_key") if isinstance(auth, dict) else None
-        return credential_role(raw if isinstance(raw, str) else None, config.api_key) is not None
+        candidate = raw if isinstance(raw, str) else None
+        if credential_role(candidate, config.api_key) is None:
+            return False
+        if registration := credential_registration(candidate, config.api_key):
+            app = getattr(self.server, "fastapi_app", None)
+            db = getattr(getattr(app, "state", None), "db", None)
+            return bool(db and await db.agents.registration_name(registration))
+        return True
 
     async def on_connect(self, sid: str, environ: dict, auth: dict | None = None) -> bool:
-        if not self._auth_valid(auth):
+        if not await self._auth_valid(auth):
             log.warning(
                 "Socket.IO %s connection rejected — invalid auth (sid=%s)", self.namespace, sid
             )
             return False
+        config = self._config()
+        raw = auth.get("api_key") if isinstance(auth, dict) else None
+        if registration := credential_registration(raw, config.api_key):
+            self._registrations[sid] = registration
         return True
 
 
@@ -161,7 +242,7 @@ class TerminalNamespace(_AuthenticatedNamespace):
             return
 
         task = sid_subs.get(session_name)
-        if isinstance(task, asyncio.Task):
+        if isinstance(task, asyncio.Task) and task is not asyncio.current_task():
             task.cancel()
             try:
                 await task
@@ -282,8 +363,14 @@ class TerminalNamespace(_AuthenticatedNamespace):
     async def on_disconnect(self, sid: str) -> None:
         sessions = list(self._subscriptions.get(sid, {}).keys())
         for session_name in sessions:
-            await self._cleanup_session(sid, session_name)
+            try:
+                await self._cleanup_session(sid, session_name)
+            except Exception:
+                # Let Socket.IO finish removing the client from its rooms even
+                # if a PTY fails to detach, and still clean up other sessions.
+                log.exception("Could not clean up disconnected terminal subscription")
         self._subscriptions.pop(sid, None)
+        await super().on_disconnect(sid)
         log.info("sid=%s disconnected, cleaned up %d sessions", sid, len(sessions))
 
     async def _cleanup_session(self, sid: str, session_name: str) -> None:

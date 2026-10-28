@@ -181,9 +181,7 @@ def _serialized(fn: Callable[..., Awaitable[_Result]]):
     return locked
 
 
-def queue_detail(
-    report: DeliveryReport, session_name: str, expiry_minutes: int, *, inbox_only: bool = False
-) -> str:
+def queue_detail(report: DeliveryReport, session_name: str, *, inbox_only: bool = False) -> str:
     """One plain sentence about what happened, for people and agents alike."""
     if report.unconfirmed and report.queue_id is None:
         return "Submission is uncertain and was not retained; inspect the terminal before retrying."
@@ -212,8 +210,7 @@ def queue_detail(
     if report.queue == "stored":
         return (
             f"Queued: {session_name} is {why}; the message is stored and will be delivered "
-            f"when the agent is ready (normally expires after {expiry_minutes} minutes; "
-            "active swarm coordination is retained)."
+            "when the agent is ready, or read with backbone inbox; direct messages do not expire."
         )
     if report.queue == "already_queued":
         return (

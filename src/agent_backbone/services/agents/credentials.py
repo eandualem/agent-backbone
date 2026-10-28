@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from agent_backbone.config import (
+    REGISTRATION_KEY_PREFIX,
     BackboneConfig,
     agent_api_key,
     agent_credential,
@@ -100,7 +101,7 @@ def _profile_values(config: BackboneConfig, name: str, identity: str, launch: st
         "launch": launch,
         "host": host,
         "port": str(config.backbone.port),
-        "credential": agent_api_key(config.api_key),
+        "credential": agent_api_key(config.api_key, identity),
     }
 
 
@@ -153,9 +154,11 @@ def _bind_agent_profile(config: BackboneConfig, registration: dict, launch_id: s
     if profile is None:
         profile = _profile_values(config, name, identity, launch_id)
     else:
+        if not config.api_key or not profile["credential"].startswith(
+            REGISTRATION_KEY_PREFIX + identity + ":"
+        ):
+            profile["credential"] = agent_api_key(config.api_key, identity)
         profile.update(registration=identity, launch=launch_id)
-        if not config.api_key or not profile["credential"]:
-            profile["credential"] = agent_api_key(config.api_key)
     _write_profile(
         agent_profile_path(config.data_dir, name),
         "".join(f"{key}={value}\n" for key, value in profile.items()),
@@ -168,7 +171,7 @@ def agent_profile_readiness(config: BackboneConfig, row: dict) -> str:
         profile = read_agent_profile(config.data_dir, row["name"])
         if not profile or profile["registration"] != row.get("report_identity"):
             return "unavailable"
-        if profile["credential"] != agent_api_key(config.api_key):
+        if profile["credential"] != agent_api_key(config.api_key, row["report_identity"]):
             return "unavailable"
         launch = read_launch_marker(config.state_dir, row["name"])
         if not launch:

@@ -615,7 +615,7 @@ async def test_the_immediate_drain_expires_what_is_overdue_first(api_app, config
 
     db = api_app.state.db
     old = await db.queue.enqueue(
-        session_name="ike", message="stale", delivery_kind="direct_message", sender="peer"
+        session_name="ike", message="stale", delivery_kind="comment", sender="peer"
     )
     async with db.engine.begin() as conn:
         await conn.execute(

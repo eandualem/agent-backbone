@@ -76,7 +76,7 @@ async def test_existing_and_offline_agents_pick_up_scoped_profiles_without_resta
         client.setenv("BACKBONE_HOST", "attacker.example")
         client.setenv("BACKBONE_PORT", "9999")
         config = await read_client_config()
-        assert config.api_key == agent_api_key("operator")
+        assert config.api_key == agent_api_key("operator", row["report_identity"])
         assert config.github_token == ""
         assert config.backbone.host == "127.0.0.1"
         assert config.backbone.port == store.config.backbone.port
@@ -87,7 +87,7 @@ async def test_existing_and_offline_agents_pick_up_scoped_profiles_without_resta
         await provision_agent_profiles(rotated, rows)
         client.setenv("BACKBONE_AGENT_CREDENTIAL", config.api_key)
         config = await read_client_config()
-        assert config.api_key == agent_api_key("rotated")
+        assert config.api_key == agent_api_key("rotated", row["report_identity"])
         assert config.backbone.port == 8234
     assert os.stat(agent_profile_path(tmp_path, "worker")).st_mode & 0o777 == 0o600
     assert os.stat(tmp_path / "agent-credentials").st_mode & 0o777 == 0o700
@@ -217,7 +217,9 @@ async def test_launch_binding_preserves_new_registrations_and_rotated_credential
     worker = read_agent_profile(tmp_path, "worker")
     peer = read_agent_profile(tmp_path, "peer")
     assert worker["launch"] == "b" * 32
-    assert worker["credential"] == peer["credential"] == agent_api_key("rotated")
+    assert worker["credential"] == agent_api_key("rotated", worker["registration"])
+    assert peer["credential"] == agent_api_key("rotated", peer["registration"])
+    assert worker["credential"] != peer["credential"]
 
 
 async def test_local_configuration_reader_cannot_replace_daemon_endpoint(db, tmp_path, monkeypatch):
@@ -261,7 +263,7 @@ async def test_offline_recreated_registration_can_start_without_restoring_old_id
     row = next(row for row in await db.agents.list() if row["name"] == "worker")
     assert profile["registration"] == row["report_identity"] != old["registration"]
     assert profile["launch"] == start.call_args.kwargs["environment"]["BACKBONE_LAUNCH_ID"]
-    assert profile["credential"] == agent_api_key("operator")
+    assert profile["credential"] == agent_api_key("operator", profile["registration"])
 
 
 def _paused_profile_binding(config, registration, entered, release):
@@ -303,7 +305,7 @@ async def test_daemon_rotation_serializes_with_a_separate_cli_binding(db, tmp_pa
         await asyncio.to_thread(process.join, 10)
         assert process.exitcode == 0
         profile = read_agent_profile(tmp_path, "worker")
-        assert profile["credential"] == agent_api_key("rotated")
+        assert profile["credential"] == agent_api_key("rotated", profile["registration"])
         assert profile["port"] == "8234"
     finally:
         release.set()
@@ -406,7 +408,16 @@ async def test_concurrent_starts_do_not_rebind_the_surviving_session(db, tmp_pat
     await store.refresh()
     for key, value in live_environment.items():
         monkeypatch.setenv(key, value)
-    assert load_secrets(tmp_path)["BACKBONE_API_KEY"] == agent_api_key("operator")
+    assert live_environment["BACKBONE_API_KEY"] == agent_api_key(
+        store.config.api_key, spec.registration_id
+    )
+    assert read_agent_profile(tmp_path, "worker")["credential"] == agent_api_key(
+        store.config.api_key, spec.registration_id
+    )
+    assert (
+        load_secrets(tmp_path)["BACKBONE_API_KEY"]
+        == read_agent_profile(tmp_path, "worker")["credential"]
+    )
 
 
 async def test_resumed_launch_cannot_overwrite_its_replacement_binding(db, tmp_path, monkeypatch):
@@ -455,7 +466,16 @@ async def test_resumed_launch_cannot_overwrite_its_replacement_binding(db, tmp_p
     await store.refresh()
     for key, value in live_environment.items():
         monkeypatch.setenv(key, value)
-    assert load_secrets(tmp_path)["BACKBONE_API_KEY"] == agent_api_key("operator")
+    assert live_environment["BACKBONE_API_KEY"] == agent_api_key(
+        store.config.api_key, spec.registration_id
+    )
+    assert read_agent_profile(tmp_path, "worker")["credential"] == agent_api_key(
+        store.config.api_key, spec.registration_id
+    )
+    assert (
+        load_secrets(tmp_path)["BACKBONE_API_KEY"]
+        == read_agent_profile(tmp_path, "worker")["credential"]
+    )
 
 
 async def test_saved_endpoint_change_waits_for_listener_restart(db, tmp_path, monkeypatch):
@@ -562,7 +582,10 @@ async def test_registration_mutations_wait_for_session_creation(
     await store.refresh()
     for key, value in start.call_args.kwargs["environment"].items():
         monkeypatch.setenv(key, value)
-    assert load_secrets(tmp_path)["BACKBONE_API_KEY"] == agent_api_key("operator")
+    assert (
+        load_secrets(tmp_path)["BACKBONE_API_KEY"]
+        == read_agent_profile(tmp_path, "worker")["credential"]
+    )
 
 
 @pytest.mark.parametrize("refresh_before_start", [False, True])
@@ -607,4 +630,6 @@ async def test_profiles_follow_explicit_unauthenticated_mode(
         registration,
         start.call_args.kwargs["environment"]["BACKBONE_LAUNCH_ID"],
     )
-    assert (await read_client_config()).api_key == agent_api_key("rotated")
+    assert (await read_client_config()).api_key == agent_api_key(
+        "rotated", registration["report_identity"]
+    )

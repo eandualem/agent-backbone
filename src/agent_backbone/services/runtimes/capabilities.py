@@ -947,37 +947,37 @@ CAPABILITIES: tuple[Capability, ...] = (
     ),
     _row(
         "scoped-credentials",
-        "Scoped collaboration credentials and persistent client pickup",
+        "Registration-scoped credentials, self-switching and persistent client pickup",
         "src/agent_backbone/api/auth.py",
         fallback="Use an operator credential for administrative changes.",
         implemented=lambda rt: True,
         claude=_ok(
-            "tests/unit/services/agents/test_credentials.py",
-            "Common CLI and API tests; live uptake pending.",
+            "tests/unit/api/test_authority.py",
+            "Shared authority and profile tests; natural self-switch live check pending.",
         ),
         codex=_ok(
-            "tests/unit/services/agents/test_credentials.py",
-            "Common CLI and API tests; live uptake pending.",
+            "tests/unit/api/test_authority.py",
+            "Shared authority and profile tests; natural self-switch live check pending.",
         ),
         gemini=_ok(
-            "tests/unit/services/agents/test_credentials.py",
-            "Common CLI and API tests; live uptake pending.",
+            "tests/unit/api/test_authority.py",
+            "Shared authority and profile tests; natural self-switch live check pending.",
         ),
         opencode=_ok(
-            "tests/unit/services/agents/test_credentials.py",
-            "Common CLI and API tests; live uptake pending.",
+            "tests/unit/api/test_authority.py",
+            "Shared authority and profile tests; natural self-switch live check pending.",
         ),
         deepcode=_ok(
-            "tests/unit/services/agents/test_credentials.py",
-            "Common CLI and API tests; live uptake pending.",
+            "tests/unit/api/test_authority.py",
+            "Shared authority and profile tests; natural self-switch live check pending.",
         ),
         aider=_ok(
-            "tests/unit/services/agents/test_credentials.py",
-            "Common CLI and API tests; live uptake pending.",
+            "tests/unit/api/test_authority.py",
+            "Shared authority and profile tests; natural self-switch live check pending.",
         ),
         shell=_ok(
-            "tests/unit/services/agents/test_credentials.py",
-            "Common CLI and API tests; live uptake pending.",
+            "tests/unit/api/test_authority.py",
+            "Shared authority and profile tests; natural self-switch live check pending.",
         ),
     ),
     _row(

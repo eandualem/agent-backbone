@@ -178,6 +178,13 @@ class AgentRepo(Repo):
                 {"at": at, "name": name},
             )
 
+    async def registration_name(self, identity: str) -> str | None:
+        async with self._tx() as conn:
+            return await conn.scalar(
+                text("SELECT name FROM agents WHERE report_identity=:identity"),
+                {"identity": identity},
+            )
+
     async def registration_matches(self, name: str, identity: str | None) -> bool:
         if not identity:
             return False

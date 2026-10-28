@@ -389,13 +389,22 @@ async def restart_agent(
     body: AgentRestartRequest | None = None,
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
+    store: AgentStore = Depends(get_agent_store),
 ):
     """Accept a one-time stop/restart. Validated and persisted here; the
     ``agent-transitions`` job stops the session and starts the replacement,
     so a caller asking for its own session cannot lose the start."""
-    spec = registered_agent_or_404(config, session)
+    # Accept promptly even during a launch. The job rechecks the persisted
+    # registration under the lifecycle lock before stopping or starting anything.
+    await store.refresh()
+    spec = registered_agent_or_404(store.config, session)
     body = body or AgentRestartRequest()
-    if body.runtime is not None or body.model is not None:
+    registration = getattr(request.state, "credential_registration", None)
+    if registration and not await db.agents.registration_name(registration):
+        raise HTTPException(status_code=403, detail="Agent credential registration is retired")
+    if (body.runtime is not None or body.model is not None) and (
+        not registration or not await db.agents.registration_matches(session, registration)
+    ):
         await require_operator(request)
     try:
         req = TransitionRequest(
@@ -406,7 +415,9 @@ async def restart_agent(
             delay_seconds=body.delay_seconds,
             start_at=parse_start_at(body.start_at) if body.start_at else None,
             message=body.message or None,
-            requested_by=body.from_entity,
+            requested_by=getattr(request.state, "credential_agent", None) or body.from_entity,
+            # Saved-setting peer restarts bind the target, not the caller.
+            registration_id=spec.registration_id if registration else None,
         )
         row = await request_transition(db, config, spec, req)
     except TransitionPending as exc:

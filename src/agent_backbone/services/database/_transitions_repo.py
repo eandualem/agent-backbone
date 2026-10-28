@@ -30,6 +30,7 @@ class TransitionRepo(Repo):
         *,
         agent_name: str,
         requested_by: str = "",
+        registration_id: str | None = None,
         runtime: str | None = None,
         model: str | None = None,
         resume: bool = False,
@@ -45,15 +46,18 @@ class TransitionRepo(Repo):
                 result = await conn.execute(
                     text(
                         """INSERT INTO agent_transitions
-                       (agent_name, requested_by, requested_at, runtime, model, resume, start,
+                       (agent_name, registration_id, requested_by, requested_at,
+                        runtime, model, resume, start,
                         delay_seconds, start_at, message, status, result)
-                       VALUES (:agent_name, :requested_by, :requested_at, :runtime, :model,
+                       VALUES (:agent_name, :registration_id, :requested_by, :requested_at,
+                               :runtime, :model,
                                :resume, :start, :delay_seconds, :start_at, :message,
                                'pending', '{}')
                        RETURNING *"""
                     ),
                     {
                         "agent_name": agent_name,
+                        "registration_id": registration_id,
                         "requested_by": requested_by,
                         "requested_at": now_iso(),
                         "runtime": runtime,

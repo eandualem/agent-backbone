@@ -265,9 +265,13 @@ async def test_checkpoint_and_terminal_lease_do_not_both_claim(db):
 
 async def test_expiry_preserves_active_swarm_and_checkpoint_but_expires_other_messages(db):
     for name in ["worker", "ordinary", "reader"]:
-        await db.queue.enqueue(session_name=name, message="old", delivery_kind="direct_message")
+        await db.queue.enqueue(
+            session_name=name,
+            message="old",
+            delivery_kind="direct_message" if name == "reader" else "comment",
+        )
     await db.queue.enqueue(
-        session_name="lead", message="handoff", delivery_kind="direct_message", sender="worker"
+        session_name="lead", message="handoff", delivery_kind="comment", sender="worker"
     )
     await db.queue.checkpoint("reader")
     async with db.engine.begin() as conn:

@@ -42,6 +42,8 @@ class TransitionRequest:
     """An explicit start time (ISO 8601); excludes ``delay_seconds``."""
     message: str | None = None
     requested_by: str = ""
+    registration_id: str | None = None
+    """Bind a scoped credential request to the target registration through execution."""
 
 
 class TransitionPending(ValueError):
@@ -130,6 +132,7 @@ async def request_transition(
     row = await db.transitions.create(
         agent_name=spec.name,
         requested_by=req.requested_by,
+        registration_id=req.registration_id,
         runtime=req.runtime,
         model=req.model,
         resume=req.resume,

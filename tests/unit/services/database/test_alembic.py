@@ -163,6 +163,8 @@ async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
         )
         await db.queue.enqueue(session_name="ike", message="hello", delivery_kind="direct_message")
         assert (await queue_row(db, 1))["status"] == "pending"
+        transition = await db.transitions.create(agent_name="ike", registration_id="a" * 32)
+        assert transition["registration_id"] == "a" * 32
     finally:
         await db.stop()
 

@@ -239,8 +239,9 @@ SETTINGS_HELP: dict[str, str] = {
     "timing.stale_threshold_seconds": "Hook state older than this is verified against the terminal",
     "timing.grace_period_seconds": "Settle time after a hook reports idle before delivering",
     "timing.queue_expiry_minutes": (
-        "Queued messages expire after this age, except active swarm coordination, inbox holds"
-        " and queues held by an unconfirmed delivery; recipients and senders are notified"
+        "Queued notifications expire after this age; direct messages, active swarm coordination,"
+        " inbox holds and queues held by an unconfirmed delivery are retained;"
+        " recipients and senders are notified of expiry"
     ),
     "timing.stall_threshold_seconds": "Busy on one issue longer than this is a stall",
     "timing.escalation_dedup_seconds": "Do not repeat the same escalation within this window",
@@ -921,12 +922,18 @@ def env_file_keys(env_path: Path | str) -> tuple[str, ...]:
 
 
 AGENT_KEY_PREFIX = "backbone-agent-v1:"
+REGISTRATION_KEY_PREFIX = "backbone-agent-v2:"
 
 
-def agent_api_key(operator_key: str) -> str:
+def agent_api_key(operator_key: str, registration_id: str = "") -> str:
     """Derive the collaboration credential without handing out the operator key."""
-    if not operator_key or operator_key.startswith(AGENT_KEY_PREFIX):
+    if not operator_key or agent_credential(operator_key):
         return operator_key
+    if registration_id:
+        if not re.fullmatch(r"[a-f0-9]{32}", registration_id):
+            raise ValueError("Invalid agent registration identity")
+        prefix = REGISTRATION_KEY_PREFIX + registration_id + ":"
+        return prefix + hmac.digest(operator_key.encode(), prefix.encode(), "sha256").hex()
     return (
         AGENT_KEY_PREFIX
         + hmac.digest(
@@ -936,7 +943,7 @@ def agent_api_key(operator_key: str) -> str:
 
 
 def agent_credential(key: str) -> bool:
-    return key.startswith(AGENT_KEY_PREFIX)
+    return key.startswith((AGENT_KEY_PREFIX, REGISTRATION_KEY_PREFIX))
 
 
 def agent_profile_path(data_dir: Path, name: str) -> Path:
@@ -988,7 +995,11 @@ def read_agent_profile(data_dir: Path, name: str) -> dict[str, str] | None:
         or not (values.get("port") or "").isdigit()
         or not 1 <= int(values["port"]) <= 65535
         or not re.fullmatch(
-            "(?:" + re.escape(AGENT_KEY_PREFIX) + r"[a-f0-9]{64})?",
+            "(?:"
+            + re.escape(AGENT_KEY_PREFIX)
+            + r"[a-f0-9]{64}|"
+            + re.escape(REGISTRATION_KEY_PREFIX)
+            + r"[a-f0-9]{32}:[a-f0-9]{64})?",
             values.get("credential") or "",
         )
     ):
