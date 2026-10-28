@@ -67,7 +67,7 @@ _TAG_ARG = f"--tag {HOOK_MARKER}"
 def hook_command(script: Path, state_dir: Path, python: str | None = None) -> str:
     """Shell command a CLI runs for each event (tagged so we can find it again)."""
     interpreter = python or "python3"
-    quoted = shlex.join([interpreter, str(script), "--state-dir", str(state_dir)])
+    quoted = shlex.join([interpreter, "-B", str(script), "--state-dir", str(state_dir)])
     return f"{quoted} {_TAG_ARG}"
 
 
@@ -161,7 +161,9 @@ def install_chrome_tab_names(
     host = target / "host.py"
     shutil.copy2(hook_source("chrome_tab_names_host.py"), host)
     wrapper = target / "host"
-    command = shlex.join([python or default_python(), str(host), "--state-dir", str(state_dir)])
+    command = shlex.join(
+        [python or default_python(), "-B", str(host), "--state-dir", str(state_dir)]
+    )
     atomic_write_text(wrapper, f'#!/bin/sh\nexec {command} "$@"\n')
     wrapper.chmod(0o755)
     manifest = chrome_host_manifest()

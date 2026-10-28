@@ -318,10 +318,10 @@ class TestStartSessionEnvironment:
             # The pane's start command, which tmux keeps, names the file the
             # process reads its values from (after tmux sets TERM, SHELL, PATH).
             launched = new_session[new_session.index("env") :]
-            env_file = Path(launched[6])
-            assert launched[:5] == ["env", "-uGITHUB_TOKEN", sys.executable, "-I", "-c"]
-            assert launched[9:] == ["claude", "--model", "opus"]
-            assert launched[7] == hashlib.sha256(env_file.read_bytes()).hexdigest()
+            env_file = Path(launched[7])
+            assert launched[:6] == ["env", "-uGITHUB_TOKEN", sys.executable, "-I", "-B", "-c"]
+            assert launched[10:] == ["claude", "--model", "opus"]
+            assert launched[8] == hashlib.sha256(env_file.read_bytes()).hexdigest()
             assert json.loads(env_file.read_text()) == {"API_TOKEN": "s3cret value"}
             assert env_file.stat().st_mode & 0o777 == 0o600
 
@@ -398,7 +398,7 @@ class TestStartSessionEnvironment:
             mock_subprocess.return_value = proc
             assert not await start_session("test", environment={"API_TOKEN": "s3cret"})
             new_session = _new_session(mock_subprocess)
-            env_file = Path(new_session[new_session.index("-I") + 3])
+            env_file = Path(new_session[new_session.index("-c") + 2])
             assert not env_file.exists()
 
     async def test_env_vars_are_session_environment_from_the_start(self, mock_subprocess):

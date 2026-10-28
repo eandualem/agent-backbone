@@ -187,8 +187,19 @@ then atomically activate only after successful fresh initialization. Preserve th
 previous payload/activation for rollback and keep existing installations' CLI,
 service and configuration. Removing the app must not delete engine or user data.
 
-The spreadsheet subprocess uses isolated Python imports and disables bytecode
-writes, so native calculations cannot add cache files to a verified engine payload.
+Backbone-owned Python children disable bytecode writes explicitly, including
+terminal environment loading, runtime launch helpers, hooks, spreadsheet workers
+and daemon relaunches. Python flags do not propagate to child interpreters, and
+isolated Python ignores `PYTHONDONTWRITEBYTECODE`; each invocation passes `-B`.
+Daemon relaunches and version probes also preserve the parent's isolated-import
+mode. These paths do not add cache files to a verified engine payload.
+Saved global/project hook commands and Chrome host wrappers from an older build
+keep their original interpreter arguments. After replacing such a payload,
+reinstall those commands using the corrected launcher: run
+`backbone hooks install <runtime>` for each configured runtime (`claude`, `codex`
+or `gemini`), adding `--dir <project>` for each project with saved hooks. If the
+Chrome host is configured, run `backbone chrome install` too. Launch-specific
+hooks are regenerated on the next agent start.
 
 ## Building the bundled engine
 

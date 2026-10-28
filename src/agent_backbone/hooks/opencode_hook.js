@@ -20,7 +20,7 @@ async function shellActions(command, cwd, phase, response) {
   try {
     const helper = fileURLToPath(new URL("backbone_state.py", import.meta.url));
     const stdout = await new Promise((resolve, reject) => {
-      const child = execFile("python3", [helper, "--shell-actions"], {
+      const child = execFile("python3", ["-B", helper, "--shell-actions"], {
         encoding: "utf8", timeout: 15000,
       }, (error, output) => error ? reject(error) : resolve(output));
       child.stdin.on("error", reject);

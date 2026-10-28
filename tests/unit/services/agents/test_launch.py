@@ -627,7 +627,8 @@ class TestStartAgentBrief:
         if runtime == "claude":
             content = Path(command[command.index("--append-system-prompt-file") + 1]).read_text()
         elif runtime == "opencode":
-            content = Path(command[3]).read_text()
+            helper = next(i for i, arg in enumerate(command) if arg.endswith("_opencode_launch.py"))
+            content = Path(command[helper + 2]).read_text()
         else:
             launch_id = started.await_args.kwargs["environment"]["BACKBONE_LAUNCH_ID"]
             assert take_context(config.state_dir, "ike", "another-launch") == []
@@ -1269,7 +1270,7 @@ class TestHookWiringReachesTheSession:
         assert "--auto" in launched["command"]
         content = json.loads(launched["environment"]["OPENCODE_CONFIG_CONTENT"])
         assert content == original  # the wrapper composes the final inherited environment
-        assert launched["command"][1].endswith("_opencode_launch.py")
+        assert any(arg.endswith("_opencode_launch.py") for arg in launched["command"])
         assert json.loads(spec.env["OPENCODE_CONFIG_CONTENT"]) == original
 
     async def test_gemini_and_opencode_get_their_hook_environment(self, tmp_path):
@@ -1291,7 +1292,10 @@ class TestHookWiringReachesTheSession:
             env = start.await_args.kwargs["environment"]
             if runtime == "opencode":
                 assert key not in env  # composed after inheriting tmux's environment
-                assert start.await_args.kwargs["command"][1].endswith("_opencode_launch.py")
+                assert any(
+                    arg.endswith("_opencode_launch.py")
+                    for arg in start.await_args.kwargs["command"]
+                )
             else:
                 assert key in env
             assert env["BACKBONE_AGENT"] == f"{runtime}-agent"

@@ -247,7 +247,8 @@ class TestRestartBackbone:
 
 
 class TestRunServerRestart:
-    def test_the_flag_on_the_inner_app_triggers_an_exec(self, tmp_path):
+    @pytest.mark.parametrize("isolated", [False, True])
+    def test_the_flag_on_the_inner_app_triggers_an_exec(self, tmp_path, isolated):
         from types import SimpleNamespace
 
         from agent_backbone.cli import server
@@ -259,10 +260,21 @@ class TestRunServerRestart:
             patch("agent_backbone.api.app.create_app", return_value=wrapper),
             patch("uvicorn.Server"),
             patch(f"{_UP.rsplit('.', 1)[0]}.server.os.execv") as execv,
+            patch.object(
+                server,
+                "sys",
+                SimpleNamespace(
+                    executable="python",
+                    flags=SimpleNamespace(isolated=isolated),
+                    argv=["backbone", "up"],
+                ),
+            ),
         ):
             server._run_server(config)
-        execv.assert_called_once()
-        assert execv.call_args.args[1][1:3] == ["-m", "agent_backbone.cli"]
+        execv.assert_called_once_with(
+            "python",
+            ["python", *(["-I"] if isolated else []), "-B", "-m", "agent_backbone.cli", "up"],
+        )
 
     def test_no_flag_no_exec(self, tmp_path):
         from types import SimpleNamespace
