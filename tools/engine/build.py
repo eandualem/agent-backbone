@@ -424,10 +424,26 @@ def native_notice_material(lock=None):
         document["complete_compiled_component_attestation"] is False,
         "Source inventory must not claim compiled component attestation",
     )
+    sources = {item["id"]: item for item in document["sources"]}
+    require(len(sources) == len(document["sources"]), "Duplicate native notice source")
+    wheel_fields = {"name", "version", "filename", "sha256", "source_id"}
+    for item in document["wheels"]:
+        require(set(item) == wheel_fields, "Incomplete native wheel identity")
+        source = sources.get(item["source_id"], {})
+        require(
+            source.get("name", "").replace("_", "-") == item["name"].replace("_", "-")
+            and source.get("version") == item["version"],
+            "Native wheel/source version mismatch",
+        )
+    require(
+        sources.get("cpython", {}).get("version") == document["python_version"],
+        "Native Python/source version mismatch",
+    )
     if lock is not None:
         require(
             document["target"] == lock["target"]
-            and document["python_archive_sha256"] == lock["python"]["sha256"],
+            and document["python_archive_sha256"] == lock["python"]["sha256"]
+            and document["python_version"] == lock["python"]["version"],
             "Native notice target/Python input mismatch",
         )
         wheels = {item["name"]: item for item in lock["runtime_wheels"]}
@@ -443,7 +459,9 @@ def native_notice_material(lock=None):
         for item in document["wheels"]:
             require(
                 item["name"] in wheels
-                and all(wheels[item["name"]].get(k) == v for k, v in item.items()),
+                and all(
+                    wheels[item["name"]].get(k) == item[k] for k in wheel_fields - {"source_id"}
+                ),
                 "Native notice wheel input mismatch",
             )
     files = {"native-notices.json": metadata}
@@ -458,11 +476,25 @@ def native_notice_material(lock=None):
             "Native notice changed while reading",
         )
         files[name] = data
-    sources = {item["id"] for item in document["sources"]}
-    require(len(sources) == len(document["sources"]), "Duplicate native notice source")
+    expected_crates = {sid for root in document["rust_roots"] for sid in root["registry_packages"]}
+    require(
+        expected_crates == {sid for sid in sources if sid.startswith("crate:")},
+        "Rust source membership differs from root inventories",
+    )
+    components = [
+        c["source_id"]
+        for c in document["components"]
+        if c.get("kind") == "rust-source-lock-package"
+    ]
+    require(
+        len(components) == len(set(components)) and set(components) == expected_crates,
+        "Missing or duplicate Rust component notices",
+    )
     for component in document["components"]:
         require(component["source_id"] in sources, "Missing native notice source")
-        for notice in component.get("notices", [component.get("notice")]):
+        notices = component.get("notices", [component.get("notice")])
+        require(isinstance(notices, list) and notices, "Missing native component notices")
+        for notice in notices:
             require(isinstance(notice, dict), "Missing native component notice")
             require(
                 notice.get("source_id", component["source_id"]) in sources,

@@ -7,9 +7,12 @@ checks source correspondence, not how an upstream binary wheel was compiled.
 import argparse
 import hashlib
 import json
+import re
 import runpy
 import tarfile
 import tomllib
+import urllib.parse
+from email.parser import BytesParser
 from pathlib import Path
 
 builder = runpy.run_path(str(Path(__file__).with_name("build.py")))
@@ -20,7 +23,7 @@ verify_input = builder["verify_input"]
 
 
 def verify_sources(cache):
-    material = native_notice_material()
+    material = native_notice_material(json.loads(builder["LOCK"].read_text()))
     document = json.loads(material["native-notices.json"])
     sources = {row["id"]: row for row in document["sources"]}
     for source in sources.values():
@@ -41,8 +44,93 @@ def verify_sources(cache):
             require(entries[0].size <= 4 * 1024 * 1024, "Source notice member too large")
             return archive.extractfile(entries[0]).read()
 
+    root_sources = {root["source_id"] for root in document["rust_roots"]}
+    found_roots = set()
+    for wheel in document["wheels"]:
+        source = sources[wheel["source_id"]]
+        with tarfile.open(cache / source["filename"]) as archive:
+            members = archive.getmembers()
+            infos = [
+                m
+                for m in members
+                if m.isfile() and len(m.name.split("/")) == 2 and m.name.endswith("/PKG-INFO")
+            ]
+            require(len(infos) == 1, "Missing source distribution identity")
+            info = BytesParser().parsebytes(archive.extractfile(infos[0]).read())
+            require(
+                info["Name"].replace("_", "-").lower() == wheel["name"].replace("_", "-").lower()
+                and info["Version"] == wheel["version"],
+                "Source distribution identity mismatch",
+            )
+            prefix = infos[0].name.rsplit("/", 1)[0]
+            if prefix + "/Cargo.lock" in {m.name for m in members}:
+                found_roots.add(wheel["source_id"])
+                require(
+                    any(
+                        root["source_id"] == wheel["source_id"]
+                        and root["source_member"] == prefix + "/Cargo.lock"
+                        for root in document["rust_roots"]
+                    ),
+                    "Missing Rust root source",
+                )
+    require(root_sources == found_roots, "Rust roots differ from source distributions")
+    version = document["python_version"]
+    header = read("cpython", "Python-" + version + "/Include/patchlevel.h").decode()
+    numbers = [
+        re.search(r"#define\s+PY_" + part + r"_VERSION\s+(\d+)", header)
+        for part in ("MAJOR", "MINOR", "MICRO")
+    ]
+    require(
+        all(numbers) and ".".join(n.group(1) for n in numbers) == version,
+        "CPython source version mismatch",
+    )
+
     notices = 0
     for component in document["components"]:
+        if component.get("kind") == "rust-source-lock-package":
+            sid = component["source_id"]
+            source = sources[sid]
+            prefix = source["name"] + "-" + source["version"]
+            package = tomllib.loads(read(sid, prefix + "/Cargo.toml").decode())["package"]
+            require(
+                package["name"] == source["name"]
+                and package["version"] == source["version"]
+                and package.get("license") == component["declared_license"],
+                "Crate package identity/license differs",
+            )
+            with tarfile.open(cache / source["filename"]) as archive:
+                required = {
+                    member.name
+                    for member in archive
+                    if member.isfile()
+                    and (
+                        Path(member.name)
+                        .name.upper()
+                        .startswith(("LICENSE", "COPYING", "NOTICE", "COPYRIGHT", "UNLICENSE"))
+                        or any(p.upper() == "LICENSES" for p in Path(member.name).parts[:-1])
+                        or member.name == prefix + "/" + package.get("license-file", "")
+                    )
+                }
+            retained = {n["source_member"] for n in component["notices"] if n["source_id"] == sid}
+            require(
+                required <= retained, f"Crate notice members missing: {sorted(required - retained)}"
+            )
+            for notice in component["notices"]:
+                external = sources[notice["source_id"]]
+                if external.get("format") != "raw":
+                    continue
+                vcs = json.loads(read(sid, prefix + "/.cargo_vcs_info.json"))
+                repo = urllib.parse.urlsplit(package["repository"].removesuffix(".git").rstrip("/"))
+                url = urllib.parse.urlsplit(external["url"])
+                require(
+                    repo.scheme == "https"
+                    and repo.netloc == "github.com"
+                    and external["git_commit"] == vcs["git"]["sha1"]
+                    and url.scheme == "https"
+                    and url.netloc == "raw.githubusercontent.com"
+                    and url.path.startswith(repo.path + "/" + vcs["git"]["sha1"] + "/"),
+                    "Upstream notice commit/repository differs from crate provenance",
+                )
         for notice in component.get("notices", [component.get("notice")]):
             source_id = notice.get("source_id", component["source_id"])
             member = notice.get("source_member", component.get("source_member"))

@@ -10149,6 +10149,7 @@
     "Other targets require wheel and CPython input reconciliation; this metadata is bound to the Apple Silicon inputs."
   ],
   "python_archive_sha256": "e5af2fde6a937a0e0c795a0c595c4efb70578d57463a2657c819992b9b9acbac",
+  "python_version": "3.13.18",
   "rust_roots": [
     {
       "local_packages": [
@@ -10638,7 +10639,8 @@
       "filename": "Python-3.13.18.tar.xz",
       "id": "cpython",
       "sha256": "abb0102e6d4ae027509bcb82327d9dd85515b44a3ba8ad538cfc5e9847029f68",
-      "url": "https://www.python.org/ftp/python/3.13.18/Python-3.13.18.tar.xz"
+      "url": "https://www.python.org/ftp/python/3.13.18/Python-3.13.18.tar.xz",
+      "version": "3.13.18"
     },
     {
       "filename": "tcl9.0.4-src.tar.gz",
@@ -13108,78 +13110,91 @@
       "filename": "asyncpg-0.31.0-cp313-cp313-macosx_11_0_arm64.whl",
       "name": "asyncpg",
       "sha256": "54a64f91839ba59008eccf7aad2e93d6e3de688d796f35803235ea1c4898ae1e",
+      "source_id": "asyncpg",
       "version": "0.31.0"
     },
     {
       "filename": "cffi-2.0.0-cp313-cp313-macosx_11_0_arm64.whl",
       "name": "cffi",
       "sha256": "45d5e886156860dc35862657e1494b9bae8dfa63bf56796f2fb56e1679fc0bca",
+      "source_id": "cffi",
       "version": "2.0.0"
     },
     {
       "filename": "cryptography-46.0.5-cp311-abi3-macosx_10_9_universal2.whl",
       "name": "cryptography",
       "sha256": "351695ada9ea9618b3500b490ad54c739860883df6c1f555e088eaf25b1bbaad",
+      "source_id": "cryptography",
       "version": "46.0.5"
     },
     {
       "filename": "greenlet-3.3.2-cp313-cp313-macosx_11_0_universal2.whl",
       "name": "greenlet",
       "sha256": "aa6ac98bdfd716a749b84d4034486863fd81c3abde9aa3cf8eff9127981a4ae4",
+      "source_id": "greenlet",
       "version": "3.3.2"
     },
     {
       "filename": "httptools-0.7.1-cp313-cp313-macosx_11_0_arm64.whl",
       "name": "httptools",
       "sha256": "601b7628de7504077dd3dcb3791c6b8694bbd967148a6d1f01806509254fb1ca",
+      "source_id": "httptools",
       "version": "0.7.1"
     },
     {
       "filename": "ironcalc-0.9.1-cp313-cp313-macosx_11_0_arm64.whl",
       "name": "ironcalc",
       "sha256": "8910991c9297bf8bb5671df7f16e4e99ab8d933a0e1a5c762ae4a22a006e65c8",
+      "source_id": "ironcalc",
       "version": "0.9.1"
     },
     {
       "filename": "markupsafe-3.0.3-cp313-cp313-macosx_11_0_arm64.whl",
       "name": "markupsafe",
       "sha256": "116bb52f642a37c115f517494ea5feb03889e04df47eeff5b130b1808ce7c219",
+      "source_id": "markupsafe",
       "version": "3.0.3"
     },
     {
       "filename": "pydantic_core-2.41.5-cp313-cp313-macosx_11_0_arm64.whl",
       "name": "pydantic-core",
       "sha256": "112e305c3314f40c93998e567879e887a3160bb8689ef3d2c04b6cc62c33ac34",
+      "source_id": "pydantic-core",
       "version": "2.41.5"
     },
     {
       "filename": "pyyaml-6.0.3-cp313-cp313-macosx_11_0_arm64.whl",
       "name": "pyyaml",
       "sha256": "2283a07e2c21a2aa78d9c4442724ec1eb15f5e42a723b99cb3d822d48f5f7ad1",
+      "source_id": "pyyaml",
       "version": "6.0.3"
     },
     {
       "filename": "sqlalchemy-2.0.48-cp313-cp313-macosx_11_0_arm64.whl",
       "name": "sqlalchemy",
       "sha256": "e3070c03701037aa418b55d36532ecb8f8446ed0135acb71c678dbdf12f5b6e4",
+      "source_id": "sqlalchemy",
       "version": "2.0.48"
     },
     {
       "filename": "uvloop-0.22.1-cp313-cp313-macosx_10_13_universal2.whl",
       "name": "uvloop",
       "sha256": "561577354eb94200d75aca23fbde86ee11be36b00e52a4eaf8f50fb0c86b7705",
+      "source_id": "uvloop",
       "version": "0.22.1"
     },
     {
       "filename": "watchfiles-1.1.1-cp313-cp313-macosx_11_0_arm64.whl",
       "name": "watchfiles",
       "sha256": "5f3bde70f157f84ece3765b42b4a52c6ac1a50334903c6eaf765362f6ccca88a",
+      "source_id": "watchfiles",
       "version": "1.1.1"
     },
     {
       "filename": "websockets-16.0-cp313-cp313-macosx_11_0_arm64.whl",
       "name": "websockets",
       "sha256": "e6578ed5b6981005df1860a56e3617f14a6c307e6a71b4fff8c48fdc50f3ed2c",
+      "source_id": "websockets",
       "version": "16.0"
     }
   ]

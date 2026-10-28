@@ -304,8 +304,10 @@ def notice_fixture(tmp_path, monkeypatch, *, missing=False):
         "complete_compiled_component_attestation": False,
         "target": "aarch64-apple-darwin",
         "python_archive_sha256": "a" * 64,
+        "python_version": "3.13",
+        "rust_roots": [],
         "wheels": [],
-        "sources": [],
+        "sources": [{"id": "cpython", "version": "3.13"}],
         "components": [],
         "files": [],
     }
@@ -381,7 +383,7 @@ def test_notice_copy_checks_sources_and_component_paths(tmp_path, monkeypatch, c
     lock = {
         "target": "aarch64-apple-darwin",
         "runtime_wheels": [],
-        "python": {"sha256": "a" * 64},
+        "python": {"sha256": "a" * 64, "version": "3.13"},
         "tmux": {n: {"filename": n} for n in ("LICENSES.txt", "BUILD.json")},
     }
     monkeypatch.setattr(engine, "package_notices", lambda *a: [])
@@ -480,7 +482,19 @@ def test_native_notice_inventory_cannot_follow_changed_binary_inputs(change):
         engine.native_notice_material(lock)
 
 
-@pytest.mark.parametrize("change", ["bytes", "slice", "source", "attestation"])
+@pytest.mark.parametrize(
+    "change",
+    [
+        "bytes",
+        "slice",
+        "source",
+        "attestation",
+        "missing_hash",
+        "source_version",
+        "empty_notices",
+        "missing_crate",
+    ],
+)
 def test_native_notice_tampering_refused_before_snapshot(tmp_path, monkeypatch, change):
     import shutil
 
@@ -494,12 +508,116 @@ def test_native_notice_tampering_refused_before_snapshot(tmp_path, monkeypatch, 
         metadata["components"][0]["notice"]["offset"] += 1
     elif change == "source":
         metadata["components"][0]["source_id"] = "absent"
-    else:
+    elif change == "attestation":
         metadata["complete_compiled_component_attestation"] = True
+    elif change == "missing_hash":
+        metadata["wheels"][0].pop("sha256")
+    elif change == "source_version":
+        metadata["wheels"][0]["version"] = "999"
+    elif change == "empty_notices":
+        metadata["components"][0] = {**metadata["components"][0], "notices": []}
+    else:
+        metadata["components"] = [
+            c
+            for c in metadata["components"]
+            if c["source_id"] != metadata["rust_roots"][0]["registry_packages"][0]
+        ]
     engine.write_json(tmp_path / "native-notices.json", metadata)
     monkeypatch.setattr(engine, "ROOT", tmp_path)
     with pytest.raises(ValueError):
         engine.native_notice_material()
+
+
+@pytest.mark.parametrize("change", [None, "commit", "repository", "omitted_notice"])
+def test_source_verifier_checks_upstream_crate_notice_correspondence(tmp_path, monkeypatch, change):
+    import runpy
+
+    verifier = runpy.run_path(str(PATH.with_name("verify_native_sources.py")))
+    verify = verifier["verify_sources"]
+    sha = "a" * 40
+    raw = tmp_path / "upstream-license"
+    raw.write_text("MIT license text")
+    python_source = archive(
+        tmp_path,
+        [
+            (
+                "Python-3.13.18/Include/patchlevel.h",
+                tarfile.REGTYPE,
+                "#define PY_MAJOR_VERSION 3\n#define PY_MINOR_VERSION 13\n"
+                "#define PY_MICRO_VERSION 18\n",
+            )
+        ],
+    )
+    python_source.rename(tmp_path / "python.tar")
+    crate_members = [
+        (
+            "demo-1.0.0/Cargo.toml",
+            tarfile.REGTYPE,
+            '[package]\nname="demo"\nversion="1.0.0"\nlicense="MIT"\nrepository="https://github.com/acme/demo"\n',
+        ),
+        ("demo-1.0.0/.cargo_vcs_info.json", tarfile.REGTYPE, json.dumps({"git": {"sha1": sha}})),
+    ]
+    if change == "omitted_notice":
+        crate_members.append(("demo-1.0.0/NOTICE", tarfile.REGTYPE, "required attribution"))
+    crate = archive(tmp_path, crate_members)
+    crate.rename(tmp_path / "crate.tar")
+    data = {
+        "wheels": [],
+        "python_version": "3.13.18",
+        "rust_roots": [],
+        "sources": [
+            {
+                "id": "cpython",
+                "filename": "python.tar",
+                "sha256": engine.digest(tmp_path / "python.tar"),
+            },
+            {
+                "id": "crate:demo-1.0.0",
+                "filename": "crate.tar",
+                "sha256": engine.digest(tmp_path / "crate.tar"),
+                "name": "demo",
+                "version": "1.0.0",
+            },
+            {
+                "id": "raw",
+                "filename": raw.name,
+                "sha256": engine.digest(raw),
+                "format": "raw",
+                "git_commit": "b" * 40 if change == "commit" else sha,
+                "url": "https://raw.githubusercontent.com/"
+                + ("other/demo" if change == "repository" else "acme/demo")
+                + "/"
+                + sha
+                + "/LICENSE",
+            },
+        ],
+        "components": [
+            {
+                "kind": "rust-source-lock-package",
+                "component": "demo-1.0.0",
+                "source_id": "crate:demo-1.0.0",
+                "declared_license": "MIT",
+                "notices": [
+                    {
+                        "source_id": "raw",
+                        "source_member": None,
+                        "bytes": raw.stat().st_size,
+                        "sha256": engine.digest(raw),
+                    }
+                ],
+            }
+        ],
+    }
+    monkeypatch.setitem(
+        verify.__globals__,
+        "native_notice_material",
+        lambda lock: {"native-notices.json": json.dumps(data).encode()},
+    )
+    if change:
+        with pytest.raises(ValueError, match="notice"):
+            verify(tmp_path)
+    else:
+        assert verify(tmp_path)["notices_verified"] == 1
 
 
 def test_build_refuses_runtime_input_drift_from_source_lock(tmp_path):
