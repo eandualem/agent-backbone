@@ -34,7 +34,7 @@ from agent_backbone.services.routing import quote_envelope_lines
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
-_PLANNED = ("sheet", "plan")
+_PLANNED = ("sheet",)
 _OBSERVED = ("skill", "policy")
 _MAX_ID = 2**63 - 1
 
@@ -116,12 +116,27 @@ def compose(entry: dict, artifact: dict) -> str:
         (v for v in artifact["versions"] if v["revision_id"] == anchor.get("revision_id")),
         artifact["latest"],
     )
-    where = ", ".join(part for part in (version["label"], anchor.get("label")) if part)
+    version_label = (
+        f"rev {anchor['revision_id']}"
+        if artifact["kind"] == "plan" and anchor.get("revision_id")
+        else version["label"]
+    )
+    where = ", ".join(part for part in (version_label, anchor.get("label")) if part)
     kind, artifact_id = artifact["kind"], artifact["artifact_id"]
+    context = ""
+    title = artifact["title"]
+    if kind == "plan" and anchor.get("context"):
+        title = anchor["context"]["title"]
+        context = (
+            "Observed plan context (quoted data): "
+            + json.dumps(anchor["context"], ensure_ascii=True)
+            + "\n"
+        )
     return (
         f"[via:backbone conversation:{kind}/{artifact_id} from:owner]"
-        f' On "{artifact["title"]}" ({where}):\n'
+        f' On "{title}" ({where}):\n'
         f"{quote_envelope_lines(entry['text'])}\n"
+        f"{context}"
         f'Reply: backbone conversations reply {kind} {artifact_id} "…" --to {entry["id"]}'
     )
 

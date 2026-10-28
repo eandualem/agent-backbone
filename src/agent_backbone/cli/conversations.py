@@ -27,7 +27,9 @@ def add_conversation_parsers(subparsers) -> None:
     read = subparsers.add_parser(
         "conversations", help="read and reply in the conversations on artifacts"
     )
-    read.add_argument("--kind", choices=("document", "response", "report", "skill", "policy"))
+    read.add_argument(
+        "--kind", choices=("document", "response", "report", "skill", "policy", "plan")
+    )
     read.add_argument("--limit", type=int, choices=range(1, 201), metavar="1–200", default=50)
     read.add_argument("--after", help="the next page: the cursor a previous list printed")
     read.add_argument("--agent", help="read as this agent (default: $BACKBONE_AGENT)")
@@ -157,6 +159,10 @@ def _print_conversation(data) -> None:
             if entry.get("resulting_revision_id"):
                 text += f" (produced version {entry['resulting_revision_id']})"
             state = entry.get("delivery") or ""
+        elif entry["kind"] == "step":
+            event = entry["step"]
+            text = f"{event['title']}: {event['status']} ({event['section']})"
+            state = ""
         else:
             event = entry[entry["kind"]]
             verb = "observed" if entry["author"]["type"] == "backbone" else "published"

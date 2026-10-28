@@ -7,8 +7,8 @@ publishes because of it) appears in the same thread, beside the artifact.
 Shared skills and policies have conversations too, so you can ask an agent to
 explain one even though no agent published it.
 
-Conversations exist today for Documents, Responses, progress reports, skills and
-policies. Sheets and current plans follow; until then their routes return
+Conversations exist today for Documents, Responses, progress reports, skills,
+policies and current plans. Sheets follow; until then their routes return
 `404 {"error": "unknown_artifact"}`.
 
 ## Identity
@@ -22,6 +22,7 @@ A conversation is keyed by the artifact's kind and stable ID:
 | `report` | The report's ID (reports have no corrections) | Its author |
 | `skill` | Assigned when Backbone first reads the skill ([below](#skills-and-policies)) | The maintainer the operator mapped, if any |
 | `policy` | Assigned when Backbone first reads the policy | The maintainer the operator mapped, if any |
+| `plan` | The agent registration’s `author_id` | That registration |
 
 Responses and reports carry `conversation_id` in their list and show output.
 Reading a conversation that has never been used returns an empty list with its
@@ -36,6 +37,7 @@ A conversation is an append-only list of entries:
 - **Owner messages**, delivered to a recipient, with a delivery state.
 - **Agent messages**, optionally answering an entry (`in_reply_to`) and naming
   the version the reply produced (`resulting_revision_id`).
+- **Step events**, recording a published current-plan item status change.
 - **Revision events**, appended automatically when a correction is published,
   or when Backbone sees a skill or policy change (author type `backbone`).
   They record that a version appeared and who published it, never which
@@ -43,7 +45,45 @@ A conversation is an append-only list of entries:
 
 Any message can carry an `anchor`: the version the author was viewing
 (`revision_id`) and a display `label`. Artifact content stays in its own store;
-entries only reference versions, and every version stays readable.
+entries reference versions. Current plans are the exception to historical content
+reads: only the current checklist remains readable, as described below.
+
+## Current plans
+
+Open `backbone conversations show plan AUTHOR_ID` to read the thread and use
+`backbone conversations reply plan AUTHOR_ID "…" --to ENTRY` to answer. The
+thread follows the registration across plan replacement and agent rename. When
+that registration retires, the conversation remains readable; name reuse never
+makes the replacement its owner.
+
+Publication atomically appends a revision event. Changing an existing item's
+status within the same plan also appends a `step` event with `item_id`, `title`,
+`status`, `section`, `plan_id` and `revision_id`. New plans and new items do not
+invent earlier status transitions. Events are metadata, not full old checklists.
+For plans already present at upgrade, the current publication is the baseline;
+its metadata is recorded on the first new publication, accepted message, or
+retirement prune.
+Nothing earlier is reconstructed from retry receipt IDs.
+
+A plan anchor requires the observed `revision_id`, with optional `item_id` and display-only
+`label`. A new anchored message must still match the current revision and item:
+`409 stale_revision` means refresh and reselect; `422 invalid_anchor` means the
+observed revision is missing, the item is absent, or the anchor is for another kind. The server stores a bounded
+`anchor.context` containing the plan title/ID and the selected item, if any,
+so a delivered question remains interpretable after an update. It never captures
+all checklist items. Existing accepted-message retries return the original entry,
+even after the checklist changes. A reply can name an observed older
+`resulting_revision_id` if its author published that revision, without implying
+that its old content is retained.
+
+`GET /api/current-plans/{author_id}/versions` lists observed revision metadata,
+newest first, with `content_available`. Page using `before=next_before_id` and
+`limit`; the cursor is an event sequence, not a revision UUID. Exact reads at
+`…/versions/{revision_id}` return the current record or
+`410 {"detail":{"code":"version_not_retained",…}}` for a known replaced or
+pruned revision. Unknown revisions return `404 version_not_found`. After the
+current row is pruned for a retired registration, revision metadata and its
+conversation remain; the full checklist does not.
 
 ## Skills and policies
 

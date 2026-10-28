@@ -157,6 +157,7 @@ class ConversationEntryORM(Base):
     recipient_name: Mapped[str | None] = mapped_column(Text)
     in_reply_to: Mapped[int | None] = mapped_column(BigInteger)
     resulting_revision_id: Mapped[str | None] = mapped_column(Text)
+    """Agent reply result; also the lookup ID on current-plan revision events."""
     anchor: Mapped[str | None] = mapped_column(Text)
     detail: Mapped[str | None] = mapped_column(Text)
     """The revision or step event, as JSON."""
@@ -177,6 +178,13 @@ class ConversationEntryORM(Base):
             unique=True,
         ),
         Index("idx_conversation_operation", "operation_id"),
+        Index(
+            "idx_conversation_revision",
+            "kind",
+            "artifact_id",
+            "entry_kind",
+            "resulting_revision_id",
+        ),
         {"sqlite_autoincrement": True},
     )
 

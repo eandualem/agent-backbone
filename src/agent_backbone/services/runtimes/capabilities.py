@@ -188,7 +188,10 @@ _PLAN = "tests/unit/services/agents/test_plan_approval.py"
 _INSTRUCTIONS_API = "tests/unit/api/routes/test_api_instructions.py"
 
 _CONVERSATIONS = "tests/unit/api/routes/test_api_conversations.py"
-_CONVERSATION_DELIVERY = _API_BOUNDARY + "; delivered as a queued message, like backbone tell"
+_CONVERSATION_DELIVERY = (
+    _API_BOUNDARY + "; delivered as a queued message, like backbone tell; "
+    "current-plan adapter: tests/unit/api/routes/test_api_plan_conversations.py"
+)
 
 _RESPONSE_DELIVERY = (
     _API_BOUNDARY + "; topic delivery: tests/unit/services/integrations/telegram/test_responses.py"

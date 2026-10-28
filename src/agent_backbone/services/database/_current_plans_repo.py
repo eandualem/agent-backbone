@@ -11,6 +11,8 @@ from sqlalchemy import delete, insert, select, update
 from sqlalchemy.exc import IntegrityError
 
 from agent_backbone.models import CurrentPlanFeedback, PublishCurrentPlan
+from agent_backbone.services.database._plan_conversations import artifact as plan_artifact
+from agent_backbone.services.database._plan_conversations import published, record_revision
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 from agent_backbone.services.database.models import (
@@ -131,6 +133,7 @@ class CurrentPlanRepo(Repo):
                     )
                 else:
                     await conn.execute(insert(_P).values(**values))
+                await published(conn, current, values)
                 await self._save_receipt(conn, actor, body.request_id, digest, receipt)
                 return {"receipt": receipt, "created": True}
         except IntegrityError:
@@ -160,6 +163,26 @@ class CurrentPlanRepo(Repo):
                     "plan_not_found", "no current plan for this active registration", 404
                 )
             return _record(row)
+
+    async def version(self, author_id, revision_id):
+        async with self._tx() as conn:
+            artifact = await plan_artifact(conn, author_id, (revision_id,))
+            if artifact is None:
+                raise CurrentPlanError(
+                    "plan_not_found", "no observed plan for this registration", 404
+                )
+            if not any(v["revision_id"] == revision_id for v in artifact["versions"]):
+                raise CurrentPlanError("version_not_found", "no observed version with this ID", 404)
+            current = artifact["current"]
+            if current is None or current["revision_id"] != revision_id:
+                raise CurrentPlanError(
+                    "version_not_retained",
+                    "Only the current checklist is retained; "
+                    "this version's content is unavailable.",
+                    410,
+                )
+            name = await conn.scalar(select(_A.c.name).where(_A.c.report_identity == author_id))
+            return _record(dict(current) | {"agent_name": name})
 
     async def query(self, *, agent=None, limit=50, after_author_id=None):
         stmt = (
@@ -294,10 +317,17 @@ class CurrentPlanRepo(Repo):
         async with self._tx() as conn:
             receipts = await conn.execute(delete(_R).where(_R.c.created_at < cutoff_iso(days=days)))
             plans = await conn.execute(
-                delete(_P).where(
+                delete(_P)
+                .where(
                     ~_P.c.author_id.in_(
                         select(_A.c.report_identity).where(_A.c.report_identity.is_not(None))
                     )
                 )
+                .returning(_P)
             )
-            return receipts.rowcount + plans.rowcount
+            retired = plans.mappings().all()
+            # Preserve an untouched pre-adapter baseline in the same transaction.
+            # RETURNING also prevents concurrent pruners from recording it twice.
+            for row in retired:
+                await record_revision(conn, row)
+            return receipts.rowcount + len(retired)
