@@ -174,3 +174,59 @@ async def test_retirement_preserves_existing_shared_socket_authority(api_app, cr
     assert sio.manager.is_connected(sid, "/sessions")
     sio._send_eio_packet.assert_awaited_once()
     assert "sessions:update" in sio._send_eio_packet.await_args.args[1].data
+
+
+async def _operator_connection(sio, ns, api_app):
+    sid = await sio.manager.connect("operator-engine", ns.namespace)
+    assert await ns.on_connect(sid, {}, {"api_key": api_app.state.config.api_key})
+    return sid
+
+
+async def test_targeted_output_checks_only_its_recipient(api_app):
+    from agent_backbone.config import agent_api_key
+
+    sio, ns, sid, spec = await _scoped_connection(api_app, "/terminal")
+    other = await sio.manager.connect("other-engine", ns.namespace)
+    assert await ns.on_connect(
+        other,
+        {},
+        {
+            "api_key": agent_api_key(api_app.state.config.api_key, spec.registration_id),
+        },
+    )
+    operator = await _operator_connection(sio, ns, api_app)
+    repo = api_app.state.db.agents
+    with patch.object(repo, "registration_name", wraps=repo.registration_name) as lookup:
+        await sio.emit("terminal_output", "one", to=sid, namespace=ns.namespace)
+        lookup.assert_awaited_once_with(spec.registration_id)
+        lookup.reset_mock()
+        await sio.emit("terminal_output", "two", to=operator, namespace=ns.namespace)
+        lookup.assert_not_awaited()
+
+
+async def test_registration_lookup_failure_excludes_scoped_reader_without_failing_feed(api_app):
+    from agent_backbone.api.session_updates import SessionFeed
+
+    sio, ns, sid, _ = await _scoped_connection(api_app, "/sessions")
+    operator = await _operator_connection(sio, ns, api_app)
+    feed = SessionFeed(lambda: api_app.state.config, sio)
+    with (
+        patch.object(feed, "snapshot", new_callable=AsyncMock, return_value=[]),
+        patch.object(
+            api_app.state.db.agents, "registration_name", side_effect=RuntimeError("busy")
+        ),
+    ):
+        assert await feed.emit()
+    assert not sio.manager.is_connected(sid, ns.namespace)
+    assert sio.manager.is_connected(operator, ns.namespace)
+    sio._send_eio_packet.assert_awaited_once()
+    assert sio._send_eio_packet.await_args.args[0] == "operator-engine"
+
+
+async def test_retired_reader_is_excluded_even_when_disconnect_is_still_pending(api_app):
+    sio, ns, sid, spec = await _scoped_connection(api_app, "/sessions")
+    await api_app.state.db.agents.delete(spec.name)
+    with patch.object(ns, "disconnect", new_callable=AsyncMock) as disconnect:
+        await sio.emit("sessions:update", [], namespace=ns.namespace)
+    disconnect.assert_awaited_once_with(sid)
+    sio._send_eio_packet.assert_not_awaited()

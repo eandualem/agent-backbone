@@ -85,16 +85,23 @@ class RegistrationAwareServer(socketio.AsyncServer):
         ignore_queue=False,
     ):
         ns = self.namespace_handlers.get(namespace or "/")
+        excluded = [skip_sid] if isinstance(skip_sid, str) else list(skip_sid or [])
         if isinstance(ns, _AuthenticatedNamespace):
-            for sid in tuple(ns._registrations):
-                if not await ns.registration_current(sid) and (to or room) == sid:
-                    return
+            recipients = tuple(self.manager.get_participants(ns.namespace, to or room))
+            for sid, _ in recipients:
+                if (
+                    sid not in excluded
+                    and sid in ns._registrations
+                    and not await ns.registration_current(sid)
+                ):
+                    # Also exclude a connection whose disconnect is already in progress.
+                    excluded.append(sid)
         return await super().emit(
             event,
             data,
             to=to,
             room=room,
-            skip_sid=skip_sid,
+            skip_sid=excluded or None,
             namespace=namespace,
             callback=callback,
             ignore_queue=ignore_queue,
@@ -114,8 +121,13 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
             return True
         app = getattr(self.server, "fastapi_app", None)
         db = getattr(getattr(app, "state", None), "db", None)
-        if db is not None and await db.agents.registration_name(registration):
-            return True
+        try:
+            if db is not None and await db.agents.registration_name(registration):
+                return True
+        except Exception as exc:
+            log.warning(
+                "Scoped socket registration check failed (%s); disconnecting", type(exc).__name__
+            )
         await self.disconnect(sid)
         return False
 
