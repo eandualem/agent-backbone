@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import Text, and_, case, func, insert, not_, or_, select, text, update
 
+from agent_backbone.services.database._conversation_events import append_revision
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._reports_repo import chain_ids, chain_roots
 from agent_backbone.services.database._time import cutoff_iso, format_iso, now_iso
@@ -29,6 +30,8 @@ from agent_backbone.services.database.models import (
     DiagnosticORM,
     DocumentORM,
     MessageQueueORM,
+    ObservedSourceORM,
+    ObservedVersionORM,
     ReportORM,
 )
 
@@ -40,9 +43,13 @@ _Q = MessageQueueORM.__table__
 _R = ReportORM.__table__
 _READ = ConversationReadORM.__table__
 _REDELIVERY = ConversationRedeliveryORM.__table__
+_S = ObservedSourceORM.__table__
+_V = ObservedVersionORM.__table__
 
-KINDS = ("document", "response", "report")
+KINDS = ("document", "response", "report", "skill", "policy")
 """Kinds with an adapter in this release."""
+OBSERVED = ("skill", "policy")
+"""Kinds whose versions are snapshots Backbone takes when it reads their source."""
 
 TEXT_CHARACTERS = 4000
 PAGE_BYTES = 1_048_576
@@ -123,6 +130,8 @@ async def _artifact(conn, kind: str, artifact_id: str) -> dict:
         ).all()
         content = json.loads(rows[-1].content) if rows else {}
         title = content.get("question") or content.get("goal", {}).get("text", "")
+    elif kind in OBSERVED:
+        return await _observed(conn, kind, artifact_id)
     else:
         raise UnknownArtifact(f"No {kind} {artifact_id}.")
     if not rows:
@@ -143,6 +152,48 @@ async def _artifact(conn, kind: str, artifact_id: str) -> dict:
         "title": _title(title),
         "versions": versions,
         "latest": versions[-1],
+        "responsible_id": versions[-1]["author_id"],
+        "responsible_name": versions[-1]["author_name"],
+    }
+
+
+async def _observed(conn, kind: str, artifact_id: str) -> dict:
+    """A skill or policy: its snapshots are its versions, published by no agent,
+    and only the operator's maintainer mapping makes an agent responsible."""
+    source = None
+    if re.fullmatch(r"[0-9a-f]{32}", artifact_id):
+        source = (
+            await conn.execute(select(_S).where(_S.c.artifact_id == artifact_id, _S.c.kind == kind))
+        ).first()
+    if source is None:
+        raise UnknownArtifact(f"No {kind} {artifact_id}.")
+    rows = (
+        await conn.execute(
+            select(_V.c.id, _V.c.sha256, _V.c.observed_at)
+            .where(_V.c.artifact_id == artifact_id)
+            .order_by(_V.c.id)
+        )
+    ).all()
+    versions = [
+        {
+            "revision_id": str(row.id),
+            "label": f"v{index}",
+            "created_at": row.observed_at,
+            "sha256": row.sha256,
+            "author_id": None,
+            "author_name": None,
+        }
+        for index, row in enumerate(rows, 1)
+    ]
+    return {
+        "kind": kind,
+        "artifact_id": artifact_id,
+        "title": _title(source.name),
+        "status": source.status,
+        "versions": versions,
+        "latest": versions[-1],
+        "responsible_id": source.maintainer_id,
+        "responsible_name": source.maintainer_name,
     }
 
 
@@ -158,11 +209,12 @@ async def _names(conn, ids) -> dict[str, str]:
 
 
 def _responsible(artifact: dict, names: dict[str, str]) -> dict:
-    latest = artifact["latest"]
-    agent_id = latest["author_id"]
+    agent_id = artifact["responsible_id"]
+    if agent_id is None:
+        return {"agent_id": None, "name": None, "status": "unassigned"}
     return {
         "agent_id": agent_id,
-        "name": names.get(agent_id, latest["author_name"]),
+        "name": names.get(agent_id, artifact["responsible_name"]),
         "status": "active" if agent_id in names else "retired",
     }
 
@@ -195,7 +247,7 @@ def _entry(row) -> dict:
         "created_at": row.created_at,
         "author": {
             "type": row.author_type,
-            "agent_id": None if owner else row.author_id,
+            "agent_id": row.author_id or None,
             "name": row.author_name,
         },
     }
@@ -242,7 +294,7 @@ async def _registration(conn, name: str) -> str | None:
 
 
 async def _participant(conn, kind, artifact_id, artifact, agent_id: str) -> bool:
-    if agent_id == artifact["latest"]["author_id"]:
+    if agent_id == artifact["responsible_id"]:
         return True
     return bool(
         await conn.scalar(
@@ -400,7 +452,9 @@ class ConversationRepo(Repo):
                     .distinct()
                 )
             ).all()
-            known = {artifact["latest"]["author_id"]: artifact["latest"]["author_name"]}
+            known = {}
+            if artifact["responsible_id"]:
+                known[artifact["responsible_id"]] = artifact["responsible_name"]
             for person in people:
                 if person.author_id:
                     known.setdefault(person.author_id, person.author_name)
@@ -412,11 +466,13 @@ class ConversationRepo(Repo):
             entries.pop()
         entries.sort(key=lambda entry: entry["id"])
         responsible = _responsible(artifact, names)
+        source = {"source_status": artifact["status"]} if kind in OBSERVED else {}
         return {
             "kind": kind,
             "artifact_id": artifact_id,
             "title": artifact["title"],
             "latest_revision_id": artifact["latest"]["revision_id"],
+            **source,
             "responsible": responsible,
             "participants": [
                 {
@@ -508,9 +564,11 @@ class ConversationRepo(Repo):
                     _D.c.author_id == agent_id, _D.c.id.in_(latest)
                 )
                 authored = select(func.cast(_R.c.id, Text)).where(_R.c.author_id == agent_id)
+                maintained = select(_S.c.artifact_id).where(_S.c.maintainer_id == agent_id)
                 responsible = or_(
                     and_(_E.c.kind == "document", _E.c.artifact_id.in_(documents)),
                     and_(_E.c.kind.in_(("response", "report")), _E.c.artifact_id.in_(authored)),
+                    and_(_E.c.kind.in_(OBSERVED), _E.c.artifact_id.in_(maintained)),
                 )
                 query = query.having(or_(func.sum(case((mine, 1), else_=0)) > 0, responsible))
             rows = (await conn.execute(query.order_by(last.desc()).limit(limit + 1))).all()
@@ -518,7 +576,7 @@ class ConversationRepo(Repo):
             for row in rows[:limit]:
                 try:
                     artifact = await _artifact(conn, row.kind, row.artifact_id)
-                    names = await _names(conn, [artifact["latest"]["author_id"]])
+                    names = await _names(conn, [artifact["responsible_id"]])
                     responsible = _responsible(artifact, names)
                 except UnknownArtifact:
                     responsible = {"agent_id": None, "name": None, "status": "unassigned"}
@@ -688,13 +746,15 @@ class ConversationRepo(Repo):
         """``(registration ID, current name)`` of the agent an owner message goes to.
         Never a new agent that merely has a retired registration's name."""
         if recipient is None:
-            agent_id = artifact["latest"]["author_id"]
+            agent_id = artifact["responsible_id"]
             if name := await _locked_name(conn, agent_id):
                 return agent_id, name
             raise ConversationRefused(
                 422,
                 "recipient_required",
-                "The responsible agent is retired; name a recipient.",
+                "The responsible agent is retired; name a recipient."
+                if agent_id
+                else "No agent is responsible for this; name a recipient.",
             )
         if re.fullmatch(r"[0-9a-f]{32}", recipient):
             if name := await _locked_name(conn, recipient):
@@ -820,3 +880,209 @@ class ConversationRepo(Repo):
             "has_more": more,
             "next_before_id": int(items[-1]["revision_id"]) if more else None,
         }
+
+    async def observe(
+        self, kind: str, store: str, items: dict[str, str | None], *, complete: bool
+    ) -> dict[str, dict]:
+        """Record what was just read from a skill or policy store: name → content,
+        None when it could not be read. ``complete`` means ``items`` is the whole
+        store, so a known item absent from it is missing too. A missing item keeps
+        its identity; changed content becomes a new version and a revision event.
+        Returns name → ``{artifact_id, status, latest_revision_id}``."""
+        prefix = f"{store}/"
+        result = {}
+        async with self._tx() as conn:
+            if complete:
+                gone = [
+                    row.artifact_id
+                    for row in await conn.execute(
+                        select(_S.c.artifact_id, _S.c.source_key).where(
+                            _S.c.kind == kind, _S.c.status == "active"
+                        )
+                    )
+                    # Names hold no "/": a nested store's keys are not this store's.
+                    if row.source_key.startswith(prefix)
+                    and "/" not in row.source_key[len(prefix) :]
+                    and row.source_key[len(prefix) :] not in items
+                ]
+                if gone:
+                    # Only still-active ones: a concurrent retirement must stand.
+                    await conn.execute(
+                        update(_S)
+                        .where(_S.c.artifact_id.in_(gone), _S.c.status == "active")
+                        .values(status="missing")
+                    )
+            for name, content in items.items():
+                source = await _source(conn, kind, prefix + name, name, create=content is not None)
+                if source is None:
+                    continue
+                digest = None if content is None else hashlib.sha256(content.encode()).hexdigest()
+                status, latest = source.status, await _latest(conn, source.artifact_id)
+                if (content is None and status == "active") or (
+                    content is not None
+                    and (status == "missing" or latest is None or latest[1] != digest)
+                ):
+                    status, latest = await _record(conn, kind, source.artifact_id, content, digest)
+                result[name] = {
+                    "artifact_id": source.artifact_id,
+                    "status": status,
+                    "latest_revision_id": str(latest[0]) if latest else None,
+                }
+        return result
+
+    async def observed_source(self, kind: str, artifact_id: str) -> dict | None:
+        """The identity's name, source key and status, or None."""
+        async with self._tx() as conn:
+            row = (
+                await conn.execute(
+                    select(_S.c.name, _S.c.source_key, _S.c.status).where(
+                        _S.c.artifact_id == artifact_id, _S.c.kind == kind
+                    )
+                )
+            ).first()
+        return dict(row._mapping) if row else None
+
+    async def observed_version(self, kind: str, artifact_id: str, revision_id: str) -> dict:
+        """One snapshot with its content."""
+        async with self._tx() as conn:
+            artifact = await _artifact(conn, kind, artifact_id)
+            version = next(
+                (v for v in artifact["versions"] if v["revision_id"] == revision_id), None
+            )
+            if version is None:
+                raise UnknownArtifact(f"No version {revision_id} of {kind} {artifact_id}.")
+            content = await conn.scalar(select(_V.c.content).where(_V.c.id == int(revision_id)))
+        return {key: version[key] for key in ("revision_id", "label", "created_at", "sha256")} | {
+            "content": content
+        }
+
+    async def set_maintainer(self, kind: str, artifact_id: str, agent: str | None) -> dict:
+        """The operator maps a skill or policy to a registration, or clears it."""
+        async with self._tx() as conn:
+            await _observed(conn, kind, artifact_id)
+            agent_id = name = None
+            if agent is not None:
+                if re.fullmatch(r"[0-9a-f]{32}", agent):
+                    agent_id, name = agent, await _locked_name(conn, agent)
+                else:
+                    agent_id, name = await _identity(conn, agent), agent
+                if not agent_id or not name:
+                    raise ConversationRefused(
+                        422, "unknown_recipient", f"No registered agent {agent}."
+                    )
+            await conn.execute(
+                update(_S)
+                .where(_S.c.artifact_id == artifact_id)
+                .values(maintainer_id=agent_id, maintainer_name=name)
+            )
+            # The summary's responsible agent changed: report it to ``since`` polling.
+            await _lock(conn, kind, artifact_id)
+            await conn.execute(
+                update(_READ)
+                .where(_READ.c.kind == kind, _READ.c.artifact_id == artifact_id)
+                .values(updated_at=now_iso())
+            )
+            artifact = await _observed(conn, kind, artifact_id)
+            return _responsible(artifact, await _names(conn, [agent_id]))
+
+    async def retire(self, kind: str, artifact_id: str) -> dict:
+        """End an identity on the operator's word. Its conversation stays readable;
+        anything later observed under the same name gets a new identity."""
+        async with self._tx() as conn:
+            await _observed(conn, kind, artifact_id)
+            await conn.execute(
+                update(_S)
+                .where(_S.c.artifact_id == artifact_id, _S.c.status != "retired")
+                .values(status="retired", retired_at=now_iso())
+            )
+            row = (
+                await conn.execute(
+                    select(_S.c.status, _S.c.retired_at).where(_S.c.artifact_id == artifact_id)
+                )
+            ).one()
+        return {"artifact_id": artifact_id, "status": row.status, "retired_at": row.retired_at}
+
+
+async def _source(conn, kind: str, key: str, name: str, *, create: bool):
+    """The identity currently holding ``key``; a new one when ``create`` and
+    there is none (never revived from a retired identity)."""
+    query = (
+        select(_S.c.artifact_id, _S.c.generation, _S.c.status)
+        .where(_S.c.kind == kind, _S.c.source_key == key)
+        .order_by(_S.c.generation.desc())
+        .limit(1)
+    )
+    row = (await conn.execute(query)).first()
+    if row is not None and row.status != "retired":
+        return row
+    if not create:
+        return None
+    # A concurrent first observation takes the same generation; the unique
+    # index keeps one, and both read it back.
+    await conn.execute(
+        text(
+            "INSERT INTO observed_sources (artifact_id, kind, source_key, generation, name,"
+            " status, first_observed_at) VALUES (:artifact_id, :kind, :key, :generation,"
+            " :name, 'active', :now) ON CONFLICT DO NOTHING"
+        ),
+        {
+            "artifact_id": uuid.uuid4().hex,
+            "kind": kind,
+            "key": key,
+            "generation": (row.generation if row else 0) + 1,
+            "name": name,
+            "now": now_iso(),
+        },
+    )
+    return (await conn.execute(query)).first()
+
+
+async def _latest(conn, artifact_id: str):
+    """``(version ID, sha256)`` of the newest snapshot, or None."""
+    return (
+        await conn.execute(
+            select(_V.c.id, _V.c.sha256)
+            .where(_V.c.artifact_id == artifact_id)
+            .order_by(_V.c.id.desc())
+            .limit(1)
+        )
+    ).first()
+
+
+async def _record(conn, kind: str, artifact_id: str, content: str | None, digest: str | None):
+    """Apply one observation under the identity's row lock, so a concurrent
+    observer of the same change finds this snapshot instead of adding another."""
+    status = await conn.scalar(
+        update(_S)
+        .where(_S.c.artifact_id == artifact_id)
+        .values(status=_S.c.status)
+        .returning(_S.c.status)
+    )
+    latest = await _latest(conn, artifact_id)
+    if status == "retired":
+        return status, latest
+    observed = "missing" if content is None else "active"
+    if status != observed:
+        await conn.execute(
+            update(_S).where(_S.c.artifact_id == artifact_id).values(status=observed)
+        )
+    if content is None or (latest is not None and latest[1] == digest):
+        return observed, latest
+    version_id = await conn.scalar(
+        insert(_V)
+        .values(artifact_id=artifact_id, sha256=digest, content=content, observed_at=now_iso())
+        .returning(_V.c.id)
+    )
+    if latest is not None:
+        count = await conn.scalar(select(func.count()).where(_V.c.artifact_id == artifact_id))
+        await append_revision(
+            conn,
+            kind,
+            artifact_id,
+            revision_id=str(version_id),
+            label=f"v{count}",
+            author_id="",
+            name="backbone",
+            author_type="backbone",
+        )
+    return observed, (version_id, digest)

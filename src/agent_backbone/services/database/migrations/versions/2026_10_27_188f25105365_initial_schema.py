@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 0bbd17190ae8
+Revision ID: 188f25105365
 Revises:
-Create Date: 2026-10-27 20:29:53.614588
+Create Date: 2026-10-27 21:45:23.625093
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0bbd17190ae8"
+revision: str = "188f25105365"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -411,6 +411,43 @@ def upgrade() -> None:
         )
 
     op.create_table(
+        "observed_sources",
+        sa.Column("artifact_id", sa.Text(), nullable=False),
+        sa.Column("kind", sa.Text(), nullable=False),
+        sa.Column("source_key", sa.Text(), nullable=False),
+        sa.Column("generation", sa.Integer(), nullable=False),
+        sa.Column("name", sa.Text(), nullable=False),
+        sa.Column("status", sa.Text(), nullable=False),
+        sa.Column("first_observed_at", sa.Text(), nullable=False),
+        sa.Column("retired_at", sa.Text(), nullable=True),
+        sa.Column("maintainer_id", sa.Text(), nullable=True),
+        sa.Column("maintainer_name", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("artifact_id", name=op.f("pk_observed_sources")),
+    )
+    with op.batch_alter_table("observed_sources", schema=None) as batch_op:
+        batch_op.create_index(
+            "uq_observed_source_generation", ["kind", "source_key", "generation"], unique=True
+        )
+
+    op.create_table(
+        "observed_versions",
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            autoincrement=True,
+            nullable=False,
+        ),
+        sa.Column("artifact_id", sa.Text(), nullable=False),
+        sa.Column("sha256", sa.Text(), nullable=False),
+        sa.Column("content", sa.Text(), nullable=False),
+        sa.Column("observed_at", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_observed_versions")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("observed_versions", schema=None) as batch_op:
+        batch_op.create_index("idx_observed_versions", ["artifact_id", "id"], unique=False)
+
+    op.create_table(
         "poll_cursors",
         sa.Column("repo", sa.Text(), nullable=False),
         sa.Column("since", sa.Text(), nullable=False),
@@ -748,6 +785,14 @@ def downgrade() -> None:
 
     op.drop_table("reports")
     op.drop_table("poll_cursors")
+    with op.batch_alter_table("observed_versions", schema=None) as batch_op:
+        batch_op.drop_index("idx_observed_versions")
+
+    op.drop_table("observed_versions")
+    with op.batch_alter_table("observed_sources", schema=None) as batch_op:
+        batch_op.drop_index("uq_observed_source_generation")
+
+    op.drop_table("observed_sources")
     with op.batch_alter_table("message_queue", schema=None) as batch_op:
         batch_op.drop_index(
             "uq_mq_message_dedup",

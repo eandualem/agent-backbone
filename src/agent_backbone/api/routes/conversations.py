@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agent_backbone.api.deps import get_config, get_db
+from agent_backbone.api.observed import observe_one
 from agent_backbone.models import ReportAgentName
 from agent_backbone.services.database import (
     CONVERSATION_KINDS,
@@ -33,7 +34,8 @@ from agent_backbone.services.routing import quote_envelope_lines
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
-_PLANNED = ("sheet", "plan", "skill", "policy")
+_PLANNED = ("sheet", "plan")
+_OBSERVED = ("skill", "policy")
 _MAX_ID = 2**63 - 1
 
 
@@ -95,6 +97,11 @@ class MessageBody(BaseModel):
 class ReadBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     read_through: int = Field(ge=0, le=_MAX_ID)
+
+
+class MaintainerBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    agent: str = Field(min_length=1, max_length=128)
 
 
 class RedeliverBody(BaseModel):
@@ -226,6 +233,7 @@ async def conversation(
     limit: int = Query(default=50, ge=1, le=200),
     entries: str | None = Query(default=None, max_length=1024),
     agent: str | None = Query(default=None, max_length=128),
+    config=Depends(get_config),
     db: BackboneDB = Depends(get_db),
 ):
     """The header and a page of entries; an unchanged poll returns 304.
@@ -238,6 +246,8 @@ async def conversation(
             raise HTTPException(422, "entries takes 1 to 50 entry IDs")
     try:
         _kind(kind)
+        if kind in _OBSERVED:
+            await observe_one(config, db, kind, artifact_id)
         page = await db.conversations.conversation(
             kind,
             artifact_id,
@@ -351,9 +361,68 @@ async def redeliver(
     )
 
 
+@router.put("/{kind}/{artifact_id}/maintainer", operation_id="set_conversation_maintainer")
+async def set_maintainer(
+    kind: str,
+    artifact_id: str,
+    body: MaintainerBody,
+    request: Request,
+    db: BackboneDB = Depends(get_db),
+):
+    """Make a registered agent responsible for a skill or policy (operator only)."""
+    _owner(request)
+    try:
+        if kind not in _OBSERVED:
+            raise UnknownArtifact(
+                f"Only skills and policies have a maintainer mapping, not {kind}."
+            )
+        return {"responsible": await db.conversations.set_maintainer(kind, artifact_id, body.agent)}
+    except UnknownArtifact as exc:
+        return _unknown(exc)
+    except ConversationRefused as exc:
+        return _refused(exc)
+
+
+@router.delete("/{kind}/{artifact_id}/maintainer", operation_id="clear_conversation_maintainer")
+async def clear_maintainer(
+    kind: str, artifact_id: str, request: Request, db: BackboneDB = Depends(get_db)
+):
+    """Remove the mapping: the conversation is unassigned again (operator only)."""
+    _owner(request)
+    try:
+        if kind not in _OBSERVED:
+            raise UnknownArtifact(
+                f"Only skills and policies have a maintainer mapping, not {kind}."
+            )
+        return {"responsible": await db.conversations.set_maintainer(kind, artifact_id, None)}
+    except UnknownArtifact as exc:
+        return _unknown(exc)
+
+
+@router.post("/{kind}/{artifact_id}/retire", operation_id="retire_conversation_source")
+async def retire(kind: str, artifact_id: str, request: Request, db: BackboneDB = Depends(get_db)):
+    """End a skill or policy identity (operator only). Its conversation stays
+    readable; content later found under the same name starts a new one."""
+    _owner(request)
+    try:
+        if kind not in _OBSERVED:
+            raise UnknownArtifact(f"Only skills and policies can be retired, not {kind}.")
+        return await db.conversations.retire(kind, artifact_id)
+    except UnknownArtifact as exc:
+        return _unknown(exc)
+
+
 async def versions(db: BackboneDB, kind: str, artifact_id: str, before, limit):
     """A kind's version list, shared by its own router."""
     try:
         return await db.conversations.versions(kind, artifact_id, before=before, limit=limit)
+    except UnknownArtifact as exc:
+        return _unknown(exc)
+
+
+async def observed_version(db: BackboneDB, kind: str, artifact_id: str, version_id: str):
+    """One skill or policy snapshot with its content."""
+    try:
+        return await db.conversations.observed_version(kind, artifact_id, version_id)
     except UnknownArtifact as exc:
         return _unknown(exc)
