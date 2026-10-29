@@ -268,7 +268,7 @@ async def lifespan(app: FastAPI):
     app.state.lifecycle = lifecycle
 
     # Stage 1: the database, then the configuration stored in it.
-    app.state.db = BackboneDB(boot.database_url)
+    app.state.db = BackboneDB(boot.database_url, state_dir=boot.state_dir)
     lifecycle.register("database", app.state.db)
     await lifecycle.start_all()
 

@@ -171,7 +171,7 @@ class Direct:
         from agent_backbone.services.agents import AgentStore
         from agent_backbone.services.database import BackboneDB
 
-        self.db = BackboneDB(self._boot.database_url)
+        self.db = BackboneDB(self._boot.database_url, state_dir=self._boot.state_dir)
         await self.db.start()
         self.store = AgentStore(self.db, self._boot.data_dir)
         self.config = await self.store.refresh()

@@ -212,6 +212,108 @@ def _tool_call(runtime: str, tmp_path) -> str:
     return data["additionalContext"]
 
 
+@pytest.mark.parametrize("runtime", RUNTIMES)
+async def test_startup_withdraws_unbound_offers_before_hooks_consume_them(tmp_path, runtime):
+    from sqlalchemy import text
+
+    from agent_backbone.services.database import BackboneDB
+
+    url = f"sqlite+aiosqlite:///{tmp_path}/queue.db"
+    async with BackboneDB.connect(url) as db:
+        for message, status, registration in (
+            ("legacy pending", "pending", None),
+            ("legacy expired", "expired", None),
+            ("current notification", "pending", "current-registration"),
+        ):
+            queued = await db.queue.enqueue(
+                session_name="desk", message=message, delivery_kind="subscription"
+            )
+            async with db.engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "UPDATE message_queue SET status=:status, registration_id=:identity "
+                        "WHERE id=:id"
+                    ),
+                    {"status": status, "identity": registration, "id": queued.id},
+                )
+            bb.offer_context(tmp_path, "desk", str(queued.id), message)
+
+    db = BackboneDB(url, state_dir=tmp_path)
+    await db.start()
+    try:
+        assert _tool_call(runtime, tmp_path) == "current notification"
+        async with db.engine.connect() as conn:
+            rows = (
+                await conn.execute(text("SELECT message, status FROM message_queue ORDER BY id"))
+            ).all()
+        assert rows == [
+            ("legacy pending", "expired"),
+            ("legacy expired", "expired"),
+            ("current notification", "pending"),
+        ]
+    finally:
+        await db.stop()
+
+
+@pytest.mark.parametrize("cancel_startup", [False, True])
+async def test_startup_prevents_pruning_and_id_reuse_during_hook_withdrawal(
+    tmp_path, cancel_startup
+):
+    import asyncio
+    import sqlite3
+    import threading
+    from contextlib import closing
+
+    from sqlalchemy import text
+
+    from agent_backbone.services.database import BackboneDB
+
+    database = tmp_path / "queue.db"
+    url = f"sqlite+aiosqlite:///{database}"
+    async with BackboneDB.connect(url) as db:
+        queued = await db.queue.enqueue(
+            session_name="desk", message="old notification", delivery_kind="subscription"
+        )
+        async with db.engine.begin() as conn:
+            await conn.execute(text("UPDATE message_queue SET status='expired'"))
+        bb.offer_context(tmp_path, "desk", str(queued.id), "old notification")
+
+    loop = asyncio.get_running_loop()
+    withdrawn = threading.Event()
+    pruning_blocked = []
+
+    def withdraw(state_dir, agent, key):
+        try:
+            if cancel_startup:
+                loop.call_soon_threadsafe(startup.cancel)
+            with closing(sqlite3.connect(database, timeout=1)) as concurrent:
+                try:
+                    concurrent.execute("DELETE FROM message_queue WHERE status='expired'")
+                except sqlite3.OperationalError as exc:
+                    assert "database is locked" in str(exc)
+                    pruning_blocked.append(True)
+                else:
+                    pruning_blocked.append(False)
+            bb.clear_context(state_dir, agent, key)
+        finally:
+            withdrawn.set()
+
+    db = BackboneDB(url, state_dir=tmp_path)
+    try:
+        with patch("agent_backbone.services.database.backbone_db.clear_context", withdraw):
+            startup = asyncio.create_task(db.start())
+            if cancel_startup:
+                with pytest.raises(asyncio.CancelledError):
+                    await startup
+            else:
+                await startup
+            assert await asyncio.to_thread(withdrawn.wait, 5)
+        assert pruning_blocked == [True]
+        assert bb.take_context(tmp_path, "desk") == []
+    finally:
+        await db.stop()
+
+
 def _prompt(runtime: str, tmp_path, at: float) -> dict:
     """A prompt starts a turn on ``runtime`` (Claude Code, Codex) at ``at``:
     the turn as the backbone names it in an offer."""

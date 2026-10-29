@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 import agent_backbone.services.database.models  # noqa: F401  (registers the ORM tables)
+from agent_backbone.hooks.backbone_state import clear_context
 from agent_backbone.services.database._acks_repo import AcknowledgementRepo
 from agent_backbone.services.database._agents_repo import AgentRepo
 from agent_backbone.services.database._conversations_repo import ConversationRepo
@@ -220,8 +221,9 @@ class BackboneDB:
             await db.deliveries.record(...)
     """
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, *, state_dir: Path | None = None) -> None:
         self._url = url
+        self._state_dir = state_dir
         self._engine: AsyncEngine | None = None
         engine = lambda: self.engine  # noqa: E731 — the repos read the live engine
         self.deliveries = DeliveryRepo(engine)
@@ -292,6 +294,21 @@ class BackboneDB:
                     {"name": name, "identity": uuid.uuid4().hex},
                 )
             # Legacy queues have no provable link to the current registration.
+            if self._state_dir is not None:
+                # Hold the rows until withdrawal finishes: pruning must not
+                # reuse an ID for a current notification while its files clear.
+                legacy = await conn.execute(
+                    text(
+                        "UPDATE message_queue SET registration_id=NULL "
+                        "WHERE registration_id IS NULL RETURNING id, session_name"
+                    )
+                )
+                for row in legacy:
+                    # Include already-retired rows: earlier upgrades left their
+                    # offers behind for still-running hooks to consume.
+                    # Keep these unlinks inside the locked transaction even
+                    # when startup is cancelled; no worker may outlive it.
+                    clear_context(self._state_dir, row.session_name, str(row.id))
             await conn.execute(
                 text(
                     "INSERT INTO deliveries (operation_id,kind,repo,issue_number,target_entity,"
