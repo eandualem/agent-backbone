@@ -121,7 +121,7 @@ def verify_sources(cache, target="aarch64-apple-darwin"):
                     bases.add(posixpath.dirname(source_path(prefix, prefix, manifest)))
             for declared in info.get_all("License-File", []):
                 matches = {source_path(prefix, base, declared) for base in bases} & names
-                require(len(matches) == 1, "Missing or ambiguous declared distribution notice")
+                require(matches, "Missing declared distribution notice")
                 required.update(matches)
             cargo = {
                 m.name: tomllib.loads(read(wheel["source_id"], m.name).decode())
@@ -191,7 +191,14 @@ def verify_sources(cache, target="aarch64-apple-darwin"):
                 "Crate package identity/license differs",
             )
             with open_archive(sid) as archive:
-                required = notice_members(archive, prefix + "/" + package.get("license-file", ""))
+                required = notice_members(archive)
+                if "license-file" in package:
+                    declared = source_path(prefix, prefix, package["license-file"])
+                    require(
+                        declared in {m.name for m in archive.getmembers() if m.isfile()},
+                        "Missing declared crate notice",
+                    )
+                    required.add(declared)
             retained = {n["source_member"] for n in component["notices"] if n["source_id"] == sid}
             require(
                 required <= retained, f"Crate notice members missing: {sorted(required - retained)}"

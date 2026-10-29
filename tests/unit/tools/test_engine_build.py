@@ -485,9 +485,11 @@ def test_native_notice_inventory_cannot_follow_changed_binary_inputs(change):
         lock["runtime_wheels"].append({"name": "new-native", "filename": "new-native.so.whl"})
     elif change == "target":
         lock["target"] = "x86_64-apple-darwin"
+        lock["native_notice_metadata"] = "native-notices.json"
     else:
         lock["python"]["sha256"] = "0" * 64
-    with pytest.raises(ValueError, match="[Nn]otice"):
+    message = "target/Python input mismatch" if change in {"target", "python"} else "[Nn]otice"
+    with pytest.raises(ValueError, match=message):
         engine.native_notice_material(lock)
 
 
@@ -550,8 +552,14 @@ def test_native_notice_tampering_refused_before_snapshot(tmp_path, monkeypatch, 
         "concurrent_cache_change",
         "wheel_declared",
         "wheel_workspace",
+        "wheel_inherited",
+        "wheel_inherited_ok",
         "wheel_spelling",
         "wheel_maturin_ok",
+        "wheel_maturin_duplicate_ok",
+        "crate_declared",
+        "crate_declared_missing",
+        "crate_declared_ok",
         "prepared_ok",
     ],
 )
@@ -585,6 +593,13 @@ def test_source_verifier_checks_upstream_crate_notice_correspondence(tmp_path, m
     ]
     if change == "omitted_notice":
         crate_members.append(("demo-1.0.0/NOTICE", tarfile.REGTYPE, "required attribution"))
+    if change and change.startswith("crate_declared"):
+        name, kind, content = crate_members[0]
+        crate_members[0] = (name, kind, content + 'license-file="./legal/TERMS.md"\n')
+        if change != "crate_declared_missing":
+            crate_members.append(
+                ("demo-1.0.0/legal/TERMS.md", tarfile.REGTYPE, "required attribution")
+            )
     wheel_case = bool(change and change.startswith("wheel_"))
     member = "demo-1.0.0/docs/terms.txt"
     if wheel_case:
@@ -598,6 +613,21 @@ def test_source_verifier_checks_upstream_crate_notice_correspondence(tmp_path, m
                     "demo-1.0.0/inner/Cargo.toml",
                     tarfile.REGTYPE,
                     '[package]\nname="inner"\nversion="1"\nlicense-file="LEGAL.md"\n',
+                )
+            )
+        elif change in {"wheel_inherited", "wheel_inherited_ok"}:
+            member = "demo-1.0.0/legal/TERMS.md"
+            name, kind, content = crate_members[0]
+            crate_members[0] = (
+                name,
+                kind,
+                content + '[workspace.package]\nlicense-file="legal/TERMS.md"\n',
+            )
+            crate_members.append(
+                (
+                    "demo-1.0.0/inner/Cargo.toml",
+                    tarfile.REGTYPE,
+                    '[package]\nname="inner"\nversion="1"\nlicense-file.workspace=true\n',
                 )
             )
         elif change == "wheel_spelling":
@@ -625,6 +655,8 @@ def test_source_verifier_checks_upstream_crate_notice_correspondence(tmp_path, m
                 (member, tarfile.REGTYPE, "required attribution"),
             ]
         )
+        if change == "wheel_maturin_duplicate_ok":
+            crate_members.append(("demo-1.0.0/LEGAL.md", tarfile.REGTYPE, "required attribution"))
     crate = archive(tmp_path, crate_members)
     crate.rename(tmp_path / "crate.tar")
     data = {
@@ -681,19 +713,37 @@ def test_source_verifier_checks_upstream_crate_notice_correspondence(tmp_path, m
     )
     if wheel_case:
         data["wheels"] = [{"name": "demo", "version": "1.0.0", "source_id": "crate:demo-1.0.0"}]
-    if change == "wheel_maturin_ok":
-        data["components"].append(
-            {
-                "component": "workspace notice",
+    if change in {
+        "wheel_maturin_ok",
+        "wheel_maturin_duplicate_ok",
+        "wheel_inherited_ok",
+        "crate_declared_ok",
+    }:
+        members = ["demo-1.0.0/legal/TERMS.md"] if change == "crate_declared_ok" else [member]
+        if change == "wheel_maturin_duplicate_ok":
+            members.append("demo-1.0.0/LEGAL.md")
+        for retained_member in members:
+            notice = {
                 "source_id": "crate:demo-1.0.0",
-                "source_member": member,
-                "notice": {
-                    "bytes": len(b"required attribution"),
-                    "sha256": hashlib.sha256(b"required attribution").hexdigest(),
-                },
+                "source_member": retained_member,
+                "bytes": len(b"required attribution"),
+                "sha256": hashlib.sha256(b"required attribution").hexdigest(),
             }
-        )
-        assert verify(tmp_path)["notices_verified"] == 2
+            if change == "crate_declared_ok":
+                data["components"][0]["notices"].append(notice)
+            else:
+                data["components"].append(
+                    {
+                        "component": "workspace notice",
+                        "source_id": "crate:demo-1.0.0",
+                        "source_member": retained_member,
+                        "notice": {
+                            "bytes": len(b"required attribution"),
+                            "sha256": hashlib.sha256(b"required attribution").hexdigest(),
+                        },
+                    }
+                )
+        assert verify(tmp_path)["notices_verified"] == 1 + len(members)
         return
     if change == "prepared_ok":
         engine.write_json(tmp_path / "x86_64-apple-darwin.json", {"prepared_only": True})
