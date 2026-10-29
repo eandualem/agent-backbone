@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime
@@ -273,12 +274,39 @@ async def inspect_agent(
     )
 
 
+async def _runtime_setup_checks():
+    # Drain every worker before allowing another batch, including on failure.
+    values = await asyncio.gather(
+        *(asyncio.to_thread(rt.setup_compatibility) for rt in RUNTIMES.values()),
+        return_exceptions=True,
+    )
+    for value in values:
+        if isinstance(value, BaseException):
+            raise value
+    return dict(zip(RUNTIMES, values, strict=True))
+
+
 @router.get("/runtimes", response_model=list[RuntimeInfo])
-async def list_runtimes():
+async def list_runtimes(request: Request, check_setup: bool = False):
     """Supported runtimes and whether their binary is installed."""
+    checks = {}
+    if check_setup:
+        await require_operator(request)
+        task = getattr(request.app.state, "runtime_setup_checks", None)
+        if task is None or task.done():
+            task = asyncio.create_task(_runtime_setup_checks())
+            # Observe failures even if all clients disconnect before completion.
+            task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+            request.app.state.runtime_setup_checks = task
+        # Disconnecting clients must not free capacity while workers still run.
+        checks = await asyncio.shield(task)
     return [
         RuntimeInfo(
-            id=rt.id, display_name=rt.display_name, available=rt.available(), models=list(rt.models)
+            id=rt.id,
+            display_name=rt.display_name,
+            available=rt.available(),
+            models=list(rt.models),
+            setup_compatibility=checks.get(rt.id),
         )
         for rt in RUNTIMES.values()
     ]

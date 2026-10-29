@@ -6,6 +6,7 @@ unrelated agent, weakens runtime trust, or guesses that a lost send was unsent.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import replace
 from pathlib import Path
@@ -16,6 +17,7 @@ from agent_backbone.fs import AtomicCreateUnsupported, atomic_create_text
 from agent_backbone.git import detect_repo
 from agent_backbone.models import (
     SUCCESS_OUTCOMES,
+    SetupCancelFirstAgent,
     SetupFirstAgent,
     SetupTemplateBrief,
     setup_result,
@@ -120,6 +122,14 @@ async def first_agent(request: SetupFirstAgent, config, store, db):
         )
     try:
         with SetupReceipt(config.data_dir, request.model_dump()) as receipt:
+            if receipt.cancelled:
+                return setup_result(
+                    "first_agent",
+                    "request_cancelled",
+                    "This setup request was cancelled; choose a new request ID.",
+                    status="failed",
+                    retry="new_request",
+                )
             receipt.save(agent_name=request.agent.name)
             async with lifecycle_lock(request.agent.name):
                 return await _first(request, receipt, store, db)
@@ -140,6 +150,60 @@ async def first_agent(request: SetupFirstAgent, config, store, db):
             "first_agent",
             "outcome_unknown",
             "Setup could not confirm the result; inspect the agent and retry the same request.",
+        )
+
+
+async def cancel_first_agent(request: SetupCancelFirstAgent, config):
+    """Atomically retire an input before effects, including a not-yet-sent input.
+
+    First-agent holds this same nonblocking file lock through all effects. A
+    cancellation can therefore never pass a concurrent registration or launch.
+    No runtime probing, replay, agent deletion or terminal stop is involved.
+    """
+    action = request.action
+    if Path(request.data_dir) != config.data_dir.resolve():
+        return setup_result(
+            action, "installation_conflict", "This service owns a different data directory."
+        )
+    try:
+        with SetupReceipt(config.data_dir, request.original().model_dump()) as receipt:
+            if not receipt.cancelled:
+                # Preflight can only write these fields. Fail closed for any
+                # later or unfamiliar evidence, even an incomplete step.
+                allowed = {
+                    "schema_version",
+                    "request_id",
+                    "fingerprint",
+                    "completed_steps",
+                    "agent_name",
+                }
+                if receipt.record["completed_steps"] or receipt.record.keys() - allowed:
+                    return setup_result(
+                        action,
+                        "cancellation_unsafe",
+                        "Setup may have made changes; the request and any agent were preserved.",
+                        retry="none",
+                        steps=receipt.record["completed_steps"],
+                    )
+                receipt.cancel()
+            return setup_result(
+                action,
+                "request_cancelled",
+                "This setup request is cancelled; a new request may be submitted.",
+                status="completed",
+                retry="new_request",
+                data={"cancelled_request_id": request.request_id, "can_start_new_request": True},
+            )
+    except SetupReceiptError as exc:
+        return setup_result(action, exc.code, str(exc))
+    except Exception as exc:
+        log.error(
+            "Setup cancellation failed request=%s error=%s", request.request_id, type(exc).__name__
+        )
+        return setup_result(
+            action,
+            "outcome_unknown",
+            "Cancellation was not confirmed; retry the same cancellation request.",
         )
 
 
@@ -183,7 +247,7 @@ async def _first(request, receipt, store, db):
     if not any(
         receipt.record.get(key)
         for key in ("registration_id", "registration_pending", "launch_operation")
-    ) and (error := selected.setup_error()):
+    ) and (error := await asyncio.to_thread(selected.setup_error)):
         return _answer(receipt, "runtime_permission", error)
     path = spec.path
     if path.resolve() != path or (path.exists() and not path.is_dir()):

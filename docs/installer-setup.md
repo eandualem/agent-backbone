@@ -28,6 +28,33 @@ file. An external database URL must also be declared literally in that installat
 that the selected directory is an installation. For `service: "none"`, start a later daemon without an unrelated
 `BACKBONE_API_KEY` environment override so it uses that same file.
 
+### Optional setup compatibility checks
+
+Default runtime discovery does not execute installed programs. To inspect the
+selected executable before Start, use `backbone runtimes --json --check-setup`
+or operator-only `GET /api/runtimes?check_setup=true`. Each runtime gains a
+`setup_compatibility` object containing `compatible` (boolean), `reason`,
+`message`, `path` (nullable), `version` (nullable), and `version_error` (nullable).
+The API observes the running service's executable selection; the CLI observes
+its own environment. A shell result does not prove which binary the service uses.
+
+Reasons are `compatible`, `unsupported`, `runtime_missing`,
+`version_unavailable`, and `version_unsupported`. Version errors are `missing`,
+`timeout`, `unavailable`, `nonzero_exit`, or `invalid_output`. Supported adapters
+probe the selected executable with `--version`, with a ten-second timeout per
+probe; API probes run off the event loop. Raw output is never returned. Only
+OpenCode has a setup minimum-version requirement; a failed version observation
+for another supported adapter does not introduce a new setup restriction.
+Compatibility does not establish authentication, model availability or launch
+success. Missing compatibility metadata from an older provider is unknown.
+
+OpenCode's reported path and version refer to the same selected executable.
+An old executable on PATH continues to take precedence over the standalone
+installer location. The result explains this rather than silently replacing a
+user-selected binary. An unreadable or failed version probe is distinguished
+from a known version below 2.1.4. Fix the selected executable or deliberately
+choose another tool; cancel its saved setup request before submitting new input.
+
 ## Initialize
 
 All fields are required, unknown fields are rejected, and paths must be absolute:
@@ -149,9 +176,58 @@ handling them in the terminal. Ambiguous startup is not reported as authenticati
 failure. A custom brief applies to this first launch; ordinary later starts use
 normal agent instruction selection.
 
+## Change the first agent before setup makes changes
+
+A user can cancel a saved first-agent request before it makes changes, for
+example to switch tools after a runtime preflight refusal. This additive schema-1
+action requires provider support in both the installed CLI and running service.
+Older providers reject it; rejection is never confirmation of cancellation.
+
+Copy the **entire saved first-agent request**, retaining its request ID and all
+other fields, and change only `"action"` to `"cancel_first_agent"`. Submit it with
+`backbone setup --file cancel.json --jsonl`, or as an operator to
+`POST /api/setup/first-agent/cancel`. The consumer must persist this cancellation
+intent before sending it. After an app restart or lost response, retry this
+cancellation input, not the original first-agent action.
+
+Cancellation uses the same nonblocking installation lock as first-agent setup.
+It checks the original request fingerprint and refuses if any step completed or
+any registration, launch, greeting or unfamiliar effect marker exists. It never
+probes a runtime, launches, stops, forgets or changes an agent. A missing receipt
+is recorded as cancelled too, preventing a delayed original submission from
+starting after cancellation wins the lock.
+
+The only confirmation permitting a replacement request is a matching final
+result with `action: "cancel_first_agent"`, `status: "completed"`,
+`code: "request_cancelled"`, `retry: "new_request"`, `completed_steps: []`, and
+`data: {"cancelled_request_id": "<original ID>", "can_start_new_request": true}`.
+The CLI exits 0. Save that confirmation and retire the old consumer attempt before
+creating the user's replacement input under a **new request ID**. Keep the old
+provider receipt. Its permanent marker also makes older provider implementations
+reject the original request's fingerprint; it is not a flag they can ignore.
+
+Cancellation is idempotent across process restarts. A concurrent setup holds the
+lock and cancellation returns `outcome_unknown`, `action_required`,
+`retry: "same_request"`: retry the **cancellation** after the operation finishes.
+If work already progressed, the result is `cancellation_unsafe`,
+`action_required`, `retry: "none"`; preserve and inspect the original agent or
+request. A changed input under the original ID returns `request_conflict`, which
+does not confirm cancellation. None of these results unlocks replacement.
+
+A later original first-agent replay returns `request_cancelled`, `failed`,
+`retry: "new_request"` without further effects. This is not a rollback: the
+operation deliberately refuses once any step completed, even if registration
+has not yet occurred. An ordinary runtime permission prompt after launch must be
+handled in its terminal. Do not infer cancellation safety from the previous
+failure code, empty output steps, a missing terminal, or an interrupted response.
+There is no read-only setup status endpoint; replaying first-agent setup is an
+execution request, not a status query.
+
 ## Results and recovery
 
-Requests are limited to 32,768 UTF-8 bytes. JSONL events carry `schema_version: 1`,
+Initialize and first-agent requests are limited to 32,768 UTF-8 bytes.
+Cancellation allows 32,775 bytes so even a maximum-size original input can
+change only its action to the longer cancellation action. JSONL events carry `schema_version: 1`,
 `request_id`, a strictly increasing `seq` within that invocation, and `type`
 (`step` or `result`). Each invocation emits exactly one final result. Step events
 have `step` and `status`. The result has `action`, `status`, `code`, `message`,
@@ -174,7 +250,7 @@ Result codes include `initialized`, `existing_preserved`, `agent_ready`,
 `validated`, `invalid_request`, `operator_required`, `installation_conflict`,
 `starter_conflict`, `agent_conflict`, `runtime_missing`, `runtime_permission`,
 `service_unavailable`, `launch_failed`, `launch_timeout`, `outcome_unknown`,
-`request_conflict` and `filesystem_unsupported`. `retry` is `same_request`, `new_request` or `none`.
+`request_conflict`, `filesystem_unsupported`, `request_cancelled` and `cancellation_unsafe`. `retry` is `same_request`, `new_request` or `none`.
 
 Private receipts under `setup-receipts` bind each request ID to its full input
 fingerprint. A changed request with the same ID conflicts. One nonblocking lock

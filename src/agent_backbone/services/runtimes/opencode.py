@@ -232,12 +232,34 @@ class OpenCode(Runtime):
         ]
 
     def setup_error(self) -> str | None:
-        version = self._version()
-        if not version or version < (2, 1, 4):
-            return (
-                "OpenCode setup requires @opencode/cli 2.1.4 or newer; update it before retrying."
-            )
-        return None
+        status = self.setup_compatibility()
+        return None if status["compatible"] else status["message"]
+
+    def setup_compatibility(self) -> dict:
+        status = super().setup_compatibility()
+        if status["path"] is None:
+            return status
+        version = status["version"] or ""
+        match = re.match(r"(\d+)\.(\d+)\.(\d+)", version)
+        if not match:
+            return {
+                **status,
+                "compatible": False,
+                "reason": "version_unavailable",
+                "message": "The selected OpenCode executable did not report a usable version "
+                f"({status['version_error'] or 'invalid_output'}). Check its setup compatibility "
+                "path and run that executable with --version; no agent was started.",
+            }
+        if tuple(map(int, match.groups())) < (2, 1, 4):
+            return {
+                **status,
+                "compatible": False,
+                "reason": "version_unsupported",
+                "message": f"The selected OpenCode executable reports {version}; setup requires "
+                "@opencode/cli 2.1.4 or newer. Check the selected path: an older PATH executable "
+                "takes precedence over ~/.opencode/bin/opencode.",
+            }
+        return status
 
     def prepare_setup_hooks(self, data_dir: Path, state_dir: Path) -> None:
         try:

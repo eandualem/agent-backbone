@@ -21,6 +21,7 @@ _FROM_TAG_PATTERN = re.compile(r"^\[from:([A-Za-z0-9][A-Za-z0-9_.-]*)\]")
 REPORT_BODY_BYTES = 16_384
 RESPONSE_BODY_BYTES = 65_536
 SETUP_BODY_BYTES = 32_768
+SETUP_CANCEL_BODY_BYTES = SETUP_BODY_BYTES + len("cancel_")
 REPORT_TEXT_CHARACTERS = 1_500
 REPORT_LINKS = 6
 REPORTS_PER_HOUR = 30
@@ -102,7 +103,18 @@ class SetupFirstAgent(SetupBase):
         return self
 
 
-SetupRequest = Annotated[SetupInitialize | SetupFirstAgent, Field(discriminator="action")]
+class SetupCancelFirstAgent(SetupFirstAgent):
+    """Cancel the exact saved first-agent input, never an agent or its terminal."""
+
+    action: Literal["cancel_first_agent"]
+
+    def original(self) -> SetupFirstAgent:
+        return SetupFirstAgent.model_validate({**self.model_dump(), "action": "first_agent"})
+
+
+SetupRequest = Annotated[
+    SetupInitialize | SetupFirstAgent | SetupCancelFirstAgent, Field(discriminator="action")
+]
 
 
 def report_error_details(errors: list[dict]) -> list[dict]:
@@ -761,7 +773,7 @@ class CurrentPlanFeedback(BaseModel):
 
 class SetupResult(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    action: Literal["initialize", "first_agent", "validate"]
+    action: Literal["initialize", "first_agent", "cancel_first_agent", "validate"]
     status: Literal["completed", "action_required", "failed"]
     code: str = Field(min_length=1, max_length=100)
     message: str = Field(max_length=2000)

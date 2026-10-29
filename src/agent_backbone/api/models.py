@@ -372,6 +372,7 @@ class RuntimeInfo(BaseModel):
     available: bool = True
     models: list[str] = Field(default_factory=list)
     """Example model ids known to work with ``--model`` (the CLI's picker is the authority)."""
+    setup_compatibility: dict | None = None
 
 
 # --- Issues ---
