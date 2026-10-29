@@ -18,6 +18,7 @@ def test_state_records_identify_the_runtime_and_session(tmp_path):
     plugin = tmp_path / "hook.mjs"
     plugin.write_text(hook_source("opencode_hook.js").read_text())
     script = """
+process.umask(0);
 const { AgentBackbone } = await import(process.argv[1]);
 const hook = await AgentBackbone();
 await hook.event({event: {type: "session.status", properties: {
@@ -41,6 +42,8 @@ await hook.event({event: {type: "session.status", properties: {
     assert state["runtime"] == "opencode"
     assert state["session_id"] == "opencode-session"
     assert state["launch_id"] == "replacement-launch"
+    assert tmp_path.stat().st_mode & 0o777 == 0o700
+    assert all(p.stat().st_mode & 0o777 == 0o600 for p in tmp_path.rglob("*.json"))
 
 
 def test_the_running_model_comes_from_a_completed_opencode_reply(tmp_path):
@@ -233,11 +236,16 @@ if (!timerFired) throw new Error("parser blocked the plugin event loop");
 await before({tool: "bash"}, {args: {command}});
 await after({tool: "bash", args: {command}}, {metadata: {exit: 1}});
 await after({tool: "bash", args: {command: "gh issue comment 7 -R acme/app -b done"}},
-            {metadata: {exit: 0}});
+            {metadata: {exit: 0}, output: "https://github.com/acme/app/issues/7#issuecomment-123"});
 """
     subprocess.run(
         [node, "--input-type=module", "-e", script, plugin.as_uri()],
-        env={**os.environ, "BACKBONE_AGENT": "app", "BACKBONE_STATE_DIR": str(tmp_path)},
+        env={
+            **os.environ,
+            "BACKBONE_AGENT": "app",
+            "BACKBONE_STATE_DIR": str(tmp_path),
+            "BACKBONE_REGISTRATION_ID": "a" * 32,
+        },
         check=True,
         capture_output=True,
         text=True,
@@ -245,9 +253,10 @@ await after({tool: "bash", args: {command: "gh issue comment 7 -R acme/app -b do
     )
     log = tmp_path / "actions.jsonl"
     rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert all(row["registration_id"] == "a" * 32 for row in rows)
     assert [(row["issue"], row["phase"]) for row in rows] == [(5, "intent"), (7, "succeeded")]
-    assert not has_commented_on_issue(5, "app", log, repo="acme/app")
-    assert has_commented_on_issue(7, "app", log, repo="acme/app")
+    assert not has_commented_on_issue(5, "app", log, repo="acme/app", registration_id="a" * 32)
+    assert has_commented_on_issue(7, "app", log, repo="acme/app", registration_id="a" * 32)
 
 
 def test_old_opencode_launch_cannot_overwrite_replacement_state(tmp_path):

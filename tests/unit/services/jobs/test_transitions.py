@@ -3,17 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from agent_backbone.config import AgentsConfig
 from agent_backbone.models import DeliveryOutcome
-from agent_backbone.services.agents import AgentStore, StartResult
+from agent_backbone.services.agents import (
+    AgentStore,
+    StartResult,
+    lifecycle_lock,
+    write_starting_marker,
+    write_state_file,
+)
 from agent_backbone.services.database import now_iso
 from agent_backbone.services.jobs.retry import drain_message_queue
 from agent_backbone.services.jobs.transitions import run_transitions
 from agent_backbone.services.routing import DeliveryReport, safe_deliver
 from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+from agent_backbone.services.runtimes import RUNTIMES
 
 _JOB = "agent_backbone.services.jobs.transitions"
 _DELIVERY = "agent_backbone.services.routing._delivery"
@@ -104,14 +115,13 @@ async def test_stop_now_then_start_when_due(db, config, store, seams):
 async def test_default_delay_and_a_zero_delay_start_in_the_same_tick(db, config, store, seams):
     stop, start, _ = seams
     default = await db.transitions.create(agent_name="ike")
-    assert default["delay_seconds"] == 60
-    assert await _run(config, store, db) == {"ike": "stopped"}
-    start.assert_not_awaited()
-    await db.transitions.finish(default["id"], "failed", {"reason": "test cleanup"})
+    assert default["delay_seconds"] == 0
+    assert await _run(config, store, db) == {"ike": "started"}
+    start.assert_awaited_once()
 
     await db.transitions.create(agent_name="leo", delay_seconds=0)
     assert await _run(config, store, db) == {"leo": "started"}
-    assert stop.await_count == 2 and start.await_count == 1
+    assert stop.await_count == 2 and start.await_count == 2
 
 
 async def test_stop_only_completes_after_the_stop(db, config, store, seams):
@@ -123,8 +133,81 @@ async def test_stop_only_completes_after_the_stop(db, config, store, seams):
     start.assert_not_awaited()
 
 
+@pytest.mark.parametrize("runtime", sorted(RUNTIMES))
+async def test_impossible_resume_never_stops_existing_session(db, config, store, seams, runtime):
+    stop, start, _ = seams
+    spec = replace(next(iter(config.agents)), runtime=runtime)
+    name = spec.name
+    await store.update(name, runtime=runtime)
+    config = replace(config, agents=AgentsConfig(specs={name: spec}))
+    write_state_file(
+        config.state_dir,
+        name,
+        {
+            "state": "idle",
+            "ts": time.time(),
+            "runtime": runtime,
+            "session_id": "old",
+        },
+    )
+    # A replacement started after the request and has not reported its own identity.
+    write_starting_marker(config.state_dir, name, time.time(), launch_id="replacement")
+    row = await db.transitions.create(agent_name=name, resume=True)
+    assert await _run(config, store, db) == {name: "failed"}
+    stop.assert_not_awaited()
+    start.assert_not_awaited()
+    failed = await db.transitions.get(row["id"])
+    assert failed["status"] == "failed" and failed["stopped_at"] is None
+    assert "resum" in failed["result"]["reason"]
+
+
+async def test_resume_rechecks_runtime_changed_while_waiting_for_lock(db, config, store, seams):
+    stop, start, _ = seams
+    name = next(iter(config.agents)).name
+    write_state_file(
+        config.state_dir,
+        name,
+        {
+            "state": "idle",
+            "ts": time.time(),
+            "runtime": "claude",
+            "session_id": "saved",
+        },
+    )
+    row = await db.transitions.create(agent_name=name, resume=True)
+    waiting = asyncio.Event()
+
+    @asynccontextmanager
+    async def observed_lock(agent_name):
+        waiting.set()
+        async with lifecycle_lock(agent_name):
+            yield
+
+    with patch(f"{_JOB}.lifecycle_lock", observed_lock):
+        async with lifecycle_lock(name):
+            task = asyncio.create_task(_run(config, store, db))
+            await asyncio.wait_for(waiting.wait(), timeout=2)
+            await store.update(name, runtime="aider")
+        assert await task == {name: "failed"}
+    stop.assert_not_awaited()
+    start.assert_not_awaited()
+    failed = await db.transitions.get(row["id"])
+    assert failed["stopped_at"] is None
+    assert "cannot resume an exact session" in failed["result"]["reason"]
+
+
 async def test_runtime_model_and_resume_reach_the_start_request(db, config, store, seams):
     _, start, _ = seams
+    write_state_file(
+        config.state_dir,
+        config.agents.get("ike").name,
+        {
+            "state": "idle",
+            "ts": time.time(),
+            "runtime": "claude",
+            "session_id": "saved",
+        },
+    )
     with patch(f"{_JOB}.resolve_agent", new_callable=AsyncMock) as resolve:
         resolve.return_value = config.agents.get("ike")
         await db.transitions.create(
@@ -555,3 +638,179 @@ async def test_an_unexpected_error_fails_the_row_and_continues(db, config, store
         "reason": "unexpected error: RuntimeError"
     }
     assert (await db.transitions.get(second["id"]))["status"] == "completed"
+
+
+@pytest.mark.parametrize("already_stopped", [False, True])
+async def test_registration_bound_restart_never_reaches_replacement(
+    db, config, store, seams, already_stopped
+):
+    stop, start, deliver = seams
+    spec = store.agents.get("ike")
+    row = await db.transitions.create(
+        agent_name="ike", registration_id=spec.registration_id, runtime="codex"
+    )
+    if already_stopped:
+        await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.agents.delete("ike")
+    await store.register(replace(spec, registration_id=""))
+    assert await _run(config, store, db) == {"ike": "failed"}
+    assert (await db.transitions.get(row["id"]))["result"]["reason"] == "agent registration changed"
+    stop.assert_not_awaited()
+    start.assert_not_awaited()
+    deliver.assert_not_awaited()
+
+
+@pytest.mark.parametrize("runtime", tuple(RUNTIMES))
+async def test_continuation_cannot_reach_registration_replaced_after_start(
+    db, config, store, seams, runtime
+):
+    _, start, deliver = seams
+    original = store.agents.get("ike")
+    row = await db.transitions.create(
+        agent_name="ike",
+        registration_id=original.registration_id,
+        runtime=runtime,
+        message="original continuation",
+    )
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+
+    async def replace_after_start(*args, **kwargs):
+        await db.agents.delete("ike")
+        await store.register(replace(original, registration_id=""))
+        return StartResult(ok=True, ready="ready")
+
+    start.side_effect = replace_after_start
+    assert await _run(config, store, db) == {"ike": "failed"}
+    deliver.assert_not_awaited()
+    assert (await db.transitions.get(row["id"]))["result"]["reason"] == "agent registration changed"
+
+
+@pytest.mark.parametrize("runtime", sorted(RUNTIMES))
+@pytest.mark.parametrize("already_stopped", [False, True])
+async def test_bound_restart_refuses_replacement_during_refresh(
+    db, config, store, seams, runtime, already_stopped
+):
+    stop, start, deliver = seams
+    original = store.agents.get("ike")
+    row = await db.transitions.create(
+        agent_name="ike",
+        registration_id=original.registration_id,
+        runtime=runtime,
+        model="requested-model",
+        message="original continuation",
+    )
+    if already_stopped:
+        await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    refresh = store.refresh
+    replaced = False
+
+    async def replace_before_refresh():
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            await db.agents.delete("ike")
+            await db.agents.upsert(
+                "ike",
+                dir=original.dir,
+                runtime="shell",
+                model="replacement-model",
+                repo="",
+                tags=[],
+                env={},
+                description="replacement",
+                always_on=False,
+                unattended=False,
+            )
+        return await refresh()
+
+    with patch.object(store, "refresh", side_effect=replace_before_refresh):
+        assert await _run(config, store, db) == {"ike": "failed"}
+    replacement = store.agents.get("ike")
+    assert replacement.registration_id != original.registration_id
+    assert (replacement.runtime, replacement.model) == ("shell", "replacement-model")
+    stop.assert_not_awaited()
+    start.assert_not_awaited()
+    deliver.assert_not_awaited()
+    assert (await db.transitions.get(row["id"]))["result"]["reason"] == "agent registration changed"
+
+
+async def test_continuation_serializes_with_profile_writers(db, config, store, seams):
+    import fcntl
+
+    _, _, deliver = seams
+    row = await db.transitions.create(
+        agent_name="ike",
+        registration_id=store.agents.get("ike").registration_id,
+        message="continue",
+    )
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+
+    async def guarded_delivery(*args, **kwargs):
+        # An independent descriptor cannot acquire the replacement guard while
+        # the continuation is being pasted or stored for this registration.
+        with (config.data_dir / "agent-credentials" / ".lock").open("r+") as lock:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return DeliveryReport(outcome=DeliveryOutcome.DELIVERED)
+
+    deliver.side_effect = guarded_delivery
+    assert await _run(config, store, db) == {"ike": "started"}
+    deliver.assert_awaited_once()
+
+
+async def test_bound_stop_rechecks_after_waiting_for_profile_guard(db, config, store, seams):
+    stop, start, deliver = seams
+    original = store.agents.get("ike")
+    row = await db.transitions.create(agent_name="ike", registration_id=original.registration_id)
+
+    @asynccontextmanager
+    async def replacement_before_lock(data_dir):
+        await db.agents.delete("ike")
+        await store.register(replace(original, registration_id=""))
+        yield
+
+    with patch(f"{_JOB}.profile_lock", replacement_before_lock):
+        assert await _run(config, store, db) == {"ike": "failed"}
+    stop.assert_not_awaited()
+    start.assert_not_awaited()
+    deliver.assert_not_awaited()
+    assert (await db.transitions.get(row["id"]))["result"]["reason"] == "agent registration changed"
+
+
+async def test_unbound_continuation_and_registration_mutation_do_not_deadlock(
+    db, config, store, seams
+):
+    _, _, deliver = seams
+    row = await db.transitions.create(agent_name="ike", message="continue")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    profile = asyncio.Lock()
+    continuation_has_profile = asyncio.Event()
+    mutation_entering = asyncio.Event()
+
+    @asynccontextmanager
+    async def guard(_):
+        async with profile:
+            continuation_has_profile.set()
+            await mutation_entering.wait()
+            yield
+
+    async def mutation():
+        await continuation_has_profile.wait()
+        mutation_entering.set()
+        async with lifecycle_lock("ike"), profile:
+            pass
+
+    async def delivery(*args, **kwargs):
+        async with lifecycle_lock("ike"):
+            return DeliveryReport(outcome=DeliveryOutcome.DELIVERED)
+
+    deliver.side_effect = delivery
+    with patch(f"{_JOB}.profile_lock", guard):
+        tasks = [asyncio.create_task(_run(config, store, db)), asyncio.create_task(mutation())]
+        try:
+            results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=1)
+            assert results[0] == {"ike": "started"}
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)

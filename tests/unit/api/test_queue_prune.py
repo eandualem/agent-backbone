@@ -1,5 +1,6 @@
 """The periodic prune job includes queue retention and reads live settings."""
 
+import threading
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,6 +12,13 @@ from agent_backbone.config import bootstrap_config
 
 
 async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
+    event_thread = threading.get_ident()
+
+    def rotate(*args, **kwargs):
+        assert threading.get_ident() != event_thread
+        assert kwargs == {"receipt_retention_days": 9}
+        return 5
+
     app = FastAPI()
     app.state.config = bootstrap_config(tmp_path)
     app.state.github = None
@@ -28,7 +36,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
             prune=AsyncMock(return_value=4), active_ids=AsyncMock(return_value=set())
         ),
         diagnostics=SimpleNamespace(prune=AsyncMock(return_value=6)),
-        reports=SimpleNamespace(prune=AsyncMock(return_value=7)),
+        current_plans=SimpleNamespace(prune=AsyncMock(return_value=11)),
         signing=SimpleNamespace(
             prune=AsyncMock(return_value=8), prune_receipts=AsyncMock(return_value=9)
         ),
@@ -41,7 +49,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
     with (
         patch("agent_backbone.services.scheduler.PeriodicScheduler") as scheduler,
         patch("agent_backbone.services.jobs.UpgradeWatch"),
-        patch("agent_backbone.services.agents.rotate_action_log", return_value=5),
+        patch("agent_backbone.services.agents.rotate_action_log", side_effect=rotate),
         patch("agent_backbone.api.app.batch_receipts", return_value=[tmp_path / "1.taken"]),
     ):
         _register_jobs(app)
@@ -58,7 +66,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
             "queue": 4,
             "context_receipts": 1,
             "diagnostics": 6,
-            "reports": 7,
+            "current_plans": 11,
             "signing_audit": 8,
             "signing_receipts": 9,
             "action_log_lines": 5,
@@ -68,7 +76,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
         app.state.db.events,
         app.state.db.queue,
         app.state.db.diagnostics,
-        app.state.db.reports,
+        app.state.db.current_plans,
         app.state.db.signing,
     ):
         repo.prune.assert_awaited_once_with(9)

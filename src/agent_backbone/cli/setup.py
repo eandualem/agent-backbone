@@ -46,7 +46,8 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     config = bootstrap_config(args.data_dir)
     data_dir = config.data_dir
-    data_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    data_dir.chmod(0o700)
     (data_dir / "state").mkdir(exist_ok=True)
 
     env_path = config.env_path
@@ -209,6 +210,12 @@ def cmd_secrets(args: argparse.Namespace) -> int:
 def cmd_runtimes(args: argparse.Namespace) -> int:
     """Every runtime, whether its binary is installed, and example model ids."""
     from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
+
+    if getattr(args, "json", False):
+        _common.print_json(
+            {"schema_version": 1, "items": [rt.discovery() for rt in REGISTRY.values()]}
+        )
+        return 0
 
     rows = []
     for rt in REGISTRY.values():

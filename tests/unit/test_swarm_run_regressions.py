@@ -265,9 +265,13 @@ async def test_checkpoint_and_terminal_lease_do_not_both_claim(db):
 
 async def test_expiry_preserves_active_swarm_and_checkpoint_but_expires_other_messages(db):
     for name in ["worker", "ordinary", "reader"]:
-        await db.queue.enqueue(session_name=name, message="old", delivery_kind="direct_message")
+        await db.queue.enqueue(
+            session_name=name,
+            message="old",
+            delivery_kind="direct_message" if name == "reader" else "comment",
+        )
     await db.queue.enqueue(
-        session_name="lead", message="handoff", delivery_kind="direct_message", sender="worker"
+        session_name="lead", message="handoff", delivery_kind="comment", sender="worker"
     )
     await db.queue.checkpoint("reader")
     async with db.engine.begin() as conn:
@@ -401,6 +405,12 @@ async def test_checkpoint_survives_database_restart_and_squashed_migration(tmp_p
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'persist.db'}"
     async with BackboneDB.connect(url) as db:
+        from agent_backbone.config import AgentSpec
+        from agent_backbone.services.agents import AgentStore
+
+        store = AgentStore(db, tmp_path)
+        await store.start()
+        await store.register(AgentSpec(name="worker", dir=str(tmp_path), runtime="shell"))
         receipt = await db.queue.enqueue(
             session_name="worker", message="durable", delivery_kind="direct_message"
         )

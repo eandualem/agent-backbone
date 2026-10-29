@@ -270,3 +270,56 @@ async def test_a_path_changed_while_waiting_for_the_store_is_checked_again(
     response = await request
     assert response.status_code == 422
     assert (outside / "SKILL.md").is_file() and not (store / "theirs").exists()
+
+
+@pytest.mark.parametrize("name", ["%2e%2e", "linked"])
+async def test_retag_refuses_parent_and_symlink_paths(api_client, auth_headers, store, name):
+    outside = store.parent / "outside"
+    _skill(store.parent, "outside", tags="all")
+    (store / "linked").symlink_to(outside, target_is_directory=True)
+    before = (outside / "SKILL.md").read_bytes()
+    response = await api_client.put(
+        f"/api/skills/{name}/tags", headers=auth_headers, json={"tags": ["changed"]}
+    )
+    assert response.status_code == 422
+    assert (outside / "SKILL.md").read_bytes() == before
+
+
+async def test_retag_rejects_a_symlinked_skill_file_before_reading_it(
+    api_client, auth_headers, store
+):
+    skill = store / "linked-file"
+    skill.mkdir()
+    outside = _skill(store.parent, "outside", tags="all") / "SKILL.md"
+    (skill / "SKILL.md").symlink_to(outside)
+    before = outside.read_bytes()
+    response = await api_client.put(
+        "/api/skills/linked-file/tags", headers=auth_headers, json={"tags": ["coder"]}
+    )
+    assert response.status_code == 422
+    assert (skill / "SKILL.md").is_symlink() and outside.read_bytes() == before
+
+
+async def test_import_rejects_ancestor_swapped_after_authorization(
+    api_client, auth_headers, store, tmp_path, monkeypatch
+):
+    from agent_backbone.api.routes import skills as routes
+
+    parent = tmp_path / "project" / "incoming"
+    source = _skill(parent, "mine")
+    outside = _skill(tmp_path / "elsewhere", "mine")
+    original = (outside / "SKILL.md").read_bytes()
+    add = routes.add_skill
+
+    def switched(*args, **kwargs):
+        parent.rename(parent.with_name("saved"))
+        parent.symlink_to(outside.parent, target_is_directory=True)
+        return add(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "add_skill", switched)
+    response = await api_client.post(
+        "/api/skills", headers=auth_headers, json={"path": str(source), "tags": ["all"]}
+    )
+    assert response.status_code == 422
+    assert (outside / "SKILL.md").read_bytes() == original
+    assert not (store / "mine").exists()

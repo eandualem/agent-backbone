@@ -81,11 +81,11 @@ async def _settle(conn, where: str = "", params: dict | None = None) -> None:
 
 
 async def _revoke_epoch(conn, sender_key: str, epoch: int, at: str) -> None:
-    """A reset: the old epoch's confirmations that weren't delivered lose their
+    """A reset: this and earlier epochs' confirmations that weren't delivered lose their
     authority, and their queued deliveries (leased ones too) are expired with
     a completion time, so ordinary retention removes their bodies."""
     params = {"k": sender_key, "epoch": epoch, "at": at}
-    scope = "AND sender_key = :k AND key_epoch = :epoch"
+    scope = "AND sender_key = :k AND key_epoch <= :epoch"
     await _settle(conn, scope, params)
     await conn.execute(
         text(

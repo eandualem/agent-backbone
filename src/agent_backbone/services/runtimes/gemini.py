@@ -109,7 +109,7 @@ class Gemini(Runtime):
     aliases = ("gemini-cli",)
     binary = "gemini"
     brief_mode = "initial_prompt"
-    declared_capabilities = frozenset({"observed-model", "trust"})
+    declared_capabilities = frozenset({"observed-model", "trust", "comment-receipts"})
 
     hook_events = (
         ("SessionStart", None),

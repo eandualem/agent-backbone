@@ -9,7 +9,7 @@ resolution-markers = [
 
 [[package]]
 name = "agent-backbone"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -17,8 +17,10 @@ dependencies = [
     { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "ironcalc" },
     { name = "pydantic" },
     { name = "python-dotenv" },
+    { name = "python-engineio" },
     { name = "python-socketio" },
     { name = "python-telegram-bot" },
     { name = "rich" },
@@ -49,9 +51,11 @@ requires-dist = [
     { name = "cryptography", specifier = ">=44.0" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "ironcalc", specifier = "==0.9.1" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "python-socketio", specifier = ">=5.11" },
+    { name = "python-engineio", specifier = ">=4.13.5" },
+    { name = "python-socketio", specifier = ">=5.16.4" },
     { name = "python-telegram-bot", specifier = ">=21.0" },
     { name = "rich", specifier = ">=14.1" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
@@ -618,6 +622,68 @@ wheels = [
 ]
 
 [[package]]
+name = "ironcalc"
+version = "0.9.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/8e/d68def477707223dfc40acabf9c5059fe62e756a03d44f2318de2016e8f2/ironcalc-0.9.1.tar.gz", hash = "sha256:1f6b641b9fb2cf262000c3e078338709c42ff6264f809605ade18ec27d891f94", size = 3428282, upload-time = "2026-10-21T13:55:21.088Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/33/a1/d482be0da497d0f2dcd571b2d1f93e2d7674871601d56e69814a9ddf6a94/ironcalc-0.9.1-cp311-cp311-macosx_10_12_x86_64.whl", hash = "sha256:e02ce3944e7d1e8a2d651638d0582c412d403fc0fd003374721e0e17343bb8b2", size = 3426005, upload-time = "2026-10-21T13:55:14.482Z" },
+    { url = "https://files.pythonhosted.org/packages/59/a6/06f7eab814b71d2df2c8a3e43ea566b6ad60c0e76aca2d34a74b2c123ed1/ironcalc-0.9.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:2eecb7936c503d102f974818c3270bd7ab60755dbe25f57e37da87f541b604f8", size = 3321473, upload-time = "2026-10-21T13:55:06.105Z" },
+    { url = "https://files.pythonhosted.org/packages/22/42/fff3b8b5ea8b3ef6347607f618c4371ba99d44e36f5b631f9f24eff9348a/ironcalc-0.9.1-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:44f36ca0fc06ca78677e563175ccf22f9b0311fbae5365b4badd34dfcc1e080d", size = 3507622, upload-time = "2026-10-21T13:53:52.343Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/14/2f9653dc2054f2d70571bd2e8ca3beec9ad10f8329941add64c4a5b9668c/ironcalc-0.9.1-cp311-cp311-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:2882f50b101c430a16b995f804d07f5d2f5e51e09ba02c17ce026b612317f676", size = 3416377, upload-time = "2026-10-21T13:54:01.428Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/c7/5ccdb39d2d53e236dcf154632da029fe0f9a4d50be09339c3582ed89dc97/ironcalc-0.9.1-cp311-cp311-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:31aa5d449881ab6ebfcd0f9de5d6173c7db71c37afc66ed6269cbc2dce930463", size = 3840747, upload-time = "2026-10-21T13:54:11.616Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/d9/81fd6c48b7d61796ad69eca140a54bc754e38e0117ca2062e3f6466787a0/ironcalc-0.9.1-cp311-cp311-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:53dd1b79303a4810245504cba5fff188ac9be519ac8527a1c1e62144f30a0202", size = 4076770, upload-time = "2026-10-21T13:54:22.041Z" },
+    { url = "https://files.pythonhosted.org/packages/bf/6c/69124624cbf04674b78ab74fb54ccf5be4675ee5768db85478afc4926813/ironcalc-0.9.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e28351dc1b1759cdbe9bf71146295ec953cb826d0c1fe302d23baef09fa1d695", size = 3626332, upload-time = "2026-10-21T13:54:45.449Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/58/bbc37ff9b95a46f29d501f37fe207b0ec638583ce5a81a0768455d7996cd/ironcalc-0.9.1-cp311-cp311-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:4754440bfe4e093afd7ba08b988e89e2c037d0cad85e39f07df38c91d66eee24", size = 3627504, upload-time = "2026-10-21T13:54:31.296Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/be/3a8ac126a3160a466b4a8b4d5ea515db4c8be18c5ce98970e425881cc536/ironcalc-0.9.1-cp311-cp311-win_amd64.whl", hash = "sha256:23e7141b4a1fb5d218452e797b2331300120d4b89ab82801da27bac383201c33", size = 3451484, upload-time = "2026-10-21T13:54:57.726Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/2f/8cdf36a91c6e3a4b4bd95a6b4f5590ac964630bbd16ff2cb3cbafe22c1d1/ironcalc-0.9.1-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:a782a70acab720621ceee9d0672cffbdeb3dd5475d453562d0ca82dbc1502a4a", size = 3449032, upload-time = "2026-10-21T13:55:15.781Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/75/2b08817516cfde2bacb12ad2ee02d9c8b467719ae9a9123543439abcd873/ironcalc-0.9.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:32b19e06ffaf9d0c91539c95ad2ea6006a6f0362e945081baa25e9d75f90241d", size = 3309270, upload-time = "2026-10-21T13:55:07.581Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/1a/18328b93c4d661ed2bb5854d376f4c2b5a1aa7344bd028f5b9d310ac3cd9/ironcalc-0.9.1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8f13dbc2ba7c09b2969277f1330ef7aca807ba7f4d666edd32bd66cadf12a1f4", size = 3494639, upload-time = "2026-10-21T13:53:53.827Z" },
+    { url = "https://files.pythonhosted.org/packages/96/c7/94988d802cde285fbcdfe44808db4e11429115409d713db8ebd30cf6af5a/ironcalc-0.9.1-cp312-cp312-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:548928d09b3a95f64289316f52db9021405fac9db1e39b865ca24d4960ae5ae8", size = 3417345, upload-time = "2026-10-21T13:54:02.685Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/6d/78937877c59839e2f089c710cab754dfd8b49036a5edb970c13e66c8b91a/ironcalc-0.9.1-cp312-cp312-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:8d3d5e9911ae4d26730a6fdf4bcdec4bdbe68692d801ef7ae13d9ec776040955", size = 3829081, upload-time = "2026-10-21T13:54:13.158Z" },
+    { url = "https://files.pythonhosted.org/packages/65/0e/097372fffb4eb70dbc8d6088ee91eb6a3607e24e4a9e03a185f58a40fb22/ironcalc-0.9.1-cp312-cp312-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:eebd453bf6c22237fdc6ad773bb8d3551d881ce50ac2970475a42ed34cfa0c70", size = 4072622, upload-time = "2026-10-21T13:54:23.26Z" },
+    { url = "https://files.pythonhosted.org/packages/44/6f/71db2c2204859aa0599339095594ffbedc4bc7a1ae2c0576c2f26225c122/ironcalc-0.9.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5caee4f553fbfc9e8f270856fb5c5104dd87e82df4fab3cdeeb03587ce8c5a27", size = 3619828, upload-time = "2026-10-21T13:54:46.702Z" },
+    { url = "https://files.pythonhosted.org/packages/29/34/36d5d9b8f508798d0e9647cd856f6d81b28d9b33f5178f578654cc618829/ironcalc-0.9.1-cp312-cp312-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:c3fe8e1308d38fec0f2c5e0abe51799aa4b2b837af49f528635380da89e594c8", size = 3619469, upload-time = "2026-10-21T13:54:33.563Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/3d/616568ab4a56264d334cdc1b7eb35d8aa9f13cd1befe102b4aa5c3bdb9e2/ironcalc-0.9.1-cp312-cp312-win_amd64.whl", hash = "sha256:cc4b3f98abc5a34dc8fbac4f42df03e87245a19ad9c14f70c76cd4dcf0b90101", size = 3440821, upload-time = "2026-10-21T13:54:59.099Z" },
+    { url = "https://files.pythonhosted.org/packages/76/3e/c6881942332f70a02647376c85b2139d2b0115497080cf3b0c79323f86db/ironcalc-0.9.1-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:a6c240ed20440a65814062006746bda928fd2cde8f5cf9b6b31203b28d9b1c9a", size = 3447824, upload-time = "2026-10-21T13:55:16.962Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/0a/b2a76010b01f63f2b42da156810678167e69319ac9ffe505df142cd98aea/ironcalc-0.9.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:8910991c9297bf8bb5671df7f16e4e99ab8d933a0e1a5c762ae4a22a006e65c8", size = 3308774, upload-time = "2026-10-21T13:55:08.968Z" },
+    { url = "https://files.pythonhosted.org/packages/be/08/958192b85c3812b1ca9d2be835ef2ce8c880d159d02590ed4653b1dfff78/ironcalc-0.9.1-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7ea3e55fccbf1de8fbd16bc59847748fe880f9e06302d5c8a40267f8892f9b13", size = 3493393, upload-time = "2026-10-21T13:53:55.008Z" },
+    { url = "https://files.pythonhosted.org/packages/da/97/3ac92ea400ee7f9bae063838141e79c5b1bfa62992c92f77dc42ac7d7a42/ironcalc-0.9.1-cp313-cp313-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:4b9fc12e20d21610ed7268f5144bc37299d654269ea3b6ad9930b0697514d570", size = 3416644, upload-time = "2026-10-21T13:54:04.133Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/cd/aa43e610f8935b53b5558fb1a52764d76d215490fab0d53284dc8059ac12/ironcalc-0.9.1-cp313-cp313-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:93fea9917bbb304af1ba404faab6344ba553d743474bc167567b7d8300060545", size = 3827739, upload-time = "2026-10-21T13:54:14.625Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/02/a80247f67a3588350961cd01c55091d7a8eed9c025a9e3c8972ad2333ac9/ironcalc-0.9.1-cp313-cp313-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:d4b1c0168e7ddf4c51c3e017b6aec687d240a500959517510c78a88b53fb7247", size = 4071531, upload-time = "2026-10-21T13:54:24.556Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/64/07ac0d023ff1d09e20aea21dd531812ff45d97c7ba8ad1fe467daae8c195/ironcalc-0.9.1-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:bb5c8ed8947cf26a57b4990a9afa7ce7183ec0587e82a6bd691211e608df0280", size = 3620012, upload-time = "2026-10-21T13:54:48.275Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/38/8d3192193dd3b9772bc958182ca6886ed82cb800f89c7badf8026bdb27de/ironcalc-0.9.1-cp313-cp313-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:24addc3cd2242d7988a72453a3dd29cb7c6227be519f2eb9c38082f502b8d29f", size = 3619275, upload-time = "2026-10-21T13:54:35.006Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/06/c2b52355fc5a375cd0e01c1cf49b15b96f353af85fac743f5fcd1c03136e/ironcalc-0.9.1-cp313-cp313-win_amd64.whl", hash = "sha256:b958d30caca3f630e6102a542ed7530f78074498d819afbabda4970d23dd0630", size = 3440104, upload-time = "2026-10-21T13:55:00.671Z" },
+    { url = "https://files.pythonhosted.org/packages/93/ba/959cac451ffd1c418462e81cebd9b37ae861a54d89fe5239758604193f1d/ironcalc-0.9.1-cp314-cp314-macosx_10_12_x86_64.whl", hash = "sha256:1228cd0905c5dc88a36c69f9c00f260fb7582b2aa306055b08f1a784ffb40abd", size = 3451346, upload-time = "2026-10-21T13:55:18.371Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/65/c10c3b08617bb6d737eec9149c9760960a001e0b90390516401c1e9d179b/ironcalc-0.9.1-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:6742d763b04c0a55c1d567b8f50a6c59340e8b9b4e9f68be5530f1dc8476b02e", size = 3308145, upload-time = "2026-10-21T13:55:10.3Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/f2/f4e5cb1931fb14a71522b1162c00772036d0f76dc62a305add511e02a64a/ironcalc-0.9.1-cp314-cp314-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:cc35d55e40be0ea7e57649b78030bc308f59bbae3ae80989f48eae86ef809028", size = 3494504, upload-time = "2026-10-21T13:53:56.188Z" },
+    { url = "https://files.pythonhosted.org/packages/29/28/c9c796cacd4bfb384e413e4644e71e66b3dd8d77997f22cb25230e45aeb0/ironcalc-0.9.1-cp314-cp314-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:ffc0f01625c536a1dcf9e549004291ea9c37832b21fde52e25099137f6044bfa", size = 3418024, upload-time = "2026-10-21T13:54:05.422Z" },
+    { url = "https://files.pythonhosted.org/packages/49/06/a06d3397516f243ccf0de9a31d2d723f69fea53a86034ef5bd103c2d2186/ironcalc-0.9.1-cp314-cp314-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:776fe016f1bac0060e67c773670d20a209265ddbd029220b1927d9c7ea38b75d", size = 3827425, upload-time = "2026-10-21T13:54:16.496Z" },
+    { url = "https://files.pythonhosted.org/packages/50/3e/8ae8d26dd02bbf60071277692aea226634015c996d98c9baf72f7ab95a42/ironcalc-0.9.1-cp314-cp314-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:b6529d307c6ce51caa1388582ee23ab375b16e1bc4a76510d64ceae315966917", size = 4073261, upload-time = "2026-10-21T13:54:25.877Z" },
+    { url = "https://files.pythonhosted.org/packages/83/6d/8b852c077500b9276762e078ae1098ee315ecef6ba493cfca52c7e3500f7/ironcalc-0.9.1-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d3a8da9e7e08cea16869498a0e185364d34493ebc99d68e3290694abc92d9161", size = 3621245, upload-time = "2026-10-21T13:54:49.609Z" },
+    { url = "https://files.pythonhosted.org/packages/93/76/2774e261947648e090bbbc0b0136025aed05415cd70f56a0272dc0be7177/ironcalc-0.9.1-cp314-cp314-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:5005017e83a43050597fba5270d65c670726ca6ce47390e0851ef3138c484916", size = 3622262, upload-time = "2026-10-21T13:54:36.48Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/28/f9b5f8c92c445e29330b54484c9389bd34c31df3c8b35816383f7ac3d573/ironcalc-0.9.1-cp314-cp314-win_amd64.whl", hash = "sha256:b19d5cd2f91e84adfd5bfac16771c0c209ff85168f1c72987ae40a114290d82d", size = 3440131, upload-time = "2026-10-21T13:55:02.331Z" },
+    { url = "https://files.pythonhosted.org/packages/c1/9e/7bd01ca1a396770e2fb26b34522d59afdada5ab5bdae715199c430cb9fca/ironcalc-0.9.1-cp314-cp314t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:3a449ba13a730cb6ad930971bf3b832ca867aa925ef01862631b17b22db05652", size = 3494214, upload-time = "2026-10-21T13:53:57.506Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/8e/08882ae01b635c22111827fb43ff1fc200663078d2b25fb4bd887ae1b735/ironcalc-0.9.1-cp314-cp314t-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:8e865568e6f07846009f2e7701e17bc5facd6630bbb107b1cfaa609a39f8ea75", size = 3414223, upload-time = "2026-10-21T13:54:06.794Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/7e/309d16f285d1edb51ac70e25389e29c451d1088cbe57a8a97cbf2b544942/ironcalc-0.9.1-cp314-cp314t-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:103b0b4891d5c3df2edb0ed6430896649a91199772df14e1d010f106a41c125d", size = 3827873, upload-time = "2026-10-21T13:54:17.757Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/6e/166c0f159f56a78abcb9f735101a4d1d6f6e5155bb6124205fbf2a837d13/ironcalc-0.9.1-cp314-cp314t-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:f2aeb426c4d29bcc682cd0a54ad27b05b2a1282ad1fd13e9feda898166c9fea1", size = 4072743, upload-time = "2026-10-21T13:54:27.345Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/00/8934aefc587fb1a1555e7c6c1cf6afcb20cb0c62aaf33dd11f7e1ff97a8c/ironcalc-0.9.1-cp314-cp314t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:8384ec12fc4ff0054dbaa5c3a668bb66495c89702782cd8eebd0594ff3a7528c", size = 3619793, upload-time = "2026-10-21T13:54:50.929Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/76/7c544e4313d78f37f81ae14b8fb5dd4338150c6b5427431bb7fa1e9a462e/ironcalc-0.9.1-cp314-cp314t-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:6e57288cce320df2d908f320252a23b8d08e50eaad9e036c454ae7efa75dde0b", size = 3617941, upload-time = "2026-10-21T13:54:38.309Z" },
+    { url = "https://files.pythonhosted.org/packages/53/93/794183bb12b08d28701a94ea89b6930cc518c3738dc96c031e9149ee86d4/ironcalc-0.9.1-cp315-cp315-macosx_10_12_x86_64.whl", hash = "sha256:7a4497d3597e6f7375ec5b99febdc6592a6cdcb54100ea6100fdc2da714ad1f8", size = 3450824, upload-time = "2026-10-21T13:55:19.716Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/48/7df9c39528d6ce3200beec43fc4b920ea1dae842109bb5d7fd1f5f336ce3/ironcalc-0.9.1-cp315-cp315-macosx_11_0_arm64.whl", hash = "sha256:abf604dcc5ff468f6c0a62659017f952d737131eb98dc50e89b0485e2c5df7bb", size = 3309409, upload-time = "2026-10-21T13:55:11.799Z" },
+    { url = "https://files.pythonhosted.org/packages/94/81/9f30eb9b72b2f3cf6c4f80655faefaae7bdb168994a6a8a3bf9d0d0b52bc/ironcalc-0.9.1-cp315-cp315-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:dd15270d769446f21ec5dcd84f7eb5c85c172f06b8479a375af30f56c9f7e1c9", size = 3621471, upload-time = "2026-10-21T13:54:52.357Z" },
+    { url = "https://files.pythonhosted.org/packages/37/13/6b37602a98fa10de0dc9e053064b6f44bb06a6c5bee9e090a4ac33e8c83e/ironcalc-0.9.1-cp315-cp315-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:f9e8866781bf2b6547b23f2161b2268e251a3cc45a1a00287f3c7d7ea872c07c", size = 3620789, upload-time = "2026-10-21T13:54:39.743Z" },
+    { url = "https://files.pythonhosted.org/packages/60/92/6e698d1d6ce1000c609874c927fec03a86af7f0f03142d92dc08f6b73b0c/ironcalc-0.9.1-cp315-cp315t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:44eb4e432c0a9757af87323ef925228f8afcf68a71912bc95639882de6e3b508", size = 3619541, upload-time = "2026-10-21T13:54:53.53Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/f7/150ad7357ad9d2688d00f33407529aad510b43c5681e0f19e3fdc736028c/ironcalc-0.9.1-cp315-cp315t-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:c40a4dbb92eb986d07935016a91abf3dca2be42391aa29c9474be51a1a419799", size = 3618127, upload-time = "2026-10-21T13:54:41.029Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/2a/6c9455240e4b34c8c6c6be21c39cdef28e92c35607c48845f93657c81ab6/ironcalc-0.9.1-pp311-pypy311_pp73-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:5054747a46cc2f7d2977bbef254ec567c105a514a0a0b28ad3b4b44e0c05ec3a", size = 3512007, upload-time = "2026-10-21T13:53:58.686Z" },
+    { url = "https://files.pythonhosted.org/packages/02/03/2073917d4655a8dfb79b45f0a25d75dad7a599eb2adc0b243747362e1788/ironcalc-0.9.1-pp311-pypy311_pp73-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:664e8a32b6502abb87d7705277bfd3b070c5fb6a07b13cb8fba41fe7921e3a48", size = 3426565, upload-time = "2026-10-21T13:54:08.183Z" },
+    { url = "https://files.pythonhosted.org/packages/41/ec/485b5dad6622ee3057be66a1e2f9ae0afd551fd0aeec2a4525d024e6f067/ironcalc-0.9.1-pp311-pypy311_pp73-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:1a10df6b76e37362db80949bf806a4880205578d100868c366bea25e552a090d", size = 3851388, upload-time = "2026-10-21T13:54:19.197Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/84/9a41b1f0c794beabf79a39e510f2bae3b1d513559cc14ac29bf0e06b040c/ironcalc-0.9.1-pp311-pypy311_pp73-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:1158f6952cf0e7fc8e0f1132a93fb42ebc3d07a9ee942857d5bf27bfc710991e", size = 4085863, upload-time = "2026-10-21T13:54:28.619Z" },
+    { url = "https://files.pythonhosted.org/packages/31/c3/5ef31d34763e6721b527ef659382a4f72da9f22ba68eef2ed69364cded23/ironcalc-0.9.1-pp311-pypy311_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7ba076601831970cb434c37b6ffe7331a826681285f02db97204e42eeb542449", size = 3641552, upload-time = "2026-10-21T13:54:54.936Z" },
+    { url = "https://files.pythonhosted.org/packages/11/67/3f9fdbf75a5aeb6200714de9cef5edb104d904680ff2cb9b93b2c7c3f6c1/ironcalc-0.9.1-pp311-pypy311_pp73-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:16a6d1cbec6289ad0556c26a4a4f13e71e03a569ae09299389c6d1bbd047bbbb", size = 3641604, upload-time = "2026-10-21T13:54:42.519Z" },
+]
+
+[[package]]
 name = "mako"
 version = "1.3.10"
 source = { registry = "https://pypi.org/simple" }
@@ -926,27 +992,27 @@ wheels = [
 
 [[package]]
 name = "python-engineio"
-version = "4.13.1"
+version = "4.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "simple-websocket" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/34/12/bdef9dbeedbe2cdeba2a2056ad27b1fb081557d34b69a97f574843462cae/python_engineio-4.13.1.tar.gz", hash = "sha256:0a853fcef52f5b345425d8c2b921ac85023a04dfcf75d7b74696c61e940fd066", size = 92348, upload-time = "2026-02-06T23:38:06.12Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fc/65/f8bae11b228647e2e2f45b63dec7448efaddb7cb51f529de1fdba69e63b5/python_engineio-4.14.0.tar.gz", hash = "sha256:eaa1e386baf9c2c7959eef7f9d9165c5ea910c5b392f5316e78d29ed073cb43d", size = 80863, upload-time = "2026-08-30T19:52:01.32Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/aa/54/0cce26da03a981f949bb8449c9778537f75f5917c172e1d2992ff25cb57d/python_engineio-4.13.1-py3-none-any.whl", hash = "sha256:f32ad10589859c11053ad7d9bb3c9695cdf862113bfb0d20bc4d890198287399", size = 59847, upload-time = "2026-02-06T23:38:04.861Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/de/07cfd386974c2a26a7bde41f2111be29bbfc92b9ea0bb76694415a4a1a78/python_engineio-4.14.0-py3-none-any.whl", hash = "sha256:9f0fe275fb7d67bfc1a632421adf22949fd4843bd9c458c004b0a89cede302a2", size = 60291, upload-time = "2026-08-30T19:51:59.776Z" },
 ]
 
 [[package]]
 name = "python-socketio"
-version = "5.16.1"
+version = "5.17.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bidict" },
     { name = "python-engineio" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/59/81/cf8284f45e32efa18d3848ed82cdd4dcc1b657b082458fbe01ad3e1f2f8d/python_socketio-5.16.1.tar.gz", hash = "sha256:f863f98eacce81ceea2e742f6388e10ca3cdd0764be21d30d5196470edf5ea89", size = 128508, upload-time = "2026-02-06T23:42:07Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b9/04/8647675c93b5e74a3daa41a2a03930bac0cbdcfcf307900f0441ae6550ba/python_socketio-5.17.0.tar.gz", hash = "sha256:c3bbfc4937dcfea7c4d1b182afa94d4a30335d153987e8f2078b344beacf95a0", size = 134574, upload-time = "2026-09-14T22:51:02.968Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/07/c7/deb8c5e604404dbf10a3808a858946ca3547692ff6316b698945bb72177e/python_socketio-5.16.1-py3-none-any.whl", hash = "sha256:a3eb1702e92aa2f2b5d3ba00261b61f062cce51f1cfb6900bf3ab4d1934d2d35", size = 82054, upload-time = "2026-02-06T23:42:05.772Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/be/44b558c944bc16618483967ecd3424c578705aa33ceee7df8c1e4ab43ea0/python_socketio-5.17.0-py3-none-any.whl", hash = "sha256:b5826fd2f8aa02e11347816349b74ac6b53e8a4f4e4b1cf1388e1aff19b7f3f4", size = 82548, upload-time = "2026-09-14T22:51:01.405Z" },
 ]
 
 [[package]]

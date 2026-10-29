@@ -8,12 +8,14 @@ directory your CLI reads (`.claude/skills` for Claude Code, `.agents/skills`
 for Codex, Gemini and OpenCode). You never copy a skill; you use it through
 the link.
 
-**The store is written only through the backbone.** Its directory is outside
-your repository on purpose, and a sandbox that refuses a write through a link
-is enforcing that design, not blocking you. `backbone skills add` and
-`backbone skills tag` are the sanctioned route: the backbone performs the move
-and records who asked. Using them after a refused direct write is the intended
-sequence, not a way around the sandbox.
+**Shared skill changes require an operator credential.** Agents can prepare a
+local draft and hand it to the operator for `skills add` or `skills tag`.
+
+**The store is written only through the backbone.** The operator runs
+`backbone skills add` or `backbone skills tag`; agents provide the reviewed
+draft, intended tags and exact command through the existing approval route.
+A direct-write refusal does not grant permission to edit the store or use an
+operator credential. Keep the draft in your repository while the handoff is pending.
 
 Which skills reach you is decided by tags. Each store skill names its tags in
 its frontmatter:
@@ -50,47 +52,46 @@ Write it in your own repository first — `.claude/skills/<name>/SKILL.md` or
 `.agents/skills/<name>/SKILL.md`, whichever your CLI reads — and use it there.
 A skill that only you need can stay there forever; nothing requires the store.
 
-When it should reach other agents, hand it to the backbone with the tags of
-the agents it is for:
+When it should reach other agents, give the operator the draft and the tags
+of the agents it is for. The operator runs:
 
 ```bash
 backbone skills add .claude/skills/my-skill --tag coder --tag python
 ```
 
 This **moves** the directory into the store (the store holds the only copy),
-records the tags in its frontmatter, commits the store's history with your name,
+records the tags in its frontmatter, commits the store's history with the recorded requester,
 and the link appears in your repository at once. Pick the narrowest
 tags that fit: `all` reaches every agent on the machine, and other agents will
 follow what you wrote. Do not write into the store directory directly — the
-command is the sanctioned path, and it works from inside a sandbox because the
-backbone does the move.
+operator command is the sanctioned path; the backbone does the move.
 
 ## Change or retag a skill
 
-How you edit depends on your sandbox — measured, not assumed:
+Prepare a local draft, then ask the operator to apply it. Copy from your CLI’s
+skill directory: `.claude/skills` for Claude Code, `.agents/skills` for Codex
+and OpenCode. This example uses `.agents/skills`:
 
-- **Codex** refuses a write through the link (`operation not permitted`): the
-  sandbox stops writes that resolve outside your repository. Copy the skill
-  into your repository, edit the copy, and hand it back:
+```bash
+cp -RL .agents/skills/my-skill ./my-skill-draft
+# edit ./my-skill-draft/SKILL.md
+```
 
-  ```bash
-  cp -r .agents/skills/my-skill ./my-skill-draft
-  # edit ./my-skill-draft/SKILL.md
-  backbone skills add ./my-skill-draft --name my-skill --replace
-  ```
+Give the operator this command with the reviewed draft:
 
-  `--replace` without `--tag` keeps the existing tags: it is an update, not a
-  re-tag. The draft is moved into the store, so nothing is left behind.
-- **Claude Code** has no such sandbox by default: editing
-  `.claude/skills/<name>/SKILL.md` through the link edits the store file
-  directly. The copy-and-replace path above works there too and leaves a
-  commit with your name, which the in-place edit does not.
+```bash
+backbone skills add ./my-skill-draft --name my-skill --replace
+```
+
+`--replace` without `--tag` keeps the existing tags. The operator's command
+moves the draft into the store and records the change. A runtime allowing a
+write through the shared link does not replace this publication route.
 
 Running agents tagged for the skill get the change at once, and the command
 names them: Claude Code and Codex load it during the session, and OpenCode
 reloads its skills at its next pause between turns. Agents not running get it
-at their next launch. Change who
-receives it with:
+at their next launch. To change who receives it, give the operator the intended
+tags and the corresponding command:
 
 ```bash
 backbone skills tag my-skill coder python typescript   # replace its tags

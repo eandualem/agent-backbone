@@ -25,7 +25,6 @@ from agent_backbone.services.runtimes.base import (
     _error_foreground,
     agent_home,
     has_text,
-    read_brief,
     transcript_clock,
 )
 from agent_backbone.usage import UsageEvent, timestamp
@@ -49,6 +48,8 @@ def _has_session_projection(conn: sqlite3.Connection) -> bool:
 
 
 class OpenCode(Runtime):
+    setup_hooks = True
+
     supports_exact_resume = True
     id = "opencode"
     skill_dirs = (".agents/skills",)
@@ -58,11 +59,12 @@ class OpenCode(Runtime):
     refusal_check = "OpenCode's permission policy"
     aliases = ("open-code", "open_code")
     binary = "opencode"
-    brief_mode = "initial_prompt"
+    brief_mode = "system_prompt"
     # An interrupted turn, or a rejected permission, ends in session.status
     # idle and session.idle (live, 1.18.32): its plugin reports it.
     declared_capabilities = frozenset(
         {
+            "comment-receipts",
             "observed-model",
             "project-instructions",
             "request-diagnostics",
@@ -191,13 +193,12 @@ class OpenCode(Runtime):
         resume = kwargs.get("resume", False)
         selection = {"model": model, "effort": effort, "resume": resume}
         kwargs = {**kwargs, "model": None, "resume": False}
-        if resume:
-            kwargs["brief_file"] = None
         command = super().build_command(**kwargs)
         if command is None:
             return command
         command = [
             hooks.default_python(),
+            "-B",
             str(Path(__file__).with_name("_opencode_v2_launch.py")),
             json.dumps(selection),
             command[0],
@@ -205,22 +206,39 @@ class OpenCode(Runtime):
             *command[1:],
         ]
         data_dir, state_dir = kwargs.get("data_dir"), kwargs.get("state_dir")
-        if data_dir is None or state_dir is None:
+        brief = kwargs.get("brief_file")
+        plugin = None
+        if data_dir is not None and state_dir is not None:
+            self.prepare_setup_hooks(Path(data_dir), Path(state_dir))
+            plugin = Path(data_dir) / "hooks/opencode-v2"
+        if plugin is None and brief is None:
             return command
+        return [
+            hooks.default_python(),
+            "-B",
+            str(Path(__file__).with_name("_opencode_launch.py")),
+            str(plugin) if plugin else "",
+            str(Path(brief).resolve()) if brief is not None else "",
+            *command,
+        ]
+
+    def setup_error(self) -> str | None:
+        version = self._version()
+        if not version or version < (2, 1, 4):
+            return (
+                "OpenCode setup requires @opencode/cli 2.1.4 or newer; update it before retrying."
+            )
+        return None
+
+    def prepare_setup_hooks(self, data_dir: Path, state_dir: Path) -> None:
         try:
-            plugin = hooks.install_hook_files(Path(data_dir)) / "opencode-v2"
+            plugin = hooks.install_hook_files(data_dir) / "opencode-v2"
             plugin.mkdir(exist_ok=True)
             atomic_write_text(
                 plugin / "index.js", hooks.hook_source("opencode_v2_hook.js").read_text()
             )
         except OSError as exc:
             raise RuntimeError("Could not install OpenCode launch hooks") from exc
-        return [
-            hooks.default_python(),
-            str(Path(__file__).with_name("_opencode_launch.py")),
-            str(plugin),
-            *command,
-        ]
 
     def startup_error(self, state_dir, agent, launch_id):
         try:
@@ -270,8 +288,6 @@ class OpenCode(Runtime):
             args.extend(["--model", model])
         if resume:
             args.extend(["--session", resume] if isinstance(resume, str) else ["--continue"])
-        if brief_file is not None and (brief := read_brief(brief_file)):
-            args.extend(["--prompt", brief])
         return args
 
     usage_supported = True

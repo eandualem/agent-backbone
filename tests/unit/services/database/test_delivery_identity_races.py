@@ -1,12 +1,63 @@
 """Stable receipt identities when legacy rows retire or a duplicate completes."""
 
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
 from sqlalchemy import text
 
 from tests.support import queue_row
+
+
+@pytest.mark.parametrize("operation", ["record", "delete", "rename"])
+async def test_bound_acknowledgment_and_retirement_lock_registration_first(
+    db, monkeypatch, operation
+):
+    await db.agents.upsert(
+        "worker",
+        dir="/tmp/example",
+        runtime="codex",
+        model=None,
+        repo="acme/app",
+        tags=[],
+        env={},
+        description="",
+        unattended=False,
+    )
+    identity = (await db.agents.list())[0]["report_identity"]
+    repository = db.acks if operation == "record" else db.agents
+    original_tx = repository._tx
+    locked = False
+
+    @asynccontextmanager
+    async def postgres_lock_order():
+        async with original_tx() as conn:
+
+            class Connection:
+                dialect = SimpleNamespace(name="postgresql")
+
+                async def execute(self, statement, params=None):
+                    nonlocal locked
+                    sql = str(statement)
+                    if "FOR UPDATE" in sql:
+                        assert "FROM agents WHERE" in sql
+                        locked = True
+                    if sql.startswith(("INSERT", "UPDATE", "DELETE")):
+                        assert locked, "registration must be locked before dependent rows"
+                    # SQLite runs the behavior; this spy checks PostgreSQL's lock order.
+                    return await conn.execute(text(sql.replace(" FOR UPDATE", "")), params)
+
+            yield Connection()
+
+    monkeypatch.setattr(repository, "_tx", postgres_lock_order)
+    if operation == "record":
+        assert await db.acks.record(5, "worker", repo="acme/app", registration_id=identity)
+    elif operation == "delete":
+        assert await db.agents.delete("worker")
+    else:
+        await db.agents.rename("worker", "renamed")
+    assert locked
 
 
 @pytest.mark.parametrize("legacy", [True, False])

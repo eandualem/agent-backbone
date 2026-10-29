@@ -1,0 +1,284 @@
+{
+  "schema_version": 1,
+  "target": "aarch64-apple-darwin",
+  "python_version": "3.13.18",
+  "full_archive_sha256": "5706f1fdf82f7ea10b56a9b9cbadfa5f372010568a9794f19e0af4c48d975f34",
+  "components": [
+    {
+      "component": "CPython",
+      "licenses": [
+        "Python-2.0",
+        "CNRI-Python"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.cpython.txt"
+      ]
+    },
+    {
+      "component": "_bz2",
+      "licenses": [
+        "bzip2-1.0.6"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.bzip2.txt"
+      ],
+      "public_domain": false
+    },
+    {
+      "component": "_ctypes",
+      "licenses": [
+        "MIT"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.libffi.txt"
+      ],
+      "public_domain": false
+    },
+    {
+      "component": "_curses",
+      "licenses": [
+        "X11"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.ncurses.txt"
+      ],
+      "public_domain": false
+    },
+    {
+      "component": "_curses_panel",
+      "licenses": [
+        "X11"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.ncurses.txt"
+      ],
+      "public_domain": false
+    },
+    {
+      "component": "_decimal",
+      "licenses": [
+        "BSD-2-Clause"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.mpdecimal.txt"
+      ],
+      "public_domain": false
+    },
+    {
+      "component": "_hashlib",
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.openssl-3.txt"
+      ],
+      "public_domain": false
+    },
+    {
+      "component": "_lzma",
+      "licenses": [
+        "0BSD"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.liblzma.txt"
+      ],
+      "public_domain": false
+    },
+    {
+      "component": "_sqlite3",
+      "licenses": [
+        "Zlib"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.sqlite.txt",
+        "licenses/LICENSE.zlib-ng.txt",
+        "licenses/LICENSE.zlib.txt"
+      ],
+      "public_domain": false
+    },
+    {
+      "component": "_ssl",
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.openssl-3.txt"
+      ],
+      "public_domain": false
+    },
+    {
+      "component": "_tkinter",
+      "licenses": [
+        "TCL",
+        "Zlib"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.tcl.txt",
+        "licenses/LICENSE.zlib-ng.txt",
+        "licenses/LICENSE.zlib.txt"
+      ],
+      "public_domain": false
+    },
+    {
+      "component": "_uuid",
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.libuuid.txt"
+      ],
+      "public_domain": false
+    },
+    {
+      "component": "binascii",
+      "licenses": [
+        "Zlib"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.zlib-ng.txt",
+        "licenses/LICENSE.zlib.txt"
+      ],
+      "public_domain": false
+    },
+    {
+      "component": "pyexpat",
+      "licenses": [
+        "MIT"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.expat.txt"
+      ],
+      "public_domain": false
+    },
+    {
+      "component": "readline",
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.libedit.txt"
+      ],
+      "public_domain": false
+    },
+    {
+      "component": "zlib",
+      "licenses": [
+        "Zlib"
+      ],
+      "license_paths": [
+        "licenses/LICENSE.zlib-ng.txt",
+        "licenses/LICENSE.zlib.txt"
+      ],
+      "public_domain": false
+    }
+  ],
+  "files": [
+    {
+      "path": "LICENSE.bzip2.txt",
+      "source": "licenses/LICENSE.bzip2.txt",
+      "sha256": "1f38bbc7caacafd65169276d759c0d88c991b753b643ce35d0e45ea1971dd441",
+      "bytes": 1743
+    },
+    {
+      "path": "LICENSE.cpython.txt",
+      "source": "licenses/LICENSE.cpython.txt",
+      "sha256": "86e61415828a8b5b06ec8d024e6f086ce155a8b85fd0c419c0ba4dc004e74fdd",
+      "bytes": 36164
+    },
+    {
+      "path": "LICENSE.expat.txt",
+      "source": "licenses/LICENSE.expat.txt",
+      "sha256": "122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534",
+      "bytes": 1144
+    },
+    {
+      "path": "LICENSE.libedit.txt",
+      "source": "licenses/LICENSE.libedit.txt",
+      "sha256": "29cea33c32bbc9785142386377915612a2fa786482c46843383384aded2e09b1",
+      "bytes": 1614
+    },
+    {
+      "path": "LICENSE.libffi.txt",
+      "source": "licenses/LICENSE.libffi.txt",
+      "sha256": "deaf3a42effb551a5b140fa9afefed183a27f1341c6d1bf430d106a5e6931fc0",
+      "bytes": 1132
+    },
+    {
+      "path": "LICENSE.liblzma.txt",
+      "source": "licenses/LICENSE.liblzma.txt",
+      "sha256": "9a4062de0a2c388a98cf35a35d348b62fa97c838a71c3c28ee1a2d7d0a565b02",
+      "bytes": 660
+    },
+    {
+      "path": "LICENSE.libuuid.txt",
+      "source": "licenses/LICENSE.libuuid.txt",
+      "sha256": "122ee1f7e258f2c3c0e538a75c037684f420454bf3850ddc74ce750bbf5fe86b",
+      "bytes": 1432
+    },
+    {
+      "path": "LICENSE.mpdecimal.txt",
+      "source": "licenses/LICENSE.mpdecimal.txt",
+      "sha256": "669512af7219f58be03a398766d7c9da11a3b3df9d3f05cb74c5ceca25c8da3b",
+      "bytes": 1284
+    },
+    {
+      "path": "LICENSE.ncurses.txt",
+      "source": "licenses/LICENSE.ncurses.txt",
+      "sha256": "87a4c4442337b8968ef956031c406b74f9cb7149b7ba87311bdaba534816201c",
+      "bytes": 1447
+    },
+    {
+      "path": "LICENSE.openssl-3.txt",
+      "source": "licenses/LICENSE.openssl-3.txt",
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "bytes": 10175
+    },
+    {
+      "path": "LICENSE.sqlite.txt",
+      "source": "licenses/LICENSE.sqlite.txt",
+      "sha256": "38bef3d28b24f145ea293bd3b6eb4b20396982abc8303128fb493986ea5bc719",
+      "bytes": 1481
+    },
+    {
+      "path": "LICENSE.tcl.txt",
+      "source": "licenses/LICENSE.tcl.txt",
+      "sha256": "c0a69a2bfd757361ec7e6143973b103c90409316b49e9c88db26ad6388e79f16",
+      "bytes": 2255
+    },
+    {
+      "path": "LICENSE.zlib-ng.txt",
+      "source": "licenses/LICENSE.zlib-ng.txt",
+      "sha256": "6c9f0d975b41afaa34d22f55bb8986ce69e5cb7ad327cb2b28820cd425edf5ee",
+      "bytes": 867
+    },
+    {
+      "path": "LICENSE.zlib.txt",
+      "source": "licenses/LICENSE.zlib.txt",
+      "sha256": "818922b2620f12801a12bf78e399644a30990e66824abd8ca8ec24d451d6f92c",
+      "bytes": 995
+    }
+  ],
+  "install_only_comparison": [
+    {
+      "path": "bin/python3.13",
+      "sha256": "0268618cb32ef816f465bc6065be291158a6fc27c2553414a5c048f234f1ce40",
+      "byte_identical": true
+    },
+    {
+      "path": "lib/libpython3.13.dylib",
+      "sha256": "7ea21d62299215568cb194003d2d07eeed49bd26a156a4ba3628e8d982da04f6",
+      "byte_identical": true
+    },
+    {
+      "path": "lib/python3.13/lib-dynload/_tkinter.cpython-313-darwin.so",
+      "sha256": "9b71c5dfc9734cf765a431ece8a023a7092d452fd417bcb07fe51de738b2001d",
+      "byte_identical": true
+    }
+  ],
+  "scope": "upstream metadata license paths; wheel package notices tracked separately",
+  "upstream_release": "20261026",
+  "install_only_archive": "cpython-3.13.18+20261026-aarch64-apple-darwin-install_only.tar.gz",
+  "install_only_archive_sha256": "e5af2fde6a937a0e0c795a0c595c4efb70578d57463a2657c819992b9b9acbac",
+  "full_archive_filename": "cpython-3.13.18+20261026-aarch64-apple-darwin-pgo+lto-full.tar.zst",
+  "full_archive_url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.13.18%2B20261026-aarch64-apple-darwin-pgo%2Blto-full.tar.zst"
+}

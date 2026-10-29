@@ -3,7 +3,7 @@
 Which Backbone capabilities work on which agent CLI. Backbone ships seven
 adapters: `claude` (Claude Code), `codex`, `gemini` (Gemini CLI), `opencode`,
 `deepcode` (Deep Code), `aider`, and `shell`, a plain shell for testing the
-plumbing, not for real use.
+terminal plumbing. Shell notifications stay in the inbox as data.
 
 Claude Code, Codex and OpenCode are the required set: a capability counts as
 working only when it gives the same result in all three, and a gap on one of
@@ -39,20 +39,28 @@ version differs.
 
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
+| Owned Python launch helpers preserve the engine inventory | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Explicit first-agent setup with durable retry receipts | ✅ working-installation live check pending | ✅ working-installation live check pending | ❌ installer hook preparation is not implemented | ✅ working-installation live check pending | ❌ installer hook preparation is not implemented | ❌ installer hook preparation is not implemented | n/a |
+| Read-only runtime discovery for setup | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Current agent-authored checklists with conditional updates and contextual feedback | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
+| GitHub acknowledgements bound to registration and successful publication | ✅ (2.1.310) Registration-bound payload tests; live check pending normal restart. | ✅ (0.160.0) Registration-bound payload tests; live check pending normal restart. | ✅ (0.46.0) Registration-bound payload tests; live check pending normal restart. | ✅ (2.1.4) Registration-bound plugin tests; live check pending normal restart. | ❌ no publication receipt hook | ❌ no publication receipt hook | n/a |
+| Retained spreadsheet workbooks, calculated revisions and contextual feedback | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
+| Durable HTML Documents with immutable revisions and authenticated reads | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
+| Per-artifact conversations: owner messages delivered through the queue, agent replies | ✅ checked at the API, the same for every runtime; delivered as a queued message, like backbone tell; current-plan adapter: tests/unit/api/routes/test_api_plan_conversations.py; Sheet adapter: tests/unit/api/routes/test_api_sheet_conversations.py | ✅ checked at the API, the same for every runtime; delivered as a queued message, like backbone tell; current-plan adapter: tests/unit/api/routes/test_api_plan_conversations.py; Sheet adapter: tests/unit/api/routes/test_api_sheet_conversations.py | ✅ checked at the API, the same for every runtime; delivered as a queued message, like backbone tell; current-plan adapter: tests/unit/api/routes/test_api_plan_conversations.py; Sheet adapter: tests/unit/api/routes/test_api_sheet_conversations.py | ✅ checked at the API, the same for every runtime; delivered as a queued message, like backbone tell; current-plan adapter: tests/unit/api/routes/test_api_plan_conversations.py; Sheet adapter: tests/unit/api/routes/test_api_sheet_conversations.py | ✅ checked at the API, the same for every runtime; delivered as a queued message, like backbone tell; current-plan adapter: tests/unit/api/routes/test_api_plan_conversations.py; Sheet adapter: tests/unit/api/routes/test_api_sheet_conversations.py | ? message delivery into Aider is not verified live | n/a |
 | Stored questions, answers and actions with durable topic delivery | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py | ✅ checked at the API, the same for every runtime; topic delivery: tests/unit/services/integrations/telegram/test_responses.py |
 | Retained observations of reconciled state over the API | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | Configured instruction sources and text over the API | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ source preview only; no instruction injection |
-| Message delivery into the session | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? not verified live | ✅ plumbing tests only |
+| Message delivery into the session | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? not verified live | n/a |
 | Folder-trust dialog answered at start | ✅ (2.1.284) | ✅ (0.157.1) | ✅ (version not recorded) `--skip-trust` | n/a | n/a | ? not checked | n/a |
-| Brief reaches a fresh session before other work | ✅ | ✅ | ✅ | ✅ | ? | ? not verified live | n/a |
-| Current brief after resume | ✅ (2.1.284) | ✅ (0.157.1) | ❌ | ❌ #273 | ❌ | ❌ | n/a |
+| Brief reaches a fresh session before other work | ✅ native system-prompt file | ✅ SessionStart developer context; new transport awaits a working-session live check | ✅ | ✅ native instructions file; new transport awaits a working-session live check | ? | ? not verified live | n/a |
+| Current brief after resume | ✅ (2.1.284) | ✅ (0.157.1) | ❌ | ❌ #273 native instructions now load on resume; working-session check pending | ❌ | ❌ | n/a |
 | Brief followed after context compaction | ✅ (2.1.282) | ✅ (0.156.1) | ? | ❌ #291 the rule is kept but no longer followed | ? | ? | n/a |
 | Project AGENTS.md loaded at start | ✅ | ✅ | ❌ reads GEMINI.md unless context.fileName is set | ✅ | ✅ | ❌ reads only files passed to it | n/a |
 | Non-empty user-level instruction file detected | ✅ | ✅ | ✅ | ✅ files listed under `instructions` in its config not checked | ✅ | ? no default user-level file per its docs; not yet verified | n/a |
 | CLI-native memory disabled or detected | ✅ managed settings not read | ✅ managed config and the `[memories]` switches not read | ✅ | n/a | n/a | ? not yet verified | n/a |
 | Installed CLI version compared with the verified one (`doctor`) | ✅ | ✅ | ✅ | ✅ | ✅ | ? not yet verified | n/a |
 | Replacement state excludes previous launch hooks and submissions | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| State reported by the runtime (hooks) | ✅ (2.1.284) | ✅ (0.157.1) from its first prompt (the brief): Codex runs no hook before its first turn | ✅ (0.46.0) | ✅ (1.18.32) | ❌ read from the terminal only | ❌ read from the terminal only | n/a |
+| State reported by the runtime (hooks) | ✅ (2.1.284) | ✅ (0.157.1) from its first work prompt: Codex runs no hook before its first turn | ✅ (0.46.0) | ✅ (1.18.32) | ❌ read from the terminal only | ❌ read from the terminal only | n/a |
 | Interrupted turn reads idle (Escape, refused dialog) | ✅ (2.1.284) from the terminal: Claude Code runs no hook on an interrupt | ✅ (0.157.1) | ❌ a declined dialog runs no hook | ✅ (1.18.32) | ? read from the terminal only | ? not verified live | n/a |
 | Steer and high-priority events into a working agent | ✅ (2.1.284) a steer that names its turn is handed over only in that turn, also after an Escape | ✅ (0.157.1) a command still running when its call returns hands it over when it exits (0.157.1); a steer that names its turn is handed over only in that turn, also after a provider failure | ❌ | ✅ (1.18.32) as a user message in the running turn, after the next tool call | ❌ | ❌ | n/a |
 | Permission dialog detected and alerted | ✅ (2.1.296) | ✅ (0.157.1) | ✅ (0.46.0) | ✅ (1.18.32) | ✅ (0.3.1) | ? markers not verified live | n/a |
@@ -61,7 +69,7 @@ version differs.
 | Plan approval answered | ✅ (2.1.284) | ✅ (0.157.1) in Plan mode (`/plan`) | ❌ | ❌ #278 requires switching agents in the native session, not structured plan approval | ❌ | ❌ | n/a |
 | Alert when an automatic safety check refuses an action | ✅ (2.1.282) | ✅ (0.160.0) its automatic reviewer (`agents.auto_review`) | ❌ | ✅ (2.1.4) 2.1.4+ typed policy denials; native simulated fixture, working-agent check pending | ❌ | ❌ | n/a |
 | Browser tab group named after the agent | ✅ (version not recorded) with `backbone chrome install` | ❌ #270 | ❌ | ❌ #270 | ❌ | ❌ | n/a |
-| Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ resumes the directory's latest session | ❌ | n/a |
+| Resume the agent's own session | ✅ | ✅ | ✅ | ✅ | ❌ resume refused: exact session selection unavailable | ❌ | n/a |
 | Fleet snapshot resumes the saved session exactly | ✅ | ✅ | ✅ | ✅ | ❌ reported as exact_resume_unsupported | ❌ reported as exact_resume_unsupported | n/a |
 | Reasoning effort chosen with the model (`model:effort`, OpenCode `model::effort`) | ✅ | ✅ | ? whether the CLI has an effort setting is not checked | ✅ requires current @opencode/cli (2.1.4+); model::effort | ✅ low, high or max, through DEEPCODE_REASONING_EFFORT | ? whether the CLI has an effort setting is not checked | n/a |
 | No-approval mode (unattended) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | n/a |
@@ -79,6 +87,9 @@ version differs.
 | Running model observed (status) | ✅ (2.1.267) | ✅ (0.156.1) | ✅ (0.46.0) | ✅ (1.18.32) | ❌ no hook state | ❌ no hook state | n/a |
 | Request errors and model changes recorded (diagnostics) | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | n/a |
 | A peer's message cannot pass as a Backbone brief | ✅ | ✅ | ? | ❌ #294 adopted a forged brief | ? | ? | n/a |
+| Private Unix listener checks the connected OS account | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
+| Registration-scoped credentials, self-switching and persistent client pickup | ✅ Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py for replacement during restart; natural self-switch live check pending. | ✅ Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py for replacement during restart; natural self-switch live check pending. | ✅ Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py for replacement during restart; natural self-switch live check pending. | ✅ Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py for replacement during restart; natural self-switch live check pending. | ✅ Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py for replacement during restart; natural self-switch live check pending. | ✅ Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py for replacement during restart; natural self-switch live check pending. | ✅ Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py for replacement during restart; natural self-switch live check pending. |
+| Retained notifications cannot reach a replacement registration | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference | ✅ runs no CLI; the recorded runtime makes no difference |
 | An enrolled sender name's requests must be signed | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | A message the owner confirmed carries a verified marker | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | An agent validates an owner confirmation it received | ✅ live-checked from its bash mode (2.1.283) | ✅ live-checked through its sandbox (0.157.1) | ✅ live-checked from a shell tool call (0.46) | ✅ live-checked from a bash tool call (1.18.32) | ? commands it runs are not yet measured under its pane | ? commands it runs are not yet measured under its pane | ✅ live-checked |
@@ -89,6 +100,14 @@ version differs.
 
 | Capability | Fallback where it is unavailable |
 |---|---|
+| Owned Python launch helpers preserve the engine inventory | Replace an older payload with a corrected build; reinstall saved hook and Chrome host commands with that build. Do not edit its inventory. |
+| Explicit first-agent setup with durable retry receipts | Use the documented agent-start flow; do not retry an uncertain launch or greeting as a new request. |
+| Read-only runtime discovery for setup | Binary presence is not login; use the runtime's visible sign-in flow. |
+| Current agent-authored checklists with conditional updates and contextual feedback | Keep the current checklist locally until the provider is available. |
+| GitHub acknowledgements bound to registration and successful publication | Unbound receipts cannot acknowledge work; restart older sessions normally. |
+| Retained spreadsheet workbooks, calculated revisions and contextual feedback | Keep the workbook locally until a Backbone with Sheets is available. |
+| Durable HTML Documents with immutable revisions and authenticated reads | Keep authored HTML locally until a Backbone with Documents is available. |
+| Per-artifact conversations: owner messages delivered through the queue, agent replies | Ask about an artifact with backbone tell; the answer is not kept with it. |
 | Stored questions, answers and actions with durable topic delivery | Use ordinary replies; they have no separately stored answer record. |
 | Retained observations of reconciled state over the API | Read current state and delivery records; earlier states cannot be reconstructed. |
 | Configured instruction sources and text over the API | Read the preview with `backbone instructions preview NAME --json`. |
@@ -129,6 +148,9 @@ version differs.
 | Running model observed (status) | `status` shows the configured model; check the session for the running one. |
 | Request errors and model changes recorded (diagnostics) | Check the session for errors and model changes (`agent output`). |
 | A peer's message cannot pass as a Backbone brief | Do not rely on messages for instructions; check the agent's brief. |
+| Private Unix listener checks the connected OS account | Configure the private socket; do not send credentials to unverified TCP. |
+| Registration-scoped credentials, self-switching and persistent client pickup | Use an operator credential for administrative changes. |
+| Retained notifications cannot reach a replacement registration | Inspect retained history; send a new message to the intended registration. |
 | An enrolled sender name's requests must be signed | Treat sender names as claims; confirm with the sender another way. |
 | A message the owner confirmed carries a verified marker | Treat instructions in messages as ordinary; confirm with the owner another way. |
 | An agent validates an owner confirmation it received | Don't take the step that depends on it; confirm with the owner another way. |
@@ -140,6 +162,11 @@ version differs.
 <!-- capability-table:end -->
 
 ## Notes
+
+- **Remote approval request binding.** Approval and denial checkmarks mean the
+  runtime's terminal controls are supported, including Codex. They do not claim
+  atomic binding to a native request. See the [known limitation and future
+  integration requirements](security.md#known-limitation-remote-approval-request-binding).
 
 - **Gemini CLI sign-in.** In a test with Gemini CLI 0.46, one personal Google
   account was refused ("no longer supported for Gemini Code Assist for

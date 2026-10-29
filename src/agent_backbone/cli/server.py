@@ -64,21 +64,52 @@ def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
     }
 
 
+def _reload_app():
+    """Build the reload child with the endpoint pinned by its parent listener."""
+    from dataclasses import replace
+
+    from agent_backbone.api.app import create_app
+    from agent_backbone.config import bootstrap_config
+
+    config = bootstrap_config()
+    host = os.environ.get("BACKBONE_HOST", config.backbone.host)
+    return create_app(replace(config, backbone=replace(config.backbone, host=host)))
+
+
 def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | None = None) -> None:
     import uvicorn
 
+    from agent_backbone.api.local_transport import LocalPeerProtocol, private_listener
+
     logging_config = log_config(config, log_file)
+    if reload and config.backbone.socket_path:
+        raise ValueError("the private socket requires backbone up without --reload")
     if reload:
-        uvicorn.run(
-            "agent_backbone.api.app:create_app",
-            factory=True,
-            host=config.backbone.host,
-            port=config.backbone.port,
-            reload=True,
-            reload_dirs=["src"],
-            log_level="info",
-            log_config=logging_config,
-        )
+        # The reloader imports the factory in a child instead of passing config.
+        # Give that factory the same fixed endpoint as the listener it serves.
+        endpoint = {
+            "BACKBONE_HOST": config.backbone.host,
+            "BACKBONE_PORT": str(config.backbone.port),
+        }
+        previous = {key: os.environ.get(key) for key in endpoint}
+        os.environ.update(endpoint)
+        try:
+            uvicorn.run(
+                "agent_backbone.cli.server:_reload_app",
+                factory=True,
+                host=config.backbone.host,
+                port=config.backbone.port,
+                reload=True,
+                reload_dirs=["src"],
+                log_level="info",
+                log_config=logging_config,
+            )
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
         return
 
     from agent_backbone.api.app import create_app
@@ -92,6 +123,7 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
             log_level="info",
             log_config=logging_config,
             workers=1,
+            http=LocalPeerProtocol if config.backbone.socket_path else "auto",
         )
     )
     inner = getattr(app, "other_asgi_app", app)
@@ -99,7 +131,15 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
     # signals after shutdown, which would kill us before the exec below.
     inner.state.request_shutdown = lambda: setattr(server, "should_exit", True)
     try:
-        server.run()
+        if config.backbone.socket_path:
+            with private_listener(config.data_dir, config.backbone.socket_path) as local:
+                tcp = server.config.bind_socket()
+                try:
+                    server.run(sockets=[tcp, local])
+                finally:
+                    tcp.close()
+        else:
+            server.run()
     except KeyboardInterrupt:
         return
     if not server.started:
@@ -108,7 +148,17 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
         # The upgrade watch asked for new code: become a fresh `backbone up`
         # in place, so the login service or tmux session is unchanged.
         log.warning("restarting onto the new code")
-        os.execv(sys.executable, [sys.executable, "-m", "agent_backbone.cli", *sys.argv[1:]])
+        os.execv(
+            sys.executable,
+            [
+                sys.executable,
+                *(["-I"] if sys.flags.isolated else []),
+                "-B",
+                "-m",
+                "agent_backbone.cli",
+                *sys.argv[1:],
+            ],
+        )
 
 
 def restart_requested(app) -> bool:
@@ -126,7 +176,14 @@ async def _up_detached(config: BackboneConfig, log_file: Path | None = None) -> 
     if await session_exists(session):
         print(f"backbone already running in tmux session '{session}'")
         return 0
-    command = [sys.executable, "-m", "agent_backbone.cli", "up"]
+    command = [
+        sys.executable,
+        *(["-I"] if sys.flags.isolated else []),
+        "-B",
+        "-m",
+        "agent_backbone.cli",
+        "up",
+    ]
     if log_file is not None:
         command += ["--log-file", str(log_file)]
     env = {"BACKBONE_DATA_DIR": str(config.data_dir)}
@@ -177,10 +234,18 @@ def cmd_down(args: argparse.Namespace) -> int:
 async def _config_cmd(args: argparse.Namespace) -> int:
     sub = args.config_command
     boot = await _common.read_client_config()
+    remote = _common.is_agent_client(boot.api_key) and sub in {"list", "get"}
+    if remote:
+        response = await _common.api(boot, "GET", "/api/config")
+        if not response or response[0] != 200:
+            print("Configuration reads require the running Backbone API")
+            return 1
+        stored = {key: item["value"] for key, item in response[1].items()}
 
     if sub == "list":
-        async with _common.Direct(boot) as direct:
-            stored = await direct.db.settings.all()
+        if not remote:
+            async with _common.Direct(boot) as direct:
+                stored = await direct.db.settings.all()
         print_table(
             "Configuration",
             ("Setting", "Value", "Source"),
@@ -188,7 +253,7 @@ async def _config_cmd(args: argparse.Namespace) -> int:
                 (
                     key,
                     json.dumps(stored.get(key, SETTINGS_DEFAULTS[key])),
-                    "explicit" if key in stored else "default",
+                    "API" if remote else "explicit" if key in stored else "default",
                 )
                 for key in sorted(SETTINGS_DEFAULTS)
             ],
@@ -197,8 +262,9 @@ async def _config_cmd(args: argparse.Namespace) -> int:
         return 0
 
     if sub == "get":
-        async with _common.Direct(boot) as direct:
-            stored = await direct.db.settings.all()
+        if not remote:
+            async with _common.Direct(boot) as direct:
+                stored = await direct.db.settings.all()
         if args.key not in SETTINGS_DEFAULTS:
             print(f"unknown setting '{args.key}'")
             return 1

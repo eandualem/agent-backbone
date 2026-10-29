@@ -51,7 +51,7 @@ async def test_a_restart_continuation_never_expires(db):
         source="agent-restart",
     )
     chat = await db.queue.enqueue(
-        session_name="app", message="[via:backbone from:leo] hi", delivery_kind="direct_message"
+        session_name="app", message="notification", delivery_kind="comment"
     )
     async with db.engine.begin() as conn:
         await conn.execute(
@@ -71,7 +71,7 @@ async def test_a_startup_brief_never_expires(db):
         source=BRIEF_SOURCE,
     )
     chat = await db.queue.enqueue(
-        session_name="app", message="[via:backbone from:peer] hi", delivery_kind="direct_message"
+        session_name="app", message="notification", delivery_kind="comment"
     )
     await _age_all(db)
     expired = await db.queue.expire_pending(max_age_minutes=30)
@@ -96,10 +96,10 @@ async def test_messages_held_behind_an_unconfirmed_delivery_do_not_expire(db):
         uncertain=True,
     )
     held = await db.queue.enqueue(
-        session_name="app", message="[via:backbone from:leo] next", delivery_kind="direct_message"
+        session_name="app", message="next notification", delivery_kind="comment"
     )
     other = await db.queue.enqueue(
-        session_name="web", message="[via:backbone from:leo] hi", delivery_kind="direct_message"
+        session_name="web", message="notification", delivery_kind="comment"
     )
     await _age_all(db)
     expired = await db.queue.expire_pending(max_age_minutes=30)
@@ -127,7 +127,7 @@ async def test_a_released_hold_gives_the_waiting_queue_a_full_window(db):
         uncertain=True,
     )
     held = await db.queue.enqueue(
-        session_name="app", message="[via:backbone from:leo] next", delivery_kind="direct_message"
+        session_name="app", message="next notification", delivery_kind="comment"
     )
     await _age_all(db)  # the hold lasted longer than the expiry
     token = f"{hold.id}:{hold.operation_id}"
@@ -155,3 +155,71 @@ async def test_active_ids_are_the_rows_still_waiting_or_being_delivered(db):
         ids[status] = row.id
     expected = {ids[s] for s in ("pending", "in_progress", "checkpoint", "uncertain")}
     assert await db.queue.active_ids() == expected
+
+
+async def test_inbox_held_brief_blocks_later_work_until_acknowledged(db):
+    brief = await db.queue.enqueue(
+        session_name="app",
+        message="startup instructions",
+        delivery_kind="direct_message",
+        source=BRIEF_SOURCE,
+    )
+    later = await db.queue.enqueue(
+        session_name="app",
+        message="later work",
+        delivery_kind="direct_message",
+    )
+    await db.queue.hold_for_inbox(brief.id)
+    assert await db.queue.has_brief_ahead("app", later.id)
+    assert not await db.queue.has_brief_ahead("app", brief.id)
+    token = f"{brief.id}:{brief.operation_id}"
+    assert await db.queue.acknowledge_checkpoint("app", [token]) == [token]
+    assert not await db.queue.has_brief_ahead("app", later.id)
+
+
+async def test_direct_messages_stay_available_past_expiry_and_pruning(db):
+    message = "A request with full context " * 30
+    queued = await db.queue.enqueue(
+        session_name="app", message=message, delivery_kind="direct_message"
+    )
+    await _age_all(db)
+    assert await db.queue.expire_pending(max_age_minutes=30) == []
+    assert await db.queue.prune(1) == 0
+    inbox = await db.queue.checkpoint("app")
+    assert [(r["id"], r["message"]) for r in inbox] == [(queued.id, message)]
+    token = f"{queued.id}:{queued.operation_id}"
+    assert await db.queue.acknowledge_checkpoint("app", [token]) == [token]
+    assert await db.queue.checkpoint("app") == []
+
+
+async def test_pending_direct_message_survives_service_database_restart(tmp_path):
+    from agent_backbone.services.database import BackboneDB
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'restart.db'}"
+    first = BackboneDB(url)
+    await first.start()
+    await first.agents.upsert(
+        "app",
+        dir=str(tmp_path),
+        runtime="shell",
+        model=None,
+        repo="",
+        tags=[],
+        env={},
+        description="",
+        unattended=False,
+    )
+    queued = await first.queue.enqueue(
+        session_name="app", message="full request", delivery_kind="direct_message"
+    )
+    await _age_all(first)
+    await first.stop()
+    second = BackboneDB(url)
+    await second.start()
+    try:
+        assert await second.queue.expire_pending() == []
+        assert [(r["id"], r["message"]) for r in await second.queue.checkpoint("app")] == [
+            (queued.id, "full request")
+        ]
+    finally:
+        await second.stop()

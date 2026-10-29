@@ -190,12 +190,12 @@ class TestSubscriptionBatches:
         batch = await db.queue.enqueue_subscription(
             session_name="desk", header="h", lines=["- a"], priority=0
         )
-        await db.queue.enqueue(session_name="desk", message="chat", delivery_kind="direct_message")
+        await db.queue.enqueue(session_name="desk", message="notification", delivery_kind="comment")
         async with db.engine.begin() as conn:
             await conn.execute(
                 text("UPDATE message_queue SET enqueued_at = :t"),
                 {"t": (datetime.now(UTC) - timedelta(hours=2)).isoformat()},
             )
         expired = await db.queue.expire_pending(max_age_minutes=30)
-        assert [row["delivery_kind"] for row in expired] == ["direct_message"]
+        assert [row["delivery_kind"] for row in expired] == ["comment"]
         assert (await queue_row(db, batch.id))["status"] == "pending"

@@ -182,16 +182,26 @@ class TestCapitalisedAgentNames:
 
     async def test_its_own_comment_is_not_echoed_and_acknowledges(self, config, mock_db):
         event = _comment_event(5, "ops", ["Builder"], "[from:Builder] Done.")
-        with _patch_safe_deliver() as deliver:
+        with _patch_safe_deliver() as deliver, _patch_find_outgoing("Builder"):
             result = await issue_dispatcher(event, config, mock_db)
         assert result.delivered == ["ops"] and deliver.await_count == 1
-        mock_db.acks.record.assert_called_once_with(5, "Builder", repo=OTHER_REPO)
+        mock_db.acks.record.assert_called_once_with(
+            5,
+            "Builder",
+            repo=OTHER_REPO,
+            comment_id=event.comment.id,
+            registration_id=next(
+                row["report_identity"]
+                for row in mock_db.agents.list.return_value
+                if row["name"] == event.issue.labels.targets[0]
+            ),
+        )
 
-    async def test_its_own_review_is_not_echoed(self, config, mock_db):
+    async def test_review_prefix_cannot_exclude_registered_spelling(self, config, mock_db):
         event = _review_event(6, "ops", ["Builder"], "[from:Builder] LGTM", state="approved")
         with _patch_safe_deliver():
             result = await issue_dispatcher(event, config, mock_db)
-        assert result.delivered == ["ops"]
+        assert result.delivered == ["Builder", "ops"]
 
 
 class TestReviewDispatch:
@@ -208,11 +218,11 @@ class TestReviewDispatch:
         assert deliver.await_args.kwargs["source_key"] == "review:acme/app#41:9"
         assert deliver.await_args.kwargs["sender"] == "coderabbitai[bot]"
 
-    async def test_an_agent_reviewer_is_not_told_about_its_own_review(self, config, mock_db):
+    async def test_review_prefix_cannot_exclude_a_recipient(self, config, mock_db):
         event = _review_event(41, "ike", ["feynman"], "[from:feynman] LGTM", state="approved")
         with _patch_safe_deliver() as deliver:
             result = await issue_dispatcher(event, config, mock_db)
-        assert result.delivered == ["ike"]
+        assert sorted(result.delivered) == ["feynman", "ike"]
         assert "from feynman (approved)" in deliver.await_args.args[1]
 
     async def test_empty_review_body_points_at_the_inline_comments(self, config, mock_db):
@@ -223,10 +233,14 @@ class TestReviewDispatch:
 
 
 @pytest.fixture
-def mock_db():
+def mock_db(config):
     db = AsyncMock()
+    db.agents.list.return_value = [
+        {"name": spec.name, "report_identity": f"{index:032x}"}
+        for index, spec in enumerate(config.agents, 1)
+    ]
     db.dependencies.counts = AsyncMock(return_value={})
-    db.acks.record = AsyncMock()
+    db.acks.record = AsyncMock(return_value=True)
     db.acks.clear = AsyncMock()
     db.deliveries.record = AsyncMock()
     return db
@@ -368,6 +382,7 @@ class TestIssueDispatcher:
             head_ref="feat/x",
             head_repo="acme/backbone",
         )
+        mock_db.agents.list.return_value = [{"name": "backbone", "report_identity": "a" * 32}]
         event = IssueEvent(event_type=EventType.PULL_REQUEST_OPENED, issue=issue)
         with (
             _patch_safe_deliver() as deliver,
@@ -546,7 +561,7 @@ class TestIssueDispatcher:
 
 
 class TestCommentRouting:
-    async def test_intent_suppresses_echo_without_acknowledging(self, config, mock_db):
+    async def test_intent_cannot_suppress_an_unmatched_comment(self, config, mock_db):
         event = _comment_event(42, "leo", ["ike"], "comment arriving before the hook result")
 
         def outgoing(*args, include_intent=True, **kwargs):
@@ -560,7 +575,7 @@ class TestCommentRouting:
             ),
         ):
             result = await issue_dispatcher(event, config, mock_db)
-        assert result.delivered == ["leo"]
+        assert sorted(result.delivered) == ["ike", "leo"]
         mock_db.acks.record.assert_not_awaited()
 
     async def test_unknown_commenter_notifies_everyone(self, config, mock_db):
@@ -569,24 +584,35 @@ class TestCommentRouting:
             result = await issue_dispatcher(event, config, mock_db)
         assert sorted(result.delivered) == ["ike", "leo"]
 
-    async def test_from_tag_suppresses_self_notification(self, config, mock_db):
+    async def test_from_tag_cannot_suppress_notification(self, config, mock_db):
         event = _comment_event(9, "leo", ["ike"], "[from:ike] Done with this.")
         with _patch_safe_deliver(DeliveryOutcome.DELIVERED):
             result = await issue_dispatcher(event, config, mock_db)
-        assert result.delivered == ["leo"]
+        assert sorted(result.delivered) == ["ike", "leo"]
+        mock_db.acks.record.assert_not_awaited()
 
     async def test_self_comment_records_acknowledgment(self, config, mock_db):
         event = _comment_event(42, "leo", ["ike"], "[from:ike] Ack")
-        with _patch_safe_deliver(DeliveryOutcome.DELIVERED):
+        with _patch_safe_deliver(DeliveryOutcome.DELIVERED), _patch_find_outgoing("ike"):
             await issue_dispatcher(event, config, mock_db)
-        mock_db.acks.record.assert_called_once_with(42, "ike", repo=OTHER_REPO)
+        mock_db.acks.record.assert_called_once_with(
+            42,
+            "ike",
+            repo=OTHER_REPO,
+            comment_id=event.comment.id,
+            registration_id=next(
+                row["report_identity"]
+                for row in mock_db.agents.list.return_value
+                if row["name"] == event.issue.labels.targets[0]
+            ),
+        )
 
     async def test_external_comment_clears_acknowledgment(self, config, mock_db):
         event = _comment_event(42, "leo", ["ike"], "[from:leo] New info")
         with _patch_safe_deliver(DeliveryOutcome.DELIVERED):
             result = await issue_dispatcher(event, config, mock_db)
-        assert result.delivered == ["ike"]
-        mock_db.acks.clear.assert_called_with(42, "ike", repo=OTHER_REPO)
+        assert sorted(result.delivered) == ["ike", "leo"]
+        mock_db.acks.clear.assert_any_call(42, "ike", repo=OTHER_REPO, comment_id=event.comment.id)
 
     async def test_no_from_tag_falls_back_to_action_log(self, config, mock_db):
         event = _comment_event(12, "leo", ["ike"], "Just a plain comment.")
@@ -611,7 +637,7 @@ class TestCommentRouting:
         event = _comment_event(16, "leo", ["ike", "feynman"], "[from:feynman] I'll handle this.")
         with _patch_safe_deliver(DeliveryOutcome.DELIVERED):
             result = await issue_dispatcher(event, config, mock_db)
-        assert sorted(result.delivered) == ["ike", "leo"]
+        assert sorted(result.delivered) == ["feynman", "ike", "leo"]
 
     async def test_repo_owner_fallback_for_untargeted_comment(self, tmp_path, mock_db):
         config = make_config(

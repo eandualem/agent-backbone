@@ -5,11 +5,21 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from agent_backbone.config import BackboneConfig, bootstrap_config, build_config, validate_setting
+from dotenv import dotenv_values
+
+from agent_backbone.config import (
+    BackboneConfig,
+    agent_credential,
+    bootstrap_config,
+    build_config,
+    validate_setting,
+)
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +43,11 @@ def api_url(config: BackboneConfig, path: str) -> str:
 
 
 def headers(config: BackboneConfig) -> dict[str, str]:
-    return {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
+    result = {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
+    if config.client_registration:
+        result["X-Backbone-Client-Agent"] = config.client_agent
+        result["X-Backbone-Client-Registration"] = config.client_registration
+    return result
 
 
 async def api(
@@ -47,6 +61,7 @@ async def api(
     """
     import httpx
 
+    _not_sent[path] = False
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.request(
@@ -55,6 +70,9 @@ async def api(
     except httpx.HTTPError as exc:
         global _last_failure
         _last_failure = _failures[path] = _failure(exc, api_url(config, path), timeout)
+        _not_sent[path] = isinstance(
+            exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+        )
         return None
     try:
         data = resp.json()
@@ -65,6 +83,11 @@ async def api(
 
 _last_failure = "no request was made"
 _failures: dict[str, str] = {}
+_not_sent: dict[str, bool] = {}
+
+
+def request_not_sent(path: str) -> bool:
+    return _not_sent.get(path, False)
 
 
 def _failure(exc: Exception, url: str, timeout: float) -> str:
@@ -119,6 +142,18 @@ async def api_up(config: BackboneConfig) -> bool:
     return result is not None
 
 
+def is_agent_client(key: str) -> bool:
+    """Launch identity remains meaningful when development authentication is off."""
+    return (
+        agent_credential(key)
+        or "BACKBONE_AGENT_CREDENTIAL" in os.environ
+        or (
+            not key
+            and bool(os.environ.get("BACKBONE_AGENT") and os.environ.get("BACKBONE_LAUNCH_ID"))
+        )
+    )
+
+
 class Direct:
     """Direct database access for when the backbone is not running."""
 
@@ -129,6 +164,10 @@ class Direct:
         self.config = config
 
     async def __aenter__(self) -> Direct:
+        if is_agent_client(self._boot.api_key):
+            raise ValueError(
+                "Agent credentials require the running API; direct database fallback is disabled"
+            )
         from agent_backbone.services.agents import AgentStore
         from agent_backbone.services.database import BackboneDB
 
@@ -164,13 +203,45 @@ _CLIENT_SETTINGS_SQL = (
 )
 
 
-async def read_client_config() -> BackboneConfig:
+class OperatorFileUnavailable(ValueError):
+    """Installer authentication requires the agreed local operator-file handoff."""
+
+
+async def read_client_config(
+    data_dir: str | Path | None = None, *, strict: bool = False, operator_file: bool = False
+) -> BackboneConfig:
     """Read only existing address settings, without creating or repairing a database."""
     from sqlalchemy import text
     from sqlalchemy.engine import make_url
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    boot = bootstrap_config()
+    if operator_file and (
+        "BACKBONE_AGENT_CREDENTIAL" in os.environ
+        or os.environ.get("BACKBONE_AGENT")
+        or os.environ.get("BACKBONE_CLIENT_AGENT")
+        or os.environ.get("BACKBONE_CLIENT_REGISTRATION")
+        or agent_credential(os.environ.get("BACKBONE_API_KEY", ""))
+    ):
+        raise ValueError("An operator process is required to read the installation credential")
+    boot = bootstrap_config(data_dir) if data_dir is not None else bootstrap_config()
+    file_key = None
+    if operator_file:
+        file_key = dotenv_values(boot.env_path).get("BACKBONE_API_KEY")
+        if not file_key or agent_credential(file_key) or any(ord(c) < 32 for c in file_key):
+            raise OperatorFileUnavailable(
+                "Existing installation operator credentials are unavailable"
+            )
+        boot = replace(boot, api_key=file_key, client_agent="", client_registration="")
+    if boot.client_registration:
+        return boot
+    if is_agent_client(boot.api_key):
+        # The launcher exports the effective address without loading operator secrets.
+        return replace(
+            boot,
+            backbone=replace(
+                boot.backbone, host=os.environ.get("BACKBONE_HOST", boot.backbone.host)
+            ),
+        )
     try:
         url = make_url(boot.database_url)
         if url.get_backend_name() == "sqlite":
@@ -198,13 +269,20 @@ async def read_client_config() -> BackboneConfig:
             finally:
                 await engine.dispose()
         settings = {key: validate_setting(key, json.loads(value)) for key, value in rows}
-    except Exception:
+    except Exception as exc:
+        if strict:
+            raise ValueError("Cannot read existing installation settings") from exc
         # A missing database or unreadable settings must not trigger initialization.
         # The API call will report whether the bootstrap address is reachable.
         return boot
     # Share server precedence, including BACKBONE_PORT from process env/.env,
     # while keeping this path read-only and limited to address settings.
-    return build_config(boot.data_dir, settings=settings, agents=boot.agents)
+    configured = build_config(boot.data_dir, settings=settings, agents=boot.agents)
+    return (
+        replace(configured, api_key=file_key, client_agent="", client_registration="")
+        if operator_file
+        else configured
+    )
 
 
 async def _read_config() -> BackboneConfig:
@@ -215,7 +293,22 @@ async def _read_config() -> BackboneConfig:
 
     from agent_backbone.config import agents_from_rows, build_config
 
-    boot = bootstrap_config()
+    boot = await read_client_config()
+    if is_agent_client(boot.api_key):
+        settings_result, agents_result = await asyncio.gather(
+            api(boot, "GET", "/api/config"), api(boot, "GET", "/api/config/agents")
+        )
+        if (
+            not settings_result
+            or settings_result[0] != 200
+            or not agents_result
+            or agents_result[0] != 200
+        ):
+            raise ValueError("Agent discovery requires the running Backbone API")
+        settings = {key: item["value"] for key, item in settings_result[1].items()}
+        return build_config(
+            boot.data_dir, settings=settings, agents=agents_from_rows(agents_result[1])
+        )
     url = make_url(boot.database_url)
     queries = (
         "SELECT key, value FROM settings",
@@ -290,5 +383,5 @@ async def read_config() -> BackboneConfig:
         return await asyncio.wait_for(_read_config(), timeout=5)
     except Exception as exc:
         raise ValueError(
-            "Could not read existing configuration; check database availability and schema"
+            "Could not read existing configuration; check API or database availability and schema"
         ) from exc

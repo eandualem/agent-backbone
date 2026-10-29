@@ -117,10 +117,14 @@ def install_hint() -> str:
     )
 
 
-async def send_message(session_name: str, message: str, *, runtime_hint: str | None = None) -> bool:
-    """Paste ``message`` into a session and submit it the way its runtime expects."""
+async def send_message(
+    session_name: str, message: str, *, runtime_hint: str | None = None
+) -> bool | None:
+    """Submit to an identified runtime; None means keep this notification as data."""
     pane_content = await capture_pane(session_name, lines=80)
     runtime = await resolve_runtime(session_name, hint=runtime_hint, pane_content=pane_content)
+    if not await runtime.accepts_notifications(session_name):
+        return None
     return await runtime.deliver_message(session_name, message)
 
 

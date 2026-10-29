@@ -9,6 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from agent_backbone.api.auth import require_operator
 from agent_backbone.api.deps import (
     get_config,
     get_db,
@@ -167,7 +168,11 @@ class UpgradeHoldRequest(BaseModel):
     enabled: bool = Field(strict=True)
 
 
-@router.post("/upgrade/hold", operation_id="hold_automatic_upgrade_restart")
+@router.post(
+    "/upgrade/hold",
+    operation_id="hold_automatic_upgrade_restart",
+    dependencies=[Depends(require_operator)],
+)
 async def hold_upgrade_restart(body: UpgradeHoldRequest, request: Request):
     """Coordinate a no-restart upgrade with this running process, without changing settings."""
     watch = getattr(request.app.state, "upgrade_watch", None)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,19 +14,24 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 import agent_backbone.services.database.models  # noqa: F401  (registers the ORM tables)
 from agent_backbone.services.database._acks_repo import AcknowledgementRepo
 from agent_backbone.services.database._agents_repo import AgentRepo
+from agent_backbone.services.database._conversations_repo import ConversationRepo
+from agent_backbone.services.database._current_plans_repo import CurrentPlanRepo
 from agent_backbone.services.database._delivery_repo import DeliveryRepo
 from agent_backbone.services.database._dependencies_repo import DependencyRepo
 from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
+from agent_backbone.services.database._documents_repo import DocumentRepo
 from agent_backbone.services.database._events_repo import EventRepo
 from agent_backbone.services.database._fleet_repo import FleetSnapshotRepo
 from agent_backbone.services.database._outbox_repo import OutboxRepo
 from agent_backbone.services.database._queue_repo import QueueRepo
 from agent_backbone.services.database._reports_repo import ReportRepo
 from agent_backbone.services.database._settings_repo import SettingRepo
+from agent_backbone.services.database._sheets_repo import SheetRepo
 from agent_backbone.services.database._signing_repo import SigningRepo
 from agent_backbone.services.database._state_history_repo import StateHistoryRepo
 from agent_backbone.services.database._state_repo import StateRepo
 from agent_backbone.services.database._swarms_repo import SwarmRepo
+from agent_backbone.services.database._time import now_iso
 from agent_backbone.services.database._transitions_repo import TransitionRepo
 from agent_backbone.services.database._usage_repo import UsageRepo
 from agent_backbone.services.database.base import Base
@@ -221,6 +227,10 @@ class BackboneDB:
         self.deliveries = DeliveryRepo(engine)
         self.queue = QueueRepo(engine)
         self.reports = ReportRepo(engine)
+        self.documents = DocumentRepo(engine)
+        self.conversations = ConversationRepo(engine)
+        self.sheets = SheetRepo(engine)
+        self.current_plans = CurrentPlanRepo(engine)
         self.acks = AcknowledgementRepo(engine)
         self.dependencies = DependencyRepo(engine)
         self.diagnostics = DiagnosticRepo(engine)
@@ -265,6 +275,43 @@ class BackboneDB:
                 await conn.run_sync(metadata.create_all)
         if not self._is_memory:
             await self._run_migrations()
+        async with self._engine.begin() as conn:
+            names = list(
+                (
+                    await conn.execute(
+                        text("SELECT name FROM agents WHERE report_identity IS NULL")
+                    )
+                ).scalars()
+            )
+            for name in names:
+                await conn.execute(
+                    text(
+                        "UPDATE agents SET report_identity=:identity "
+                        "WHERE name=:name AND report_identity IS NULL"
+                    ),
+                    {"name": name, "identity": uuid.uuid4().hex},
+                )
+            # Legacy queues have no provable link to the current registration.
+            await conn.execute(
+                text(
+                    "INSERT INTO deliveries (operation_id,kind,repo,issue_number,target_entity,"
+                    "session_name,outcome,source,preview,created_at,registration_id) "
+                    "SELECT operation_id,delivery_kind,repo,issue_number,"
+                    "COALESCE(target_entity,session_name),session_name,'expired',"
+                    "'registration-unbound',substr(message,1,120),:now,registration_id "
+                    "FROM message_queue WHERE registration_id IS NULL "
+                    "AND status IN ('pending','in_progress','checkpoint','uncertain')"
+                ),
+                {"now": now_iso()},
+            )
+            await conn.execute(
+                text(
+                    "UPDATE message_queue SET status='expired', delivered_at=:now, leased_at=NULL "
+                    "WHERE registration_id IS NULL "
+                    "AND status IN ('pending','in_progress','checkpoint','uncertain')"
+                ),
+                {"now": now_iso()},
+            )
 
     async def stop(self) -> None:
         if self._engine is not None:

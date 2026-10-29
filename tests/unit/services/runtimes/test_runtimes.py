@@ -31,9 +31,9 @@ class TestRegistry:
     def test_brief_modes(self):
         assert {r.id: r.brief_mode for r in RUNTIMES.values()} == {
             "claude": "system_prompt",
-            "codex": "message",
+            "codex": "hook_context",
             "gemini": "initial_prompt",
-            "opencode": "initial_prompt",
+            "opencode": "system_prompt",
             "deepcode": "initial_prompt",
             "aider": "message",
             "shell": "none",
@@ -280,7 +280,10 @@ class TestLaunchEnvironment:
         from agent_backbone.services.agents.launch import launch_environment
 
         env = launch_environment(
-            "reviewer", "claude", "/data/state", {"FOO": "1", "BACKBONE_LAUNCH_ID": "spoofed"}
+            "reviewer",
+            "claude",
+            "/data/state",
+            {"FOO": "1", "BACKBONE_LAUNCH_ID": "spoofed", "BACKBONE_REGISTRATION_ID": "spoofed"},
         )
         launch_id = env.pop("BACKBONE_LAUNCH_ID")
         assert len(launch_id) == 32
@@ -292,6 +295,7 @@ class TestLaunchEnvironment:
             "BACKBONE_RUNTIME": "claude",
             "BACKBONE_AGENT": "reviewer",
             "BACKBONE_STATE_DIR": "/data/state",
+            "BACKBONE_REGISTRATION_ID": "",
             "FOO": "1",
         }
 
@@ -527,3 +531,132 @@ def test_current_opencode_idle_resume_placeholder():
     assert runtime.detect_idle(pane)
     assert not runtime.prompt_has_pending_input(pane)
     assert not runtime.detect_idle(pane + "\nesc interrupt")
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+@pytest.mark.parametrize("foreground", ["matching", "zsh", "unidentified", ""])
+async def test_notifications_require_the_actual_foreground_runtime(runtime, foreground):
+    adapter = RUNTIMES[runtime]
+    command = adapter.binary if foreground == "matching" else foreground
+    with (
+        patch("agent_backbone.services.runtimes.capture_pane", return_value="old model banner"),
+        patch(
+            "agent_backbone.services.runtimes.base.query_format_vars",
+            return_value={"command": command},
+        ),
+        patch("agent_backbone.services.runtimes.base.foreground_commands", return_value=[]),
+        patch.object(adapter, "deliver_message", return_value=True) as deliver,
+    ):
+        result = await send_message("app", "untrusted notification", runtime_hint=runtime)
+    assert result is (True if foreground == "matching" else None)
+    assert deliver.await_count == (1 if foreground == "matching" else 0)
+
+
+@pytest.mark.parametrize("runtime", ["shell", "unknown"])
+async def test_shell_and_unknown_receivers_never_receive_notification_pastes(runtime):
+    with (
+        patch("agent_backbone.services.runtimes.capture_pane", return_value="user $"),
+        patch("agent_backbone.services.runtimes.query_environment_var", return_value=None),
+        patch("agent_backbone.services.runtimes.base.paste_message") as paste,
+    ):
+        assert await send_message("app", "touch /tmp/unwanted", runtime_hint=runtime) is None
+    paste.assert_not_awaited()
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider"])
+@pytest.mark.parametrize("entrypoint", ["installed", "unrelated"])
+async def test_interpreted_notification_receivers_require_the_installed_entrypoint(
+    tmp_path, runtime, entrypoint
+):
+    adapter = RUNTIMES[runtime]
+    installed = tmp_path / adapter.binary
+    actual = installed if entrypoint == "installed" else tmp_path / "unrelated.js"
+    with (
+        patch(
+            "agent_backbone.services.runtimes.base.query_format_vars",
+            return_value={"command": "node"},
+        ),
+        patch("agent_backbone.services.runtimes.base.resolve_command", return_value=str(installed)),
+        patch(
+            "agent_backbone.services.runtimes.base.foreground_commands",
+            return_value=[["node", str(actual)]],
+        ),
+    ):
+        assert await adapter.accepts_notifications("app") is (entrypoint == "installed")
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_native_notification_receiver_uses_installed_launcher_path(tmp_path, runtime):
+    adapter = RUNTIMES[runtime]
+    current = tmp_path / "versions" / "2.1.311"
+    current.parent.mkdir()
+    current.touch()
+    installed = tmp_path / adapter.binary
+    installed.symlink_to(current)
+    with (
+        patch("agent_backbone.services.runtimes.capture_pane", return_value="model banner"),
+        patch(
+            "agent_backbone.services.runtimes.base.query_format_vars",
+            return_value={"command": "2.1.311"},
+        ),
+        patch("agent_backbone.services.runtimes.base.resolve_command", return_value=str(installed)),
+        patch(
+            "agent_backbone.services.runtimes.base.foreground_commands",
+            return_value=[[str(installed), "--model", "example"]],
+        ),
+        patch.object(adapter, "deliver_message", return_value=True) as deliver,
+    ):
+        assert await send_message("app", "authorized continuation", runtime_hint=runtime) is True
+    deliver.assert_awaited_once_with("app", "authorized continuation")
+
+
+@pytest.mark.parametrize("argv0", ["2.1.311", "claude", "/bin/zsh", "/other/2.1.311"])
+async def test_native_notification_receiver_rejects_unrelated_or_relative_paths(tmp_path, argv0):
+    adapter = RUNTIMES["claude"]
+    with (
+        patch("agent_backbone.services.runtimes.capture_pane", return_value="old model banner"),
+        patch(
+            "agent_backbone.services.runtimes.base.query_format_vars",
+            return_value={"command": "2.1.311"},
+        ),
+        patch(
+            "agent_backbone.services.runtimes.base.resolve_command",
+            return_value=str(tmp_path / "claude"),
+        ),
+        patch("agent_backbone.services.runtimes.base.foreground_commands", return_value=[[argv0]]),
+        patch.object(adapter, "deliver_message") as deliver,
+    ):
+        assert await send_message("app", "held notification", runtime_hint="claude") is None
+    deliver.assert_not_awaited()
+
+
+async def test_native_child_of_startup_helper_does_not_receive_notifications(tmp_path):
+    adapter = RUNTIMES["opencode"]
+    installed = tmp_path / "opencode"
+    commands = {
+        20: ["python", "/opt/runtime-launch-helper.py"],
+        21: [str(installed), "serve", "--stdio"],
+    }
+    with (
+        patch("agent_backbone.services.runtimes.capture_pane", return_value=""),
+        patch(
+            "agent_backbone.services.runtimes.base.query_format_vars",
+            return_value={"command": "python"},
+        ),
+        patch("agent_backbone.services.runtimes.base.resolve_command", return_value=str(installed)),
+        patch(
+            "agent_backbone.services.terminal._foreground.query_format_vars",
+            return_value={"tty": "/dev/pts/3"},
+        ),
+        patch(
+            "agent_backbone.services.terminal._foreground._output",
+            return_value=(0, "10 10 20\n20 20 20\n21 20 20\n"),
+        ),
+        patch(
+            "agent_backbone.services.terminal._foreground._arguments",
+            side_effect=commands.__getitem__,
+        ),
+        patch.object(adapter, "deliver_message") as deliver,
+    ):
+        assert await send_message("app", "held notification", runtime_hint="opencode") is None
+    deliver.assert_not_awaited()

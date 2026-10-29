@@ -405,6 +405,35 @@ class TestGetAgentState:
         assert result.source == "pull"
         mock_capture.assert_awaited_once()
 
+    @pytest.mark.parametrize(
+        "runtime,pane",
+        [
+            ("claude", "✳ Working… (esc to interrupt · 301s)\n❯ \n"),
+            ("opencode", "┃  Build · Small\n   esc interrupt\n"),
+            # Reconstructed from a reported Codex 0.160.0 inspect excerpt;
+            # the original raw pane was not retained.
+            ("codex", "• Compacting context (4m 57s • es…\n› Ask Codex to do anything\n"),
+            # Codex 0.160.0's upstream renders_truncated snapshot.
+            ("codex", "• Working (0s • esc…\n› Ask Codex to do anything\n"),
+        ],
+    )
+    async def test_visible_progress_keeps_expired_busy_hook_busy(self, tmp_path, runtime, pane):
+        (tmp_path / "app.json").write_text(
+            json.dumps({"state": "busy", "ts": time.time() - 301, "runtime": runtime})
+        )
+        result = await get_agent_state(tmp_path, "app", runtime_hint=runtime, pane_content=pane)
+        assert result.state == AgentState.BUSY
+        assert result.source == "pull"
+        assert "terminal shows a busy marker" in " ".join(result.evidence)
+
+    @pytest.mark.parametrize(
+        "output",
+        ["  • Compacting context (4m 57s • es…", "• Compacting context is running."],
+    )
+    def test_codex_progress_quoted_in_reply_does_not_prevent_idle(self, output):
+        result = infer_state_from_pane(output + "\n› Ask Codex to do anything\n", "codex")
+        assert result.state == AgentState.IDLE
+
     async def test_stale_plan_waiting_without_plan_file_does_not_resurrect(self, tmp_path):
         """A missing plan file must not keep a dead plan_waiting snapshot alive."""
         state_file = tmp_path / "feynman.json"
@@ -492,8 +521,10 @@ def _action_entry(session="ike", action="comment", issue=42, ts=None):
     return {
         "ts": ts if ts is not None else time.time(),
         "session": session,
+        "registration_id": "a" * 32,
         "action": action,
         "phase": "succeeded",
+        "comment_id": 123,
         "issue": issue,
     }
 
@@ -543,17 +574,25 @@ class TestHasCommentedOnIssue:
         log_file = tmp_path / "github-actions.jsonl"
         entry = _action_entry(session="ike", issue=42, ts=time.time() - 3600)
         log_file.write_text(json.dumps(entry) + "\n")
-        assert has_commented_on_issue(42, "ike", action_log=str(log_file)) is True
+        assert (
+            has_commented_on_issue(42, "ike", action_log=str(log_file), registration_id="a" * 32)
+            is True
+        )
 
     def test_no_match_wrong_issue(self, tmp_path):
         log_file = tmp_path / "github-actions.jsonl"
         entry = _action_entry(session="ike", issue=42)
         log_file.write_text(json.dumps(entry) + "\n")
-        assert has_commented_on_issue(99, "ike", action_log=str(log_file)) is False
+        assert (
+            has_commented_on_issue(99, "ike", action_log=str(log_file), registration_id="a" * 32)
+            is False
+        )
 
     def test_missing_file_returns_false(self, tmp_path):
         assert (
-            has_commented_on_issue(42, "ike", action_log=str(tmp_path / "nonexistent.jsonl"))
+            has_commented_on_issue(
+                42, "ike", action_log=str(tmp_path / "nonexistent.jsonl"), registration_id="a" * 32
+            )
             is False
         )
 
@@ -567,9 +606,11 @@ class TestRotateActionLog:
                     {
                         "ts": float(i),
                         "session": "ike",
+                        "registration_id": "a" * 32,
                         "action": "comment",
                         "issue": i,
                         "phase": "succeeded",
+                        "comment_id": i + 1,
                     }
                 )
                 + "\n"
@@ -581,6 +622,7 @@ class TestRotateActionLog:
     def test_keeps_the_newest_entries(self, tmp_path):
         path = self._log(tmp_path, 50)
         assert rotate_action_log(path, keep_lines=10) == 40
+        assert path.stat().st_mode & 0o777 == 0o600
         kept = [json.loads(ln) for ln in path.read_text().splitlines()]
         assert [e["issue"] for e in kept] == list(range(40, 50))
 
@@ -592,11 +634,11 @@ class TestRotateActionLog:
     def test_missing_log_is_noop(self, tmp_path):
         assert rotate_action_log(tmp_path / "nope.jsonl") == 0
 
-    def test_lookup_reads_only_the_tail(self, tmp_path):
-        """A large log is not read whole: an old entry beyond the tail is invisible."""
+    def test_acknowledgment_uses_all_retained_receipts(self, tmp_path):
+        """Old exact publication receipts still acknowledge the issue."""
         path = self._log(tmp_path, 20000)
-        assert has_commented_on_issue(19999, "ike", path) is True
-        assert has_commented_on_issue(0, "ike", path) is False
+        assert has_commented_on_issue(19999, "ike", path, registration_id="a" * 32) is True
+        assert has_commented_on_issue(0, "ike", path, registration_id="a" * 32) is True
 
 
 class TestStartingMarker:
@@ -688,7 +730,9 @@ class TestPromptIdentity:
 class TestFindOutgoingPullRequest:
     def _log(self, tmp_path, *entries: dict):
         path = tmp_path / "actions.jsonl"
-        path.write_text("".join(json.dumps(e) + "\n" for e in entries))
+        path.write_text(
+            "".join(json.dumps({**e, "registration_id": "a" * 32}) + "\n" for e in entries)
+        )
         return path
 
     def test_matches_head_repository_and_branch(self, tmp_path):
@@ -703,10 +747,25 @@ class TestFindOutgoingPullRequest:
                 "branch": "feat/x",
             },
         )
-        assert find_outgoing_pull_request("forker/app", "feat/x", action_log=log) == "app"
+        assert (
+            find_outgoing_pull_request(
+                "forker/app", "feat/x", action_log=log, registrations={"app": "a" * 32}
+            )
+            == "app"
+        )
         # the same branch name from another fork is not it
-        assert find_outgoing_pull_request("other/app", "feat/x", action_log=log) is None
-        assert find_outgoing_pull_request("forker/app", "feat/other", action_log=log) is None
+        assert (
+            find_outgoing_pull_request(
+                "other/app", "feat/x", action_log=log, registrations={"app": "a" * 32}
+            )
+            is None
+        )
+        assert (
+            find_outgoing_pull_request(
+                "forker/app", "feat/other", action_log=log, registrations={"app": "a" * 32}
+            )
+            is None
+        )
 
     def test_an_event_without_a_head_repository_compares_the_base_ones(self, tmp_path):
         """A fork deleted before the event arrives: GitHub names no head repo,
@@ -722,9 +781,13 @@ class TestFindOutgoingPullRequest:
                 "branch": "feat/x",
             },
         )
-        found = find_outgoing_pull_request("", "feat/x", action_log=log, base_repo="acme/app")
+        found = find_outgoing_pull_request(
+            "", "feat/x", action_log=log, registrations={"app": "a" * 32}, base_repo="acme/app"
+        )
         assert found == "app"
-        missed = find_outgoing_pull_request("", "feat/x", action_log=log, base_repo="other/app")
+        missed = find_outgoing_pull_request(
+            "", "feat/x", action_log=log, registrations={"app": "a" * 32}, base_repo="other/app"
+        )
         assert missed is None
 
     def test_an_explicit_head_repository_is_never_satisfied_by_a_base_one(self, tmp_path):
@@ -742,7 +805,11 @@ class TestFindOutgoingPullRequest:
             },
         )
         found = find_outgoing_pull_request(
-            "acme/app", "feat/x", action_log=log, base_repo="acme/app"
+            "acme/app",
+            "feat/x",
+            action_log=log,
+            registrations={"app": "a" * 32},
+            base_repo="acme/app",
         )
         assert found is None
 
@@ -757,7 +824,12 @@ class TestFindOutgoingPullRequest:
                 "branch": "feat/x",
             },
         )
-        assert find_outgoing_pull_request("acme/app", "feat/x", action_log=log) == "app"
+        assert (
+            find_outgoing_pull_request(
+                "acme/app", "feat/x", action_log=log, registrations={"app": "a" * 32}
+            )
+            == "app"
+        )
 
     def test_old_entries_and_missing_fields_do_not_match(self, tmp_path):
         log = self._log(
@@ -771,8 +843,18 @@ class TestFindOutgoingPullRequest:
             },
             {"ts": time.time(), "session": "app", "action": "pull_request", "repo": "acme/app"},
         )
-        assert find_outgoing_pull_request("acme/app", "feat/x", action_log=log) is None
-        assert find_outgoing_pull_request("", "feat/x", action_log=log) is None
+        assert (
+            find_outgoing_pull_request(
+                "acme/app", "feat/x", action_log=log, registrations={"app": "a" * 32}
+            )
+            is None
+        )
+        assert (
+            find_outgoing_pull_request(
+                "", "feat/x", action_log=log, registrations={"app": "a" * 32}
+            )
+            is None
+        )
 
 
 class TestChoiceDialogBeatsHookPermission:

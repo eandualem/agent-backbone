@@ -16,6 +16,7 @@ import codecs
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -39,8 +40,10 @@ from agent_backbone.services.runtimes._pane import (
 )
 from agent_backbone.services.terminal import (
     capture_pane,
+    foreground_commands,
     paste_message,
     press_submit,
+    query_format_vars,
     send_keys,
 )
 
@@ -58,7 +61,7 @@ _FALLBACK_DIRS = (
 # A version as a word of its own: ``v2.1.284`` is 2.1.284, never 1.284.
 _VERSION = re.compile(r"(?<![\w.])v?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?)(?![\w.-])")
 
-BriefMode = Literal["system_prompt", "initial_prompt", "message", "none"]
+BriefMode = Literal["system_prompt", "hook_context", "initial_prompt", "message", "none"]
 
 
 @dataclass(frozen=True)
@@ -116,7 +119,7 @@ def resolve_command(name: str) -> str | None:
         return path
     for directory in _FALLBACK_DIRS:
         candidate = directory / name
-        if candidate.is_file():
+        if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
     return None
 
@@ -228,9 +231,11 @@ class Runtime:
     """Other spellings ``get_runtime`` accepts for this runtime."""
     binary: str | None = None
     """Command to launch; ``None`` starts the login shell instead."""
+    authentication: Literal["unknown", "not_applicable"] = "unknown"
+    """Discovery never probes account credentials or infers login from binary presence."""
     brief_mode: BriefMode = "message"
     """How the agent brief reaches the runtime at launch: appended to the
-    system prompt, passed as the first (initial) prompt, delivered as the
+    system prompt or hook context, passed as the first (initial) prompt, delivered as the
     first message once the agent is at its prompt, or not at all."""
     brief_refresh: Literal["hook_context", "none"] = "none"
     """How a resumed session gets its current brief (it keeps the one it
@@ -438,11 +443,42 @@ class Runtime:
         """How the backbone learns this runtime's state (for ``backbone runtimes``)."""
         return "hooks + terminal" if self.hook_script else "terminal"
 
+    def discovery(self) -> dict:
+        """Read-only onboarding metadata; no process launch, login or model call."""
+        supported = self.unattended_args is not None
+        return {
+            "id": self.id,
+            "display_name": self.display_name,
+            "available": self.available(),
+            "setup_supported": self.setup_hooks,
+            "reports_state": self.reports_state,
+            "models": list(self.models),
+            "efforts": list(self.efforts),
+            "unattended": {
+                "supported": supported,
+                "args": list(self.unattended_args or ()),
+                "sandboxed": self.sandboxed if supported else None,
+            },
+            "authentication": self.authentication,
+        }
+
     def hook_launch_args(
         self, data_dir: Path | str | None, state_dir: Path | str | None
     ) -> list[str]:
         """Extra CLI args that wire the runtime's state hooks to the backbone."""
         return []
+
+    setup_hooks = False
+    """Whether the finite installer can prepare isolated launch hooks."""
+
+    def setup_error(self) -> str | None:
+        """Return a deterministic installer preflight refusal, before registration."""
+        return None
+
+    def prepare_setup_hooks(self, data_dir: Path, state_dir: Path) -> None:
+        """Prepare only installation-owned hooks; never edit global CLI settings."""
+        if not self.setup_hooks or not self.hook_launch_args(data_dir, state_dir):
+            raise RuntimeError("Installer launch hooks are unavailable for this runtime.")
 
     def startup_error(self, state_dir: Path, agent: str, launch_id: str) -> str | None:
         """A launcher failure retained after its terminal exits, if available."""
@@ -1086,6 +1122,33 @@ class Runtime:
     async def reject_plan(self, session_name: str) -> int:
         """Decline the plan so feedback can follow as a message; see ``approve_plan``."""
         return await self._send_all(session_name, self.plan_reject_keys)
+
+    async def accepts_notifications(self, session_name: str) -> bool:
+        """Require the actual foreground executable, not a stale runtime hint."""
+        if self.binary is None:
+            return False
+        current = await query_format_vars(session_name, "command=#{pane_current_command}")
+        if current.get("command") == self.binary:
+            return True
+        launcher = resolve_command(self.binary)
+        if launcher is None:
+            return False
+        expected = Path(launcher).resolve()
+        for command in await foreground_commands(session_name):
+            if not command:
+                continue
+            # A native launcher can report its version as the process name;
+            # its absolute argv[0] is still the installed launcher.
+            if Path(command[0]).is_absolute() and Path(command[0]).resolve() == expected:
+                return True
+            executable = Path(command[0]).name
+            # A script launcher is valid only when it is the installed CLI's
+            # exact entry point; an arbitrary Node/Python process is not a model.
+            if len(command) > 1 and re.fullmatch(r"node|bun|python(?:\d+(?:\.\d+)*)?", executable):
+                script = Path(command[1])
+                if script.is_absolute() and script.resolve() == expected:
+                    return True
+        return False
 
     async def deliver_message(self, session_name: str, message: str) -> bool:
         """Paste a message and submit it according to runtime-specific rules."""

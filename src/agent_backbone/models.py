@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -18,9 +20,89 @@ _FROM_TAG_PATTERN = re.compile(r"^\[from:([A-Za-z0-9][A-Za-z0-9_.-]*)\]")
 # not just to how much a UI happens to show.
 REPORT_BODY_BYTES = 16_384
 RESPONSE_BODY_BYTES = 65_536
+SETUP_BODY_BYTES = 32_768
 REPORT_TEXT_CHARACTERS = 1_500
 REPORT_LINKS = 6
 REPORTS_PER_HOUR = 30
+
+
+def _setup_path(value: str) -> str:
+    if not Path(value).is_absolute() or ".." in Path(value).parts:
+        raise ValueError("use an absolute path without parent traversal")
+    if any(unicodedata.category(c) in {"Cc", "Cs", "Zl", "Zp"} for c in value):
+        raise ValueError("path must not contain control characters")
+    return value
+
+
+SetupPath = Annotated[str, Field(min_length=1, max_length=4096), AfterValidator(_setup_path)]
+SetupRuntime = Annotated[str, Field(min_length=1, max_length=40, pattern=r"^[a-z][a-z0-9-]*$")]
+
+
+class SetupBase(BaseModel):
+    """Transient operator input, never a required file in an agent's repository."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    schema_version: Literal[1]
+    request_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+    data_dir: SetupPath
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def integer_version(cls, value):
+        if type(value) is not int:
+            raise ValueError("schema_version must be an integer")
+        return value
+
+
+class SetupInitialize(SetupBase):
+    action: Literal["initialize"]
+    service: Literal["user", "none"]
+    starter_profile: Literal["core-v1"]
+
+
+class SetupTemplateBrief(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    template: Literal["orchestrator-v1"]
+
+
+class SetupCustomBrief(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    text: str = Field(min_length=1, max_length=16_000)
+
+    @field_validator("text")
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("brief must contain text")
+        return value
+
+
+class SetupAgent(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    name: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    directory: SetupPath
+    create_directory: bool
+    runtime: SetupRuntime
+    model: str | None = Field(max_length=500)
+    brief: SetupTemplateBrief | SetupCustomBrief
+
+
+class SetupFirstAgent(SetupBase):
+    action: Literal["first_agent"]
+    hooks: list[SetupRuntime] = Field(min_length=1, max_length=7)
+    agent: SetupAgent
+    start_greeting: bool
+
+    @model_validator(mode="after")
+    def selected_hooks(self) -> SetupFirstAgent:
+        if len(set(self.hooks)) != len(self.hooks):
+            raise ValueError("hooks must contain unique runtime IDs")
+        if self.agent.runtime not in self.hooks:
+            raise ValueError("hooks must include the selected agent runtime")
+        return self
+
+
+SetupRequest = Annotated[SetupInitialize | SetupFirstAgent, Field(discriminator="action")]
 
 
 def report_error_details(errors: list[dict]) -> list[dict]:
@@ -198,6 +280,47 @@ class PublishResponse(BaseModel):
     supersedes_id: int | None = Field(default=None, ge=1, le=2**63 - 1)
 
 
+DOCUMENT_HTML_BYTES = 4_194_304
+DOCUMENT_METADATA_BYTES = 8_192
+DOCUMENT_WIRE_BYTES = 6 * DOCUMENT_HTML_BYTES + DOCUMENT_METADATA_BYTES
+DOCUMENT_STORAGE_BYTES = 1_073_741_824
+DOCUMENTS_PER_AUTHOR_HOUR = 30
+DOCUMENTS_PER_HOUR = 120
+
+
+class PublishDocument(BaseModel):
+    """Exact HTML with a bounded publication envelope; no HTML normalization."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    author: ReportAgentName
+    request_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+    title: str = Field(min_length=1, max_length=240)
+    html: str = Field(min_length=1)
+    supersedes_id: int | None = Field(default=None, ge=1, le=2**63 - 1)
+
+    @field_validator("title")
+    @classmethod
+    def title_text(cls, value: str) -> str:
+        _report_text(value)
+        return value
+
+    @model_validator(mode="after")
+    def byte_limits(self) -> PublishDocument:
+        try:
+            size = len(self.html.encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise ValueError("HTML must contain valid UTF-8 text") from exc
+        if size > DOCUMENT_HTML_BYTES:
+            raise ValueError(f"HTML exceeds {DOCUMENT_HTML_BYTES} UTF-8 bytes")
+        if self.metadata_bytes() > DOCUMENT_METADATA_BYTES:
+            raise ValueError(f"metadata exceeds {DOCUMENT_METADATA_BYTES} JSON bytes")
+        return self
+
+    def metadata_bytes(self) -> int:
+        return len(json.dumps(self.model_dump() | {"html": ""}, ensure_ascii=True).encode())
+
+
 class ReportQuery(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -263,6 +386,7 @@ def parse_from_tag(comment_body: str) -> str | None:
 
 RETIREMENT_REASONS = frozenset(
     {
+        "registration_changed",
         "acknowledged",
         "no_repo",
         "issue_closed",
@@ -535,3 +659,132 @@ class IssueEvent(BaseModel):
             delivery_id=delivery_id,
             action=action,
         )
+
+
+# Current plans are short authored snapshots, never runtime approval dialogs.
+CURRENT_PLAN_BODY_BYTES = 65_536
+PlanIdentity = Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
+
+
+class PlanReference(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    kind: Literal["issue", "sheet", "document"]
+    target: str = Field(min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def valid_target(self):
+        patterns = {
+            "issue": r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*",
+            "sheet": r"[0-9a-f]{32}",
+            "document": r"[1-9][0-9]*",
+        }
+        if not re.fullmatch(patterns[self.kind], self.target):
+            raise ValueError("reference target does not match its kind")
+        return self
+
+
+class CurrentPlanItem(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    item_id: PlanIdentity
+    text: ReportText = Field(min_length=1, max_length=240)
+    section: Literal["now", "next", "later"]
+    status: Literal["pending", "in_progress", "blocked", "done"]
+    detail: str = Field(default="", max_length=400)
+    references: list[PlanReference] = Field(default_factory=list, max_length=3)
+
+    @field_validator("detail")
+    @classmethod
+    def plain_detail(cls, value):
+        return _report_text(value) if value else value
+
+
+class CurrentPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    plan_id: PlanIdentity
+    title: ReportText = Field(min_length=1, max_length=160)
+    items: list[CurrentPlanItem] = Field(max_length=30)
+
+    @model_validator(mode="after")
+    def bounded_ordered_items(self):
+        if len({item.item_id for item in self.items}) != len(self.items):
+            raise ValueError("item IDs must be unique")
+        sections = [{"now": 0, "next": 1, "later": 2}[i.section] for i in self.items]
+        if sections != sorted(sections):
+            raise ValueError("order items by now, next, then later")
+        size = len(self.title) + sum(
+            len(i.text) + len(i.detail) + sum(len(r.target) for r in i.references)
+            for i in self.items
+        )
+        if size > 8000:
+            raise ValueError("current plan exceeds 8000 combined text characters")
+        return self
+
+
+class PublishCurrentPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    author: ReportAgentName
+    author_id: PlanIdentity
+    request_id: PlanIdentity
+    base_revision_id: PlanIdentity | None
+    plan: CurrentPlan
+
+
+class CurrentPlanFeedback(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    author: ReportAgentName | None
+    request_id: PlanIdentity
+    observed_plan_id: PlanIdentity
+    observed_revision_id: PlanIdentity
+    item_ids: list[PlanIdentity] = Field(default_factory=list, max_length=10)
+    kind: Literal["question", "feedback"]
+    text: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("text")
+    @classmethod
+    def feedback_text(cls, value):
+        # Keep ordinary paragraph breaks, without permitting terminal control sequences.
+        if not value.strip() or any(
+            (unicodedata.category(c) in {"Cc", "Cs"} and c not in "\n\t")
+            or c in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+            for c in value
+        ):
+            raise ValueError("feedback must be nonblank text without control or bidi characters")
+        return value
+
+    @field_validator("item_ids")
+    @classmethod
+    def unique_items(cls, value):
+        if len(set(value)) != len(value):
+            raise ValueError("selected item IDs must be unique")
+        return value
+
+
+class SetupResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    action: Literal["initialize", "first_agent", "validate"]
+    status: Literal["completed", "action_required", "failed"]
+    code: str = Field(min_length=1, max_length=100)
+    message: str = Field(max_length=2000)
+    data: dict
+    completed_steps: list[str] = Field(max_length=30)
+    retry: Literal["same_request", "new_request", "none"]
+
+
+def setup_result(
+    action, code, message, *, status="action_required", data=None, steps=(), retry=None
+):
+    return {
+        "action": action,
+        "status": status,
+        "code": code,
+        "message": message,
+        "data": data or {},
+        "completed_steps": list(steps),
+        "retry": retry
+        or {
+            "invalid_request": "new_request",
+            "request_conflict": "new_request",
+            "agent_conflict": "new_request",
+            "launch_failed": "none",
+        }.get(code, "same_request"),
+    }

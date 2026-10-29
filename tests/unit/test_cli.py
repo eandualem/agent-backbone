@@ -344,9 +344,9 @@ class TestAgentCommands:
         listing = json.loads(capsys.readouterr().out)
         assert listing["items"][0]["dir"] == str(project)
 
-    @pytest.mark.parametrize("runtime", ["claude", "codex"])
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "aider"])
     def test_an_offline_start_briefs_the_agent(self, tmp_path, capsys, runtime):
-        """Claude Code takes its brief at launch; Codex's first message is sent here too."""
+        """Native instruction channels need no paste; Aider still receives its queued brief."""
         from agent_backbone.models import DeliveryOutcome
         from agent_backbone.services.routing import DeliveryReport
 
@@ -371,7 +371,7 @@ class TestAgentCommands:
             assert _run(argv) == 0
         out = capsys.readouterr().out
         assert "brief is not delivered yet" not in out
-        if runtime == "codex":
+        if runtime == "aider":
             assert deliver.await_count == 1
             assert deliver.await_args.args[1].startswith("[via:backbone]")
         else:
@@ -399,7 +399,7 @@ class TestAgentCommands:
             patch(_DETECT_REPO, new_callable=AsyncMock, return_value=""),
             patch("agent_backbone.services.jobs.retry.safe_deliver", side_effect=unconfirmed),
         ):
-            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "codex"]
+            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "aider"]
             assert _run(argv) == 0
         out = capsys.readouterr().out
         assert "could not be confirmed" in out and "backbone inbox" in out
@@ -422,7 +422,7 @@ class TestAgentCommands:
                 side_effect=RuntimeError("database is locked"),
             ),
         ):
-            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "codex"]
+            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "aider"]
             assert _run(argv) == 0
         out = capsys.readouterr().out
         assert "app: ready" in out and "could not deliver the brief from here" in out
@@ -452,7 +452,7 @@ class TestAgentCommands:
                 side_effect=RuntimeError("database is locked"),
             ),
         ):
-            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "codex"]
+            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "aider"]
             assert _run(argv) == 0
         out = capsys.readouterr().out
         assert "app: ready" in out and "could not read where the brief is" in out
@@ -469,7 +469,7 @@ class TestAgentCommands:
             patch("agent_backbone.services.runtimes.base.Runtime.pre_trust"),
             patch(_DETECT_REPO, new_callable=AsyncMock, return_value=""),
         ):
-            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "codex"]
+            argv = ["agent", "start", "app", "--dir", str(project), "--runtime", "aider"]
             assert _run([*argv, "--no-wait"]) == 0
         assert "brief is not delivered yet" in capsys.readouterr().out
 
@@ -716,10 +716,9 @@ class TestAgentCommands:
         assert _run(["agent", "list"]) == 0
         assert "orch" in capsys.readouterr().out
         assert _run(["agent", "unwatch", "orch", "acme/web"]) == 0
-        with patch(
-            "agent_backbone.services.agents.operations.session_exists",
-            new_callable=AsyncMock,
-            return_value=False,
+        with (
+            patch("agent_backbone.services.agents.operations.session_exists", return_value=False),
+            patch("agent_backbone.services.terminal.session_exists", return_value=False),
         ):
             assert _run(["agent", "forget", "orch"]) == 0
             assert _run(["agent", "forget", "orch"]) == 1
@@ -782,6 +781,7 @@ class TestAgentCommands:
         ]
 
         monkeypatch.setenv("BACKBONE_AGENT", "desk")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         assert _run(["agent", "subscribe", "gmail", "from:example.com"]) == 0
         assert "#2 gmail normal: from:example.com" in capsys.readouterr().out
         assert _run(["agent", "unsubscribe", "1"]) == 0
@@ -810,6 +810,7 @@ class TestAgentCommands:
         capsys.readouterr()
 
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         assert _run(["agent", "watch", "acme/app", "acme/web"]) == 0
         out = capsys.readouterr().out
         assert "orch: now watching acme/app" in out and "acme/web" in out
@@ -842,6 +843,7 @@ class TestTell:
 
     def test_sender_defaults_to_backbone_agent(self, monkeypatch):
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         args = cli.build_parser().parse_args(["tell", "x", "hi"])
         assert args.sender == "orch"
 
@@ -967,6 +969,7 @@ class TestReply:
 
     def test_negative_200_is_a_nonzero_error(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_AGENT", "ike")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         assert _run(["init"]) == 0
         capsys.readouterr()
         client = self._client(
@@ -979,6 +982,7 @@ class TestReply:
 
     def test_posted_reply_is_zero(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_AGENT", "ike")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         assert _run(["init"]) == 0
         capsys.readouterr()
         client = self._client(
@@ -1032,6 +1036,7 @@ class TestAgentApproveParser:
         from agent_backbone.cli import build_parser
 
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         ns = build_parser().parse_args(["agent", "approve", "scout"])
         assert ns.agent_command == "approve" and ns.name == "scout" and ns.sender == "orch"
         ns = build_parser().parse_args(["agent", "approve", "scout", "--from", "elias"])
@@ -1041,6 +1046,7 @@ class TestAgentApproveParser:
         from agent_backbone.cli import build_parser
 
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         ns = build_parser().parse_args(["agent", "deny", "scout"])
         assert ns.agent_command == "deny" and ns.name == "scout" and ns.sender == "orch"
 
@@ -1206,6 +1212,7 @@ class TestAlwaysOnStart:
 class TestCheckpointInbox:
     def test_claim_and_ack_use_agent_identity(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_AGENT", "worker")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         with patch(
             "agent_backbone.cli._common.api", AsyncMock(return_value=(200, {"messages": []}))
         ) as api:
@@ -1273,6 +1280,7 @@ class TestMessageValidate:
 class TestAgentRestart:
     def test_parses_options_and_posts_the_transition(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         accepted = {
             "id": 7,
             "session": "orch",
@@ -1377,7 +1385,7 @@ class TestAgentRestart:
         from agent_backbone.cli.agents import _transition_line
 
         pending = {"id": 3, "status": "pending", "start": True, "resume": False, "start_at": None}
-        assert _transition_line(pending) == "#3 pending: fresh start, starts 60s after the stop"
+        assert _transition_line(pending) == "#3 pending: fresh start, starts 0s after the stop"
         done = {
             "id": 4,
             "status": "completed",
@@ -1399,6 +1407,7 @@ class TestAgentRestart:
 class TestAgentOutput:
     def test_prints_complete_messages_and_both_directions(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         long = "word " * 500
         data = {
             "session": "orch",
@@ -1449,6 +1458,7 @@ class TestAgentOutput:
 class TestTellSteer:
     def test_steer_posts_to_the_steer_endpoint(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_AGENT", "orch")
+        monkeypatch.setenv("BACKBONE_API_KEY", "test-client-key")
         data = {
             "ok": True,
             "session": "app",

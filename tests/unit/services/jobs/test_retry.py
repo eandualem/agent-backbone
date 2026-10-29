@@ -11,7 +11,7 @@ from agent_backbone.models import DeliveryOutcome, IssueData, ParsedLabels
 from agent_backbone.services.jobs.retry import delivery_retry, drain_message_queue, retry_delivery
 from agent_backbone.services.routing import DeliveryReport
 from tests.conftest import TEST_REPO, make_config
-from tests.support import queue_row
+from tests.support import queue_row, register_config_agents, registration_id
 
 
 class TestRetryDeliveryAckCheck:
@@ -25,6 +25,7 @@ class TestRetryDeliveryAckCheck:
         )
         await db.acks.record(154, "feynman", repo=TEST_REPO)
         delivery = {
+            "registration_id": await registration_id(db, "ike"),
             "session_name": "ike",
             "issue_number": 154,
             "target_entity": "feynman",
@@ -43,6 +44,7 @@ class TestRetryDeliveryAckCheck:
         )
         await db.acks.record(154, "ike", repo=TEST_REPO)
         delivery = {
+            "registration_id": await registration_id(db, "ike"),
             "session_name": "ike",
             "issue_number": 154,
             "target_entity": "feynman",
@@ -67,6 +69,7 @@ class TestRetryDeliveryAckCheck:
         mock_gh.get_issue = AsyncMock(return_value=mock_issue)
         mock_deliver.return_value = DeliveryReport(DeliveryOutcome.DELIVERED)
         delivery = {
+            "registration_id": await registration_id(db, "ike"),
             "session_name": "ike",
             "issue_number": 154,
             "target_entity": "ike",
@@ -80,6 +83,7 @@ class TestRetryDeliveryAckCheck:
         mock_gh = AsyncMock()
         mock_gh.get_issue = AsyncMock(return_value=MagicMock(state="closed"))
         delivery = {
+            "registration_id": await registration_id(db, "ike"),
             "session_name": "ike",
             "issue_number": 1,
             "target_entity": "ike",
@@ -97,6 +101,7 @@ class TestRetryDeliveryAckCheck:
                 specs={"backbone": AgentSpec(name="backbone", dir="/x", repo="acme/backbone")}
             ),
         )
+        await register_config_agents(db, config)
         await db.deliveries.record(
             issue_number=77,
             target_entity="backbone",
@@ -110,6 +115,7 @@ class TestRetryDeliveryAckCheck:
         mock_gh.list_issues = AsyncMock(return_value=[mock_issue])
         mock_deliver.return_value = DeliveryReport(DeliveryOutcome.DELIVERED)
         delivery = {
+            "registration_id": await registration_id(db, "backbone"),
             "session_name": "backbone",
             "issue_number": 77,
             "target_entity": "backbone",
@@ -131,6 +137,7 @@ class TestRetryDeliveryAckCheck:
             )
         )
         delivery = {
+            "registration_id": await registration_id(db, "ike"),
             "session_name": "ike",
             "issue_number": 88,
             "target_entity": "ike",
@@ -205,6 +212,7 @@ class TestDeliveryRetryQueueDrain:
             tmp_path,
             agents=AgentsConfig(specs={"app": AgentSpec(name="app", dir="/x", runtime=runtime)}),
         )
+        await register_config_agents(db, config)
         profile = SessionProfile(session_name="app", intelligence=SessionIntelligence.OFFLINE)
         with (
             patch(
@@ -249,14 +257,15 @@ class TestDeliveryRetryQueueDrain:
         assert {row["outcome"] for row in receipts} == {"offline", "delivered"}
         assert {row["operation_id"] for row in receipts} == {receipt.operation_id}
 
-    async def test_offline_drain_still_expires_ordinary_messages(self, db, tmp_path):
+    async def test_offline_drain_still_expires_notifications(self, db, tmp_path):
         from sqlalchemy import text
 
         config = make_config(
             tmp_path, agents=AgentsConfig(specs={"app": AgentSpec(name="app", dir="/x")})
         )
+        await register_config_agents(db, config)
         queued = await db.queue.enqueue(
-            session_name="app", message="ordinary message", delivery_kind="direct_message"
+            session_name="app", message="ordinary notification", delivery_kind="comment"
         )
         async with db.queue._tx() as conn:
             await conn.execute(
@@ -283,6 +292,7 @@ class TestDeliveryRetryQueueDrain:
                 specs={"app": AgentSpec(name="app", dir="/x", inbox_only=hold == "inbox")}
             ),
         )
+        await register_config_agents(db, config)
         queued = await db.queue.enqueue(
             session_name="app", message="waiting message", delivery_kind="direct_message"
         )
@@ -406,7 +416,7 @@ class TestDeliveryRetryQueueDrain:
         await db.queue.enqueue(
             session_name="ike",
             message="[via:backbone from:leo] are you there?",
-            delivery_kind="direct_message",
+            delivery_kind="comment",
             source="backbone",
         )
         async with db.queue._tx() as conn:  # age the row past the expiry
@@ -415,7 +425,7 @@ class TestDeliveryRetryQueueDrain:
             )
         expired = await db.queue.expire_pending(max_age_minutes=30)
         assert len(expired) == 1 and expired[0]["session_name"] == "ike"
-        rows = await db.deliveries.query(session_name="ike", limit=5, kind="direct_message")
+        rows = await db.deliveries.query(session_name="ike", limit=5, kind="comment")
         assert rows and rows[0]["outcome"] == "expired"
         assert rows[0]["preview"].startswith("[via:backbone from:leo]")
         assert await db.queue.pending_count("ike") == 0
@@ -434,7 +444,7 @@ class TestDeliveryRetryQueueDrain:
             await db.queue.enqueue(
                 session_name=row["session_name"],
                 message=row["message"],
-                delivery_kind="direct_message",
+                delivery_kind="comment",
                 sender=row.get("sender", ""),
                 source=row.get("source", ""),
                 source_key=uuid.uuid4().hex,
@@ -492,7 +502,7 @@ class TestDeliveryRetryQueueDrain:
             target_entity="ike",
             session_name="ike",
             outcome="unattended_copy_mode",
-            kind="direct_message",
+            kind="comment",
         )
         await self._expire(
             db,
@@ -513,7 +523,7 @@ class TestDeliveryRetryQueueDrain:
                 target_entity="ike",
                 session_name="ike",
                 outcome=outcome,
-                kind="direct_message",
+                kind="comment",
             )
         await self._expire(
             db,
@@ -531,7 +541,7 @@ class TestDeliveryRetryQueueDrain:
                 target_entity="ike",
                 session_name="ike",
                 outcome=outcome,
-                kind="direct_message",
+                kind="comment",
                 source="backbone",
             )
         await self._expire(
@@ -569,7 +579,7 @@ class TestDeliveryRetryQueueDrain:
         from sqlalchemy import text
 
         await db.queue.enqueue(
-            session_name="ike", message="old", delivery_kind="direct_message", sender="leo"
+            session_name="ike", message="old", delivery_kind="comment", sender="leo"
         )
         async with db.engine.begin() as conn:
             await conn.execute(
@@ -741,7 +751,7 @@ class TestDrainKeepsTheRowIdentity:
             "agent_backbone.services.routing._delivery.get_session_intelligence",
             AsyncMock(return_value=profile),
         ):
-            for minutes in (3, 4, 5):
+            for minutes in (31, 60, 180):
                 async with db.engine.begin() as conn:
                     await conn.execute(
                         text("UPDATE message_queue SET enqueued_at = :t"),
@@ -764,7 +774,7 @@ class TestDrainKeepsTheRowIdentity:
             await drain_message_queue(config, db, None, active_sessions={"ike"})
             await drain_message_queue(config, db, None, active_sessions={"ike"})
         send.assert_awaited_once()
-        assert "(queued 5 min ago)" in send.await_args.args[1]
+        assert "(queued 3 h ago)" in send.await_args.args[1]
 
     async def test_concurrent_drains_do_not_pass_a_blocked_batch(self, config, db):
         import asyncio
@@ -858,6 +868,7 @@ class TestDrainKeepsTheRowIdentity:
             status = await retry_delivery(
                 config,
                 {
+                    "registration_id": await registration_id(db, "ike"),
                     "session_name": "ike",
                     "target_entity": "ike",
                     "repo": TEST_REPO,
@@ -889,6 +900,7 @@ class TestDrainKeepsTheRowIdentity:
                 await retry_delivery(
                     config,
                     {
+                        "registration_id": await registration_id(db, "ike"),
                         "session_name": "ike",
                         "target_entity": "ike",
                         "repo": "elsewhere/repo",
@@ -920,7 +932,14 @@ class TestDrainKeepsTheRowIdentity:
         mock_list_sessions.return_value = ["ike"]
         mock_deliver.return_value = DeliveryReport(DeliveryOutcome.AGENT_WORKING)
 
-        await delivery_retry(config, db, AsyncMock())
+        gh = AsyncMock()
+        gh.get_issue.return_value = IssueData(
+            number=7,
+            title="Current",
+            repo_full_name=TEST_REPO,
+            labels=ParsedLabels(targets=[config.agents.get("ike").name]),
+        )
+        await delivery_retry(config, db, gh)
 
         kwargs = mock_deliver.await_args.kwargs
         assert kwargs["sender"] == "leo"

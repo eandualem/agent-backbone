@@ -25,6 +25,7 @@ from agent_backbone.services.agents._file_reader import (
     write_starting_marker,
 )
 from agent_backbone.services.agents._inference import get_agent_state
+from agent_backbone.services.agents.credentials import _bind_agent_profile, profile_lock
 from agent_backbone.services.agents.instructions import instruction_preview
 from agent_backbone.services.agents.models import AgentState
 from agent_backbone.services.database import now_iso
@@ -70,22 +71,33 @@ def launch_environment(
     """Environment exported into an agent session so shipped hooks can find the backbone.
 
     This is the whole contract: the runtime, the agent's name, the state
-    directory, the launch's operation (``BACKBONE_OPERATION_ID``, how a
-    recovered restart recognises the session it started), and whatever the
+    directory, the registration bound by the launcher, the launch's operation
+    (``BACKBONE_OPERATION_ID``, how a recovered restart recognises the session
+    it started), and whatever the
     agent itself is configured with. The backbone's secrets are not part of
     it and are stripped from the session (see ``session_secret_keys`` and
     ``start_session``'s ``scrub``).
     """
-    env = {RUNTIME_ENV_KEY: runtime, AGENT_ENV_KEY: name, "BACKBONE_LAUNCH_ID": uuid4().hex}
+    env = {
+        RUNTIME_ENV_KEY: runtime,
+        AGENT_ENV_KEY: name,
+        "BACKBONE_LAUNCH_ID": uuid4().hex,
+        "BACKBONE_REGISTRATION_ID": "",
+    }
     if operation_id:
         env[OPERATION_ENV_KEY] = operation_id
     if state_dir:
         env[STATE_DIR_ENV_KEY] = str(state_dir)
     reserved = {
+        "BACKBONE_API_KEY",
+        "BACKBONE_AGENT_CREDENTIAL",
+        "BACKBONE_HOST",
+        "BACKBONE_PORT",
         RUNTIME_ENV_KEY,
         AGENT_ENV_KEY,
         STATE_DIR_ENV_KEY,
         "BACKBONE_LAUNCH_ID",
+        "BACKBONE_REGISTRATION_ID",
         OPERATION_ENV_KEY,
     }
     for key, value in (extra or {}).items():
@@ -155,7 +167,7 @@ async def start_agent(
         "requested_runtime": runtime,
         "requested_model": model,
         "resume": resume,
-        "resume_selection": "runtime_latest" if resume else "fresh",
+        "resume_selection": "unresolved" if resume else "fresh",
         "model_source": "configured",
     }
     record = {
@@ -258,9 +270,9 @@ async def _start_agent(
     (``agents.pre_trust``). The agent's brief — the common backbone brief
     (``agents.inject_brief``), or ``brief_file`` when the caller has its own,
     such as a swarm role brief — reaches the runtime the way its
-    ``brief_mode`` says: at launch (Claude Code, Gemini, OpenCode) or
-    queued as the first message the agent receives once it is at its prompt
-    (Codex, Aider). A resumed session keeps the brief it started with, so a
+    ``brief_mode`` says: native instructions or a launch prompt, hook context,
+    or queued as the first message once it is at its prompt. A resumed session
+    may keep the brief it started with, so a
     runtime whose hook can add session context is handed the current one
     there (``brief_refresh``); a plain shell has nobody to brief (pasting it
     would run it as commands).
@@ -326,14 +338,6 @@ async def _start_agent(
         except OSError:
             log.warning("Could not retain usage identity for %s", spec.name)
 
-    # A session id from *another* runtime means nothing here. A record
-    # without a runtime (an older state file, or a hook wired by hand
-    # outside a backbone session) is this agent's own.
-    own_session = (
-        last.session_id
-        if last is not None and last.session_id and last.runtime in (None, rt.id)
-        else None
-    )
     saved_age = _age(last.timestamp, time.time()) if last is not None else ""
     # The last launch's conversation is the id its hook reported or, before
     # that, the one it resumed by id. A launch that ended before either leaves
@@ -353,14 +357,14 @@ async def _start_agent(
         resume_target = last_launch
         details["resume_selection"] = "known_session"
         resume_evidence.append(f"resuming the session the last launch {how}")
-    elif resume and last is not None and last.session_id and own_session is None:
-        resume_evidence.append(
-            f"last session id belongs to {last.runtime}; using {rt.id}'s own resume"
-        )
-    elif resume and own_session and rt.supports_exact_resume:
-        resume_evidence.append(
-            f"the last launch reported no session id; {own_session} ({saved_age} old) is from "
-            f"an earlier session, so using {rt.id}'s own resume"
+    elif resume:
+        details.update(reason="resume_identity_unknown", resume_selection="unresolved")
+        return StartResult(
+            ok=False,
+            evidence=(
+                "the last launch has no resumable session identity for this runtime; "
+                "start a fresh conversation with --fresh",
+            ),
         )
     elif not resume and last_launch and rt.supports_exact_resume:
         resume_evidence.append(
@@ -403,94 +407,141 @@ async def _start_agent(
         },
         operation_id=operation_id,
     )
+    from agent_backbone.config import agent_api_key
+
+    environment["BACKBONE_API_KEY"] = agent_api_key(config.api_key, spec.registration_id)
+    # Runtimes may strip *KEY*, *TOKEN* and *SECRET* from tool environments.
+    # This alias carries only the collaboration credential through that filter.
+    environment["BACKBONE_AGENT_CREDENTIAL"] = environment["BACKBONE_API_KEY"]
+    environment["BACKBONE_HOST"] = config.backbone.host
+    environment["BACKBONE_PORT"] = str(config.backbone.port)
     # `starting` lives in its own marker file, written before the launch: a
     # hook write newer than the marker outranks it, ``wait_until_ready``
     # clears it when the prompt shows, and ``get_agent_state`` stops
     # trusting it after a short window regardless.
     details["stage"] = "launch"
-    launched_at = time.time()
-    # Hook-context offers belong to the session they were written for: the
-    # new session must not have the old one's guidance injected on its
-    # first tool call. Queue rows behind a batch survive and are pasted;
-    # what the old session already took stays to be settled, never re-pasted.
-    clear_agent_context(config.state_dir, spec.name)
-    # Likewise a brief queued for an earlier launch that never received it:
-    # this launch brings its own, and the old one must not reach it (#290).
-    retired = await _retire_stale_briefs(db, spec.name)
-    if retired is None:
-        details["reason"] = "brief_retirement_failed"
-        return StartResult(
-            ok=False, evidence=("could not retire an earlier launch's undelivered brief",)
+    # Direct CLI processes have separate lifecycle locks. Recheck under the
+    # shared profile guard before touching the live launch's state or identity.
+    async with profile_lock(config.data_dir):
+        if await session_exists(spec.name):
+            return StartResult(ok=True, already_running=True)
+        registration = (
+            next((row for row in await db.agents.list() if row["name"] == spec.name), None)
+            if db is not None
+            else None
         )
-    # Queued before the session exists, so no message sent once it is ready
-    # can go ahead of it; a launch that fails leaves it for the next one to retire.
-    # A resumed conversation whose brief never reached it gets the current one,
-    # unless its hook hands it over below (once is enough).
-    if (
-        rt.brief_mode == "message"
-        and brief is not None
-        and (not resume or (retired > 0 and rt.brief_refresh != "hook_context"))
-        and not await _queue_brief(db, spec.name, brief)
-    ):
-        details["reason"] = "brief_queue_failed"
-        return StartResult(ok=False, evidence=("could not queue the agent's brief",))
-    # A resumed session keeps the brief it started with: a runtime whose hook
-    # can add session context is handed the current one there. A chat message
-    # is never used for that, because a peer's message can imitate it (#294).
-    refresh = resume and rt.brief_mode != "none" and brief is not None
-    if (
-        refresh
-        and rt.brief_refresh == "hook_context"
-        # The hook that takes the offer must be wired into this launch too.
-        and not (
-            rt.hook_launch_args(config.data_dir, config.state_dir)
-            and _offer_refreshed_brief(config, spec.name, environment["BACKBONE_LAUNCH_ID"], brief)
+        if db is not None and (
+            not spec.registration_id
+            or (registration or {}).get("report_identity") != spec.registration_id
+        ):
+            details["reason"] = "registration_changed"
+            return StartResult(
+                ok=False,
+                evidence=("agent registration changed during startup; retry the start",),
+            )
+        launched_at = time.time()
+        # Hook-context offers belong to the session they were written for: the
+        # new session must not have the old one's guidance injected on its
+        # first tool call. Queue rows behind a batch survive and are pasted;
+        # what the old session already took stays to be settled, never re-pasted.
+        clear_agent_context(config.state_dir, spec.name)
+        # Likewise a brief queued for an earlier launch that never received it:
+        # this launch brings its own, and the old one must not reach it (#290).
+        retired = await _retire_stale_briefs(db, spec.name)
+        if retired is None:
+            details["reason"] = "brief_retirement_failed"
+            return StartResult(
+                ok=False, evidence=("could not retire an earlier launch's undelivered brief",)
+            )
+        # Queued before the session exists, so no message sent once it is ready
+        # can go ahead of it; a launch that fails leaves it for the next one to retire.
+        # A resumed conversation whose brief never reached it gets the current one,
+        # unless its hook hands it over below (once is enough).
+        if (
+            rt.brief_mode == "message"
+            and brief is not None
+            and (not resume or (retired > 0 and rt.brief_refresh != "hook_context"))
+            and not await _queue_brief(db, spec.name, brief)
+        ):
+            details["reason"] = "brief_queue_failed"
+            return StartResult(ok=False, evidence=("could not queue the agent's brief",))
+        # A resumed session keeps the brief it started with: a runtime whose hook
+        # can add session context is handed the current one there. A chat message
+        # is never used for that, because a peer's message can imitate it (#294).
+        hook_brief = brief is not None and (
+            rt.brief_mode == "hook_context" or (resume and rt.brief_refresh == "hook_context")
         )
-    ):
-        details["reason"] = "brief_refresh_failed"
-        return StartResult(ok=False, evidence=("could not hand the current brief to the session",))
-    write_starting_marker(
-        config.state_dir, spec.name, launched_at, launch_id=environment["BACKBONE_LAUNCH_ID"]
-    )
-    session_started = now_iso()  # it may receive messages before it is ready
-    ok = await start_session(
-        spec.name,
-        working_dir=str(spec.path),
-        command=command,
-        environment=environment,
-        scrub=session_secret_keys(config.data_dir),
-        mouse=rt.mouse_scroll,
-    )
-    if not ok:
-        details["reason"] = "session_failed"
-        clear_starting_marker(config.state_dir, spec.name)
-        return StartResult(ok=False, evidence=("tmux could not create the session",))
-    if db is not None and (
-        not resume_target
-        or command is None
-        or (isinstance(resume_target, str) and resume_target != last_launch)
-    ):
-        # A fresh conversation (a plain shell has none to resume), or a saved one
-        # other than the last launch's: what was delivered before no longer
-        # counts for it (a restored one may be offered an issue again, rather
-        # than miss one the newer conversation received). Recorded before the
-        # readiness wait, which a backbone restart can cut short. The session
-        # is already up, so a failed write must not fail the start (a swarm
-        # would roll back a member that keeps running).
-        try:
-            await db.agents.conversation_started(spec.name, session_started)
-        except Exception:
-            log.warning("Could not record the start of '%s'", spec.name, exc_info=True)
-    if isinstance(resume_target, str):
-        # Recorded once the session runs: the conversation this launch holds
-        # until its hook reports. A launch that never ran records none.
+        if (
+            hook_brief
+            # The hook that takes the offer must be wired into this launch too.
+            and not (
+                rt.hook_launch_args(config.data_dir, config.state_dir)
+                and _offer_refreshed_brief(
+                    config, spec.name, environment["BACKBONE_LAUNCH_ID"], brief
+                )
+            )
+        ):
+            details["reason"] = "brief_refresh_failed"
+            return StartResult(
+                ok=False, evidence=("could not hand the current brief to the session",)
+            )
+        if db is not None:
+            current = next(
+                (row for row in await db.agents.list() if row["name"] == spec.name), None
+            )
+            if (current or {}).get("report_identity") != (registration or {}).get(
+                "report_identity"
+            ):
+                details["reason"] = "registration_changed"
+                return StartResult(
+                    ok=False,
+                    evidence=("agent registration changed during startup; retry the start",),
+                )
         write_starting_marker(
-            config.state_dir,
-            spec.name,
-            launched_at,
-            launch_id=environment["BACKBONE_LAUNCH_ID"],
-            opened=(rt.id, resume_target),
+            config.state_dir, spec.name, launched_at, launch_id=environment["BACKBONE_LAUNCH_ID"]
         )
+        if registration is not None:
+            environment["BACKBONE_REGISTRATION_ID"] = registration["report_identity"]
+            _bind_agent_profile(config, registration, environment["BACKBONE_LAUNCH_ID"])
+        session_started = now_iso()  # it may receive messages before it is ready
+        ok = await start_session(
+            spec.name,
+            working_dir=str(spec.path),
+            command=command,
+            environment=environment,
+            scrub=session_secret_keys(config.data_dir),
+            mouse=rt.mouse_scroll,
+        )
+        if not ok:
+            details["reason"] = "session_failed"
+            clear_starting_marker(config.state_dir, spec.name)
+            return StartResult(ok=False, evidence=("tmux could not create the session",))
+        if db is not None and (
+            not resume_target
+            or command is None
+            or (isinstance(resume_target, str) and resume_target != last_launch)
+        ):
+            # A fresh conversation (a plain shell has none to resume), or a saved one
+            # other than the last launch's: what was delivered before no longer
+            # counts for it (a restored one may be offered an issue again, rather
+            # than miss one the newer conversation received). Recorded before the
+            # readiness wait, which a backbone restart can cut short. The session
+            # is already up, so a failed write must not fail the start (a swarm
+            # would roll back a member that keeps running).
+            try:
+                await db.agents.conversation_started(spec.name, session_started)
+            except Exception:
+                log.warning("Could not record the start of '%s'", spec.name, exc_info=True)
+        if isinstance(resume_target, str):
+            # Recorded once the session runs: the conversation this launch holds
+            # until its hook reports. A launch that never ran records none.
+            write_starting_marker(
+                config.state_dir,
+                spec.name,
+                launched_at,
+                launch_id=environment["BACKBONE_LAUNCH_ID"],
+                opened=(rt.id, resume_target),
+            )
     extra = f", model: {effective_model}" if effective_model else ""
     if unattended:
         extra += ", unattended"
@@ -740,6 +791,8 @@ async def approve_agent(
     tail = [ln.strip() for ln in sanitize_pane_content(pane).splitlines() if ln.strip()][-8:]
     if not rt.detect_active_dialog(pane):
         return "not_waiting", ["terminal shows no active permission prompt:", *tail]
+    if rt.detect_plan_dialog(pane):
+        return "not_permission", ["plan decisions require the dedicated plan controls", *tail]
     if rt.detect_choice_dialog(pane):
         return "not_permission", [
             "the dialog on screen is a choice, not a permission prompt — Enter would pick "
@@ -774,6 +827,8 @@ async def deny_agent(
     tail = [ln.strip() for ln in sanitize_pane_content(pane).splitlines() if ln.strip()][-8:]
     if not rt.detect_active_dialog(pane):
         return "not_waiting", ["terminal shows no active permission prompt:", *tail]
+    if rt.detect_plan_dialog(pane):
+        return "not_permission", ["plan decisions require the dedicated plan controls", *tail]
     if not await rt.deny_prompt(name):
         return "failed", ["tmux refused the keystroke"]
     await asyncio.sleep(settle_seconds)

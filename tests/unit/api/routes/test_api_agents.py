@@ -57,6 +57,7 @@ def tmux_svc():
         patch(f"{_ROUTE}.session_exists", mocks.session_exists),
         # stop and forget go through the shared operations now
         patch("agent_backbone.services.agents.operations.session_exists", mocks.session_exists),
+        patch("agent_backbone.services.terminal.session_exists", mocks.session_exists),
         patch("agent_backbone.services.agents.launch.stop_session", mocks.stop_session),
         patch(f"{_ROUTE}.capture_pane", mocks.capture_pane),
     ):
@@ -182,7 +183,14 @@ class TestStartAgent:
         assert kwargs["command"] == ["/usr/bin/claude"]
         assert kwargs["environment"]["BACKBONE_RUNTIME"] == "claude"
 
-    async def test_request_overrides_config(self, api_client, auth_headers, launch):
+    async def test_request_overrides_config(self, api_client, auth_headers, launch, api_app):
+        from agent_backbone.services.agents import write_state_file
+
+        write_state_file(
+            api_app.state.config.state_dir,
+            "ike",
+            {"state": "idle", "ts": time.time(), "runtime": "codex", "session_id": "saved-id"},
+        )
         launch.build_command.return_value = ["/usr/bin/codex", "--model", "x"]
         resp = await api_client.post(
             "/api/agents/ike/start",
@@ -192,7 +200,7 @@ class TestStartAgent:
         assert resp.json()["runtime"] == "codex"
         assert launch.start_session.await_args.kwargs["environment"]["BACKBONE_RUNTIME"] == "codex"
         assert launch.build_command.call_args.kwargs["model"] == "x"
-        assert launch.build_command.call_args.kwargs["resume"] is True
+        assert launch.build_command.call_args.kwargs["resume"] == "saved-id"
 
     async def test_every_runtime_gets_the_trust_setting(self, api_client, auth_headers, launch):
         # `agent start` for codex must pre-trust like the swarm path does, and
@@ -485,7 +493,7 @@ class TestRestartAgent:
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["status"] == "pending" and data["session"] == "ike"
-        assert data["delay_seconds"] == 60 and data["start_at"] is None
+        assert data["delay_seconds"] == 0 and data["start_at"] is None
         assert data["model"] == "opus" and data["message"] == "carry on"
         tmux_svc.stop_session.assert_not_awaited()
         launch.start_session.assert_not_awaited()
@@ -845,3 +853,37 @@ async def test_update_rejects_unknown_fields_atomically(api_app, api_client, aut
     assert response.status_code == 422
     assert any(error["type"] == "extra_forbidden" for error in response.json()["detail"])
     assert await api_app.state.db.agents.list() == before
+
+
+@pytest.mark.parametrize("endpoint", ["inspect", "state"])
+async def test_inspect_refuses_unregistered_session_before_terminal_read(
+    api_client, auth_headers, endpoint
+):
+    with (
+        patch("agent_backbone.api.routes.agents.session_exists") as exists,
+        patch("agent_backbone.api.routes.agents.get_session_intelligence") as intelligence,
+        patch("agent_backbone.api.routes.agents.capture_pane") as capture,
+    ):
+        response = await api_client.get(
+            f"/api/agents/unregistered/{endpoint}", headers=auth_headers
+        )
+    assert response.status_code == 404
+    exists.assert_not_called()
+    intelligence.assert_not_called()
+    capture.assert_not_called()
+
+
+async def test_unregistered_list_entry_contains_no_terminal_or_saved_state(config):
+    from agent_backbone.services.agents import agent_state, build_enriched_agent, write_state_file
+
+    write_state_file(config.state_dir, "unregistered", {"state": "idle", "last_message": "private"})
+    with (
+        patch("agent_backbone.services.agents.queries.agent_state", agent_state),
+        patch("agent_backbone.services.agents._inference.capture_pane") as capture,
+        patch("agent_backbone.services.agents.queries.query_environment_var") as environment,
+    ):
+        view = await build_enriched_agent("unregistered", config, {"unregistered"})
+    assert view.state == "unknown" and view.last_message is None
+    assert not view.configured and view.online
+    capture.assert_not_called()
+    environment.assert_not_called()

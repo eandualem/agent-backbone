@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import signal
@@ -175,7 +176,8 @@ class TestStartSession:
         scrubbed = ("set-environment", "-t", "=test:", "-r", "GITHUB_TOKEN")
         assert (scrubbed in [call.args for call in run.await_args_list]) is running
 
-    async def test_start_with_working_dir_and_command(self, mock_subprocess):
+    @pytest.mark.parametrize("directory", ["/tmp/wd", "/tmp/a #() #{HOME} # directory"])
+    async def test_start_with_working_dir_and_command(self, mock_subprocess, directory):
         with patch(
             "agent_backbone.services.terminal._sessions.session_exists",
             new_callable=AsyncMock,
@@ -188,13 +190,13 @@ class TestStartSession:
             mock_subprocess.return_value = proc
             result = await start_session(
                 "test",
-                working_dir="/tmp/wd",
+                working_dir=directory,
                 command=["claude"],
             )
             assert result is True
             call_args = _new_session(mock_subprocess)
             assert "-c" in call_args
-            assert "/tmp/wd" in call_args
+            assert directory.replace("#", "#{l:##}") in call_args
             assert "claude" in call_args
 
     async def test_start_already_exists(self, mock_subprocess):
@@ -316,9 +318,10 @@ class TestStartSessionEnvironment:
             # The pane's start command, which tmux keeps, names the file the
             # process reads its values from (after tmux sets TERM, SHELL, PATH).
             launched = new_session[new_session.index("env") :]
-            env_file = Path(launched[6])
-            assert launched[:5] == ["env", "-uGITHUB_TOKEN", sys.executable, "-I", "-c"]
-            assert launched[7:] == ["claude", "--model", "opus"]
+            env_file = Path(launched[7])
+            assert launched[:6] == ["env", "-uGITHUB_TOKEN", sys.executable, "-I", "-B", "-c"]
+            assert launched[10:] == ["claude", "--model", "opus"]
+            assert launched[8] == hashlib.sha256(env_file.read_bytes()).hexdigest()
             assert json.loads(env_file.read_text()) == {"API_TOKEN": "s3cret value"}
             assert env_file.stat().st_mode & 0o777 == 0o600
 
@@ -328,7 +331,16 @@ class TestStartSessionEnvironment:
         env_file = tmp_path / "env.json"
         env_file.write_text(json.dumps({"UID": "123", "PATH": str(tmp_path), "K": "a b"}))
         out = subprocess.run(
-            [sys.executable, "-I", "-c", _LOAD_AND_EXEC, str(env_file), "/usr/bin/env"],
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                _LOAD_AND_EXEC,
+                str(env_file),
+                hashlib.sha256(env_file.read_bytes()).hexdigest(),
+                str(env_file.stat().st_size),
+                "/usr/bin/env",
+            ],
             capture_output=True,
             text=True,
             check=True,
@@ -339,7 +351,7 @@ class TestStartSessionEnvironment:
     async def test_env_file_is_removed_when_it_cannot_be_written(self):
         with (
             patch("agent_backbone.services.terminal._sessions.session_exists", return_value=False),
-            patch("agent_backbone.services.terminal._sessions.json.dump", side_effect=OSError),
+            patch("agent_backbone.services.terminal._sessions.json.dumps", side_effect=OSError),
             pytest.raises(OSError),
         ):
             await start_session("test", environment={"API_TOKEN": "s3cret"})
@@ -386,7 +398,7 @@ class TestStartSessionEnvironment:
             mock_subprocess.return_value = proc
             assert not await start_session("test", environment={"API_TOKEN": "s3cret"})
             new_session = _new_session(mock_subprocess)
-            env_file = Path(new_session[new_session.index("-I") + 3])
+            env_file = Path(new_session[new_session.index("-c") + 2])
             assert not env_file.exists()
 
     async def test_env_vars_are_session_environment_from_the_start(self, mock_subprocess):
@@ -673,3 +685,38 @@ class TestSessionSecretScrub:
             new_session = _new_session(mock_subprocess)
             assert "env" not in new_session
             assert new_session[-1] == "claude"
+
+
+@pytest.mark.parametrize("tamper", ["content", "symlink"])
+def test_modified_launch_environment_is_refused_before_exec(tmp_path, tamper):
+    path = tmp_path / "environment.json"
+    original = b'{"SAFE": "value"}'
+    path.write_bytes(original)
+    if tamper == "content":
+        path.write_bytes(b'{"SAFE": "changed"}')
+    else:
+        target = tmp_path / "other.json"
+        target.write_bytes(original)
+        path.unlink()
+        path.symlink_to(target)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            _LOAD_AND_EXEC,
+            str(path),
+            hashlib.sha256(original).hexdigest(),
+            str(len(original)),
+            sys.executable,
+            "-c",
+            "print('executed')",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0 and "executed" not in result.stdout
+    if tamper == "content":
+        assert not path.exists()
+    else:
+        assert path.is_symlink() and target.read_bytes() == original

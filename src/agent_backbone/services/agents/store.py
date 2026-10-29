@@ -32,6 +32,7 @@ from agent_backbone.git import detect_repo
 from agent_backbone.hooks.backbone_state import CONTEXT_DIR
 from agent_backbone.services.agents._locks import lifecycle_lock, serialized_mutation
 from agent_backbone.services.agents._validation import validate_agent_spec, validate_repo
+from agent_backbone.services.agents.credentials import _provision_agent_profiles, profile_lock
 from agent_backbone.services.terminal import session_exists
 
 if TYPE_CHECKING:
@@ -86,8 +87,8 @@ def case_twin(names, name: str | None) -> str | None:
 
 
 def refuse_case_twin(agents, name: str | None) -> None:
-    """A new name beside a registered one of different case ("alfred" beside
-    "Alfred") would be a second agent that messages to the first never reach.
+    """A new name beside a registered one of different case ("worker" beside
+    "Worker") would be a second agent that messages to the first never reach.
     An exact registered name is not new and passes."""
     if name and agents.get(name) is None and (twin := case_twin(agents.names, name)):
         raise ValueError(
@@ -110,6 +111,14 @@ def check_agent_tags(tags) -> None:
         )
 
 
+class AgentRegistrationConflict(ValueError):
+    """New-only registration collided with an owner or changed before publication."""
+
+    def __init__(self, message: str, *, registration_id: str | None = None):
+        super().__init__(message)
+        self.registration_id = registration_id
+
+
 class AgentStore:
     """Known agents + settings snapshot, with change notification."""
 
@@ -119,10 +128,14 @@ class AgentStore:
         data_dir: Path,
         *,
         on_change: Callable[[BackboneConfig], Awaitable[None] | None] | None = None,
+        credential_endpoint: tuple[str, int] | None = None,
     ) -> None:
         self._db = db
         self._data_dir = data_dir
         self._on_change = on_change
+        # Only the running daemon owns profile endpoints and credential rotation.
+        # Local Direct readers may have a different environment.
+        self._credential_endpoint = credential_endpoint
         self._agents = AgentsConfig()
         self._settings: dict = {}
         self._config: BackboneConfig | None = None
@@ -155,16 +168,33 @@ class AgentStore:
     async def refresh(self) -> BackboneConfig:
         """Re-read settings and agents from the database and publish."""
         async with self._lock:
-            self._settings = await self._db.settings.all()
-            self._agents = agents_from_rows(await self._db.agents.list())
-            self._config = build_config(
-                self._data_dir, settings=self._settings, agents=self._agents
-            )
+            if self._credential_endpoint is not None:
+                try:
+                    async with profile_lock(self._data_dir):
+                        registrations = await self._refresh_snapshot()
+                        host, port = self._credential_endpoint
+                        active_config = replace(
+                            self._config,
+                            backbone=replace(self._config.backbone, host=host, port=port),
+                        )
+                        _provision_agent_profiles(active_config, registrations)
+                except (OSError, ValueError):
+                    log.warning("Could not provision agent credential profiles", exc_info=True)
+                    await self._refresh_snapshot()
+            else:
+                await self._refresh_snapshot()
         if self._on_change is not None:
             result = self._on_change(self._config)
             if asyncio.iscoroutine(result):
                 await result
         return self._config
+
+    async def _refresh_snapshot(self) -> list[dict]:
+        self._settings = await self._db.settings.all()
+        registrations = await self._db.agents.list()
+        self._agents = agents_from_rows(registrations)
+        self._config = build_config(self._data_dir, settings=self._settings, agents=self._agents)
+        return registrations
 
     # --- Discovery / registration ---
 
@@ -249,33 +279,57 @@ class AgentStore:
                     return await self.register(current.with_watches(*watches))
 
     @serialized_mutation
-    async def register(self, spec: AgentSpec) -> AgentSpec:
+    async def register(self, spec: AgentSpec, *, only_new: bool = False) -> AgentSpec:
         """Insert or update an agent and publish the new snapshot."""
         validate_agent_spec(spec)
-        current = self._agents.get(spec.name)
-        await _refuse_running_inbox_only(
-            spec.name, spec.inbox_only and not (current and current.inbox_only)
-        )
-        await self._db.agents.upsert(
-            spec.name,
-            dir=spec.dir,
-            runtime=spec.runtime,
-            model=spec.model,
-            repo=spec.repo,
-            tags=list(spec.tags),
-            env=dict(spec.env),
-            description=spec.description,
-            always_on=spec.always_on,
-            unattended=spec.unattended,
-            inbox_only=spec.inbox_only,
-        )
-        for repo in spec.watches:
-            await self._db.agents.add_watch(spec.name, repo)
+        async with profile_lock(self._data_dir):
+            agents = agents_from_rows(await self._db.agents.list())
+            if only_new and any(
+                other.name.casefold() == spec.name.casefold()
+                or other.path.resolve() == spec.path.resolve()
+                for other in agents
+            ):
+                raise AgentRegistrationConflict("An agent already owns this name or directory.")
+            current = agents.get(spec.name)
+            await _refuse_running_inbox_only(
+                spec.name, spec.inbox_only and not (current and current.inbox_only)
+            )
+            await self._db.agents.upsert(
+                spec.name,
+                dir=spec.dir,
+                runtime=spec.runtime,
+                model=spec.model,
+                repo=spec.repo,
+                tags=list(spec.tags),
+                env=dict(spec.env),
+                description=spec.description,
+                always_on=spec.always_on,
+                unattended=spec.unattended,
+                inbox_only=spec.inbox_only,
+            )
+            for repo in spec.watches:
+                await self._db.agents.add_watch(spec.name, repo)
+            # Capture our insert before another process can replace this name.
+            inserted = (
+                agents_from_rows(await self._db.agents.list()).get(spec.name) if only_new else None
+            )
+            if only_new and (inserted is None or not inserted.registration_id):
+                raise RuntimeError("The new agent registration could not be read.")
         await self.refresh()
+        if only_new:
+            current = self._agents.get(spec.name)
+            if current != inserted:
+                raise AgentRegistrationConflict(
+                    "The new agent changed during registration.",
+                    registration_id=inserted.registration_id,
+                )
+            return inserted
         return self._agents.get(spec.name) or spec
 
     @serialized_mutation
-    async def update(self, name: str, **changes) -> AgentSpec:
+    async def update(
+        self, name: str, *, expected_registration_id: str | None = None, **changes
+    ) -> AgentSpec:
         """Change fields on a known agent (dir, runtime, model, repo, tags, env,
         description, always_on, unattended, inbox_only)."""
         allowed = {
@@ -300,17 +354,31 @@ class AgentStore:
         current = self._agents.get(name)
         if current is None:
             raise KeyError(name)
+        if (
+            expected_registration_id is not None
+            and current.registration_id != expected_registration_id
+        ):
+            raise ValueError("agent registration changed")
         if changes.get("runtime", current.runtime) != current.runtime:
             changes.setdefault("unattended", False)
             changes.setdefault("model", None)
         validate_agent_spec(replace(current, **changes))
         await _refuse_running_inbox_only(name, changes.get("inbox_only") and not current.inbox_only)
-        if not await self._db.agents.update_fields(name, changes):
+        if not await self._db.agents.update_fields(
+            name, changes, expected_registration_id=expected_registration_id
+        ):
+            if expected_registration_id is not None:
+                raise ValueError("agent registration changed")
             raise KeyError(name)
         await self.refresh()
         current = self._agents.get(name)
         if current is None:
             raise KeyError(name)
+        if (
+            expected_registration_id is not None
+            and current.registration_id != expected_registration_id
+        ):
+            raise ValueError("agent registration changed")
         return current
 
     @serialized_mutation
@@ -329,14 +397,19 @@ class AgentStore:
 
     @serialized_mutation
     async def forget(self, name: str) -> bool:
-        spec = self._agents.get(name)
-        removed = await self._db.agents.delete(name)
+        from agent_backbone.services.terminal import session_exists
+
+        async with profile_lock(self._data_dir):
+            if await session_exists(name):
+                raise RuntimeError(f"'{name}' is running — stop it first")
+            spec = self._agents.get(name)
+            removed = await self._db.agents.delete(name)
+            if removed:
+                # Clear old context before another process can reuse the name.
+                shutil.rmtree(self.config.state_dir / CONTEXT_DIR / name, ignore_errors=True)
+                if spec is not None:
+                    self._release_skills(spec.name)
         await self.refresh()
-        if removed:
-            # A pending hook-context offer must not reach the next agent of this name.
-            shutil.rmtree(self.config.state_dir / CONTEXT_DIR / name, ignore_errors=True)
-            if spec is not None:
-                self._release_skills(spec.name)
         return removed
 
     def _release_skills(self, name: str) -> bool:
@@ -356,7 +429,14 @@ class AgentStore:
             # not be the agent's directory any more (``agent set dir=``).
             repo = json.loads(manifest.read_text(encoding="utf-8")).get("repo")
             if store is not None and isinstance(repo, str):
-                materialize(store, Path(repo), (), [], manifest)
+                result = materialize(store, Path(repo), (), [], manifest)
+                if not result.ok:
+                    log.warning(
+                        "Could not release skill links for %s: %s",
+                        name,
+                        result.conflicts + result.broken,
+                    )
+                    return False
         except (OSError, ValueError, AttributeError) as exc:
             # Kept: it is what a later cleanup of those links goes by.
             log.warning("Could not release the skill links of '%s': %s", name, exc)
@@ -374,86 +454,88 @@ class AgentStore:
         # Stable lock order prevents two cross-renames from deadlocking.
         async with lifecycle_lock(min(name, new_name)), lifecycle_lock(max(name, new_name)):
             await self.refresh()
-            spec = self._agents.get(name)
-            if spec is None:
-                raise KeyError(name)
-            validate_agent_spec(replace(spec, name=new_name))
-            if (
-                name == self.config.backbone.session_name
-                or new_name == self.config.backbone.session_name
-            ):
-                raise ValueError("the backbone session name is reserved")
-            if spec.swarm:
-                raise ValueError("swarm member names belong to the swarm lifecycle")
-            if await session_exists(name) or await session_exists(new_name):
-                raise ValueError(
-                    f"stop '{name}' before renaming; both session names must be unused"
-                )
-            source = self.config.state_dir / f"{name}.json"
-            target = self.config.state_dir / f"{new_name}.json"
-            launch_moves = [
-                (
-                    self.config.state_dir / f"{name}.launch",
-                    self.config.state_dir / f"{new_name}.launch",
-                ),
-                (
-                    self.config.state_dir / "launches" / name,
-                    self.config.state_dir / "launches" / new_name,
-                ),
-            ]
-            if target.exists() or any(destination.exists() for _, destination in launch_moves):
-                raise ValueError(f"'{new_name}' already has saved state; choose another name")
-            # Its skill manifest follows too, or the old name would keep its links
-            # alive; it moves with the rename or not at all.
-            from agent_backbone.skills import manifest_path
+            async with profile_lock(self._data_dir):
+                agents = agents_from_rows(await self._db.agents.list())
+                spec = agents.get(name)
+                if spec is None:
+                    raise KeyError(name)
+                validate_agent_spec(replace(spec, name=new_name))
+                if (
+                    name == self.config.backbone.session_name
+                    or new_name == self.config.backbone.session_name
+                ):
+                    raise ValueError("the backbone session name is reserved")
+                if spec.swarm:
+                    raise ValueError("swarm member names belong to the swarm lifecycle")
+                if await session_exists(name) or await session_exists(new_name):
+                    raise ValueError(
+                        f"stop '{name}' before renaming; both session names must be unused"
+                    )
+                source = self.config.state_dir / f"{name}.json"
+                target = self.config.state_dir / f"{new_name}.json"
+                launch_moves = [
+                    (
+                        self.config.state_dir / f"{name}.launch",
+                        self.config.state_dir / f"{new_name}.launch",
+                    ),
+                    (
+                        self.config.state_dir / "launches" / name,
+                        self.config.state_dir / "launches" / new_name,
+                    ),
+                ]
+                if target.exists() or any(destination.exists() for _, destination in launch_moves):
+                    raise ValueError(f"'{new_name}' already has saved state; choose another name")
+                # Its skill manifest follows too, or the old name would keep its links
+                # alive; it moves with the rename or not at all.
+                from agent_backbone.skills import manifest_path
 
-            old_manifest = manifest_path(self.config.data_dir, name)
-            new_manifest = manifest_path(self.config.data_dir, new_name)
-            others = [n for n in self._agents.names if n != name]
-            if new_name in others or case_twin(others, new_name):
-                raise ValueError(f"'{new_name}' is already an agent")
-            # A manifest under a name no agent holds is a forgotten agent's,
-            # kept because its links could not be released then: retry now. On a
-            # case-insensitive filesystem a case-only rename names the agent's own.
-            leftover = new_manifest.exists() and not (
-                old_manifest.exists() and old_manifest.samefile(new_manifest)
-            )
-            if leftover and not self._release_skills(new_name):
-                raise ValueError(
-                    f"'{new_name}' still has a forgotten agent's skill links that could not be "
-                    "released; choose another name"
+                old_manifest = manifest_path(self.config.data_dir, name)
+                new_manifest = manifest_path(self.config.data_dir, new_name)
+                others = [n for n in agents.names if n != name]
+                if new_name in others or case_twin(others, new_name):
+                    raise ValueError(f"'{new_name}' is already an agent")
+                # A manifest under a name no agent holds is a forgotten agent's,
+                # kept because its links could not be released then: retry now. On a
+                # case-insensitive filesystem a case-only rename names the agent's own.
+                leftover = new_manifest.exists() and not (
+                    old_manifest.exists() and old_manifest.samefile(new_manifest)
                 )
-            copied = moved = False
-            moved_launch_state: list[tuple[Path, Path]] = []
-            try:
-                if source.exists():
-                    atomic_write_text(target, source.read_text())
-                    copied = True
-                if old_manifest.exists():
-                    old_manifest.rename(new_manifest)
-                    moved = True
-                for original, destination in launch_moves:
-                    if original.exists():
-                        original.rename(destination)
-                        moved_launch_state.append((original, destination))
-                await self._db.agents.rename(name, new_name)
-            except BaseException:
-                for original, destination in reversed(moved_launch_state):
-                    destination.rename(original)
-                if copied:
-                    target.unlink(missing_ok=True)
-                if moved:
-                    new_manifest.rename(old_manifest)
-                raise
-            source.unlink(missing_ok=True)
-            (self.config.state_dir / f"{name}.starting").unlink(missing_ok=True)
-            # Pending hook-context offers follow the queue rows just rekeyed.
-            offers = self.config.state_dir / CONTEXT_DIR / name
-            if offers.exists():
+                if leftover and not self._release_skills(new_name):
+                    raise ValueError(
+                        f"'{new_name}' still has a forgotten agent's skill links that could not be "
+                        "released; choose another name"
+                    )
+                copied = moved = False
+                moved_launch_state: list[tuple[Path, Path]] = []
                 try:
-                    offers.rename(self.config.state_dir / CONTEXT_DIR / new_name)
-                except OSError as exc:
-                    log.warning("Could not move %s's pending context offers: %s", name, exc)
+                    if source.exists():
+                        atomic_write_text(target, source.read_text())
+                        copied = True
+                    if old_manifest.exists():
+                        old_manifest.rename(new_manifest)
+                        moved = True
+                    for original, destination in launch_moves:
+                        if original.exists():
+                            original.rename(destination)
+                            moved_launch_state.append((original, destination))
+                    await self._db.agents.rename(name, new_name)
+                except BaseException:
+                    for original, destination in reversed(moved_launch_state):
+                        destination.rename(original)
+                    if copied:
+                        target.unlink(missing_ok=True)
+                    if moved:
+                        new_manifest.rename(old_manifest)
+                    raise
+                source.unlink(missing_ok=True)
+                (self.config.state_dir / f"{name}.starting").unlink(missing_ok=True)
+                # Pending hook-context offers follow the queue rows just rekeyed.
+                offers = self.config.state_dir / CONTEXT_DIR / name
+                if offers.exists():
+                    try:
+                        offers.rename(self.config.state_dir / CONTEXT_DIR / new_name)
+                    except OSError as exc:
+                        log.warning("Could not move %s's pending context offers: %s", name, exc)
             await self.refresh()
             return self._agents.get(new_name)
 

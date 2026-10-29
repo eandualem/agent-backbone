@@ -51,7 +51,9 @@ async def test_latest_aggregation_happens_before_limit_and_includes_missing(db):
     page = await db.reports.query(ReportQuery(limit=2))
     assert [entry["record"]["id"] for entry in page["items"]] == [latest["id"], quiet["id"]]
     page = await db.reports.query(ReportQuery(limit=2, cursor=page["next_cursor"]))
-    assert page["items"] == [{"agent_name": "missing", "author_id": None, "record": None}]
+    (missing,) = page["items"]
+    assert missing["agent_name"] == "missing" and missing["record"] is None
+    assert await db.agents.registration_matches("missing", missing["author_id"])
     assert not page["has_more"]
 
 
@@ -122,7 +124,7 @@ async def test_rename_and_forget_never_reattribute_old_reports(db):
     assert [entry["record"]["id"] for entry in archive["items"]] == [old["id"]]
 
 
-async def test_retention_preserves_latest_but_marks_it_old_and_inactive(db):
+async def test_old_reports_are_retained_and_marked_stale(db):
     await author(db)
     older = await publish(db)
     last = await publish(
@@ -133,8 +135,7 @@ async def test_retention_preserves_latest_but_marks_it_old_and_inactive(db):
     )
     async with db.engine.begin() as conn:
         await conn.execute(text("UPDATE reports SET created_at = '2020-01-01T00:00:00.000000Z'"))
-    assert await db.reports.prune(30) == 1
-    assert await db.reports.get(older["id"]) is None
+    assert await db.reports.get(older["id"])
     retained = await db.reports.get(last["id"])
     assert retained["stale"] and retained["report"]["status"] == "inactive"
 
@@ -208,3 +209,70 @@ async def test_cursor_expires_after_restart_but_reports_remain(tmp_path):
             await db.reports.query(ReportQuery(history=True, cursor=page["next_cursor"]))
         fresh = await db.reports.query(ReportQuery(history=True))
         assert len(fresh["items"]) == 2
+
+
+async def test_response_chain_roots_have_bounded_round_trips(db):
+    from sqlalchemy import event, insert
+
+    from agent_backbone.services.database._reports_repo import chain_roots
+    from agent_backbone.services.database.models import ReportORM
+
+    rows = [
+        dict(
+            id=i,
+            kind="response",
+            supersedes_id=i - 1 if i > 1 else None,
+            author_id="writer",
+            author_name="writer",
+            request_id=str(i),
+            created_at="2026-10-28T00:00:00.000000Z",
+            source="api",
+            content="{}",
+            priority=0,
+            swarm_member=0,
+        )
+        for i in range(1, 102)
+    ]
+    async with db.engine.begin() as conn:
+        await conn.execute(insert(ReportORM.__table__), rows)
+        # A pruned predecessor leaves the earliest retained correction as root.
+        await conn.execute(text("DELETE FROM reports WHERE id=10"))
+        requests = []
+
+        def observe(_conn, _cursor, statement, _parameters, _context, _many):
+            requests.append(statement)
+
+        event.listen(db.engine.sync_engine, "before_cursor_execute", observe)
+        try:
+            assert await chain_roots(conn, [1, 9, 50, 101, 999]) == {
+                1: 1,
+                9: 1,
+                50: 11,
+                101: 11,
+                999: 999,
+            }
+        finally:
+            event.remove(db.engine.sync_engine, "before_cursor_execute", observe)
+        assert len(requests) <= 2  # independent of correction depth and number of roots
+        # A full page shares its ancestry instead of expanding it once per item.
+        lineage_sizes = []
+
+        class ObservedConnection:
+            async def execute(self, statement):
+                from sqlalchemy import func, select
+
+                lineage_sizes.append(
+                    await conn.scalar(
+                        select(func.count()).select_from(statement.get_final_froms()[0])
+                    )
+                )
+                return await conn.execute(statement)
+
+        ids = list(range(1, 102)) + [999]
+        assert await chain_roots(ObservedConnection(), ids) == {
+            i: (i if i in (10, 999) else 1 if i < 10 else 11) for i in ids
+        }
+        assert lineage_sizes == [100]  # every retained ancestor exactly once
+        # Malformed legacy cycles terminate; missing predecessors still stop a chain.
+        await conn.execute(text("UPDATE reports SET supersedes_id=9 WHERE id=1"))
+        assert await chain_roots(conn, [1, 9, 101]) == {1: 1, 9: 1, 101: 11}

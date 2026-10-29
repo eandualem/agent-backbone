@@ -15,16 +15,16 @@ const STATE_BUSY = "busy";
 const STATE_WAITING = "waiting_for_human";
 const REASON_PERMISSION = "permission";
 const REASON_PLAN = "plan";
-async function shellActions(command, cwd, phase) {
+async function shellActions(command, cwd, phase, response) {
   // Reuse the shipped stdlib parser; never interpret quoted examples as commands.
   try {
     const helper = fileURLToPath(new URL("backbone_state.py", import.meta.url));
     const stdout = await new Promise((resolve, reject) => {
-      const child = execFile("python3", [helper, "--shell-actions"], {
+      const child = execFile("python3", ["-B", helper, "--shell-actions"], {
         encoding: "utf8", timeout: 15000,
       }, (error, output) => error ? reject(error) : resolve(output));
       child.stdin.on("error", reject);
-      child.stdin.end(JSON.stringify({ command, cwd, phase }));
+      child.stdin.end(JSON.stringify({ command, cwd, phase, response }));
     });
     return JSON.parse(stdout);
   } catch {
@@ -146,14 +146,29 @@ function readCurrent(t) {
   }
 }
 
+function privateDirectory(dir) {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(dir, 0o700);
+}
+
+function privateWrite(file, text, append = false) {
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW |
+    (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC);
+  const fd = fs.openSync(file, flags, 0o600);
+  try {
+    fs.fchmodSync(fd, 0o600);
+    fs.writeFileSync(fd, text);
+  } finally { fs.closeSync(fd); }
+}
+
 function writeState(t, record) {
   if (launchID()) record.launch_id = launchID();
-  fs.mkdirSync(t.dir, { recursive: true });
+  privateDirectory(t.dir);
   const files = [launchStatePath(t), path.join(t.dir, `${t.agent}.json`)];
   for (const file of files.filter(Boolean)) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    privateDirectory(path.dirname(file));
     const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(record));
+    privateWrite(tmp, JSON.stringify(record));
     fs.renameSync(tmp, file);
   }
   if (record.session_id) {
@@ -163,10 +178,10 @@ function writeState(t, record) {
         JSON.stringify([t.agent, record.runtime, record.session_id, launch]),
       ).digest("hex");
       const history = path.join(t.dir, "usage-sessions");
-      fs.mkdirSync(history, { recursive: true });
+      privateDirectory(history);
       const saved = path.join(history, `${identity}.json`);
       const temporary = `${saved}.${process.pid}.tmp`;
-      fs.writeFileSync(temporary, JSON.stringify({agent: t.agent, runtime: record.runtime,
+      privateWrite(temporary, JSON.stringify({agent: t.agent, runtime: record.runtime,
         session_id: record.session_id, observed_at: record.ts, launch_id: launch}));
       fs.renameSync(temporary, saved);
     } catch { /* Usage history must not interrupt the agent. */ }
@@ -183,17 +198,27 @@ function savePlan(t, question, root) {
   } catch { /* shown untitled; the question still waits for an answer */ }
   const title = text.split("\n").map((line) => line.trim().replace(/^#+/, "").trim()).find(Boolean);
   const file = path.join(t.dir, "plans", `${t.agent}.md`);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, text);
+  privateDirectory(path.dirname(file));
+  privateWrite(file, text);
   return { plan_file: file, plan_title: (title ?? "Untitled plan").slice(0, 120) };
 }
 
 function appendAction(t, action) {
-  fs.mkdirSync(t.dir, { recursive: true });
-  fs.appendFileSync(
-    path.join(t.dir, "actions.jsonl"),
-    JSON.stringify({ ...action, session: t.agent }) + "\n",
-  );
+  privateDirectory(t.dir);
+  const record = JSON.stringify({
+    ...action, session: t.agent,
+    registration_id: process.env.BACKBONE_REGISTRATION_ID || "",
+  }) + "\n";
+  if (action.action === "comment" && action.phase === "succeeded" &&
+      Number.isSafeInteger(action.comment_id) && action.comment_id > 0) {
+    const receipts = path.join(t.dir, "comment-receipts");
+    privateDirectory(receipts);
+    const target = path.join(receipts, createHash("sha256").update(record).digest("hex") + ".json");
+    const temporary = target + `.${process.pid}.tmp`;
+    privateWrite(temporary, record);
+    fs.renameSync(temporary, target);
+  }
+  privateWrite(path.join(t.dir, "actions.jsonl"), record, true);
 }
 
 // sessionID -> the model its last completed reply came from, in this process;
@@ -556,12 +581,14 @@ export const AgentBackbone = async ({ client, directory, worktree } = {}) => {
     },
     "tool.execute.after": async (input, output) => {
       if (isChild(input?.sessionID)) return;
-      await handOver(input?.sessionID, output);
-      if (input?.tool !== "bash") return;
-      if (output?.metadata?.exit !== 0 || output?.metadata?.timeout) return;
-      const command = input?.args?.command;
-      if (typeof command !== "string") return;
-      for (const action of await shellActions(command, directory ?? process.cwd(), "succeeded")) appendAction(t, action);
+      try {
+        if (input?.tool === "bash" && output?.metadata?.exit === 0 && !output?.metadata?.timeout &&
+            typeof input?.args?.command === "string") {
+          for (const action of await shellActions(input.args.command, directory ?? process.cwd(), "succeeded", output)) appendAction(t, action);
+        }
+      } finally {
+        await handOver(input?.sessionID, output);
+      }
     },
   };
 };

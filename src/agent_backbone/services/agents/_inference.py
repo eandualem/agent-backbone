@@ -458,15 +458,26 @@ async def _get_agent_state(
                 dialog.diagnostics = push.diagnostics
                 dialog.evidence.append("the choice dialog on screen beats the hook's permission")
                 return _with_diagnostics(dialog, pane_content, runtime_hint)
-            if (
-                pane_content
-                and push_age >= INTERRUPT_SETTLE_SECONDS
-                and not runtime.detect_active_dialog(pane_content)
-            ):
+            if pane_content and not runtime.detect_active_dialog(pane_content):
                 pull = infer_state_from_pane(pane_content, runtime.id)
                 if pull.state in (AgentState.IDLE, AgentState.BUSY, AgentState.BLOCKED):
                     latest = read_state_file(state_dir, session, current_launch=True)
                     if latest is not None and latest.timestamp != push.timestamp:
+                        if (
+                            latest.state == AgentState.WAITING_FOR_HUMAN
+                            and latest.reason == REASON_PERMISSION
+                        ):
+                            return replace(
+                                latest,
+                                state=AgentState.BUSY,
+                                reason=None,
+                                source="pull",
+                                prompt_ref=None,
+                                evidence=[
+                                    "permission request changed during terminal capture; "
+                                    "waiting for current dialog evidence"
+                                ],
+                            )
                         return await _get_agent_state(
                             state_dir,
                             session,
@@ -587,7 +598,11 @@ async def agent_state(
     An inbox-only agent has no session: nothing a tmux session with its
     name shows (a dialog, a plan) is its state."""
     spec = config.agents.get(name)
-    if spec is not None and spec.inbox_only:
+    if spec is None:
+        return StateSnapshot(
+            state=AgentState.UNKNOWN, evidence=["unregistered session: state is not inspected"]
+        )
+    if spec.inbox_only:
         return StateSnapshot(
             state=AgentState.UNKNOWN, evidence=["inbox-only agent: it has no session"]
         )

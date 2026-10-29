@@ -1,6 +1,6 @@
 [project]
 name = "agent-backbone"
-version = "0.3.0"
+version = "0.4.0"
 description = "Bring agents across AI CLIs and projects into one personal team, with communication, coordination and continuity."
 dynamic = ["readme"]
 requires-python = ">=3.11"
@@ -27,11 +27,13 @@ dependencies = [
     "python-telegram-bot>=21.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
-    "python-socketio>=5.11",
+    "python-socketio>=5.16.4",
+    "python-engineio>=4.13.5",
     "sqlalchemy[asyncio]>=2.0",
     "alembic>=1.13",
     "rich>=14.1",
     "cryptography>=44.0",
+    "ironcalc==0.9.1",
 ]
 
 [project.optional-dependencies]

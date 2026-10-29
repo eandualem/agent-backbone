@@ -379,3 +379,22 @@ class TestIntegrationReply:
             "/api/integrations/reply", json={"session": "stray", "text": "hi"}, headers=auth_headers
         )
         assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("explicit_off", [True, False])
+async def test_effective_intake_off_refuses_before_dispatch(
+    api_client, api_app, webhook_payload, mock_dispatch_svc, explicit_off
+):
+    config = api_app.state.config
+    api_app.state.config = (
+        replace(config, github=replace(config.github, intake="off"))
+        if explicit_off
+        else replace(config, github_token="", github_app_id="", github_app_private_key_path="")
+    )
+    payload = json.dumps(webhook_payload).encode()
+    response = await api_client.post(
+        WEBHOOK_PATH, content=payload, headers=_webhook_headers(payload)
+    )
+    assert response.status_code == 403
+    assert response.text == "GitHub intake is disabled"
+    mock_dispatch_svc.issue_dispatcher.assert_not_awaited()

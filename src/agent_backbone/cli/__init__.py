@@ -9,6 +9,7 @@ backbone doctor                      check tmux, runtimes, credentials
 backbone diagnostics                 recorded problems, grouped without message content
 backbone respond --file FILE         save a question, answer and action for later retrieval
 backbone responses [show ID]         read saved answers independently of progress
+backbone conversations [show|reply]  read and answer the conversation on an artifact
 backbone report --file FILE          publish a short structured progress report
 backbone updates [--agent NAME]      read reports, with --history or show ID for depth
 backbone runtimes                    supported CLIs, installed or not, example model ids
@@ -36,6 +37,7 @@ import sys
 from pathlib import Path
 
 from agent_backbone import __version__
+from agent_backbone.cli._common import is_agent_client
 from agent_backbone.cli.agents import (
     cmd_agent,
     cmd_chrome,
@@ -45,21 +47,26 @@ from agent_backbone.cli.agents import (
     cmd_tell,
 )
 from agent_backbone.cli.completion import cmd_completion, complete
+from agent_backbone.cli.conversations import add_conversation_parsers
+from agent_backbone.cli.current_plans import add_current_plan_parsers
 from agent_backbone.cli.diagnostics import add_diagnostics_parser
+from agent_backbone.cli.documents import add_document_parsers
 from agent_backbone.cli.fleet import add_fleet_parser
 from agent_backbone.cli.instructions import add_instruction_commands
+from agent_backbone.cli.onboarding import add_setup_parser
 from agent_backbone.cli.reports import add_report_parsers
 from agent_backbone.cli.responses import add_response_parsers
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_up
 from agent_backbone.cli.service import cmd_service
 from agent_backbone.cli.setup import cmd_doctor, cmd_init, cmd_runtimes, cmd_secrets
+from agent_backbone.cli.sheets import add_sheet_parsers
 from agent_backbone.cli.signing import cmd_message, cmd_signing
 from agent_backbone.cli.skills import add_skill_commands, expand_shorthand
 from agent_backbone.cli.status import add_status_options, cmd_status
 from agent_backbone.cli.swarms import cmd_docs, cmd_help, cmd_swarm
 from agent_backbone.cli.upgrade import cmd_upgrade
 from agent_backbone.cli.usage import cmd_usage
-from agent_backbone.config import RUNTIMES
+from agent_backbone.config import RUNTIMES, bootstrap_config
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -78,6 +85,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"backbone {__version__}")
     sub = parser.add_subparsers(dest="command", required=True, title="commands", metavar="COMMAND")
 
+    add_setup_parser(sub)
+
     p = sub.add_parser("init", help="create the data directory, .env and database")
     p.add_argument(
         "--data-dir",
@@ -91,6 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("runtimes", help="supported runtimes, whether installed, example model ids")
+    p.add_argument("--json", action="store_true", help="versioned runtime discovery for setup")
     p.set_defaults(func=cmd_runtimes)
 
     p = sub.add_parser("completion", help="enable Tab completion (see docs cli)")
@@ -160,6 +170,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_skill_commands(sub)
     add_report_parsers(sub)
     add_response_parsers(sub)
+    add_document_parsers(sub)
+    add_conversation_parsers(sub)
+    add_sheet_parsers(sub)
+    add_current_plan_parsers(sub)
 
     p = sub.add_parser("config", help="settings (stored in the database)")
     csub = p.add_subparsers(dest="config_command", required=True)
@@ -209,7 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="continue the conversation the backbone last saw for this agent "
-        "(the runtime's latest when none is saved); same as `backbone agent resume`",
+        "(refused when no exact ID is saved); same as `backbone agent resume`",
     )
     conversation.add_argument(
         "--fresh",
@@ -293,7 +307,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="delay",
         default=None,
         metavar="DURATION",
-        help="wait between the stop and the start: 90s, 20m, 3h20m (default: 1m)",
+        help="wait after the stop: 90s, 20m, 3h20m (default: immediate)",
     )
     prs.add_argument(
         "--at",
@@ -587,6 +601,35 @@ def main(argv: list[str] | None = None) -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
+    # Adapter discovery is usable before an installation or account exists.
+    # It reads no installation secrets and offers no administrative operation.
+    if args.command in {"runtimes", "setup"}:
+        sys.exit(args.func(args))
+    try:
+        client_key = bootstrap_config().api_key
+    except ValueError as exc:
+        parser.exit(1, f"{exc}\n")
+    if is_agent_client(client_key):
+        sub = vars(args)
+        administrative = (
+            args.command in {"init", "up", "down", "hooks", "doctor"}
+            or (args.command == "service" and sub.get("service_command") != "status")
+            or (args.command == "secrets" and sub.get("secrets_command") in {"set", "unset"})
+            or (args.command == "upgrade" and not sub.get("check"))
+            or (args.command == "skills" and sub.get("skills_command") in {"add", "tag"})
+            or (
+                args.command in {"templates", "instructions"}
+                and (
+                    sub.get("instructions_command") in {"init", "edit"}
+                    or (
+                        sub.get("instructions_command") == "use"
+                        and (sub.get("policies") or sub.get("clear"))
+                    )
+                )
+            )
+        )
+        if administrative:
+            parser.exit(1, "This operation requires an operator credential.\n")
     sys.exit(args.func(args))
 
 

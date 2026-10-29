@@ -13,6 +13,7 @@ class Shell(Runtime):
     id = "shell"
     display_name = "Plain shell"
     binary = None
+    authentication = "not_applicable"
     brief_mode = "none"
 
     prompt_prefixes = ("❯", "›", "$ ", "% ", "> ", "# ")

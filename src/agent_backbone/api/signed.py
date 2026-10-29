@@ -25,7 +25,9 @@ from starlette.responses import JSONResponse
 from starlette.routing import Match
 
 from agent_backbone import signing
-from agent_backbone.api.auth import api_key_valid
+from agent_backbone.api.auth import credential_role
+from agent_backbone.models import DOCUMENT_WIRE_BYTES
+from agent_backbone.sheets import SHEET_WIRE_BYTES
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +61,14 @@ SENDER_ROUTES: tuple[SenderRoute, ...] = (
     SenderRoute("POST", "/api/integrations/reply", "body", "session"),
     SenderRoute("POST", "/api/reports", "body", "agent"),
     SenderRoute("POST", "/api/responses", "body", "agent"),
+    SenderRoute("POST", "/api/documents", "body", "author"),
+    SenderRoute("POST", "/api/conversations/{kind}/{artifact_id}/messages", "body", "author"),
+    SenderRoute("POST", "/api/sheets", "body", "author"),
+    SenderRoute("POST", "/api/sheets/import", "body", "author"),
+    SenderRoute("POST", "/api/sheets/{sheet_id}/revisions", "body", "author"),
+    SenderRoute("POST", "/api/sheets/{sheet_id}/feedback", "body", "author"),
+    SenderRoute("POST", "/api/current-plans", "body", "author"),
+    SenderRoute("POST", "/api/current-plans/{author_id}/feedback", "body", "author"),
     SenderRoute("POST", "/api/swarms", "body", "initiator"),
     SenderRoute("POST", "/api/agents/{session}/state", "path", "session"),
     SenderRoute("POST", "/api/skills", "body", "actor"),
@@ -159,7 +169,13 @@ class SignedSenderMiddleware:
         if found is None or config is None or db is None or not _authorized(config, headers):
             return await self.app(scope, receive, send)
 
-        body, complete = await _read(receive)
+        route, path_params = found
+        limit = DOCUMENT_WIRE_BYTES if route.template == "/api/documents" else MAX_BODY_BYTES
+        if route.template in {"/api/sheets", "/api/sheets/import"}:
+            limit = SHEET_WIRE_BYTES
+        body, complete = await _read(receive, limit)
+        if complete is None:
+            return
         replayed = False
 
         async def replay():
@@ -171,9 +187,8 @@ class SignedSenderMiddleware:
 
         if not complete:
             return await Refusal(
-                413, "malformed_request", f"body exceeds {MAX_BODY_BYTES} bytes"
+                413, "malformed_request", f"body exceeds {limit} bytes"
             ).response()(scope, replay, send)
-        route, path_params = found
         try:
             signed = await check(db, scope, headers, body, route, path_params)
         except Refusal as refusal:
@@ -187,18 +202,22 @@ def _authorized(config, headers: Headers) -> bool:
     if not config.api_key:
         return config.security.allow_unauthenticated
     auth = headers.get("authorization", "")
-    return api_key_valid(auth[7:] if auth.startswith("Bearer ") else None, config.api_key)
+    return (
+        credential_role(auth[7:] if auth.startswith("Bearer ") else None, config.api_key)
+        is not None
+    )
 
 
-async def _read(receive) -> tuple[bytes, bool]:
+async def _read(receive, limit: int = MAX_BODY_BYTES) -> tuple[bytes, bool | None]:
     data = bytearray()
     while True:
         message = await receive()
         if message["type"] != "http.request":
-            return bytes(data), True
-        data.extend(message.get("body", b""))
-        if len(data) > MAX_BODY_BYTES:
-            return bytes(data), False
+            return b"", None
+        chunk = message.get("body", b"")
+        if len(data) + len(chunk) > limit:
+            return b"", False
+        data.extend(chunk)
         if not message.get("more_body", False):
             return bytes(data), True
 

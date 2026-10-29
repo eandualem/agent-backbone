@@ -616,6 +616,97 @@ class TestDeliverPendingIssues:
         assert result["ike"] == "deferred"
         d.assert_not_called()
 
+    async def test_receipts_read_once_per_pass_and_refreshed_next_pass(
+        self, config, db, monkeypatch
+    ):
+        from pathlib import Path
+
+        from agent_backbone.hooks.backbone_state import append_action
+
+        name = next(iter(_IDLE))
+        identity = next(
+            row["report_identity"] for row in await db.agents.list() if row["name"] == name
+        )
+        monkeypatch.setenv("BACKBONE_REGISTRATION_ID", identity)
+        reads = []
+        original_open = Path.open
+
+        def record_open(path, *args, **kwargs):
+            if path == config.action_log_path and not args:
+                reads.append(path)
+            return original_open(path, *args, **kwargs)
+
+        for number in (7, 8):
+            append_action(
+                config.state_dir,
+                name,
+                {
+                    "action": "comment",
+                    "phase": "succeeded",
+                    "repo": _REPO,
+                    "issue": number,
+                    "comment_id": number * 100,
+                    "ts": time.time(),
+                },
+            )
+        gh = AsyncMock()
+        gh.list_issues.return_value = [_issue(7), _issue(8)]
+        gh.list_comments.return_value = []
+        with patch.object(Path, "open", autospec=True, side_effect=record_open):
+            with patch(f"{_PEND}.safe_deliver", new_callable=AsyncMock) as deliver:
+                await deliver_pending_issues(config, _IDLE, db, gh)
+                deliver.assert_not_awaited()
+            assert len(reads) == 1
+            assert await db.acks.exists(7, name, repo=_REPO)
+            assert await db.acks.exists(8, name, repo=_REPO)
+            append_action(
+                config.state_dir,
+                name,
+                {
+                    "action": "comment",
+                    "phase": "succeeded",
+                    "repo": _REPO,
+                    "issue": 9,
+                    "comment_id": 900,
+                    "ts": time.time(),
+                },
+            )
+            gh.list_issues.return_value = [_issue(9)]
+            with patch(f"{_PEND}.safe_deliver", new_callable=AsyncMock) as deliver:
+                await deliver_pending_issues(config, _IDLE, db, gh)
+                deliver.assert_not_awaited()
+            assert len(reads) == 2
+            assert await db.acks.exists(9, name, repo=_REPO)
+
+    async def test_receipt_written_during_pass_prevents_later_candidate_delivery(
+        self, config, db, monkeypatch
+    ):
+        from agent_backbone.hooks.backbone_state import append_action
+
+        name = next(iter(_IDLE))
+        identity = next(
+            row["report_identity"] for row in await db.agents.list() if row["name"] == name
+        )
+        monkeypatch.setenv("BACKBONE_REGISTRATION_ID", identity)
+        action = {"action": "comment", "phase": "succeeded", "repo": _REPO, "ts": time.time()}
+        append_action(config.state_dir, name, {**action, "issue": 7, "comment_id": 700})
+        record = db.acks.record
+
+        async def record_then_publish(issue_number, *args, **kwargs):
+            result = await record(issue_number, *args, **kwargs)
+            if issue_number == 7:
+                append_action(config.state_dir, name, {**action, "issue": 8, "comment_id": 800})
+            return result
+
+        gh = AsyncMock()
+        gh.list_issues.return_value = [_issue(7), _issue(8)]
+        gh.list_comments.return_value = []
+        with patch.object(db.acks, "record", side_effect=record_then_publish):
+            with patch(f"{_PEND}.safe_deliver", new_callable=AsyncMock) as deliver:
+                await deliver_pending_issues(config, _IDLE, db, gh)
+                deliver.assert_not_awaited()
+        assert await db.acks.exists(8, name, repo=_REPO)
+
     async def test_skips_acknowledged_issue(self, config, db):
         await db.acks.record(7, "ike", repo=_REPO)
         gh = AsyncMock()
@@ -632,7 +723,7 @@ class TestDeliverPendingIssues:
         assert result["ike"] == "delivered_#8"
         assert d.await_args.kwargs["issue_number"] == 8
 
-    async def test_backfills_ack_from_github_comments(self, config, db):
+    async def test_forged_github_prefix_does_not_acknowledge(self, config, db):
         from agent_backbone.models import CommentData
 
         gh = AsyncMock()
@@ -641,14 +732,18 @@ class TestDeliverPendingIssues:
             return_value=[CommentData(body="[from:ike] on it", user_login="bot")]
         )
         with (
-            patch(f"{_PEND}.safe_deliver", new_callable=AsyncMock) as d,
+            patch(
+                f"{_PEND}.safe_deliver",
+                new_callable=AsyncMock,
+                return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
+            ) as d,
         ):
             result = await deliver_pending_issues(config, _IDLE, db, gh)
-        assert result["ike"] == "no_deliverable"
-        d.assert_not_called()
-        assert await db.acks.exists(7, "ike", repo=_REPO)
+        assert result["ike"] == "delivered_#7"
+        d.assert_awaited_once()
+        assert not await db.acks.exists(7, "ike", repo=_REPO)
 
-    async def test_backfills_ack_for_an_agent_with_capitals_in_its_name(self, config, db):
+    async def test_forged_capitalised_prefix_does_not_acknowledge(self, config, db):
         from agent_backbone.config import AgentSpec
         from agent_backbone.models import CommentData
 
@@ -659,13 +754,17 @@ class TestDeliverPendingIssues:
         gh.list_comments = AsyncMock(
             return_value=[CommentData(body="[from:Builder] on it", user_login="bot")]
         )
-        with patch(f"{_PEND}.safe_deliver", new_callable=AsyncMock) as d:
+        with patch(
+            f"{_PEND}.safe_deliver",
+            new_callable=AsyncMock,
+            return_value=DeliveryReport(DeliveryOutcome.DELIVERED),
+        ) as d:
             result = await deliver_pending_issues(
                 config, {"Builder": _snap(AgentState.IDLE)}, db, gh
             )
-        assert result["Builder"] == "no_deliverable"
-        d.assert_not_called()
-        assert await db.acks.exists(7, "Builder", repo=_REPO)
+        assert result["Builder"] == "delivered_#7"
+        d.assert_awaited_once()
+        assert not await db.acks.exists(7, "Builder", repo=_REPO)
 
     async def test_skips_recently_delivered(self, config, db):
         await db.deliveries.record(
@@ -848,3 +947,69 @@ async def test_queue_drain_does_not_wait_for_usage_collection(config, db):
     ):
         await monitor_agents(config, db, None)
     assert order == ["drain", "usage"]
+
+
+async def test_old_publication_receipt_cannot_restore_a_cleared_acknowledgment(config, db):
+    import json
+
+    receipt = {
+        "ts": time.time() - 60,
+        "session": "ike",
+        "action": "comment",
+        "phase": "succeeded",
+        "issue": 7,
+        "repo": _REPO,
+        "comment_id": 123,
+    }
+    receipt["registration_id"] = next(
+        row["report_identity"]
+        for row in await db.agents.list()
+        if row["name"] == receipt["session"]
+    )
+    config.action_log_path.parent.mkdir(parents=True, exist_ok=True)
+    config.action_log_path.write_text(json.dumps(receipt) + "\n" + "{}\n" * 250)
+    await db.acks.record(7, "ike", repo=_REPO)
+    await db.acks.clear(7, "ike", repo=_REPO)
+    gh = AsyncMock()
+    gh.list_issues.return_value = [_issue(7), _issue(8)]
+    with patch(f"{_PEND}.safe_deliver", return_value=DeliveryReport(DeliveryOutcome.DELIVERED)):
+        assert (await deliver_pending_issues(config, _IDLE, db, gh))["ike"] == "delivered_#7"
+        assert not await db.acks.exists(7, "ike", repo=_REPO)
+        receipt.update(ts=time.time(), comment_id=124)
+        with config.action_log_path.open("a") as log:
+            log.write(json.dumps(receipt) + "\n")
+        assert (await deliver_pending_issues(config, _IDLE, db, gh))["ike"] == "delivered_#8"
+        assert await db.acks.exists(7, "ike", repo=_REPO)
+
+
+async def test_delayed_receipt_can_reconcile_its_own_reset_comment(config, db):
+    import json
+
+    receipt = {
+        "ts": time.time() - 60,
+        "session": "ike",
+        "action": "comment",
+        "phase": "succeeded",
+        "issue": 7,
+        "repo": _REPO,
+        "comment_id": 123,
+    }
+    receipt["registration_id"] = next(
+        row["report_identity"]
+        for row in await db.agents.list()
+        if row["name"] == receipt["session"]
+    )
+    config.action_log_path.parent.mkdir(parents=True, exist_ok=True)
+    config.action_log_path.write_text("")
+    await db.acks.clear(7, "ike", repo=_REPO, comment_id=123)
+    # The webhook arrived before the completion hook appended its receipt.
+    config.action_log_path.write_text(json.dumps(receipt) + "\n")
+    gh = AsyncMock()
+    gh.list_issues.return_value = [_issue(7), _issue(8)]
+    with patch(f"{_PEND}.safe_deliver", return_value=DeliveryReport(DeliveryOutcome.DELIVERED)):
+        assert (await deliver_pending_issues(config, _IDLE, db, gh))["ike"] == "delivered_#8"
+        await db.acks.clear(7, "ike", repo=_REPO, comment_id=124)
+        # An older webhook cannot replace the newer boundary, even if processed last.
+        await db.acks.clear(7, "ike", repo=_REPO, comment_id=123)
+        assert (await deliver_pending_issues(config, _IDLE, db, gh))["ike"] == "delivered_#7"
+        assert not await db.acks.exists(7, "ike", repo=_REPO)

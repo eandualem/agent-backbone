@@ -16,7 +16,7 @@ from agent_backbone.services.integrations.telegram._topic_discovery import (
     CATCH_ALL_TOPIC,
     process_message_for_discovery,
 )
-from agent_backbone.services.routing import DeliveryReport, safe_deliver
+from agent_backbone.services.routing import DeliveryReport, quote_envelope_lines, safe_deliver
 
 _hinted = RecentKeys(300)
 """(chat, topic) pairs hinted in the last five minutes — guidance, not noise."""
@@ -96,7 +96,7 @@ async def handle_topic_message(
     bot: TelegramService, update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Route plain text messages in forum topics to mapped agent sessions."""
-    if not update.effective_chat or not bot._is_authorized(update.effective_chat.id):
+    if not bot._can_control(update):
         return
 
     group = bot._effective_group_chat_id()
@@ -140,10 +140,10 @@ async def handle_topic_message(
             )
             return
         agent = parts[0].strip()
-        message = f"{tag} {parts[1].strip()}"
+        message = f"{tag} {quote_envelope_lines(parts[1].strip())}"
     else:
         agent = target
-        message = f"{tag} {text}"
+        message = f"{tag} {quote_envelope_lines(text)}"
 
     if bot.config.agents.get(agent) is None:
         await update.message.reply_text(f"Unknown agent `{agent}`", parse_mode="Markdown")

@@ -15,12 +15,14 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.agents import launch, lifecycle_lock
+from agent_backbone.services.agents.credentials import profile_lock
 from agent_backbone.services.agents.operations import StartRequest, resolve_agent, start_resolved
-from agent_backbone.services.agents.transitions import SOURCE, due_after
+from agent_backbone.services.agents.transitions import SOURCE, due_after, validate_resume
 from agent_backbone.services.database import now_iso
 from agent_backbone.services.jobs.diagnostics import observe_job
 from agent_backbone.services.routing import envelope, safe_deliver
@@ -66,9 +68,28 @@ async def run_transitions(
 
 async def _advance(config: BackboneConfig, store: AgentStore, db: BackboneDB, row: dict) -> str:
     name = row["agent_name"]
+    if row.get("registration_id"):
+        async with lifecycle_lock(name):
+            if not await db.agents.registration_matches(name, row["registration_id"]):
+                await db.transitions.finish(
+                    row["id"], "failed", {"reason": "agent registration changed"}
+                )
+                return "failed"
+            await store.refresh()
+            return await _advance_current(replace(config, agents=store.agents), store, db, row)
+    return await _advance_current(config, store, db, row)
+
+
+async def _advance_current(
+    config: BackboneConfig, store: AgentStore, db: BackboneDB, row: dict
+) -> str:
+    name = row["agent_name"]
     spec = config.agents.get(name)
     if spec is None:
         await db.transitions.finish(row["id"], "failed", {"reason": "agent is no longer known"})
+        return "failed"
+    if row.get("registration_id") and spec.registration_id != row["registration_id"]:
+        await db.transitions.finish(row["id"], "failed", {"reason": "agent registration changed"})
         return "failed"
     if spec.inbox_only:
         # Made inbox-only after the request: a session with its name is not its own.
@@ -76,7 +97,27 @@ async def _advance(config: BackboneConfig, store: AgentStore, db: BackboneDB, ro
         return "failed"
     if row["stopped_at"] is None:
         async with lifecycle_lock(name):
-            stopped = await launch.stop_agent(name)
+            if row["resume"]:
+                try:
+                    await store.refresh()
+                    current = store.agents.get(name)
+                    if current is None or current.inbox_only:
+                        raise ValueError("agent is no longer available for a session restart")
+                    validate_resume(config, current, row["runtime"] or current.runtime)
+                except ValueError as exc:
+                    await db.transitions.finish(row["id"], "failed", {"reason": str(exc)})
+                    return "failed"
+            # The direct CLI shares this guard with registration replacement and
+            # launch; a process-local lifecycle lock alone cannot protect a name.
+            async with profile_lock(config.data_dir):
+                if row.get("registration_id") and not await db.agents.registration_matches(
+                    name, row["registration_id"]
+                ):
+                    await db.transitions.finish(
+                        row["id"], "failed", {"reason": "agent registration changed"}
+                    )
+                    return "failed"
+                stopped = await launch.stop_agent(name)
         if not stopped:
             await db.transitions.finish(
                 row["id"], "failed", {"reason": "could not stop the session"}
@@ -114,6 +155,7 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         model=row["model"],
         resume=row["resume"],
         operation_id=operation_id,
+        expected_registration_id=row.get("registration_id"),
     )
     # Read before the retry: its own "already_running" record would be the newest.
     recovered = await _recovered_launch(db, operation_id) if resumed_launch else None
@@ -146,19 +188,28 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
         return "failed"
     if row["message"]:
         sender = row["requested_by"] or "backbone"
-        report = await safe_deliver(
-            name,
-            envelope(sender, row["message"]),
-            config,
-            db=db,
-            delivery_kind="direct_message",
-            source=SOURCE,
-            sender=sender,
-            # One identity per transition: what an earlier process delivered
-            # to this conversation before exiting is not delivered again.
-            operation_id=uuid.uuid5(uuid.NAMESPACE_URL, f"backbone:transition:{row['id']}").hex,
-            once=True,
-        )
+        # Registration replacement uses this same cross-process guard. Hold it
+        # through delivery/queueing so the continuation cannot change recipients.
+        async with lifecycle_lock(name), profile_lock(config.data_dir):
+            if row.get("registration_id") and not await db.agents.registration_matches(
+                name, row["registration_id"]
+            ):
+                outcome["reason"] = "agent registration changed"
+                await db.transitions.finish(row["id"], "failed", outcome)
+                return "failed"
+            report = await safe_deliver(
+                name,
+                envelope(sender, row["message"]),
+                config,
+                db=db,
+                delivery_kind="direct_message",
+                source=SOURCE,
+                sender=sender,
+                # One identity per transition: what an earlier process delivered
+                # to this conversation before exiting is not delivered again.
+                operation_id=uuid.uuid5(uuid.NAMESPACE_URL, f"backbone:transition:{row['id']}").hex,
+                once=True,
+            )
         outcome["message"] = report.outcome.value
         if report.queue is not None:
             outcome["message_queue"] = report.queue

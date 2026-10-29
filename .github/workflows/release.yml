@@ -1,15 +1,7 @@
 name: Release
 
-# Publishes to PyPI. Runs ONLY when triggered by hand — never on a push,
-# a merge or a tag:
-#
-#   gh workflow run release.yml -f version=0.1.0
-#
-# or Actions → Release → Run workflow. It publishes `main` only; the
-# version you type must equal the one in pyproject.toml, and the job
-# refuses otherwise. Authentication is the `PYPI_API_TOKEN` repository
-# secret; the workflow's own token can do nothing but push the tag.
-
+# Manual, main-only publication. Build/test has no write token or PyPI secret.
+# A separate job creates the immutable source tag before publication starts.
 on:
   workflow_dispatch:
     inputs:
@@ -18,36 +10,71 @@ on:
         required: true
 
 permissions:
-  contents: write   # to push the release tag; every other scope stays none
+  contents: read
+
+env:
+  RELEASE_VERSION: ${{ inputs.version }}
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
-    env:
-      RELEASE_VERSION: ${{ inputs.version }}
     steps:
       - name: Publish from main only
         if: github.ref != 'refs/heads/main'
         run: |
           echo "releases are published from main, not ${GITHUB_REF}"
           exit 1
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          version: "0.13.5"
           python-version: "3.12"
+          enable-cache: false
       - name: Check the requested version matches pyproject.toml
         run: |
           version="$(uv version --short)"
           test "${version}" = "${RELEASE_VERSION}" \
             || { echo "requested ${RELEASE_VERSION} != pyproject version ${version}"; exit 1; }
-      - run: uv sync --all-extras
-      - run: uv run pytest -q
+      - run: uv sync --locked --all-extras
+      - run: uv run --locked pytest -q
       - run: uv build
-      - name: Publish to PyPI
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-dist
+          path: dist/*
+          if-no-files-found: error
+
+  tag:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Create the source tag before publishing
+        run: |
+          tag="v${RELEASE_VERSION}"
+          existing="$(git ls-remote --refs origin "refs/tags/${tag}")"
+          test -z "${existing}" || { echo "tag ${tag} already exists; publication stopped"; exit 1; }
+          git tag "${tag}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${tag}:refs/tags/${tag}"
+
+  publish:
+    needs: [build, tag]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: dist
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          version: "0.13.5"
+          enable-cache: false
+      - name: Publish the already-built distributions to PyPI
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: uv publish
-      - name: Tag the release
-        run: |
-          git tag "v${RELEASE_VERSION}"
-          git push origin "v${RELEASE_VERSION}"
+        run: uv publish dist/*

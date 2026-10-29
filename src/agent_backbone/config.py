@@ -21,10 +21,14 @@ backbone picks it up on its next refresh.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import io
 import json
 import logging
 import os
 import re
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -59,6 +63,7 @@ SUBSCRIPTION_PRIORITIES: tuple[str, ...] = ("normal", "high")
 
 SECRET_ENV_KEYS: tuple[str, ...] = (
     "BACKBONE_API_KEY",
+    "BACKBONE_AGENT_CREDENTIAL",
     "GITHUB_TOKEN",
     "GITHUB_WEBHOOK_SECRET",
     "GITHUB_APP_ID",
@@ -84,6 +89,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "usage.context_note_step_tokens": 100_000,
     "backbone.host": "127.0.0.1",
     "backbone.port": DEFAULT_PORT,
+    "backbone.socket_path": "",
     "backbone.session_name": "backbone",
     "backbone.cors_origins": [],
     "backbone.restart_on_upgrade": True,
@@ -117,11 +123,14 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "timing.retry_interval_seconds": 300,
     "timing.start_timeout_seconds": 60,
     "timing.delivery_retention_days": 30,
+    "conversations.max_messages": 10_000,
+    "conversations.owner_messages_per_hour": 60,
     "diagnostics.slow_job_seconds": 30,
     "diagnostics.resource_sample_seconds": 300,
     "diagnostics.pressure_swap_percent": 50,
     "diagnostics.pressure_free_percent": 10,
     "telegram.allowed_chat_ids": [],
+    "telegram.allowed_user_ids": [],
     "telegram.notification_chat_id": None,
     "telegram.group_chat_id": None,
     "telegram.auto_topics": True,
@@ -156,6 +165,9 @@ SETTINGS_HELP: dict[str, str] = {
         "the CLI reaches a non-loopback host over https)"
     ),
     "backbone.port": "API port",
+    "backbone.socket_path": (
+        "Optional absolute Unix socket under the data directory; empty disables it"
+    ),
     "backbone.log_max_mb": (
         "Rotate the service log (`backbone up --log-file`) at this size in MB (0: never)"
     ),
@@ -227,8 +239,9 @@ SETTINGS_HELP: dict[str, str] = {
     "timing.stale_threshold_seconds": "Hook state older than this is verified against the terminal",
     "timing.grace_period_seconds": "Settle time after a hook reports idle before delivering",
     "timing.queue_expiry_minutes": (
-        "Queued messages expire after this age, except active swarm coordination, inbox holds"
-        " and queues held by an unconfirmed delivery; recipients and senders are notified"
+        "Queued notifications expire after this age; direct messages, active swarm coordination,"
+        " inbox holds and queues held by an unconfirmed delivery are retained;"
+        " recipients and senders are notified of expiry"
     ),
     "timing.stall_threshold_seconds": "Busy on one issue longer than this is a stall",
     "timing.escalation_dedup_seconds": "Do not repeat the same escalation within this window",
@@ -236,10 +249,16 @@ SETTINGS_HELP: dict[str, str] = {
     "timing.retry_interval_seconds": "delivery-retry job period",
     "timing.start_timeout_seconds": "How long `agent start` waits for the prompt",
     "timing.delivery_retention_days": (
-        "Delivery, event, completed queue, diagnostic and report-history retention in days; "
-        "each author's latest report is kept"
+        "Delivery, event, completed queue and diagnostic retention in days"
     ),
-    "telegram.allowed_chat_ids": "Chat ids allowed to control the backbone (JSON list) — required",
+    "conversations.max_messages": (
+        "Messages one artifact conversation holds; a full one refuses new messages"
+    ),
+    "conversations.owner_messages_per_hour": "Owner messages per conversation per rolling hour",
+    "telegram.allowed_chat_ids": "Allowed Telegram chat destinations (JSON list) — required",
+    "telegram.allowed_user_ids": (
+        "User ids allowed to send instructions and approve actions (JSON list)"
+    ),
     "telegram.notification_chat_id": "Where alerts are sent",
     "telegram.group_chat_id": "Forum group where each agent gets a topic (learned if unset)",
     "telegram.report_audio": (
@@ -273,7 +292,7 @@ _SETTING_CHOICES: dict[str, tuple[str, ...]] = {
     "github.intake": ("auto", "webhook", "poll", "off"),
     "agents.default_runtime": RUNTIMES,
 }
-_INT_LIST_SETTINGS = frozenset({"telegram.allowed_chat_ids"})
+_INT_LIST_SETTINGS = frozenset({"telegram.allowed_chat_ids", "telegram.allowed_user_ids"})
 # Scheduler job periods: a zero or negative value would make Scheduler.add()
 # raise on the next startup, so reject it at write time.
 _POSITIVE_SETTINGS = frozenset(
@@ -382,7 +401,9 @@ def validate_setting(key: str, value: Any) -> Any:
             )
         return value
     if key in _INT_LIST_SETTINGS:
-        if not isinstance(value, list):
+        if not isinstance(value, list) or (
+            key == "telegram.allowed_user_ids" and any(type(item) is not int for item in value)
+        ):
             raise ValueError(f"{key}: expected a JSON list of integers")
         try:
             return [int(item) for item in value]
@@ -515,6 +536,8 @@ class AgentSpec:
     """A client without a terminal (a service reading the API): never launched
     and never typed into. Its messages wait for ``backbone inbox`` without
     expiring, and it raises no offline alerts. Off by default."""
+    registration_id: str = field(default="", repr=False)
+    """Database-assigned identity retained by a resolved startup snapshot."""
 
     @property
     def path(self) -> Path:
@@ -620,6 +643,7 @@ class BackboneSection:
     data_dir: str = DEFAULT_DATA_DIR
     host: str = "127.0.0.1"
     port: int = DEFAULT_PORT
+    socket_path: str = ""
     session_name: str = "backbone"
     cors_origins: tuple[str, ...] = ()
     restart_on_upgrade: bool = True
@@ -724,6 +748,7 @@ class TelegramConfig:
     """``telegram.*``"""
 
     allowed_chat_ids: tuple[int, ...] = ()
+    allowed_user_ids: tuple[int, ...] = ()
     topic_routes: dict[int, str] = field(default_factory=dict)
     group_chat_id: int | None = None
     notification_chat_id: int | None = None
@@ -781,6 +806,8 @@ class BackboneConfig:
     and agents from the database."""
 
     api_key: str = ""
+    client_agent: str = ""
+    client_registration: str = ""
     webhook_secret: str = ""
     github_token: str = ""
     github_app_id: int | None = None
@@ -883,13 +910,101 @@ class BackboneConfig:
 
 def resolve_data_dir(explicit: str | Path | None = None) -> Path:
     """Data directory from an explicit value, ``BACKBONE_DATA_DIR``, or the default."""
-    raw = explicit or os.environ.get("BACKBONE_DATA_DIR") or DEFAULT_DATA_DIR
-    return Path(raw).expanduser()
+    raw = explicit or os.environ.get("BACKBONE_DATA_DIR")
+    if not raw and os.environ.get("BACKBONE_AGENT") and os.environ.get("BACKBONE_STATE_DIR"):
+        raw = Path(os.environ["BACKBONE_STATE_DIR"]).expanduser().parent
+    return Path(raw or DEFAULT_DATA_DIR).expanduser()
 
 
 def env_file_keys(env_path: Path | str) -> tuple[str, ...]:
     """Keys with a live (uncommented) assignment in an ``.env`` file."""
     return tuple(dotenv_values(env_path).keys())
+
+
+AGENT_KEY_PREFIX = "backbone-agent-v1:"
+REGISTRATION_KEY_PREFIX = "backbone-agent-v2:"
+
+
+def agent_api_key(operator_key: str, registration_id: str = "") -> str:
+    """Derive the collaboration credential without handing out the operator key."""
+    if not operator_key or agent_credential(operator_key):
+        return operator_key
+    if registration_id:
+        if not re.fullmatch(r"[a-f0-9]{32}", registration_id):
+            raise ValueError("Invalid agent registration identity")
+        prefix = REGISTRATION_KEY_PREFIX + registration_id + ":"
+        return prefix + hmac.digest(operator_key.encode(), prefix.encode(), "sha256").hex()
+    return (
+        AGENT_KEY_PREFIX
+        + hmac.digest(
+            operator_key.encode(), b"agent-backbone collaboration credential v1", "sha256"
+        ).hex()
+    )
+
+
+def agent_credential(key: str) -> bool:
+    return key.startswith((AGENT_KEY_PREFIX, REGISTRATION_KEY_PREFIX))
+
+
+def agent_profile_path(data_dir: Path, name: str) -> Path:
+    """Private CLI connection material, named without trusting a filesystem component."""
+    return data_dir / "agent-credentials" / (hashlib.sha256(name.encode()).hexdigest() + ".env")
+
+
+def read_agent_profile(data_dir: Path, name: str) -> dict[str, str] | None:
+    """Read only a private regular file; never follow a profile or directory symlink."""
+    path = agent_profile_path(data_dir, name)
+    try:
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ValueError("Agent credential profile directory is unsafe") from exc
+    try:
+        info = os.fstat(directory)
+        if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+            raise ValueError("Agent credential profile directory must be private")
+        try:
+            fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise ValueError("Agent credential profile is unsafe") from exc
+        with os.fdopen(fd, "r", encoding="utf-8") as stream:
+            info = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_size > 8192
+            ):
+                raise ValueError("Agent credential profile must be a private regular file")
+            values = dict(dotenv_values(stream=io.StringIO(stream.read(8193)), interpolate=False))
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("Agent credential profile is unreadable") from exc
+    finally:
+        os.close(directory)
+    expected = {"agent", "registration", "launch", "host", "port", "credential"}
+    if (
+        values.keys() != expected
+        or any(not isinstance(value, str) for value in values.values())
+        or values["agent"] != name
+        or not re.fullmatch(r"[a-f0-9]{32}", values.get("registration") or "")
+        or not re.fullmatch(r"(?:[a-f0-9]{32})?", values.get("launch") or "")
+        or not re.fullmatch(r"[A-Za-z0-9_.:-]+", values.get("host") or "")
+        or not (values.get("port") or "").isdigit()
+        or not 1 <= int(values["port"]) <= 65535
+        or not re.fullmatch(
+            "(?:"
+            + re.escape(AGENT_KEY_PREFIX)
+            + r"[a-f0-9]{64}|"
+            + re.escape(REGISTRATION_KEY_PREFIX)
+            + r"[a-f0-9]{32}:[a-f0-9]{64})?",
+            values.get("credential") or "",
+        )
+    ):
+        raise ValueError("Agent credential profile is invalid or retired")
+    return values
 
 
 def load_secrets(data_dir: Path) -> dict[str, str]:
@@ -906,6 +1021,48 @@ def load_secrets(data_dir: Path) -> dict[str, str]:
     — a stray ``.env`` in the current working directory must not inject
     secrets or security flags.
     """
+    environment = dict(os.environ)
+    collaboration = environment.get("BACKBONE_AGENT_CREDENTIAL", "")
+    if collaboration:
+        if not agent_credential(collaboration):
+            raise ValueError(
+                "Invalid agent collaboration credential; operator fallback is disabled"
+            )
+        environment["BACKBONE_API_KEY"] = collaboration
+    name = environment.get("BACKBONE_AGENT")
+    if name and (
+        environment.get("BACKBONE_LAUNCH_ID")
+        or (
+            not environment.get("BACKBONE_API_KEY")
+            and "BACKBONE_AGENT_CREDENTIAL" not in environment
+        )
+    ):
+        profile = read_agent_profile(data_dir, name)
+        if profile is not None:
+            launch = environment.get("BACKBONE_LAUNCH_ID")
+            if not launch or launch != profile["launch"]:
+                raise ValueError("Agent credential profile does not match this launch")
+            environment.update(
+                BACKBONE_API_KEY=profile["credential"],
+                BACKBONE_AGENT_CREDENTIAL=profile["credential"],
+                BACKBONE_HOST=profile["host"],
+                BACKBONE_PORT=profile["port"],
+                BACKBONE_CLIENT_AGENT=name,
+                BACKBONE_CLIENT_REGISTRATION=profile["registration"],
+            )
+    if (
+        environment.get("BACKBONE_AGENT")
+        and not environment.get("BACKBONE_API_KEY")
+        and "BACKBONE_AGENT_CREDENTIAL" not in environment
+    ):
+        raise ValueError("Agent credential is missing; operator fallback is disabled")
+    if (
+        "BACKBONE_AGENT_CREDENTIAL" in environment
+        or environment.get("BACKBONE_AGENT")
+        or agent_credential(environment.get("BACKBONE_API_KEY", ""))
+    ):
+        # Never recover operator secrets after a runtime filters key variables.
+        return environment
     merged = {key: value for key, value in dotenv_values(data_dir / ".env").items() if value}
     merged.update(os.environ)
     return merged
@@ -984,6 +1141,8 @@ def build_config(
 
     return BackboneConfig(
         api_key=env.get("BACKBONE_API_KEY", ""),
+        client_agent=env.get("BACKBONE_CLIENT_AGENT", ""),
+        client_registration=env.get("BACKBONE_CLIENT_REGISTRATION", ""),
         webhook_secret=env.get("GITHUB_WEBHOOK_SECRET", ""),
         github_token=env.get("GITHUB_TOKEN", ""),
         github_app_id=_opt_int(env.get("GITHUB_APP_ID", "")),
@@ -993,8 +1152,11 @@ def build_config(
         gmail_app_password=env.get("GMAIL_APP_PASSWORD", ""),
         backbone=BackboneSection(
             data_dir=str(data_dir),
-            host=s["backbone.host"],
+            host=env.get("BACKBONE_HOST", s["backbone.host"])
+            if env.get("BACKBONE_CLIENT_REGISTRATION")
+            else s["backbone.host"],
             port=_opt_int(env.get("BACKBONE_PORT")) or s["backbone.port"],
+            socket_path=s["backbone.socket_path"],
             session_name=s["backbone.session_name"],
             cors_origins=tuple(s["backbone.cors_origins"]),
             restart_on_upgrade=bool(s["backbone.restart_on_upgrade"]),
@@ -1040,6 +1202,7 @@ def build_config(
         database_url_override=env.get("BACKBONE_DATABASE_URL", ""),
         telegram=TelegramConfig(
             allowed_chat_ids=tuple(int(x) for x in s["telegram.allowed_chat_ids"]),
+            allowed_user_ids=tuple(int(x) for x in s["telegram.allowed_user_ids"]),
             topic_routes={int(k): str(v) for k, v in s["telegram.topic_routes"].items()},
             group_chat_id=_opt_int(s["telegram.group_chat_id"]),
             notification_chat_id=_opt_int(s["telegram.notification_chat_id"]),
@@ -1076,6 +1239,7 @@ def agents_from_rows(rows: list[dict]) -> AgentsConfig:
         specs[row["name"]] = AgentSpec(
             name=row["name"],
             dir=row["dir"],
+            registration_id=row.get("report_identity") or "",
             runtime=row.get("runtime") or "claude",
             model=row.get("model") or None,
             repo=row.get("repo") or "",

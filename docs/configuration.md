@@ -36,7 +36,11 @@ is) and `BACKBONE_DATABASE_URL` (PostgreSQL instead of the SQLite file).
 Persistent database startup checks that required tables and columns exist,
 even when the migration revision is current. Missing structures trigger
 schema repair while preserving stored rows. A complete current schema does
-not rebuild its indexes on every start.
+not rebuild its indexes on every start. Registration-bound delivery retires
+legacy outstanding queue rows with no registration identity, preserving their
+text in history. Unbound legacy outbox and failed-delivery records are not
+replayed. Forgetting an agent also retires its outstanding notifications; a
+new registration with the same name starts with a new identity.
 
 ## Settings
 
@@ -72,6 +76,7 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 |---|---|---|
 | `backbone.host` | `127.0.0.1` | Bind address; IPv6 loopback is `::1` (the CLI adds URL brackets). Keep it local unless you put auth and TLS in front |
 | `backbone.port` | `7120` | API port |
+| `backbone.socket_path` | `""` | Optional absolute Unix socket inside the data directory; empty disables it. Parent must be owned by the service account with mode 0700 |
 | `backbone.session_name` | `backbone` | tmux session used by `backbone up --detach` |
 | `backbone.cors_origins` | `[]` | Browser origins allowed to call the API; empty disables CORS |
 | `backbone.log_max_mb` | `20` | Size in MB at which `backbone up --log-file` (what the macOS service runs) rotates its log; `0` never rotates. Applies at the next start |
@@ -88,7 +93,7 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 | `agents.auto_review` | `false` | Use automatic permission review where the runtime supports it (currently Codex, `--approve-for-me`, with its workspace sandbox). Routine requests can proceed after review; refusals return to the agent and are reported (the Refused alert in [Telegram](telegram.md)). Applies on the next start/resume. Unattended agents keep their no-prompt policy; other runtimes are unaffected. Set `false` to use your own runtime approval configuration |
 | `agents.shared_policy` | `[]` | Ordered policy names under `<templates.dir>/policies/`, composed with base and swarm briefs; see [templates](templates.md) |
 | `agents.tag_policy` | `{}` | Policy names by agent tag, as a JSON object of ordered lists; global policies apply first, then matching tags alphabetically, deduplicated |
-| `agents.inject_brief` | `true` | Give each agent the backbone's common brief at launch — who it is, how to message other agents, and where to get details (`backbone help`). Claude Code appends it to the system prompt (complementing the project's CLAUDE.md); Gemini, OpenCode and Deep Code receive it as the session's initial prompt; Codex and `aider` receive it as their first delivered message (a Codex launch command is capped at 16 KB by tmux, so the brief cannot ride on it; a brief an earlier launch never delivered is dropped at the next launch); plain shells get none. A resumed session keeps the brief it started with on every runtime (Claude Code keeps its stored system prompt). On resume, Claude Code and Codex are handed the current brief through their `SessionStart` hook, saying that it supersedes earlier Backbone briefs; on the other runtimes a changed brief applies only to a fresh start (`agent start --fresh`). Override the text with `base.md` in `templates.dir` (`backbone templates edit base`) |
+| `agents.inject_brief` | `true` | Give each agent the backbone's common brief and selected shared policies. Claude Code appends a system-prompt file; Codex loads the complete brief as developer context through `SessionStart`; OpenCode adds the policy file to native `instructions`. These paths preserve built-in guidance and do not submit a first user prompt. Gemini CLI and Deep Code use launch prompts; Aider queues its first message; plain shells get none. Claude Code and Codex receive the current brief through their hook on resume, and OpenCode reloads its native instruction file. Other runtimes need a fresh start to apply a changed brief. Override the text with `base.md` in `templates.dir` (`backbone templates edit base`) |
 
 ### `skills.*`
 
@@ -133,13 +138,20 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 |---|---|---|
 | `timing.stale_threshold_seconds` | `300` | Hook state older than this is verified against the terminal |
 | `timing.grace_period_seconds` | `5` | Settle time from the hook-written idle timestamp before delivering (`settling`); terminal-only idle readings have no transition timestamp |
-| `timing.queue_expiry_minutes` | `30` | Expiry for ordinary queued messages; active swarm coordination, inbox holds, startup briefs, queues held by an unconfirmed delivery and [subscription](sources.md) batches are retained. Recipients and registered senders are notified of what expired |
+| `timing.queue_expiry_minutes` | `30` | Expiry for queued notifications; direct messages, active swarm coordination, inbox holds, startup briefs, queues held by an unconfirmed delivery and [subscription](sources.md) batches are retained. Recipients and registered senders are notified of what expired |
 | `timing.stall_threshold_seconds` | `5400` | Busy on one issue for longer than this is a stall |
 | `timing.escalation_dedup_seconds` | `1800` | Do not repeat the same escalation within this window |
 | `timing.monitor_interval_seconds` | `60` | `agent-monitor` job period (must be positive) |
 | `timing.retry_interval_seconds` | `300` | `delivery-retry` job period (must be positive) |
 | `timing.start_timeout_seconds` | `60` | How long `agent start` waits for the prompt |
-| `timing.delivery_retention_days` | `30` | Deliveries, events, completed queue messages, diagnostics and report history are pruned every 6 h; diagnostics age from their last observation, queue age from completion; pending/leased messages and each author's latest progress report are retained |
+| `timing.delivery_retention_days` | `30` | Deliveries, events, completed queue messages and diagnostics are pruned every 6 h; diagnostics age from their last observation, queue age from completion; pending/leased messages are retained. Reports, Responses, Documents and [conversations](conversations.md) are never pruned |
+
+### `conversations.*` — artifact conversations
+
+| Key | Default | Meaning |
+|-----|---------|-------------|
+| `conversations.max_messages` | `10000` | Messages one [artifact conversation](conversations.md) holds; a full conversation refuses new messages (`conversation_full`) and never drops old ones. Revision events are never refused |
+| `conversations.owner_messages_per_hour` | `60` | Owner messages per conversation per rolling hour (`rate_limited`) |
 
 ### `diagnostics.*` — performance evidence
 
@@ -156,7 +168,8 @@ See [Slow jobs and memory pressure](diagnostics.md#slow-jobs-and-memory-pressure
 
 | Key | Default | Meaning |
 |---|---|---|
-| `telegram.allowed_chat_ids` | `[]` | **Required to enable the bot.** Chat ids (users or groups) allowed to issue commands |
+| `telegram.allowed_chat_ids` | `[]` | **Required to enable the bot.** Allowed chat destinations |
+| `telegram.allowed_user_ids` | `[]` | Numeric Telegram user IDs allowed to send instructions, manage agents and answer approval buttons; empty refuses control |
 | `telegram.notification_chat_id` | — | Where plan-waiting and dead-session alerts go |
 | `telegram.group_chat_id` | — | Forum group where each agent gets a topic (learned from the first message in the group if omitted) |
 | `telegram.auto_topics` | `true` | Create a forum topic per registered agent in that group (swarm members excepted: a `swarm:<name>` tag means no topic), close it when the agent is forgotten, reopen it if it returns. Needs the bot as an administrator with *Manage Topics*. `false` to manage topics yourself |
@@ -213,9 +226,10 @@ Recorded per agent (`backbone agent list`, `GET /api/config/agents`):
 
 Exported into every session the backbone starts: `BACKBONE_RUNTIME`,
 `BACKBONE_AGENT`, `BACKBONE_STATE_DIR` (an agent's `env` cannot override
-these reserved keys). That is the whole contract — the backbone's own
-secrets are stripped from the session, including anything you added to
-`.env` yourself. See
+these reserved keys), and a reserved derived `BACKBONE_API_KEY` for collaboration.
+The operator key and service secrets are stripped, including anything you added
+to `.env` yourself. Agent CLI calls use the inherited collaboration key without
+loading operator secrets; administrative commands require an operator terminal. See
 [What an agent session inherits](security.md#what-an-agent-session-inherits).
 
 A Claude Code agent starts with drafted feedback off: Claude can't draft
@@ -289,3 +303,51 @@ See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
 
 See [message checkpoints](cli.md#cooperative-message-checkpoints) for safe mid-turn
 coordination, acknowledgement and retention.
+
+For the optional source-checkout PostgreSQL service, keep
+`BACKBONE_POSTGRES_PASSWORD` available to every `docker compose` command, including
+`make db-up` and `make db-down`. Set it in the source checkout’s `.env` file or
+export it in each shell. The port binds to `127.0.0.1:5435`. Configure
+`BACKBONE_DATABASE_URL` separately with that password, URL-encoded when needed.
+Changing the variable does not rotate credentials in an existing database volume;
+use PostgreSQL's password-change procedure for an existing installation.
+
+Agent launches also export `BACKBONE_AGENT_CREDENTIAL`, an alias for the scoped
+collaboration credential that survives runtime filtering of `*KEY*`, `*TOKEN*`
+and `*SECRET*` variable names. It never contains the operator key. Agent CLI
+calls never import the operator `.env`.
+
+The daemon also maintains private collaboration-only profiles under
+`<data_dir>/agent-credentials/` (directory mode 0700, `.env` files mode 0600).
+They cover every registered agent, including offline agents, without starting
+sessions. An existing managed session can pick up its profile on its next normal
+CLI call using its existing name and `BACKBONE_LAUNCH_ID`; a normal new launch
+binds the profile before the runtime starts. An operator start while the daemon
+is stopped can create a missing or retired target profile from its launch
+configuration, while preserving any valid profile's endpoint and credential.
+Profiles keep the running listener's host and port until the server restarts;
+saving a new address does not redirect existing sessions before it is active.
+No shell configuration or
+per-repository files are required. Profiles carry the effective API endpoint,
+which takes precedence over stale launch environment values. Non-loopback
+endpoints retain HTTPS certificate verification.
+
+In explicitly unauthenticated development mode, profiles keep their endpoint
+and registration/launch binding with an empty credential. Enabling an API key
+again refreshes the credential; agent clients still cannot use direct database
+fallback.
+
+A profile belongs to one registration and managed launch. Missing or uncertain
+launch evidence, unsafe files, and retired or mismatched registrations refuse
+profile pickup. Renaming preserves the registration but retires the old profile
+name; forgetting an agent leaves a refusal for its old processes. The next
+ordinary start binds a new launch. Explicit scoped environment credentials still
+work for clients without a managed launch, or where no profile has been
+provisioned; there is no operator fallback.
+
+`backbone agent inspect NAME` reports `credential_profile` without disclosing
+credentials: `ready-existing-launch`, `future-launch-only`, `uncertain-legacy`,
+or `unavailable`. This is provisioning evidence, not proof of a successful
+request or that an offline agent's workspace is usable. Profiles refresh when
+configuration changes and on the existing monitor pass. Credential rotation is
+picked up on the next command after provisioning.

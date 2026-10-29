@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from agent_backbone.services.agents._file_reader import read_launch_session, read_state_file
 from agent_backbone.services.database import format_iso, parse_iso
 from agent_backbone.services.runtimes import RUNTIMES, install_hint
 
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
     from agent_backbone.config import AgentSpec, BackboneConfig
     from agent_backbone.services.database import BackboneDB
 
-DEFAULT_DELAY_SECONDS = 60
+DEFAULT_DELAY_SECONDS = 0
 MAX_DELAY_SECONDS = 30 * 86400
 """The longest supported wait between the stop and the start."""
 SOURCE = "agent-restart"
@@ -41,6 +42,8 @@ class TransitionRequest:
     """An explicit start time (ISO 8601); excludes ``delay_seconds``."""
     message: str | None = None
     requested_by: str = ""
+    registration_id: str | None = None
+    """Bind a scoped credential request to the target registration through execution."""
 
 
 class TransitionPending(ValueError):
@@ -65,6 +68,26 @@ def parse_start_at(value: str) -> str:
     return format_iso(moment)
 
 
+def validate_resume(config: BackboneConfig, spec: AgentSpec, runtime: str) -> None:
+    """Require the same CLI and the latest launch's exact conversation before stopping."""
+    if runtime != spec.runtime:
+        raise ValueError(
+            f"resume continues a conversation in the same CLI: the agent runs {spec.runtime}, "
+            f"{runtime} was requested — start fresh, or keep the CLI"
+        )
+    rt = RUNTIMES[runtime]
+    if not rt.supports_exact_resume:
+        raise ValueError(f"{runtime} cannot resume an exact session; restart fresh")
+    reported = read_state_file(config.state_dir, spec.name, current_launch=True)
+    session_id = (
+        reported.session_id
+        if reported is not None and reported.runtime in (None, runtime)
+        else None
+    ) or read_launch_session(config.state_dir, spec.name, runtime)
+    if not session_id:
+        raise ValueError("the last launch has no resumable session identity; restart fresh")
+
+
 def validate_transition(config: BackboneConfig, spec: AgentSpec, req: TransitionRequest) -> None:
     """Refuse a request that could not work, before anything is torn down (``ValueError``)."""
     if spec.name == config.backbone.session_name:
@@ -87,11 +110,8 @@ def validate_transition(config: BackboneConfig, spec: AgentSpec, req: Transition
     rt = RUNTIMES[runtime]
     if not rt.available():
         raise ValueError(f"Runtime '{runtime}' binary not found: {install_hint()}")
-    if req.resume and runtime != spec.runtime:
-        raise ValueError(
-            f"resume continues a conversation in the same CLI: the agent runs {spec.runtime}, "
-            f"{runtime} was requested — start fresh, or keep the CLI"
-        )
+    if req.resume:
+        validate_resume(config, spec, runtime)
     model = req.model if req.model is not None else spec.model if runtime == spec.runtime else None
     model_id, effort = rt.split_model(model)
     if effort and not model_id:
@@ -112,6 +132,7 @@ async def request_transition(
     row = await db.transitions.create(
         agent_name=spec.name,
         requested_by=req.requested_by,
+        registration_id=req.registration_id,
         runtime=req.runtime,
         model=req.model,
         resume=req.resume,

@@ -7,6 +7,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from agent_backbone.api.auth import require_operator
 from agent_backbone.api.deps import get_agent_store, get_config, get_db
 from agent_backbone.services.swarm import (
     SwarmError,
@@ -49,6 +50,8 @@ async def create_swarm_endpoint(
     db=Depends(get_db),
     store=Depends(get_agent_store),
 ):
+    if any("@" in member for member in body.members):
+        await require_operator(request)
     gh = getattr(request.app.state, "github", None)
     try:
         result = await create_swarm(

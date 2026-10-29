@@ -150,11 +150,21 @@ For each agent, issue delivery is gated:
 3. Delivery is claimed atomically per `(repository, number, session)`, so
    the webhook path, the poller and the monitor cannot double-deliver.
 
-**Acknowledgement** = the agent commented on the issue. Detected from:
-- the hook action log (Claude Code running `gh issue comment 42 …`, with
-  the repository when `--repo` is given, or a GitHub MCP comment tool),
-- a comment whose body starts with `[from:app]`,
-- comments fetched from GitHub by the monitor.
+**Comment acknowledgement** requires an exact successful publication receipt
+from the agent's runtime hook, matching its current registration ID, repository,
+issue and comment ID. Publish with `gh issue comment 42 --repo OWNER/REPO --body-file comment.md` through a
+hooked runtime, or a supported GitHub MCP comment tool whose successful result
+includes the published comment's ID or URL. Keep `[from:app]` for readable
+provenance; the tag alone does not establish acknowledgment. Comments posted
+through the GitHub website or a command path without a captured receipt do
+not acknowledge the agent's work automatically.
+
+Sessions started before registration-bound receipts were introduced must restart
+normally before new comment or pull-request receipts can acknowledge work
+automatically. Older receipts remain available as history but do not supply automatic acknowledgement.
+A successful pull-request action also needs the current registration before its
+closing references acknowledge linked issues. Renaming an agent preserves its
+registration; forgetting it clears its stored acknowledgements, so a later agent with the same name cannot inherit them.
 
 An issue is delivered **once** per session. If the agent never
 acknowledges it, the queue stays blocked on it (`awaiting_ack`) until a
@@ -308,3 +318,6 @@ subresources, still report redirects as errors. A same-origin redirect can move
 an issue to another repository or number; it does not prove a repository rename.
 Backbone does not silently change those identities or combine a new issue number
 with the original repository key.
+
+When effective GitHub intake is `off`, the webhook refuses new events before
+reading their bodies. Previously queued work keeps its existing delivery policy.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import subprocess
 import sys
@@ -10,8 +11,10 @@ import tempfile
 import uuid
 from pathlib import Path
 
+from agent_backbone.services.runtimes import send_message
 from agent_backbone.services.terminal import (
     capture_pane,
+    foreground_commands,
     paste_message,
     query_format_vars,
     send_keys,
@@ -33,29 +36,39 @@ async def main() -> None:
     # Characters tmux's command syntax treats specially, handed over on stdin.
     value = f"$HOME ~ 'q' \"d\" \\ {marker[:8]}"
     program = (
-        "import os, sys\n"
+        "import hashlib, os, sys\n"
         "print('smoke-ready:' + os.environ['BACKBONE_SMOKE'] + os.environ['SHELL'], flush=True)\n"
+        "print('smoke-cwd:' + hashlib.sha256(os.getcwdb()).hexdigest(), flush=True)\n"
         "for line in sys.stdin:\n"
         "    print('received:' + line.strip(), flush=True)\n"
     )
     # Under /tmp, tmux's own default: the socket path stays within macOS's 104 bytes.
     with tempfile.TemporaryDirectory(prefix="backbone-smoke-", dir="/tmp") as directory:
         # A private server, never the one the caller's own session runs in (#351).
-        os.environ.pop("TMUX", None)
-        os.environ.pop("TMUX_PANE", None)
+        for key in list(os.environ):
+            if key.startswith("BACKBONE_") or key in ("TMUX", "TMUX_PANE"):
+                os.environ.pop(key, None)
+        home = Path(directory) / "home"
+        home.mkdir()
+        os.environ["HOME"] = str(home)
+        working = Path(directory) / "literal # #[fg=red] #{HOME} #(printf smoke)"
+        working.mkdir()
         os.environ["TMUX_TMPDIR"] = directory
         tempfile.tempdir = directory  # where start_session writes the environment file
         socket = Path(directory) / f"tmux-{os.getuid()}" / "default"
         try:
             if not await start_session(
                 session,
-                working_dir=directory,
+                working_dir=str(working),
                 command=[sys.executable, "-u", "-c", program],
                 # tmux sets SHELL in the pane; the agent's own value must win.
                 environment={"BACKBONE_SMOKE": value, "SHELL": "/smoke/sh"},
             ):
                 raise RuntimeError("could not start the smoke session")
             await wait_for_output(session, f"smoke-ready:{value}/smoke/sh")
+            await wait_for_output(
+                session, "smoke-cwd:" + hashlib.sha256(os.fsencode(working.resolve())).hexdigest()
+            )
             fields = await query_format_vars(
                 session,
                 "session_name=#{session_name}\nsocket_path=#{socket_path}\n"
@@ -70,6 +83,19 @@ async def main() -> None:
             server = Path(fields.get("socket_path", "")).resolve()
             if not server.is_relative_to(Path(directory).resolve()):
                 raise RuntimeError(f"refusing to run on a server outside {directory}: {fields!r}")
+            foreground = await foreground_commands(session)
+            if not any(
+                command and "python" in Path(command[0]).name.lower() for command in foreground
+            ):
+                raise RuntimeError(f"foreground process was not identified: {foreground!r}")
+            # Neither a shell adapter nor a stale runtime hint may submit to
+            # this non-model foreground process.
+            for hint in ("shell", "codex", None):
+                if (
+                    await send_message(session, "not-a-model-notification", runtime_hint=hint)
+                    is not None
+                ):
+                    raise RuntimeError("an unidentified receiver accepted a notification")
             if not await paste_message(session, marker):
                 raise RuntimeError("paste_message failed")
             if not await send_keys(session, "Enter"):

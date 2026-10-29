@@ -56,7 +56,7 @@ async def test_terminal_ready_replacement_delivers_despite_previous_busy_hook(
         patch.object(type(RUNTIMES[runtime]), "build_command", return_value="stub"),
         patch(f"{LAUNCH}.start_session", AsyncMock(return_value=True)),
         patch(f"{LAUNCH}.capture_pane", AsyncMock(return_value=prompt)),
-        patch(f"{LAUNCH}.session_exists", AsyncMock(side_effect=[False, True])),
+        patch(f"{LAUNCH}.session_exists", AsyncMock(side_effect=[False, False, True])),
         patch(f"{LAUNCH}._queue_brief", AsyncMock(return_value=True)),
         patch(f"{INTEL}.list_sessions", AsyncMock(return_value=["app"])),
         patch(f"{INTEL}.capture_pane", AsyncMock(return_value=prompt)),
@@ -154,8 +154,8 @@ async def test_late_old_hook_cannot_clear_starting_marker(tmp_path):
 
 @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
 async def test_fresh_restart_delivers_brief_then_continuation(db, tmp_path, runtime):
+    from agent_backbone.hooks.backbone_state import take_context
     from agent_backbone.services.agents import AgentStore
-    from agent_backbone.services.jobs.retry import drain_message_queue
     from agent_backbone.services.jobs.transitions import run_transitions
 
     await db.settings.set("timing.grace_period_seconds", 0)
@@ -206,7 +206,7 @@ async def test_fresh_restart_delivers_brief_then_continuation(db, tmp_path, runt
         patch(f"{LAUNCH}.stop_agent", AsyncMock(return_value=True)),
         patch(f"{LAUNCH}.start_session", side_effect=start),
         patch(f"{LAUNCH}.capture_pane", AsyncMock(return_value=PROMPTS[runtime])),
-        patch(f"{LAUNCH}.session_exists", AsyncMock(side_effect=[False, True])),
+        patch(f"{LAUNCH}.session_exists", AsyncMock(side_effect=[False, False, True])),
         patch(f"{INTEL}.list_sessions", AsyncMock(return_value=["app"])),
         patch(f"{INTEL}.capture_pane", AsyncMock(return_value=PROMPTS[runtime])),
         patch(f"{INTEL}.resolve_runtime", AsyncMock(return_value=RUNTIMES[runtime])),
@@ -219,10 +219,9 @@ async def test_fresh_restart_delivers_brief_then_continuation(db, tmp_path, runt
         assert done["result"]["ready"] == "ready"
         assert done["result"]["message"] != "agent_working"
         if runtime == "codex":
-            assert sent == []  # The startup brief must arrive first.
-            await drain_message_queue(config, db, None, active_sessions=["app"])
-            assert len(sent) == 2
-            assert "resume-task-after-startup-brief" not in sent[0]
+            (brief,) = take_context(config.state_dir, "app", launch_env["BACKBONE_LAUNCH_ID"])
+            assert "agent-backbone environment" in brief
+        assert len(sent) == 1  # Only the continuation is a submitted prompt.
         assert sent[-1] == "[via:backbone from:backbone] resume-task-after-startup-brief"
 
 

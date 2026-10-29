@@ -187,11 +187,161 @@ _INTERRUPTED = "tests/unit/services/agents/test_interrupted_turn.py"
 _PLAN = "tests/unit/services/agents/test_plan_approval.py"
 _INSTRUCTIONS_API = "tests/unit/api/routes/test_api_instructions.py"
 
+_CONVERSATIONS = "tests/unit/api/routes/test_api_conversations.py"
+_CONVERSATION_DELIVERY = (
+    _API_BOUNDARY + "; delivered as a queued message, like backbone tell; "
+    "current-plan adapter: tests/unit/api/routes/test_api_plan_conversations.py; "
+    "Sheet adapter: tests/unit/api/routes/test_api_sheet_conversations.py"
+)
+
 _RESPONSE_DELIVERY = (
     _API_BOUNDARY + "; topic delivery: tests/unit/services/integrations/telegram/test_responses.py"
 )
 
 CAPABILITIES: tuple[Capability, ...] = (
+    _row(
+        "bundle-bytecode",
+        "Owned Python launch helpers preserve the engine inventory",
+        "services/terminal/_sessions.py; services/runtimes/opencode.py; hooks/install.py",
+        fallback=(
+            "Replace an older payload with a corrected build; reinstall saved hook and Chrome "
+            "host commands with that build. Do not edit its inventory."
+        ),
+        implemented=lambda rt: (
+            True
+        ),  # Shared terminal path; native CLIs do not control Python flags.
+        **{
+            runtime: _ok("tests/unit/test_python_children.py")
+            for runtime in ("claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell")
+        },
+    ),
+    _row(
+        "installer-first-agent",
+        "Explicit first-agent setup with durable retry receipts",
+        "services/routing/onboarding.py; cli/onboarding.py; Runtime.prepare_setup_hooks",
+        fallback=(
+            "Use the documented agent-start flow; do not retry an uncertain launch "
+            "or greeting as a new request."
+        ),
+        implemented=lambda rt: rt.setup_hooks,
+        claude=_ok(
+            "tests/unit/services/routing/test_onboarding.py",
+            "working-installation live check pending",
+        ),
+        codex=_ok(
+            "tests/unit/services/routing/test_onboarding.py",
+            "working-installation live check pending",
+        ),
+        opencode=_ok(
+            "tests/unit/services/routing/test_onboarding.py",
+            "working-installation live check pending",
+        ),
+        gemini=_gap(note="installer hook preparation is not implemented"),
+        deepcode=_gap(note="installer hook preparation is not implemented"),
+        aider=_gap(note="installer hook preparation is not implemented"),
+        shell=_na("a plain shell has no first-agent conversation"),
+    ),
+    _row(
+        "runtime-discovery",
+        "Read-only runtime discovery for setup",
+        "services/runtimes/base.py Runtime.discovery; cli/setup.py cmd_runtimes",
+        fallback="Binary presence is not login; use the runtime's visible sign-in flow.",
+        implemented=lambda rt: callable(rt.discovery),
+        claude=_ok("tests/unit/services/runtimes/test_discovery.py"),
+        codex=_ok("tests/unit/services/runtimes/test_discovery.py"),
+        opencode=_ok("tests/unit/services/runtimes/test_discovery.py"),
+        gemini=_ok("tests/unit/services/runtimes/test_discovery.py"),
+        deepcode=_ok("tests/unit/services/runtimes/test_discovery.py"),
+        aider=_ok("tests/unit/services/runtimes/test_discovery.py"),
+        shell=_ok("tests/unit/services/runtimes/test_discovery.py"),
+    ),
+    _row(
+        "current-plan",
+        "Current agent-authored checklists with conditional updates and contextual feedback",
+        "src/agent_backbone/api/routes/current_plans.py",
+        fallback="Keep the current checklist locally until the provider is available.",
+        implemented=lambda rt: True,
+        claude=_ok("tests/unit/api/routes/test_api_current_plans.py", _API_BOUNDARY),
+        codex=_ok("tests/unit/api/routes/test_api_current_plans.py", _API_BOUNDARY),
+        opencode=_ok("tests/unit/api/routes/test_api_current_plans.py", _API_BOUNDARY),
+        gemini=_ok("tests/unit/api/routes/test_api_current_plans.py", _API_BOUNDARY),
+        deepcode=_ok("tests/unit/api/routes/test_api_current_plans.py", _API_BOUNDARY),
+        aider=_ok("tests/unit/api/routes/test_api_current_plans.py", _API_BOUNDARY),
+        shell=_ok("tests/unit/api/routes/test_api_current_plans.py", _API_BOUNDARY),
+    ),
+    _row(
+        "comment-receipts",
+        "GitHub acknowledgements bound to registration and successful publication",
+        "src/agent_backbone/hooks/backbone_state.py",
+        fallback="Unbound receipts cannot acknowledge work; restart older sessions normally.",
+        implemented=_declared("comment-receipts"),
+        cli_dependent=True,
+        claude=_ok(
+            "tests/unit/hooks/test_command_acknowledgement.py",
+            "Registration-bound payload tests; live check pending normal restart.",
+            verified_on="2.1.310",
+        ),
+        codex=_ok(
+            "tests/unit/hooks/test_command_acknowledgement.py",
+            "Registration-bound payload tests; live check pending normal restart.",
+            verified_on="0.160.0",
+        ),
+        opencode=_ok(
+            "tests/unit/hooks/test_command_acknowledgement.py",
+            "Registration-bound plugin tests; live check pending normal restart.",
+            verified_on="2.1.4",
+        ),
+        gemini=_ok(
+            "tests/unit/hooks/test_command_acknowledgement.py",
+            "Registration-bound payload tests; live check pending normal restart.",
+            verified_on="0.46.0",
+        ),
+        deepcode=_gap(note="no publication receipt hook"),
+        aider=_gap(note="no publication receipt hook"),
+        shell=_na("a plain shell has no agent tool-completion hook"),
+    ),
+    _row(
+        "sheets",
+        "Retained spreadsheet workbooks, calculated revisions and contextual feedback",
+        "src/agent_backbone/api/routes/sheets.py",
+        fallback="Keep the workbook locally until a Backbone with Sheets is available.",
+        implemented=lambda rt: True,
+        claude=_ok("tests/unit/api/routes/test_api_sheets.py", _API_BOUNDARY),
+        codex=_ok("tests/unit/api/routes/test_api_sheets.py", _API_BOUNDARY),
+        gemini=_ok("tests/unit/api/routes/test_api_sheets.py", _API_BOUNDARY),
+        opencode=_ok("tests/unit/api/routes/test_api_sheets.py", _API_BOUNDARY),
+        deepcode=_ok("tests/unit/api/routes/test_api_sheets.py", _API_BOUNDARY),
+        aider=_ok("tests/unit/api/routes/test_api_sheets.py", _API_BOUNDARY),
+        shell=_ok("tests/unit/api/routes/test_api_sheets.py", _API_BOUNDARY),
+    ),
+    _row(
+        "documents",
+        "Durable HTML Documents with immutable revisions and authenticated reads",
+        "src/agent_backbone/api/routes/documents.py",
+        fallback="Keep authored HTML locally until a Backbone with Documents is available.",
+        implemented=lambda rt: True,
+        claude=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
+        codex=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
+        gemini=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
+        opencode=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
+        deepcode=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
+        aider=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
+        shell=_ok("tests/unit/api/routes/test_api_documents.py", _API_BOUNDARY),
+    ),
+    _row(
+        "conversations",
+        "Per-artifact conversations: owner messages delivered through the queue, agent replies",
+        "src/agent_backbone/api/routes/conversations.py",
+        fallback="Ask about an artifact with backbone tell; the answer is not kept with it.",
+        implemented=lambda rt: bool(rt.binary),  # Delivery into the session, as for tell.
+        claude=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
+        codex=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
+        gemini=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
+        opencode=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
+        deepcode=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
+        aider=_unverified(note="message delivery into Aider is not verified live"),
+        shell=_na("no model receiver; owner messages stay in the inbox as data"),
+    ),
     _row(
         "responses",
         "Stored questions, answers and actions with durable topic delivery",
@@ -239,7 +389,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Message delivery into the session",
         "src/agent_backbone/services/routing/_delivery.py",
         fallback="Check `agent inspect` for the delivery evidence before relying on it.",
-        implemented=lambda rt: True,
+        implemented=lambda rt: bool(rt.binary),
         cli_dependent=True,
         claude=_ok(_B3, verified_on="2.1.284"),
         codex=_ok(_B3, verified_on="0.157.1"),
@@ -247,9 +397,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         opencode=_ok(_B3, verified_on="1.18.32"),
         deepcode=_ok("live: checked during development (Deep Code 0.3.1)", verified_on="0.3.1"),
         aider=_unverified(note="not verified live"),
-        shell=_ok(
-            "tests/unit/services/routing/test_delivery_diagnostics.py", "plumbing tests only"
-        ),
+        shell=_na("no model receiver; notifications stay in the inbox as data"),
     ),
     _row(
         "trust",
@@ -272,10 +420,16 @@ CAPABILITIES: tuple[Capability, ...] = (
         "src/agent_backbone/services/agents/launch.py",
         fallback="Check that the agent's first reply follows its brief; start it fresh if not.",
         implemented=lambda rt: rt.brief_mode != "none",
-        claude=_ok(_B3),
-        codex=_ok(_FRESH),
+        claude=_ok("tests/unit/services/agents/test_launch.py", "native system-prompt file"),
+        codex=_ok(
+            "tests/unit/services/agents/test_launch.py",
+            "SessionStart developer context; new transport awaits a working-session live check",
+        ),
         gemini=_ok(_GEMINI_STUB),
-        opencode=_ok(_B3),
+        opencode=_ok(
+            "tests/unit/services/agents/test_launch.py",
+            "native instructions file; new transport awaits a working-session live check",
+        ),
         deepcode=_unverified(),
         aider=_unverified(note="not verified live"),
         shell=_na(_NO_MODEL),
@@ -285,12 +439,14 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Current brief after resume",
         "src/agent_backbone/services/agents/launch.py",
         fallback="Start the agent fresh (`agent start --fresh`) to apply a changed brief.",
-        implemented=lambda rt: rt.brief_refresh == "hook_context",
+        implemented=lambda rt: (
+            rt.brief_refresh == "hook_context" or rt.brief_mode == "system_prompt"
+        ),
         cli_dependent=True,
         claude=_ok(_RESUME, verified_on="2.1.284"),
         codex=_ok(_RESUME, verified_on="0.157.1"),
         gemini=_gap(),
-        opencode=_gap(273),
+        opencode=_gap(273, "native instructions now load on resume; working-session check pending"),
         deepcode=_gap(),
         aider=_gap(),
         shell=_na(_NO_MODEL),
@@ -390,7 +546,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok("tests/unit/hooks/test_claude_hook.py", verified_on="2.1.284"),
         codex=_ok(
             "tests/unit/hooks/test_codex_hook.py",
-            note="from its first prompt (the brief): Codex runs no hook before its first turn",
+            note="from its first work prompt: Codex runs no hook before its first turn",
             verified_on="0.157.1",
         ),
         gemini=_ok("tests/unit/hooks/test_gemini_hook.py", verified_on="0.46.0"),
@@ -476,10 +632,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Answer the dialog in the session (`agent attach`).",
         implemented=lambda rt: bool(rt.approve_keys),
         cli_dependent=True,
-        claude=_ok("docs/cli.md", verified_on="2.1.284"),
-        codex=_ok("docs/cli.md", verified_on="0.157.1"),
+        claude=_ok("tests/unit/services/agents/test_plan_approval.py", verified_on="2.1.284"),
+        codex=_ok("tests/unit/services/agents/test_plan_approval.py", verified_on="0.157.1"),
         gemini=_ok("tests/unit/services/agents/test_launch.py", verified_on="0.46.0"),
-        opencode=_ok("docs/cli.md", verified_on="1.18.32"),
+        opencode=_ok("tests/unit/services/agents/test_plan_approval.py", verified_on="1.18.32"),
         deepcode=_ok("tests/unit/services/agents/test_launch.py", verified_on="0.3.1"),
         aider=_gap(),
         shell=_na("a plain shell shows no permission dialog"),
@@ -491,8 +647,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Refuse the dialog in the session (`agent attach`).",
         implemented=lambda rt: bool(rt.deny_keys),
         cli_dependent=True,
-        claude=_ok("docs/cli.md", verified_on="2.1.284"),
-        codex=_ok("docs/cli.md", verified_on="0.157.1"),
+        claude=_ok("tests/unit/services/agents/test_plan_approval.py", verified_on="2.1.284"),
+        codex=_ok("tests/unit/services/agents/test_plan_approval.py", verified_on="0.157.1"),
         gemini=_ok("tests/unit/services/agents/test_launch.py", verified_on="0.46.0"),
         opencode=_ok("tests/unit/services/agents/test_launch.py", verified_on="1.18.32"),
         deepcode=_ok("tests/unit/services/agents/test_launch.py", verified_on="0.3.1"),
@@ -567,7 +723,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         codex=_ok(_LAUNCH),
         gemini=_ok(_LAUNCH),
         opencode=_ok(_LAUNCH),
-        deepcode=_gap(note="resumes the directory's latest session"),
+        deepcode=_gap(note="resume refused: exact session selection unavailable"),
         aider=_gap(),
         shell=_na("a plain shell has no conversation to resume"),
     ),
@@ -848,6 +1004,76 @@ CAPABILITIES: tuple[Capability, ...] = (
         deepcode=_unverified(),
         aider=_unverified(),
         shell=_na(_NO_MODEL),
+    ),
+    _row(
+        "private-local-transport",
+        "Private Unix listener checks the connected OS account",
+        "src/agent_backbone/api/local_transport.py",
+        fallback="Configure the private socket; do not send credentials to unverified TCP.",
+        implemented=lambda rt: True,
+        claude=_ok("tests/unit/api/test_local_transport.py", _API_BOUNDARY),
+        codex=_ok("tests/unit/api/test_local_transport.py", _API_BOUNDARY),
+        gemini=_ok("tests/unit/api/test_local_transport.py", _API_BOUNDARY),
+        opencode=_ok("tests/unit/api/test_local_transport.py", _API_BOUNDARY),
+        deepcode=_ok("tests/unit/api/test_local_transport.py", _API_BOUNDARY),
+        aider=_ok("tests/unit/api/test_local_transport.py", _API_BOUNDARY),
+        shell=_ok("tests/unit/api/test_local_transport.py", _API_BOUNDARY),
+    ),
+    _row(
+        "scoped-credentials",
+        "Registration-scoped credentials, self-switching and persistent client pickup",
+        "src/agent_backbone/api/auth.py",
+        fallback="Use an operator credential for administrative changes.",
+        implemented=lambda rt: True,
+        claude=_ok(
+            "tests/unit/api/test_authority.py",
+            "Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py "
+            "for replacement during restart; natural self-switch live check pending.",
+        ),
+        codex=_ok(
+            "tests/unit/api/test_authority.py",
+            "Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py "
+            "for replacement during restart; natural self-switch live check pending.",
+        ),
+        gemini=_ok(
+            "tests/unit/api/test_authority.py",
+            "Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py "
+            "for replacement during restart; natural self-switch live check pending.",
+        ),
+        opencode=_ok(
+            "tests/unit/api/test_authority.py",
+            "Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py "
+            "for replacement during restart; natural self-switch live check pending.",
+        ),
+        deepcode=_ok(
+            "tests/unit/api/test_authority.py",
+            "Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py "
+            "for replacement during restart; natural self-switch live check pending.",
+        ),
+        aider=_ok(
+            "tests/unit/api/test_authority.py",
+            "Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py "
+            "for replacement during restart; natural self-switch live check pending.",
+        ),
+        shell=_ok(
+            "tests/unit/api/test_authority.py",
+            "Shared authority/profile tests plus tests/unit/services/jobs/test_transitions.py "
+            "for replacement during restart; natural self-switch live check pending.",
+        ),
+    ),
+    _row(
+        "registration-bound-replay",
+        "Retained notifications cannot reach a replacement registration",
+        "src/agent_backbone/services/routing/_delivery.py",
+        fallback="Inspect retained history; send a new message to the intended registration.",
+        implemented=lambda rt: True,
+        claude=_ok("tests/unit/services/routing/test_registration_replay.py", _NO_CLI),
+        codex=_ok("tests/unit/services/routing/test_registration_replay.py", _NO_CLI),
+        gemini=_ok("tests/unit/services/routing/test_registration_replay.py", _NO_CLI),
+        opencode=_ok("tests/unit/services/routing/test_registration_replay.py", _NO_CLI),
+        deepcode=_ok("tests/unit/services/routing/test_registration_replay.py", _NO_CLI),
+        aider=_ok("tests/unit/services/routing/test_registration_replay.py", _NO_CLI),
+        shell=_ok("tests/unit/services/routing/test_registration_replay.py", _NO_CLI),
     ),
     _row(
         "signed-senders",

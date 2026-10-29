@@ -4,6 +4,15 @@ Base URL `http://127.0.0.1:7120`. Interactive OpenAPI docs at `/docs` while
 running. Every route except `GET /health` and the webhook requires
 `Authorization: Bearer <BACKBONE_API_KEY>`.
 
+The operator key authorizes administration. Launchers give agents a derived
+collaboration key for reads, messaging and starting/stopping/restarting known
+peers with saved settings. Changes to settings, runtime/model/workspace,
+environment, tags, shared skills or policies require an operator key and return
+403 for an agent key. New registrations, owner enrollment and externally pushed
+state also require an operator key. Fleet snapshot resume also requires an operator key because it restores saved
+models. Upgrade restart holds require the operator. This does not isolate same-user processes;
+see [the trust boundary](security.md).
+
 Response examples below show selected fields. Use the running OpenAPI schema
 for complete request and response models.
 
@@ -157,7 +166,7 @@ Starting an existing agent reuses its saved CLI and model and begins a **new
 conversation**. Continuing the previous one is your call: `backbone agent resume
 NAME` (or `start --resume`; API `resume: true`) reopens the conversation the
 agent's last launch held (the session id its hook reported, or the one it was
-resumed on), or the runtime's own last conversation when there is none. An id
+resumed on). Without that identity, resume refuses to guess. An id
 left by an earlier launch is not reused. A fresh start says when a previous conversation is available. Starts are
 fresh by default because a resumed agent trusts its own context over whatever
 happened in the checkout since — another CLI, a swarm, the shared memory.
@@ -200,12 +209,12 @@ fresh one:
  "ready": "ready", "evidence": ["resuming the session the last launch reported: 019a… (9h old)"]}
 ```
 
-When the saved session id is used, an evidence line names it. Without that line
-the runtime's own latest conversation was opened. A running agent is left
+When the saved session id is used, an evidence line names it. Without a resumable
+identity, the request returns `ok: false` and does not launch a conversation. A running agent is left
 as it is and returns `already_existed: true`; nothing is resumed. The CLI
 reference's [Resuming a previous conversation](cli.md#resuming-a-previous-conversation)
 lists every case, and `resume_selection` in the start's diagnostic records
-(`fresh`, `known_session` or `runtime_latest`) records the same choice.
+(`fresh`, `known_session` or `unresolved`) records the same choice.
 
 ### `POST /api/agents/{name}/stop`
 
@@ -232,7 +241,7 @@ All fields are optional. `runtime` and `model` (with an optional `:effort`)
 are recorded on the agent as `start` would; omitted, the saved ones are used.
 `resume` continues the saved conversation and is valid only when the runtime
 is unchanged. `start: false` stops and starts nothing. The wait is between the
-stop and the start: `delay_seconds` (default 60, at most 30 days) or `start_at`
+stop and the start: `delay_seconds` (default 0, at most 30 days) or `start_at`
 (ISO 8601; local time unless an offset is given), not both. `message` is
 delivered to the replacement once it is at its prompt, as
 `[via:backbone from:<from_entity>]`, and never expires while it waits.
@@ -310,7 +319,7 @@ Everything the backbone knows about one agent, with the evidence:
 `session_id` is the conversation id the agent's hook reported; for a running
 agent, only one reported by the current session. A resume opens it only when
 the agent's runtime still matches the one that reported it and can open a
-session by id. Otherwise the runtime's own latest conversation opens.
+session by id. Otherwise resume is refused; start a fresh conversation with `resume: false`.
 `state_age_seconds` is how long ago the hook last wrote.
 
 ### `GET /api/agents/{name}/state`
@@ -599,7 +608,10 @@ messages](owner-confirmed-messages.md).
 ## Skills
 
 The shared skills store ([skills](skills.md)). `GET /api/skills` lists every
-store entry with its tags, validity and the agents it reaches.
+store entry with its tags, validity, the agents it reaches and the
+`artifact_id` of its [conversation](conversations.md#skills-and-policies).
+`GET /api/policies` lists every policy with its `artifact_id`; both kinds serve
+their snapshots at `/api/{skills|policies}/{artifact_id}/versions`.
 `POST /api/skills` `{path, name?, tags, replace?, actor}` **moves** a skill
 directory into the store and tags it (422 when the directory is not a skill or
 the name is taken without `replace`; 400 when `skills.store` is empty).
@@ -860,3 +872,41 @@ so it can be the `escalation.target`.
 Up to 20 tokens per acknowledgement; stale or mismatched tokens return 409, unknown session 404.
 The existing shared API key is required. Session names are self-asserted, as with
 ordinary messaging; this is not a per-agent authentication boundary.
+
+## Documents
+
+`POST /api/documents` publishes immutable HTML revisions. `GET /api/documents`
+returns paged latest-per-document metadata; `GET /api/documents/{revision_id}`
+returns exact content through authenticated JSON;
+`GET /api/documents/{document_id}/revisions` lists a Document's revisions. See
+[Conversations](conversations.md) for `/api/conversations` and [Documents](documents.md)
+for the response fields, signed publication, byte limits, retries and retention.
+
+
+### Private local transport
+
+For a local client that must authenticate the provider before sending its API
+key, configure `backbone.socket_path` to an absolute socket path inside the
+Backbone data directory. Its parent must belong to the service account and have
+mode 0700. On the next explicitly requested server start, Backbone binds a 0600
+Unix socket alongside its existing TCP listener. `--reload` is not supported
+with this optional listener. No socket is enabled by default.
+
+Give the same absolute path to the client as `BACKBONE_SOCKET_PATH`. Before
+sending HTTP or bearer credentials, the client must verify the private parent,
+socket type, 0600 mode and ownership, then check the connected peer UID against
+its effective UID. The provider similarly rejects Unix peers with a different
+UID before HTTP parsing. HTTP routes, request bodies, response framing and API
+key requirements are unchanged. A client using this contract must report an
+unavailable socket rather than silently fall back to credential-bearing TCP.
+
+This transport supports macOS and Linux. It authenticates the OS account, not an
+individual agent, and does not isolate unrestricted processes sharing that account.
+An owned inactive socket is replaced at startup; active sockets and other files
+are preserved and cause startup to fail.
+
+## Sheets
+
+`/api/sheets` provides structured retained workbooks, immutable calculated revisions,
+revision-pinned ranges, import/export and registration-bound contextual feedback.
+See [Sheets](sheets.md) for request shapes, authentication, concurrency and limits.

@@ -9,7 +9,7 @@ numbers.
 
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Index, Integer, Text, text
+from sqlalchemy import BigInteger, Index, Integer, LargeBinary, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agent_backbone.services.database.base import Base
@@ -100,6 +100,158 @@ class ReportORM(Base):
         Index("idx_reports_audio", "telegram_audio_delivery", "telegram_audio_retry_at", "id"),
         {"sqlite_autoincrement": True},
     )
+
+
+class DocumentORM(Base):
+    """Immutable retained revisions, including their permanent retry receipts."""
+
+    __tablename__ = "documents"
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    document_id: Mapped[str] = mapped_column(Text, nullable=False)
+    author_id: Mapped[str] = mapped_column(Text, nullable=False)
+    author_name: Mapped[str] = mapped_column(Text, nullable=False)
+    request_id: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    html: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    content_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    supersedes_id: Mapped[int | None] = mapped_column(BigInteger)
+    __table_args__ = (
+        Index("uq_documents_request", "author_id", "request_id", unique=True),
+        Index("uq_documents_predecessor", "supersedes_id", unique=True),
+        Index("idx_documents_root", "document_id", "id"),
+        Index("idx_documents_created", "created_at", "author_id"),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class DocumentStorageORM(Base):
+    """One transactional admission counter/lock; never pruned with reports."""
+
+    __tablename__ = "document_storage"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    used_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class ConversationEntryORM(Base):
+    """One append-only entry in an artifact's conversation (docs/conversations.md)."""
+
+    __tablename__ = "conversation_entries"
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_id: Mapped[str] = mapped_column(Text, nullable=False)
+    entry_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    """``message``, ``revision`` or ``step``."""
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    author_type: Mapped[str] = mapped_column(Text, nullable=False)
+    author_id: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    """The agent's registration ID; empty for the owner."""
+    author_name: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str | None] = mapped_column(Text)
+    recipient_id: Mapped[str | None] = mapped_column(Text)
+    recipient_name: Mapped[str | None] = mapped_column(Text)
+    in_reply_to: Mapped[int | None] = mapped_column(BigInteger)
+    resulting_revision_id: Mapped[str | None] = mapped_column(Text)
+    """Agent reply result; also the lookup ID on current-plan revision events."""
+    anchor: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[str | None] = mapped_column(Text)
+    """The revision or step event, as JSON."""
+    request_id: Mapped[str | None] = mapped_column(Text)
+    request_sha256: Mapped[str | None] = mapped_column(Text)
+    operation_id: Mapped[str | None] = mapped_column(Text)
+    """The current delivery operation of an owner message."""
+    delivery: Mapped[str | None] = mapped_column(Text)
+    """The delivery state last recorded, read when its queue row is gone."""
+    __table_args__ = (
+        Index("idx_conversation_entries", "kind", "artifact_id", "id"),
+        Index(
+            "uq_conversation_request",
+            "kind",
+            "artifact_id",
+            "author_id",
+            "request_id",
+            unique=True,
+        ),
+        Index("idx_conversation_operation", "operation_id"),
+        Index(
+            "idx_conversation_revision",
+            "kind",
+            "artifact_id",
+            "entry_kind",
+            "resulting_revision_id",
+        ),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class ConversationReadORM(Base):
+    """How far the owner has read each conversation; it never moves backwards."""
+
+    __tablename__ = "conversation_reads"
+    kind: Mapped[str] = mapped_column(Text, primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    read_through: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    """When the marker last moved, or a maintainer mapping changed: summary
+    polling reports the changed counts and responsible agent."""
+
+
+class ObservedSourceORM(Base):
+    """A skill or policy identity, assigned when Backbone first reads its source.
+
+    ``source_key`` is the canonical store plus the item's name; how the item is
+    distributed is not part of it. A retired identity keeps its row, and the
+    next one under the same key takes the next ``generation``."""
+
+    __tablename__ = "observed_sources"
+    artifact_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    source_key: Mapped[str] = mapped_column(Text, nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    """``active``, ``missing`` (unreadable at the last observation) or ``retired``."""
+    first_observed_at: Mapped[str] = mapped_column(Text, nullable=False)
+    retired_at: Mapped[str | None] = mapped_column(Text)
+    maintainer_id: Mapped[str | None] = mapped_column(Text)
+    """The registration the operator mapped as maintainer; none by default."""
+    maintainer_name: Mapped[str | None] = mapped_column(Text)
+    """Its name when mapped, shown if that registration is later retired."""
+    __table_args__ = (
+        Index("uq_observed_source_generation", "kind", "source_key", "generation", unique=True),
+    )
+
+
+class ObservedVersionORM(Base):
+    """An immutable snapshot of a skill or policy, taken when its content changed."""
+
+    __tablename__ = "observed_versions"
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    artifact_id: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        Index("idx_observed_versions", "artifact_id", "id"),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class ConversationRedeliveryORM(Base):
+    """Redelivery requests by their idempotency key."""
+
+    __tablename__ = "conversation_redeliveries"
+    entry_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    request_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    result: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class AgentWatchORM(Base):
@@ -226,6 +378,7 @@ class DeliveryORM(Base):
     repo: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     issue_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     target_entity: Mapped[str] = mapped_column(Text, nullable=False)
+    registration_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     session_name: Mapped[str] = mapped_column(Text, nullable=False)
     outcome: Mapped[str] = mapped_column(Text, nullable=False)
     source: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
@@ -303,6 +456,8 @@ class AgentTransitionORM(Base):
 
     __tablename__ = "agent_transitions"
 
+    registration_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Target identity for registration-scoped requests; legacy requests remain unbound."""
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     agent_name: Mapped[str] = mapped_column(Text, nullable=False)
     requested_by: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
@@ -386,6 +541,8 @@ class AcknowledgmentORM(Base):
     issue_number: Mapped[int] = mapped_column(Integer, primary_key=True)
     target_entity: Mapped[str] = mapped_column(Text, primary_key=True)
     acknowledged_at: Mapped[str] = mapped_column(Text, nullable=False)
+    cleared_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cleared_comment_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
 class MessageQueueORM(Base):
@@ -396,6 +553,7 @@ class MessageQueueORM(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     operation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Delivery operation identity; retained through duplicate enqueue and drain."""
+    registration_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     session_name: Mapped[str] = mapped_column(Text, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     repo: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
@@ -738,3 +896,90 @@ class SigningGrantORM(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="open")
     """``open``, or ``done`` once the agent closed it."""
     closed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class SheetORM(Base):
+    """Stable retained workbook, owned by a registration rather than a reusable name."""
+
+    __tablename__ = "sheets"
+    sheet_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    author_id: Mapped[str] = mapped_column(Text, nullable=False)
+    author_name: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    current_revision_id: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class SheetRevisionORM(Base):
+    """Immutable inputs, calculated values and exact-retry receipt."""
+
+    __tablename__ = "sheet_revisions"
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    revision_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    sheet_id: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_revision_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor_key: Mapped[str] = mapped_column(Text, nullable=False)
+    request_id: Mapped[str] = mapped_column(Text, nullable=False)
+    request_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    editor_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    editor_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    editor_name: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    tab_metadata: Mapped[str] = mapped_column(Text, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    calculation_engine: Mapped[str] = mapped_column(Text, nullable=False)
+    calculation_version: Mapped[str] = mapped_column(Text, nullable=False)
+    warnings: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    __table_args__ = (
+        Index("uq_sheet_revision_request", "actor_key", "request_id", unique=True),
+        Index("idx_sheet_revision_history", "sheet_id", "seq"),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class SheetFeedbackORM(Base):
+    """Durable contextual feedback plus the ordinary queue operation it admitted."""
+
+    __tablename__ = "sheet_feedback"
+    feedback_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    sheet_id: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_revision_id: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_key: Mapped[str] = mapped_column(Text, nullable=False)
+    request_id: Mapped[str] = mapped_column(Text, nullable=False)
+    request_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    operation_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    recipient_id: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    context: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    __table_args__ = (Index("uq_sheet_feedback_request", "actor_key", "request_id", unique=True),)
+
+
+class SheetStorageORM(Base):
+    __tablename__ = "sheet_storage"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    used_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class CurrentPlanORM(Base):
+    """Only the latest authored checklist for one stable agent registration."""
+
+    __tablename__ = "current_plans"
+    author_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    author_name: Mapped[str] = mapped_column(Text, nullable=False)
+    plan_id: Mapped[str] = mapped_column(Text, nullable=False)
+    revision_id: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class CurrentPlanRequestORM(Base):
+    """Bounded-lifetime retry metadata; never historical checklist content."""
+
+    __tablename__ = "current_plan_requests"
+    actor_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    request_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    request_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    receipt: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (Index("idx_current_plan_requests_created", "created_at"),)

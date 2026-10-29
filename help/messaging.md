@@ -23,7 +23,7 @@ Read `backbone docs security` for the trust model.
 - The response tells you what happened, and its `detail` line says it in
   words. `"outcome": "delivered"` means it landed now. Otherwise `queue`
   is one of: `stored` — a row exists and the backbone retries delivery
-  when the recipient is ready, until expiry (`"queued": true`, exit code 2);
+  when the recipient is ready (`"queued": true`, exit code 2);
   `already_queued` — the same message from you is already waiting, nothing
   was added (`"queued": true`); `failed` — the message could NOT be stored
   (`"queued": false`, exit code 1): this is the only case where sending
@@ -33,8 +33,9 @@ Read `backbone docs security` for the trust model.
   continue your work; replies reach you the same way when you are next
   idle. Two different agents may send identical text — each is its own
   message; only *you* repeating *yourself* is folded into one.
-- Ordinary queued messages expire after `timing.queue_expiry_minutes` (default
-  30). Messages to or from a member of an active swarm are retained until
+- Direct messages remain pending until delivery, inbox acknowledgment, or recipient
+  registration retirement. Other queued notifications expire after
+  `timing.queue_expiry_minutes` (default 30). Messages to or from a member of an active swarm are retained until
   delivery or the swarm ends. Inbox messages and uncertain submissions remain
   held until acknowledged, and messages queued behind an uncertain submission
   wait with it, then get a full expiry window once it is acknowledged. When messages expire, you get a `[via:backbone]` notice listing

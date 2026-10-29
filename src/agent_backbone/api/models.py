@@ -38,7 +38,7 @@ class AgentStartRequest(BaseModel):
     runtime: str | None = None
     model: str | None = None
     resume: bool = False
-    """Continue the saved conversation (the runtime's latest when none is saved); default fresh."""
+    """Continue the saved conversation (refused when no exact ID is saved); default fresh."""
     watch: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     """Added to the agent's tags before it launches (skills and policies follow tags)."""
@@ -82,7 +82,7 @@ class AgentRestartRequest(BaseModel):
     start: bool = True
     """False stops the session and starts nothing."""
     delay_seconds: int | None = None
-    """Seconds between the stop and the start (default 60); excludes ``start_at``."""
+    """Seconds between the stop and the start (default 0); excludes ``start_at``."""
     start_at: str | None = None
     """ISO 8601 start time (local time unless an offset is given)."""
     message: str | None = None
@@ -108,7 +108,7 @@ class AgentTransitionView(BaseModel):
     model: str | None = None
     resume: bool = False
     start: bool = True
-    delay_seconds: int = 60
+    delay_seconds: int = 0
     start_at: str | None = None
     message: str | None = None
     status: str
@@ -216,6 +216,9 @@ class AgentStateHistory(BaseModel):
 
 class AgentInspectResponse(BaseModel):
     """Everything the backbone knows about one agent, with the evidence."""
+
+    credential_profile: str = "unavailable"
+    """Provisioning evidence only; never the credential or proof of a successful request."""
 
     name: str
     known: bool = True
@@ -743,7 +746,9 @@ class FleetResumeAgent(BaseModel):
 class FleetResumeRun(BaseModel):
     snapshot_id: int
     resumed_at: str
-    resumed_by: str = ""
+    resumed_by: str = Field(
+        default="", description="Caller-supplied actor claim, not verified identity"
+    )
     agents: list[FleetResumeAgent]
     counts: dict[str, int]
 
@@ -751,7 +756,9 @@ class FleetResumeRun(BaseModel):
 class FleetSnapshotView(BaseModel):
     id: int
     created_at: str
-    created_by: str = ""
+    created_by: str = Field(
+        default="", description="Caller-supplied actor claim, not verified identity"
+    )
     note: str | None = None
     stop: bool
     force: bool = False
@@ -763,7 +770,9 @@ class FleetSnapshotView(BaseModel):
 class FleetSnapshotSummary(BaseModel):
     id: int
     created_at: str
-    created_by: str = ""
+    created_by: str = Field(
+        default="", description="Caller-supplied actor claim, not verified identity"
+    )
     note: str | None = None
     stop: bool
     counts: dict[str, int]

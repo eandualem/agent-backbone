@@ -81,7 +81,8 @@ async def test_start_inbox_only_registers_without_launching(db, tmp_path):
     launch.assert_not_awaited()
     assert result.ok and result.ready == "inbox_only"
     assert store.agents.get("client").inbox_only
-    await store.forget("client")  # between resolving and starting
+    with patch("agent_backbone.services.terminal.session_exists", return_value=False):
+        await store.forget("client")  # between resolving and starting
     with pytest.raises(ValueError, match="forgotten"):
         await start_resolved(store, store.config, spec, req, db=db)
     with pytest.raises(ValueError, match="nothing to resume"):
@@ -241,8 +242,9 @@ async def test_its_direct_messages_wait_while_others_expire(db):
     async with db.queue._tx() as conn:
         await conn.execute(text("UPDATE message_queue SET enqueued_at = '2000-01-01T00:00:00Z'"))
     expired = await db.queue.expire_pending(inbox_sessions=("ike",))
-    assert {row["message"] for row in expired} == {"issue", "batch", "from"}
+    assert {row["message"] for row in expired} == {"issue", "batch"}
     assert [row["id"] for row in await db.queue.checkpoint("ike")] == [held.id]
+    assert [row["message"] for row in await db.queue.checkpoint("other")] == ["from"]
 
 
 async def test_the_drain_leaves_its_messages_for_the_inbox(config, db):

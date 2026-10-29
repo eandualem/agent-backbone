@@ -9,7 +9,7 @@ from tests.report_support import author, publication
 from tests.unit.api.routes.test_api_responses import body
 
 
-async def test_response_retention_keeps_latest_of_each_kind_and_idempotent_correction(db):
+async def test_responses_are_retained_and_correction_is_idempotent(db):
     await author(db)
     first, _ = await db.reports.publish(PublishResponse.model_validate(body(agent="writer")))
     request = PublishResponse.model_validate(
@@ -19,9 +19,10 @@ async def test_response_retention_keeps_latest_of_each_kind_and_idempotent_corre
     report, _ = await db.reports.publish(publication())
     async with db.engine.begin() as conn:
         await conn.execute(text("UPDATE reports SET created_at = '2000-01-01T00:00:00Z'"))
-    assert await db.reports.prune(30) == 1
-    assert await db.reports.get(first["id"], kind="response") is None
-    assert await db.reports.get(corrected["id"], kind="response")
+    assert await db.reports.get(first["id"], kind="response")
+    assert (await db.reports.get(corrected["id"], kind="response"))["conversation_id"] == first[
+        "id"
+    ]
     assert await db.reports.get(report["id"])
     retry, created = await db.reports.publish(request)
     assert not created and retry["id"] == corrected["id"]

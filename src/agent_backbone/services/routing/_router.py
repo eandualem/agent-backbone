@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from datetime import datetime
@@ -11,7 +12,6 @@ from agent_backbone.models import (
     DeliveryOutcome,
     EventType,
     IssueEvent,
-    parse_from_tag,
     review_source_key,
 )
 from agent_backbone.services.agents.acknowledgement import (
@@ -48,25 +48,20 @@ log = logging.getLogger(__name__)
 SOURCE = "issue-dispatcher"
 
 
-def _registered(entity: str, config: BackboneConfig) -> str:
-    """A ``[from:X]`` tag's agent under its registered spelling: tags are read
-    lowercased, and case-only twins cannot be registered."""
-    return next((spec.name for spec in config.agents if spec.name.lower() == entity), entity)
-
-
-def _resolve_commenter_entity(
-    event: IssueEvent, config: BackboneConfig, *, include_intent: bool = True
+async def _resolve_commenter_entity(
+    event: IssueEvent, config: BackboneConfig, registrations: dict[str, str]
 ) -> str | None:
-    """Who made the comment: ``[from:X]`` tag first, then the hook action log."""
-    if event.comment and event.comment.body:
-        entity = parse_from_tag(event.comment.body)
-        if entity:
-            return _registered(entity, config)
-    return find_outgoing_comment(
+    """Attribute only the exact comment recorded by a successful local publication."""
+    if event.comment is None:
+        return None
+    return await asyncio.to_thread(
+        find_outgoing_comment,
         event.issue.number,
         action_log=config.action_log_path,
         repo=event.issue.repo_full_name,
-        include_intent=include_intent,
+        include_intent=False,
+        comment_id=event.comment.id,
+        registrations=registrations,
     )
 
 
@@ -183,7 +178,24 @@ async def _dispatch_comment(
     event: IssueEvent, config: BackboneConfig, db: BackboneDB, result: DispatchResult
 ) -> None:
     repo = event.issue.repo_full_name
-    commenter = _resolve_commenter_entity(event, config)
+    registrations = {row["name"]: row["report_identity"] for row in await db.agents.list()}
+    commenter = await _resolve_commenter_entity(event, config, registrations)
+    if commenter:
+        try:
+            acknowledged = await db.acks.record(
+                event.issue.number,
+                commenter,
+                repo=repo,
+                comment_id=event.comment.id,
+                registration_id=registrations[commenter],
+            )
+            if not acknowledged and not await db.agents.registration_matches(
+                commenter, registrations[commenter]
+            ):
+                commenter = None
+        except Exception:
+            log.exception("Failed to record acknowledgment (non-fatal)")
+            commenter = None
     audience = comment_audience(event.issue, commenter, config)
     # A swarm's coordinator is a party to the swarm's own issue — it is not
     # an owner (members never are), so it would otherwise hear nothing.
@@ -195,20 +207,13 @@ async def _dispatch_comment(
     commenter_session: str | None = None
     if commenter:
         commenter_session = resolve_entity_session(commenter, config)
-    acknowledged = _resolve_commenter_entity(event, config, include_intent=False)
-    if acknowledged:
-        try:
-            await db.acks.record(event.issue.number, acknowledged, repo=repo)
-        except Exception:
-            log.exception("Failed to record acknowledgment (non-fatal)")
-
     for target in audience:
         session = resolve_entity_session(target, config)
         if session is None or session == commenter_session:
             result.skipped.append(target)
             continue
         try:
-            await db.acks.clear(event.issue.number, target, repo=repo)
+            await db.acks.clear(event.issue.number, target, repo=repo, comment_id=event.comment.id)
         except Exception:
             log.exception("Failed to clear acknowledgment (non-fatal)")
         await _deliver(
@@ -228,20 +233,16 @@ async def _dispatch_review(
 ) -> None:
     """A review reaches the pull request's parties, like a comment would.
 
-    The reviewer is excluded when it is an agent (a ``[from:X]`` tag in the
-    review body); a bot or human reviewer excludes nobody.
+    Review body prefixes are untrusted claims and never exclude recipients.
     """
     review = event.review
     if review is None:
         return
-    reviewer = parse_from_tag(review.body)
-    reviewer = _registered(reviewer, config) if reviewer else None
-    audience = comment_audience(event.issue, reviewer, config)
+    audience = comment_audience(event.issue, None, config)
     message = format_review_notification(event.issue, review)
-    reviewer_session = resolve_entity_session(reviewer, config) if reviewer else None
     for target in audience:
         session = resolve_entity_session(target, config)
-        if session is None or session == reviewer_session:
+        if session is None:
             result.skipped.append(target)
             continue
         await _deliver(
@@ -263,6 +264,7 @@ async def _dispatch_pull_request(
     opened it (its hook logged the ``gh pr create``), for which the issues
     the pull request closes count as acknowledged instead."""
     repo = event.issue.repo_full_name
+    registrations = {row["name"]: row["report_identity"] for row in await db.agents.list()}
     # A polled opening can arrive long after the fact (startup backfill), so
     # it is matched to the action log at the pull request's creation time.
     # An unknown creation time is matched against now, as before.
@@ -277,7 +279,13 @@ async def _dispatch_pull_request(
         action_log=config.action_log_path,
         base_repo=repo,
         at=opened_at,
+        registrations=registrations,
     )
+    if opener and (
+        not registrations.get(opener)
+        or not await db.agents.registration_matches(opener, registrations[opener])
+    ):
+        opener = None
     confirmed = (
         find_outgoing_pull_request(
             event.issue.head_repo,
@@ -286,16 +294,22 @@ async def _dispatch_pull_request(
             base_repo=repo,
             include_intent=False,
             at=opened_at,
+            registrations=registrations,
         )
         if opener
         else None
     )
-    if confirmed:
+    # A retry may leave only intent, but another author's success cannot confirm it.
+    if confirmed and confirmed == opener:
         for number in event.issue.linked_issues():
             try:
-                await db.acks.record(number, confirmed, repo=repo)
+                if not await db.acks.record(
+                    number, confirmed, repo=repo, registration_id=registrations[confirmed]
+                ):
+                    opener = None
             except Exception:
                 log.exception("Failed to record acknowledgment (non-fatal)")
+                opener = None
     routing = route_issue(event.issue, event.event_type, config)
     message = format_pull_request_notification(event.issue)
     for target in routing.queue + routing.watch:

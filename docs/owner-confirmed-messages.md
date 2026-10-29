@@ -75,14 +75,14 @@ counts.
 
 **Reset.** A replace or clear that is not signed by the current key starts a new
 epoch: the old key admits nothing more, and a pending transition is replaced.
-In the same transaction, every confirmation of the old epoch that wasn't
+In the same transaction, every confirmation from that epoch or an earlier rotated epoch that wasn't
 delivered yet is revoked (its receipt says `revoked`), and its queued delivery
 is expired, including one the delivery job is holding right now, so it is
 never delivered. A message the agent already read from its inbox, or a paste
 whose outcome is unknown, stays held until the agent acknowledges it, but its
 inbox copy loses the marker and says the confirmation was revoked. A steer already offered to an agent's running turn can still
 be taken within its five minutes. `backbone message validate` refuses every
-confirmation of the old epoch, claimed or not. After an ordinary rotation, work already admitted
+confirmation covered by the reset, claimed or not. After an ordinary rotation, work already admitted
 keeps its bounded lifetime; the old epoch admits no new requests.
 
 ## Signed requests
@@ -99,6 +99,7 @@ these fields count:
 | `POST /api/agents/{name}/restart` | `from_entity`, when given |
 | `POST /api/integrations/reply` | `session` |
 | `POST /api/reports`, `/api/responses` | `agent` |
+| `POST /api/documents` | `author` |
 | `POST /api/swarms` | `initiator` |
 | `POST /api/skills`, `PUT /api/skills/{name}/tags` | `actor` |
 | `POST /api/agents/{name}/state` | the `{name}` path parameter (a hook writing its own state) |

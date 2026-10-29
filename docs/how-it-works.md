@@ -5,7 +5,7 @@ Starting an existing agent reuses its saved CLI and model and begins a **new
 conversation**. Continuing the previous one is your call: `backbone agent resume
 NAME` (or `start --resume`; API `resume: true`) reopens the conversation the
 agent's last launch held (the session id its hook reported, or the one it was
-resumed on), or the runtime's own last conversation when there is none. An id
+resumed on). Without that identity, resume refuses to guess. An id
 left by an earlier launch is not reused. A fresh start says when a previous conversation is available. Starts are
 fresh by default because a resumed agent trusts its own context over whatever
 happened in the checkout since — another CLI, a swarm, the shared memory.
@@ -58,6 +58,14 @@ This page follows real requests through the system. Read
    Codex also starts with `-c check_for_update_on_startup=false`, so an
    available Codex update never stops a launch on its update dialog; upgrade
    Codex yourself when you choose to.
+   The configured brief and shared policies load through native instruction
+   channels: Claude Code appends the policy file to its system prompt, Codex's
+   `SessionStart` hook supplies the complete text as developer context, and
+   OpenCode adds the file to its native `instructions` list. These paths preserve
+   built-in guidance and do not submit the policies as a first user prompt.
+   OpenCode retains existing instructions, plugins and permission settings.
+   Gemini CLI and Deep Code still use launch prompts; Aider queues its brief
+   as the first message. A plain shell receives no model instructions.
 5. **Wait until ready** (up to `timing.start_timeout_seconds`, 60 s): a
    fresh hook-written `idle` state, or a visible empty prompt for runtimes
    without hooks. A fresh busy or blocked hook keeps startup waiting even if
@@ -129,11 +137,12 @@ when messages are queued for it ([`always_on`](configuration.md#agents)).
 Restarting (`agent restart`, `POST /api/agents/{name}/restart`) is the one
 restart the backbone performs, because it was asked for. The request is
 validated (registered agent, installed runtime, model and effort, same-CLI
-resume) and stored as a `pending` transition; nothing is stopped inside the
-request. The `agent-transitions` job then stops the session on its next tick
-(5 s), records the stop, and — when the wait is over (default one minute after
-the stop, or the explicit delay or time) — starts the replacement through the
-same operation as `agent start`: the record update, the brief, the hooks and
+resume with a known exact conversation identity) and stored as a `pending`
+transition; nothing is stopped inside the request. Resume eligibility is checked again before stopping, so an unsupported
+runtime or missing conversation identity leaves the existing session running.
+The `agent-transitions` job then stops the session on its next tick
+(5 s), records the stop, and starts the replacement immediately, or after an
+explicit delay or time, through the same operation as `agent start`: the record update, the brief, the hooks and
 the readiness wait. A continuation message is handed to the replacement once
 it is at its prompt (queued if it is not; that queue row never expires). No
 process inside the session takes part after acceptance, so an agent can ask
@@ -142,11 +151,15 @@ backbone restart in between changes nothing. The transition ends `completed`
 with the launch's readiness, or `failed` with the reason — including a
 session someone started by hand during the wait, which is never claimed as
 this transition's work. An agent with a pending transition is not reported
-as unexpectedly offline.
+as unexpectedly offline. Registration-bound transitions keep the accepted identity
+through shutdown, settings updates, launch and continuation delivery or queueing.
+Forgetting and re-registering a
+name cannot transfer an older restart request or its runtime/model changes to
+the replacement, including when a separate direct CLI process makes the change.
 
 When the backbone is down, the CLI does the same thing directly against the
-database and tmux, and says so. A brief sent as the first message (Codex,
-Aider) is delivered there too, through the same queue drain; if the agent
+database and tmux, and says so. A brief sent as the first message (Aider) is
+delivered there too, through the same queue drain; if the agent
 is not ready for it in time, the CLI says the brief goes first once the
 backbone runs, and if its paste could not be confirmed, that the agent's
 messages are held until it is acknowledged.
@@ -154,9 +167,8 @@ messages are held until it is acknowledged.
 ## 2. State: how the backbone knows what an agent is doing
 
 Permission requests do not always open a human dialog: an automatic reviewer can
-handle them. After the three-second redraw window, a visible busy state, current
-provider error or input prompt can supersede a permission hook when no active
-dialog remains. An input prompt alone reads as `busy` until turn completion is
+handle them. A visible busy state, current provider error or input prompt can
+immediately supersede a permission hook when no active dialog remains. An input prompt alone reads as `busy` until turn completion is
 established, so messages cannot interrupt unfinished work. Old dialog text above
 a new input prompt does not count as a current human wait. Refusal records remain
 action history; they do not mean an approval is pending.
@@ -244,17 +256,18 @@ for Claude Code and Codex.
 
 The hooks parse actual `gh issue comment`, `gh pr comment` and `gh pr create`
 commands into `<data_dir>/state/actions.jsonl`, with repository and branch
-metadata. Claude, Codex and OpenCode record **intent** before execution to suppress a fast
-self-notification. Only a **successful completion** acknowledges work; a failed
-command or a quoted example cannot remove an issue from the agent's queue.
-Legacy action records without completion evidence no longer acknowledge work.
+metadata. Claude, Codex and OpenCode record **intent** before execution, but only a
+**successful completion with the exact returned comment URL** acknowledges a comment.
+The repository, issue and comment ID must match before a GitHub notification can be
+attributed to the agent. Intent, a body prefix, or success without a publication
+receipt cannot acknowledge a comment or suppress its notification.
 Comment hooks honor an explicit repository and `GH_REPO`. If `gh repo set-default`
 makes local attribution ambiguous, the hook leaves the action unscoped and waits
-for repository-specific GitHub confirmation.
+for an unambiguous publication receipt.
 
 Direct commands, argv lists and `&&` chains are supported. Ambiguous shell
 control flow, expansion, background execution and unknown completion output
-are left to GitHub confirmation through the agent's `[from:NAME]` comment.
+cannot acknowledge a comment automatically; a `[from:NAME]` prefix is not proof of authorship.
 Claude's [completion hook](https://code.claude.com/docs/en/hooks#posttooluse)
 is distinct from its failure hook; Codex's
 [completion hook](https://learn.chatgpt.com/docs/hooks#posttooluse) also fires
@@ -302,6 +315,9 @@ character, its status chrome (lines to ignore), its busy indicator
 (Claude: `esc to interrupt`), its permission prompts (`Do you want to
 proceed?`, the folder-trust question), and how to tell typed text from a
 dim placeholder.
+Codex's timed `Working` and `Compacting context` rows also count as busy when
+a narrow terminal cuts off the interrupt hint; its visible input placeholder
+does not make the agent ready during that work.
 
 Every reading carries its evidence. `backbone agent inspect app` shows the
 state, the delivery condition, the evidence lines, the terminal tail and
@@ -452,9 +468,9 @@ not been acknowledged; a fresh conversation (not a resumed one) is offered that
 issue again, and so is a saved conversation resumed by id other than the last
 launch's (a fleet resume).
 **Acknowledgement** = the agent commented on the issue (or opened a pull
-request that closes it): detected from the hook action log, a
-`[from:<agent>]` comment prefix, or GitHub comments on
-the next poll.
+request that closes it): detected from successful local hook evidence. Comment
+acknowledgements require an exact publication receipt; prefixes in GitHub text do
+not establish identity.
 
 An agent's **queue** is the union of `for:<agent>` issues in every
 repository it owns or watches plus, if it is the sole owner of its
@@ -472,8 +488,8 @@ acknowledgement is recorded; the targets' acknowledgements are cleared.
 ### A review is submitted on a pull request
 
 Audience as for a comment (the pull request's `for:` targets, its `from:`
-opener and the sole owner), minus the reviewer when it is an agent
-(`[from:X]` in the review body). One message per review — verdict,
+opener and the sole owner). Review body prefixes do not exclude recipients.
+One message per review — verdict,
 summary preview, reviewed commit and current head, link — not one per inline comment: every inline comment
 belongs to a review, and the agent reads them on GitHub. A review on a
 closed pull request notifies nobody. Reviews arrive through webhooks; configured reviewer accounts are also polled.

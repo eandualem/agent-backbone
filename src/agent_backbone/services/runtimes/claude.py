@@ -108,6 +108,8 @@ def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = N
 
 
 class ClaudeCode(Runtime):
+    setup_hooks = True
+
     supports_exact_resume = True
     id = "claude"
     skill_dirs = (".claude/skills",)
@@ -121,6 +123,7 @@ class ClaudeCode(Runtime):
     brief_refresh = "hook_context"
     declared_capabilities = frozenset(
         {
+            "comment-receipts",
             "trust",
             "brief-after-compaction",
             "project-instructions",

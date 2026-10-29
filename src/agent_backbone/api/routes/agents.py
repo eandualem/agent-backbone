@@ -9,6 +9,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from agent_backbone.api.auth import require_operator
 from agent_backbone.api.deps import (
     get_agent_store,
     get_config,
@@ -45,6 +46,7 @@ from agent_backbone.services.agents import (
     AgentConfigView,
     AgentStore,
     EnrichedAgent,
+    agent_profile_readiness,
     agent_state,
     approve_agent,
     deny_agent,
@@ -103,7 +105,9 @@ class AgentTagsView(AgentConfigView):
     """Evidence lines from bringing a running session's skill links in line now."""
 
 
-@router.post("/agents/{name}/tags", response_model=AgentTagsView)
+@router.post(
+    "/agents/{name}/tags", response_model=AgentTagsView, dependencies=[Depends(require_operator)]
+)
 async def tag_agent(
     name: str, body: AgentTagsRequest, store: AgentStore = Depends(get_agent_store)
 ):
@@ -117,7 +121,11 @@ async def tag_agent(
     return AgentTagsView(**AgentConfigView.from_spec(spec).model_dump(), relinked=relinked)
 
 
-@router.post("/agents/{name}/rename", response_model=AgentConfigView)
+@router.post(
+    "/agents/{name}/rename",
+    response_model=AgentConfigView,
+    dependencies=[Depends(require_operator)],
+)
 async def rename_agent(
     name: str, body: AgentRenameRequest, store: AgentStore = Depends(get_agent_store)
 ):
@@ -140,6 +148,7 @@ async def list_agents(feed: SessionFeed = Depends(get_feed)):
 @router.get("/agents/{session}/state", response_model=AgentStateDetail)
 async def get_agent_state_endpoint(session: str, config: BackboneConfig = Depends(get_config)):
     """Reconciled state for one agent."""
+    registered_agent_or_404(config, session)
     snapshot = await agent_state(config, session)
     return AgentStateDetail(
         session=session,
@@ -201,7 +210,7 @@ async def inspect_agent(
     db: BackboneDB = Depends(get_db),
 ):
     """Everything the backbone knows about an agent, with the evidence behind it."""
-    spec = config.agents.get(name)
+    spec = registered_agent_or_404(config, name)
     # An inbox-only agent has no session: one with its name is not its own.
     online = not (spec is not None and spec.inbox_only) and await session_exists(name)
     profile = await get_session_intelligence(name, config)
@@ -228,8 +237,13 @@ async def inspect_agent(
     except Exception:
         recent = []
     transitions = await db.transitions.list_for(name, limit=1)
+    registration = next((row for row in await db.agents.list() if row["name"] == name), {})
+    credential_profile = (
+        agent_profile_readiness(config, registration) if registration else "unavailable"
+    )
 
     return AgentInspectResponse(
+        credential_profile=credential_profile,
         name=name,
         known=spec is not None,
         online=online,
@@ -273,6 +287,16 @@ async def list_runtimes():
 async def _start(
     request: Request, req: StartRequest, store: AgentStore, feed: SessionFeed
 ) -> AgentStartResponse:
+    if request.state.credential_role == "agent":
+        if (
+            req.directory is not None
+            or req.runtime is not None
+            or req.model is not None
+            or req.tags
+            or req.inbox_only
+        ):
+            await require_operator(request)
+        registered_agent_or_404(request.app.state.config, req.name or "")
     try:
         spec = await resolve_agent(store, req)
     except KeyError as exc:
@@ -360,16 +384,28 @@ async def stop_agent(
 
 @router.post("/agents/{session}/restart", response_model=AgentTransitionView)
 async def restart_agent(
+    request: Request,
     session: str,
     body: AgentRestartRequest | None = None,
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
+    store: AgentStore = Depends(get_agent_store),
 ):
     """Accept a one-time stop/restart. Validated and persisted here; the
     ``agent-transitions`` job stops the session and starts the replacement,
     so a caller asking for its own session cannot lose the start."""
-    spec = registered_agent_or_404(config, session)
+    # Accept promptly even during a launch. The job rechecks the persisted
+    # registration under the lifecycle lock before stopping or starting anything.
+    await store.refresh()
+    spec = registered_agent_or_404(store.config, session)
     body = body or AgentRestartRequest()
+    registration = getattr(request.state, "credential_registration", None)
+    if registration and not await db.agents.registration_name(registration):
+        raise HTTPException(status_code=403, detail="Agent credential registration is retired")
+    if (body.runtime is not None or body.model is not None) and (
+        not registration or not await db.agents.registration_matches(session, registration)
+    ):
+        await require_operator(request)
     try:
         req = TransitionRequest(
             runtime=body.runtime,
@@ -379,7 +415,9 @@ async def restart_agent(
             delay_seconds=body.delay_seconds,
             start_at=parse_start_at(body.start_at) if body.start_at else None,
             message=body.message or None,
-            requested_by=body.from_entity,
+            requested_by=getattr(request.state, "credential_agent", None) or body.from_entity,
+            # Saved-setting peer restarts bind the target, not the caller.
+            registration_id=spec.registration_id if registration else None,
         )
         row = await request_transition(db, config, spec, req)
     except TransitionPending as exc:
@@ -500,6 +538,7 @@ async def deny_agent_prompt(
 
 @router.patch("/agents/{name}", response_model=AgentConfigView)
 async def update_agent(
+    request: Request,
     name: str,
     body: AgentUpdateRequest,
     store: AgentStore = Depends(get_agent_store),
@@ -507,6 +546,8 @@ async def update_agent(
     """Change an agent's recorded settings (dir, runtime, model, repo, tags,
     env, description, always_on, unattended)."""
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    if set(changes) - {"description", "repo"}:
+        await require_operator(request)
     try:
         spec = await store.update(name, **changes)
     except KeyError:
@@ -565,7 +606,7 @@ async def unsubscribe(
     return AgentConfigView.from_spec(spec)
 
 
-@router.delete("/agents/{name}")
+@router.delete("/agents/{name}", dependencies=[Depends(require_operator)])
 async def forget_agent(name: str, store: AgentStore = Depends(get_agent_store)):
     """Forget an agent (its session must be stopped first)."""
     try:
@@ -640,7 +681,7 @@ async def get_agent_output(
     )
 
 
-@router.post("/agents/{session}/state")
+@router.post("/agents/{session}/state", dependencies=[Depends(require_operator)])
 async def post_agent_state(
     session: str,
     body: StateUpdateRequest,

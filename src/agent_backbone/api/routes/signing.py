@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 
 from agent_backbone import signing
 from agent_backbone.api import confirmations
+from agent_backbone.api.auth import require_operator
 from agent_backbone.api.deps import get_config, get_db
 from agent_backbone.api.models import envelope_sender
 from agent_backbone.api.signed import Refusal, now
@@ -269,7 +270,7 @@ async def receipts(
     }
 
 
-@router.post("/owner")
+@router.post("/owner", dependencies=[Depends(require_operator)])
 async def set_owner(body: OwnerRequest, config=Depends(get_config), db=Depends(get_db)):
     """Set the owner's Telegram id once; a later change waits for the current owner."""
     outcome = await db.signing.set_owner(body.telegram_user_id)

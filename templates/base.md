@@ -20,6 +20,12 @@ playbook for each; read it before first use):
   Response tied to that question. Responses answer the person; progress reports
   describe the work. Read `backbone help responses` before first use and
   `backbone docs responses` for operating guidance.
+- **Keep detailed work available**: publish substantial explanations, architecture
+  proposals and interactive HTML reports with `backbone documents publish`.
+  Preserve a requested format or destination, and tell the person the saved title
+  and revision ID. Documents retain the artifact without sending a notification.
+  Read `backbone help documents` before first use and `backbone docs documents`
+  for the operating contract.
 - **See the system**: `backbone status`, `backbone agent inspect <agent>`,
   `backbone agent output <agent>` (what a peer has been doing; reads only).
   `backbone agent list` shows peers' purposes and tags; consult useful expertise
@@ -37,8 +43,10 @@ playbook for each; read it before first use):
   hands over to a fresh session (another CLI or model, now or later), your own
   included; write your memory first (`backbone help agents`).
 - **Issues drive work**: unlabelled issues in your repository are yours;
-  `for:<agent>` labels route work between agents; acknowledge with a comment
-  starting `[from:{agent_name}]`.
+  `for:<agent>` labels route work between agents; acknowledge using
+  `gh issue comment` through your hooked runtime, with a comment starting
+  `[from:{agent_name}]`. Backbone requires the exact successful publication
+  receipt; `backbone help github` explains the supported paths.
 - **Skills**: shared skills tagged for you appear as links in your CLI's skills
   directory. The store behind them is read-only by design; share or update one
   with `backbone skills add PATH [--tag …]` (`backbone help skills`).

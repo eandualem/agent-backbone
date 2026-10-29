@@ -111,7 +111,7 @@ Derived from the state plus the terminal, right before anything is pasted:
 | `human_reading` | someone is selecting text or reading tmux scrollback | no — queued, even with `priority` |
 | `unattended_copy_mode` | the pane is in tmux copy mode and no client is viewing it | no — queued, even with `priority`, until someone attaches and presses `q` |
 | `human_typing` | someone typed text into the prompt | no — queued, unless `priority` |
-| `settling` | hook reported idle less than `timing.grace_period_seconds` ago, or a fresh session's brief (Codex, aider) is not delivered yet | not yet, unless `priority`; the brief goes first even then |
+| `settling` | hook reported idle less than `timing.grace_period_seconds` ago, or a fresh session's brief (Aider) is not delivered yet | not yet, unless `priority`; the brief goes first even then |
 | `ready` | idle, empty prompt | **yes** |
 | `unknown` | no signal either way | yes, best effort |
 
@@ -154,13 +154,14 @@ delivered by the background jobs — a message that waited at least two
 minutes is delivered with `(queued N min ago)` (`N h` from two hours) after
 its envelope, so a review or comment drained after a long busy stretch
 does not read as current; queued messages expire after
-`timing.queue_expiry_minutes` (30), except active swarm coordination, inbox holds,
-direct messages to an inbox-only agent, an agent's startup brief and `subscription` batches (facts, not conversation: they grow while the agent
+`timing.queue_expiry_minutes` (30), except direct messages, active swarm coordination, inbox holds, an agent's startup brief and `subscription` batches (facts, not conversation: they grow while the agent
 is busy and are retired only when delivered). Nothing expires for an agent whose
 queue is held by an unconfirmed (`uncertain`) delivery: that wait measures the
 hold, not whether the message is still wanted. Once the hold is acknowledged,
 the waiting messages get a full expiry window from that moment.
-An expired message leaves a
+Direct messages wait until delivered or acknowledged through the inbox, even across
+service restarts; retiring the recipient registration retires its pending messages.
+An expired notification leaves a
 delivery with outcome `expired` (kind, source and preview kept), so
 `agent inspect` shows what never arrived, and the recipient and each registered
 agent that sent one get a `[via:backbone]` notice listing them (source

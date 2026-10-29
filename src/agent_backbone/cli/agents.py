@@ -44,6 +44,7 @@ def _print_inspection(data: dict) -> None:
             ),
             ("CLI", data.get("runtime")),
             ("Configured model", data.get("model") or "default"),
+            ("Credential profile", data.get("credential_profile") or "unavailable"),
         ],
     )
     fields = [("State", data["state"]), ("Delivery", data["delivery"])]
@@ -125,7 +126,7 @@ def _transition_line(row: dict) -> str:
         line += (
             f", starts at {row['start_at'][:16]}Z"
             if row.get("start_at")
-            else f", starts {row.get('delay_seconds', 60)}s after the stop"
+            else f", starts {row.get('delay_seconds', 0)}s after the stop"
             if row.get("start")
             else ", stopping"
         )

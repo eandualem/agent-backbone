@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 
 from agent_backbone import __version__
 from agent_backbone.base import LifecycleManager
-from agent_backbone.config import BackboneConfig, bootstrap_config
+from agent_backbone.config import BackboneConfig, agent_credential, bootstrap_config
 from agent_backbone.hooks.backbone_state import batch_receipts, prune_context_receipts
 
 log = logging.getLogger(__name__)
@@ -124,10 +124,12 @@ def _register_jobs(app: FastAPI):
             "context_receipts": await _prune_receipts(),
             "queue": await state.db.queue.prune(days),
             "diagnostics": await state.db.diagnostics.prune(days),
-            "reports": await state.db.reports.prune(days),
+            "current_plans": await state.db.current_plans.prune(days),
             "signing_audit": await state.db.signing.prune(days),
             "signing_receipts": receipts,
-            "action_log_lines": rotate_action_log(state.config.action_log_path),
+            "action_log_lines": await asyncio.to_thread(
+                rotate_action_log, state.config.action_log_path, receipt_retention_days=days
+            ),
         }
 
     # Immediately at startup: this is what syncs agent state after a restart.
@@ -257,7 +259,8 @@ async def lifespan(app: FastAPI):
 
     boot: BackboneConfig = getattr(app.state, "config", None) or bootstrap_config()
     data_dir = boot.data_dir
-    data_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    data_dir.chmod(0o700)
     app.state.config = boot
     configure_pty_manager(data_dir)
 
@@ -280,7 +283,12 @@ async def lifespan(app: FastAPI):
         if integrations is not None:
             integrations.schedule_sync()
 
-    app.state.agent_store = AgentStore(app.state.db, data_dir, on_change=_publish)
+    app.state.agent_store = AgentStore(
+        app.state.db,
+        data_dir,
+        on_change=_publish,
+        credential_endpoint=(boot.backbone.host, boot.backbone.port),
+    )
     lifecycle.register("agents", app.state.agent_store)
     await lifecycle.start_all()
     config: BackboneConfig = app.state.config
@@ -352,9 +360,11 @@ async def lifespan(app: FastAPI):
         log.info("agent-backbone shutting down")
 
 
-def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
+def create_app(config: BackboneConfig | None = None):
     """Build and return the ASGI application (Socket.IO wrapping FastAPI)."""
     config = config or bootstrap_config()
+    if agent_credential(config.api_key):
+        raise ValueError("The server requires an operator credential, not an agent credential")
     app = FastAPI(
         title="agent-backbone",
         description="Local control plane for terminal AI agents",
@@ -378,6 +388,8 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
+            # Sheet exports report lost views and history in this header.
+            expose_headers=["X-Backbone-Sheet-Warnings"],
         )
 
     @app.exception_handler(httpx.HTTPError)
@@ -420,17 +432,23 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     from agent_backbone.api.auth import require_api_key
     from agent_backbone.api.routes.agents import router as agents_router
     from agent_backbone.api.routes.config import router as config_router
+    from agent_backbone.api.routes.conversations import router as conversations_router
+    from agent_backbone.api.routes.current_plans import router as current_plans_router
     from agent_backbone.api.routes.deliveries import router as deliveries_router
     from agent_backbone.api.routes.diagnostics import router as diagnostics_router
+    from agent_backbone.api.routes.documents import router as documents_router
     from agent_backbone.api.routes.events import router as events_router
     from agent_backbone.api.routes.fleet import router as fleet_router
     from agent_backbone.api.routes.help import router as help_router
     from agent_backbone.api.routes.integrations import router as integrations_router
     from agent_backbone.api.routes.issues import router as issues_router
     from agent_backbone.api.routes.messages import router as messages_router
+    from agent_backbone.api.routes.onboarding import router as onboarding_router
     from agent_backbone.api.routes.plans import router as plans_router
+    from agent_backbone.api.routes.policies import router as policies_router
     from agent_backbone.api.routes.reports import router as reports_router
     from agent_backbone.api.routes.responses import router as responses_router
+    from agent_backbone.api.routes.sheets import router as sheets_router
     from agent_backbone.api.routes.signing import router as signing_router
     from agent_backbone.api.routes.skills import router as skills_router
     from agent_backbone.api.routes.status import router as status_router
@@ -453,8 +471,14 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
         issues_router,
         messages_router,
         plans_router,
+        onboarding_router,
+        policies_router,
         reports_router,
         responses_router,
+        documents_router,
+        conversations_router,
+        sheets_router,
+        current_plans_router,
         signing_router,
         skills_router,
         swarms_router,
@@ -467,4 +491,6 @@ def create_app(config: BackboneConfig | None = None) -> socketio.ASGIApp:
     sio = create_sio(cors_origins=cors_origins or [])
     sio.fastapi_app = app
     app.state.sio = sio
-    return socketio.ASGIApp(sio, app)
+    from agent_backbone.api.ingress import IngressMiddleware
+
+    return IngressMiddleware(socketio.ASGIApp(sio, app), app)

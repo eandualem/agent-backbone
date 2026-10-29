@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 49e6e8eac8e6
+Revision ID: be2088e5c4ac
 Revises:
-Create Date: 2026-10-24 14:21:25.671946
+Create Date: 2026-10-28 12:37:49.881946
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "49e6e8eac8e6"
+revision: str = "be2088e5c4ac"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -25,6 +25,8 @@ def upgrade() -> None:
         sa.Column("issue_number", sa.Integer(), nullable=False),
         sa.Column("target_entity", sa.Text(), nullable=False),
         sa.Column("acknowledged_at", sa.Text(), nullable=False),
+        sa.Column("cleared_at", sa.Text(), nullable=True),
+        sa.Column("cleared_comment_id", sa.BigInteger(), nullable=True),
         sa.PrimaryKeyConstraint(
             "repo", "issue_number", "target_entity", name=op.f("pk_acknowledgments")
         ),
@@ -75,6 +77,7 @@ def upgrade() -> None:
 
     op.create_table(
         "agent_transitions",
+        sa.Column("registration_id", sa.Text(), nullable=True),
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("agent_name", sa.Text(), nullable=False),
         sa.Column("requested_by", sa.Text(), server_default="", nullable=False),
@@ -135,6 +138,91 @@ def upgrade() -> None:
         batch_op.create_index("uq_agents_report_identity", ["report_identity"], unique=True)
 
     op.create_table(
+        "conversation_entries",
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            autoincrement=True,
+            nullable=False,
+        ),
+        sa.Column("kind", sa.Text(), nullable=False),
+        sa.Column("artifact_id", sa.Text(), nullable=False),
+        sa.Column("entry_kind", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("author_type", sa.Text(), nullable=False),
+        sa.Column("author_id", sa.Text(), server_default="", nullable=False),
+        sa.Column("author_name", sa.Text(), nullable=False),
+        sa.Column("text", sa.Text(), nullable=True),
+        sa.Column("recipient_id", sa.Text(), nullable=True),
+        sa.Column("recipient_name", sa.Text(), nullable=True),
+        sa.Column("in_reply_to", sa.BigInteger(), nullable=True),
+        sa.Column("resulting_revision_id", sa.Text(), nullable=True),
+        sa.Column("anchor", sa.Text(), nullable=True),
+        sa.Column("detail", sa.Text(), nullable=True),
+        sa.Column("request_id", sa.Text(), nullable=True),
+        sa.Column("request_sha256", sa.Text(), nullable=True),
+        sa.Column("operation_id", sa.Text(), nullable=True),
+        sa.Column("delivery", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_conversation_entries")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("conversation_entries", schema=None) as batch_op:
+        batch_op.create_index(
+            "idx_conversation_entries", ["kind", "artifact_id", "id"], unique=False
+        )
+        batch_op.create_index("idx_conversation_operation", ["operation_id"], unique=False)
+        batch_op.create_index(
+            "idx_conversation_revision",
+            ["kind", "artifact_id", "entry_kind", "resulting_revision_id"],
+            unique=False,
+        )
+        batch_op.create_index(
+            "uq_conversation_request",
+            ["kind", "artifact_id", "author_id", "request_id"],
+            unique=True,
+        )
+
+    op.create_table(
+        "conversation_reads",
+        sa.Column("kind", sa.Text(), nullable=False),
+        sa.Column("artifact_id", sa.Text(), nullable=False),
+        sa.Column("read_through", sa.BigInteger(), nullable=False),
+        sa.Column("updated_at", sa.Text(), server_default="", nullable=False),
+        sa.PrimaryKeyConstraint("kind", "artifact_id", name=op.f("pk_conversation_reads")),
+    )
+    op.create_table(
+        "conversation_redeliveries",
+        sa.Column("entry_id", sa.BigInteger(), nullable=False),
+        sa.Column("request_id", sa.Text(), nullable=False),
+        sa.Column("result", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint(
+            "entry_id", "request_id", name=op.f("pk_conversation_redeliveries")
+        ),
+    )
+    op.create_table(
+        "current_plan_requests",
+        sa.Column("actor_key", sa.Text(), nullable=False),
+        sa.Column("request_id", sa.Text(), nullable=False),
+        sa.Column("request_sha256", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("receipt", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("actor_key", "request_id", name=op.f("pk_current_plan_requests")),
+    )
+    with op.batch_alter_table("current_plan_requests", schema=None) as batch_op:
+        batch_op.create_index("idx_current_plan_requests_created", ["created_at"], unique=False)
+
+    op.create_table(
+        "current_plans",
+        sa.Column("author_id", sa.Text(), nullable=False),
+        sa.Column("author_name", sa.Text(), nullable=False),
+        sa.Column("plan_id", sa.Text(), nullable=False),
+        sa.Column("revision_id", sa.Text(), nullable=False),
+        sa.Column("updated_at", sa.Text(), nullable=False),
+        sa.Column("content", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("author_id", name=op.f("pk_current_plans")),
+    )
+    op.create_table(
         "deliveries",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("operation_id", sa.Text(), nullable=True),
@@ -142,6 +230,7 @@ def upgrade() -> None:
         sa.Column("repo", sa.Text(), server_default="", nullable=False),
         sa.Column("issue_number", sa.Integer(), nullable=True),
         sa.Column("target_entity", sa.Text(), nullable=False),
+        sa.Column("registration_id", sa.Text(), nullable=True),
         sa.Column("session_name", sa.Text(), nullable=False),
         sa.Column("outcome", sa.Text(), nullable=False),
         sa.Column("source", sa.Text(), server_default="", nullable=False),
@@ -201,6 +290,39 @@ def upgrade() -> None:
         )
 
     op.create_table(
+        "document_storage",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("used_bytes", sa.BigInteger(), nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_document_storage")),
+    )
+    op.create_table(
+        "documents",
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            autoincrement=True,
+            nullable=False,
+        ),
+        sa.Column("document_id", sa.Text(), nullable=False),
+        sa.Column("author_id", sa.Text(), nullable=False),
+        sa.Column("author_name", sa.Text(), nullable=False),
+        sa.Column("request_id", sa.Text(), nullable=False),
+        sa.Column("title", sa.Text(), nullable=False),
+        sa.Column("html", sa.LargeBinary(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("content_bytes", sa.Integer(), nullable=False),
+        sa.Column("content_sha256", sa.Text(), nullable=False),
+        sa.Column("supersedes_id", sa.BigInteger(), nullable=True),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_documents")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("documents", schema=None) as batch_op:
+        batch_op.create_index("idx_documents_created", ["created_at", "author_id"], unique=False)
+        batch_op.create_index("idx_documents_root", ["document_id", "id"], unique=False)
+        batch_op.create_index("uq_documents_predecessor", ["supersedes_id"], unique=True)
+        batch_op.create_index("uq_documents_request", ["author_id", "request_id"], unique=True)
+
+    op.create_table(
         "event_outbox",
         sa.Column("event_id", sa.Integer(), nullable=False),
         sa.Column("recipient", sa.Text(), nullable=False),
@@ -228,7 +350,6 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_events")),
     )
     with op.batch_alter_table("events", schema=None) as batch_op:
-        # Autogenerate skips expression indexes: written by hand (#394).
         batch_op.create_index(
             "idx_events_delivery_id_lower", [sa.text("lower(delivery_id)")], unique=False
         )
@@ -266,6 +387,7 @@ def upgrade() -> None:
         "message_queue",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("operation_id", sa.Text(), nullable=True),
+        sa.Column("registration_id", sa.Text(), nullable=True),
         sa.Column("session_name", sa.Text(), nullable=False),
         sa.Column("message", sa.Text(), nullable=False),
         sa.Column("repo", sa.Text(), server_default="", nullable=False),
@@ -314,6 +436,43 @@ def upgrade() -> None:
                 "delivery_kind != 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain')"
             ),
         )
+
+    op.create_table(
+        "observed_sources",
+        sa.Column("artifact_id", sa.Text(), nullable=False),
+        sa.Column("kind", sa.Text(), nullable=False),
+        sa.Column("source_key", sa.Text(), nullable=False),
+        sa.Column("generation", sa.Integer(), nullable=False),
+        sa.Column("name", sa.Text(), nullable=False),
+        sa.Column("status", sa.Text(), nullable=False),
+        sa.Column("first_observed_at", sa.Text(), nullable=False),
+        sa.Column("retired_at", sa.Text(), nullable=True),
+        sa.Column("maintainer_id", sa.Text(), nullable=True),
+        sa.Column("maintainer_name", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("artifact_id", name=op.f("pk_observed_sources")),
+    )
+    with op.batch_alter_table("observed_sources", schema=None) as batch_op:
+        batch_op.create_index(
+            "uq_observed_source_generation", ["kind", "source_key", "generation"], unique=True
+        )
+
+    op.create_table(
+        "observed_versions",
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            autoincrement=True,
+            nullable=False,
+        ),
+        sa.Column("artifact_id", sa.Text(), nullable=False),
+        sa.Column("sha256", sa.Text(), nullable=False),
+        sa.Column("content", sa.Text(), nullable=False),
+        sa.Column("observed_at", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_observed_versions")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("observed_versions", schema=None) as batch_op:
+        batch_op.create_index("idx_observed_versions", ["artifact_id", "id"], unique=False)
 
     op.create_table(
         "poll_cursors",
@@ -380,6 +539,67 @@ def upgrade() -> None:
         sa.Column("value", sa.Text(), nullable=False),
         sa.Column("updated_at", sa.Text(), nullable=False),
         sa.PrimaryKeyConstraint("key", name=op.f("pk_settings")),
+    )
+    op.create_table(
+        "sheet_feedback",
+        sa.Column("feedback_id", sa.Text(), nullable=False),
+        sa.Column("sheet_id", sa.Text(), nullable=False),
+        sa.Column("observed_revision_id", sa.Text(), nullable=False),
+        sa.Column("actor_key", sa.Text(), nullable=False),
+        sa.Column("request_id", sa.Text(), nullable=False),
+        sa.Column("request_sha256", sa.Text(), nullable=False),
+        sa.Column("operation_id", sa.Text(), nullable=False),
+        sa.Column("recipient_id", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("context", sa.LargeBinary(), nullable=False),
+        sa.PrimaryKeyConstraint("feedback_id", name=op.f("pk_sheet_feedback")),
+        sa.UniqueConstraint("operation_id", name=op.f("uq_sheet_feedback_operation_id")),
+    )
+    with op.batch_alter_table("sheet_feedback", schema=None) as batch_op:
+        batch_op.create_index("uq_sheet_feedback_request", ["actor_key", "request_id"], unique=True)
+
+    op.create_table(
+        "sheet_revisions",
+        sa.Column("seq", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("revision_id", sa.Text(), nullable=False),
+        sa.Column("sheet_id", sa.Text(), nullable=False),
+        sa.Column("parent_revision_id", sa.Text(), nullable=True),
+        sa.Column("actor_key", sa.Text(), nullable=False),
+        sa.Column("request_id", sa.Text(), nullable=False),
+        sa.Column("request_sha256", sa.Text(), nullable=False),
+        sa.Column("editor_kind", sa.Text(), nullable=False),
+        sa.Column("editor_id", sa.Text(), nullable=True),
+        sa.Column("editor_name", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("payload", sa.LargeBinary(), nullable=False),
+        sa.Column("tab_metadata", sa.Text(), nullable=False),
+        sa.Column("content_sha256", sa.Text(), nullable=False),
+        sa.Column("calculation_engine", sa.Text(), nullable=False),
+        sa.Column("calculation_version", sa.Text(), nullable=False),
+        sa.Column("warnings", sa.Text(), server_default="[]", nullable=False),
+        sa.PrimaryKeyConstraint("seq", name=op.f("pk_sheet_revisions")),
+        sa.UniqueConstraint("revision_id", name=op.f("uq_sheet_revisions_revision_id")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("sheet_revisions", schema=None) as batch_op:
+        batch_op.create_index("idx_sheet_revision_history", ["sheet_id", "seq"], unique=False)
+        batch_op.create_index("uq_sheet_revision_request", ["actor_key", "request_id"], unique=True)
+
+    op.create_table(
+        "sheet_storage",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("used_bytes", sa.BigInteger(), nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_sheet_storage")),
+    )
+    op.create_table(
+        "sheets",
+        sa.Column("sheet_id", sa.Text(), nullable=False),
+        sa.Column("author_id", sa.Text(), nullable=False),
+        sa.Column("author_name", sa.Text(), nullable=False),
+        sa.Column("title", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("current_revision_id", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("sheet_id", name=op.f("pk_sheets")),
     )
     op.create_table(
         "signing_audit",
@@ -641,6 +861,17 @@ def downgrade() -> None:
         batch_op.drop_index("idx_signing_audit_sender")
 
     op.drop_table("signing_audit")
+    op.drop_table("sheets")
+    op.drop_table("sheet_storage")
+    with op.batch_alter_table("sheet_revisions", schema=None) as batch_op:
+        batch_op.drop_index("uq_sheet_revision_request")
+        batch_op.drop_index("idx_sheet_revision_history")
+
+    op.drop_table("sheet_revisions")
+    with op.batch_alter_table("sheet_feedback", schema=None) as batch_op:
+        batch_op.drop_index("uq_sheet_feedback_request")
+
+    op.drop_table("sheet_feedback")
     op.drop_table("settings")
     op.drop_table("review_lifecycle")
     with op.batch_alter_table("reports", schema=None) as batch_op:
@@ -653,6 +884,14 @@ def downgrade() -> None:
 
     op.drop_table("reports")
     op.drop_table("poll_cursors")
+    with op.batch_alter_table("observed_versions", schema=None) as batch_op:
+        batch_op.drop_index("idx_observed_versions")
+
+    op.drop_table("observed_versions")
+    with op.batch_alter_table("observed_sources", schema=None) as batch_op:
+        batch_op.drop_index("uq_observed_source_generation")
+
+    op.drop_table("observed_sources")
     with op.batch_alter_table("message_queue", schema=None) as batch_op:
         batch_op.drop_index(
             "uq_mq_message_dedup",
@@ -687,16 +926,24 @@ def downgrade() -> None:
     op.drop_table("issue_dependencies")
     op.drop_table("fleet_snapshots")
     with op.batch_alter_table("events", schema=None) as batch_op:
+        batch_op.drop_index("idx_events_delivery_id_lower")
         batch_op.drop_index("uq_events_delivery_id")
         batch_op.drop_index("idx_events_repo")
         batch_op.drop_index("idx_events_received")
-        batch_op.drop_index("idx_events_delivery_id_lower")
 
     op.drop_table("events")
     with op.batch_alter_table("event_outbox", schema=None) as batch_op:
         batch_op.drop_index("idx_outbox_pending")
 
     op.drop_table("event_outbox")
+    with op.batch_alter_table("documents", schema=None) as batch_op:
+        batch_op.drop_index("uq_documents_request")
+        batch_op.drop_index("uq_documents_predecessor")
+        batch_op.drop_index("idx_documents_root")
+        batch_op.drop_index("idx_documents_created")
+
+    op.drop_table("documents")
+    op.drop_table("document_storage")
     with op.batch_alter_table("diagnostics", schema=None) as batch_op:
         batch_op.drop_index("uq_diagnostics_observation")
         batch_op.drop_index("idx_diagnostics_last_seen")
@@ -719,6 +966,20 @@ def downgrade() -> None:
         batch_op.drop_index("idx_deliveries_created")
 
     op.drop_table("deliveries")
+    op.drop_table("current_plans")
+    with op.batch_alter_table("current_plan_requests", schema=None) as batch_op:
+        batch_op.drop_index("idx_current_plan_requests_created")
+
+    op.drop_table("current_plan_requests")
+    op.drop_table("conversation_redeliveries")
+    op.drop_table("conversation_reads")
+    with op.batch_alter_table("conversation_entries", schema=None) as batch_op:
+        batch_op.drop_index("uq_conversation_request")
+        batch_op.drop_index("idx_conversation_revision")
+        batch_op.drop_index("idx_conversation_operation")
+        batch_op.drop_index("idx_conversation_entries")
+
+    op.drop_table("conversation_entries")
     with op.batch_alter_table("agents", schema=None) as batch_op:
         batch_op.drop_index("uq_agents_report_identity")
 

@@ -40,6 +40,17 @@ def _codex_on_macos():
 
 
 class TestHookLaunchArgs:
+    def test_codex_startup_context_is_not_truncated(self, tmp_path):
+        args = RUNTIMES["codex"].hook_launch_args(tmp_path, tmp_path / "state")
+        settings = tomllib.loads("\n".join(a for a in args if a.startswith("hooks.")))
+        for event, entries in settings["hooks"].items():
+            for entry in entries:
+                for hook in entry["hooks"]:
+                    if event == "SessionStart":
+                        assert hook["additionalContextLimit"] == 0
+                    else:
+                        assert "additionalContextLimit" not in hook
+
     def test_claude_gets_backbone_owned_settings(self, tmp_path):
         args = RUNTIMES["claude"].hook_launch_args(tmp_path, tmp_path / "state")
         assert args[0] == "--settings"
@@ -73,8 +84,11 @@ class TestBuildCommand:
         with _resolve(f"/bin/{runtime}"):
             command = RUNTIMES[runtime].build_command(model=model)
         if runtime == "opencode":
-            assert json.loads(command[2])["model"] == model
-            assert command[3:] == ["/bin/opencode", "--standalone"]
+            assert (
+                json.loads(next(arg for arg in command if arg.startswith('{"model"')))["model"]
+                == model
+            )
+            assert command[command.index("/bin/opencode") :] == ["/bin/opencode", "--standalone"]
         else:
             assert command == [f"/bin/{runtime}", "--model", model]
 
@@ -148,21 +162,16 @@ class TestBuildCommand:
                 raise AssertionError("expected RuntimeError")
 
     def test_codex_brief_stays_off_the_command_line(self, tmp_path):
-        # tmux caps a launch command at 16 KB; the brief is queued as the first
-        # message instead of riding along as the initial prompt.
+        # Native hook context keeps policy text out of tmux's bounded argv.
         brief = tmp_path / "brief.md"
         brief.write_text("You are agent x.")
         with _resolve("/bin/codex"):
-            command = RUNTIMES["codex"].build_command(model="gpt-5.2", brief_file=brief)
-        assert command == [
-            "/bin/codex",
-            *_NET,
-            *_STANDARD_TIER,
-            *_NO_UPDATE_PROMPT,
-            "--no-alt-screen",
-            "--model",
-            "gpt-5.2",
-        ]
+            command = RUNTIMES["codex"].build_command(
+                model="gpt-5.2", brief_file=brief, data_dir=tmp_path, state_dir=tmp_path / "state"
+            )
+        assert "You are agent x." not in " ".join(command)
+        assert any(arg.startswith("hooks.SessionStart=") for arg in command)
+        assert command[-2:] == ["--model", "gpt-5.2"]
 
     def test_codex_resume_is_a_subcommand(self):
         with _resolve("/bin/codex"):
@@ -247,21 +256,27 @@ class TestBuildCommand:
             command = RUNTIMES["opencode"].build_command(
                 model="opencode/big-pickle", brief_file=brief
             )
-        assert json.loads(command[2])["model"] == "opencode/big-pickle"
-        assert command[3:] == [
-            "/bin/opencode",
-            "--standalone",
-            "--prompt",
-            "You are agent z.",
-        ]
+        assert command[
+            next(i for i, arg in enumerate(command) if arg.endswith("_opencode_launch.py")) + 2
+        ] == str(brief.resolve())
+        assert (
+            json.loads(next(arg for arg in command if arg.startswith('{"model"')))["model"]
+            == "opencode/big-pickle"
+        )
+        assert command[command.index("/bin/opencode") :] == ["/bin/opencode", "--standalone"]
 
-    def test_opencode_resume_does_not_rebrief(self, tmp_path):
+    def test_opencode_resume_loads_the_current_native_instructions(self, tmp_path):
         brief = tmp_path / "brief.md"
         brief.write_text("You are agent z.")
         with _resolve("/bin/opencode"):
             command = RUNTIMES["opencode"].build_command(resume=True, brief_file=brief)
-        assert json.loads(command[2])["resume"] is True
-        assert command[3:] == ["/bin/opencode", "--standalone"]
+        assert command[
+            next(i for i, arg in enumerate(command) if arg.endswith("_opencode_launch.py")) + 2
+        ] == str(brief.resolve())
+        assert (
+            json.loads(next(arg for arg in command if arg.startswith('{"model"')))["resume"] is True
+        )
+        assert command[command.index("/bin/opencode") :] == ["/bin/opencode", "--standalone"]
 
     def test_aider_ignores_the_brief_at_launch(self, tmp_path):
         brief = tmp_path / "brief.md"
@@ -557,7 +572,7 @@ class TestUnattended:
             codex = RUNTIMES["codex"].build_command(writable_dirs=("/a", "/b"))
         assert codex[1:5] == ["--add-dir", "/a", "--add-dir", "/b"]
         with _resolve("/bin/opencode"):
-            assert RUNTIMES["opencode"].build_command(writable_dirs=("/a",))[3:] == [
+            assert RUNTIMES["opencode"].build_command(writable_dirs=("/a",))[-2:] == [
                 "/bin/opencode",
                 "--standalone",
             ]
@@ -568,8 +583,15 @@ class TestUnattended:
             command = RUNTIMES["opencode"].build_command(
                 model="google/gemini-3.8-flash", unattended=True
             )
-            assert command[3:] == ["/bin/opencode", "--standalone", "--auto"]
-            assert json.loads(command[2])["model"] == "google/gemini-3.8-flash"
+            assert command[command.index("/bin/opencode") :] == [
+                "/bin/opencode",
+                "--standalone",
+                "--auto",
+            ]
+            assert (
+                json.loads(next(arg for arg in command if arg.startswith('{"model"')))["model"]
+                == "google/gemini-3.8-flash"
+            )
         with _resolve("/bin/gemini"):
             assert RUNTIMES["gemini"].build_command(unattended=True) == [
                 "/bin/gemini",
@@ -622,7 +644,7 @@ def test_required_runtimes_keep_explicit_model_and_effort_on_launch(monkeypatch,
     with _resolve(f"/bin/{runtime}"), _codex_on_macos():
         command = adapter.build_command(model=model, resume=resume)
     if runtime == "opencode":
-        selected = json.loads(command[2])
+        selected = json.loads(next(arg for arg in command if arg.startswith('{"model"')))
         assert (selected["model"], selected["effort"], selected["resume"]) == (
             "provider/model",
             "high",

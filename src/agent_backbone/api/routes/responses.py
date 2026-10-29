@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from pydantic import BaseModel
 
 from agent_backbone.api.deps import get_db
+from agent_backbone.api.routes.conversations import versions
 from agent_backbone.api.routes.reports import _ReportRoute
 from agent_backbone.models import RESPONSE_BODY_BYTES, AgentResponse, PublishResponse
 from agent_backbone.services.database import (
@@ -33,6 +34,7 @@ class ResponseRecord(BaseModel):
     response: AgentResponse
     supersedes_id: int | None
     superseded_by: int | None = None
+    conversation_id: int
     age_seconds: int
     telegram_delivery: str
     telegram_audio_delivery: str
@@ -87,6 +89,17 @@ async def responses(
     db: BackboneDB = Depends(get_db),
 ):
     return await db.reports.responses(agent=agent, before_id=before_id, limit=limit)
+
+
+@router.get("/{conversation_id}/revisions", operation_id="list_response_revisions")
+async def response_revisions(
+    conversation_id: str = Path(max_length=20),
+    before: int | None = Query(default=None, ge=1, le=2**63 - 1),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: BackboneDB = Depends(get_db),
+):
+    """A correction chain newest first; read one exactly with GET /api/responses/{id}."""
+    return await versions(db, "response", conversation_id, before, limit)
 
 
 @router.get("/{response_id}", response_model=ResponseRecord, operation_id="get_response")

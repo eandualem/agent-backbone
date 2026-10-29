@@ -13,12 +13,12 @@ resuming the old Codex conversation would miss the work done in between.
 Use `backbone agent resume NAME` (or `start --resume`; API `resume: true`) only
 when you explicitly want to reopen a previous conversation, such as after an
 unexpected closure. It uses the saved conversation ID for the selected runtime
-when supported, or that runtime's latest conversation when no usable ID is
-available. A fresh start does not replay a previous conversation.
+when supported. If no usable ID is available, resume is refused; start a fresh
+conversation with `backbone agent start NAME --fresh`. A fresh start does not replay a previous conversation.
 When a saved id is used, the start's evidence names it: `resuming the session
 the last launch reported: ID (AGE old)`, or `resuming the session the last
-launch opened: ID` when that launch resumed it and had not reported yet. Without
-either line the runtime's own latest conversation opened. An id from a launch
+launch opened: ID` when that launch resumed it and had not reported yet. A resume without either
+line is refused. An id from a launch
 that ended before reporting or opening one is from an earlier session and is not
 used; the evidence says so. `backbone agent inspect NAME` shows the id on
 record before you resume. A running agent is left as it is
@@ -27,10 +27,12 @@ Changing runtime without specifying a model clears the previous runtime's model.
 Starting from a directory reuses its registered name, even after a rename;
 if several agents share that directory, specify a name.
 
-Any agent may start other agents; you do not need a human for this.
+An agent credential may start an already registered peer with its saved settings.
+New registrations and start-time overrides require an operator credential.
+Use `agent restart` below to change your own runtime or model.
 
 `backbone fleet save --stop` saves every running agent with its current
-conversation and stops the idle ones; `backbone fleet resume` later starts each
+conversation and stops the idle ones; `backbone fleet resume` (operator credential required) later starts each
 on exactly that conversation and reports the agents it could not resume, with
 the reason (`backbone docs cli` has the outcomes).
 
@@ -99,7 +101,7 @@ place for state, delivery readiness and the last reply.
 `backbone agent restart` is how you switch CLI or model, start over with a
 clean context, or stop now and continue later. The backbone owns the
 transition: it accepts the request first, stops the session on its next
-tick and starts the replacement when the wait is over, so asking for your
+tick and starts the replacement immediately, or when an explicit delay ends, so asking for your
 own session is safe. `backbone agent stop` on yourself is not: it kills the
 shell that would run your next command.
 
@@ -111,7 +113,7 @@ startup instructions; it knows nothing you did not write down. `--message`
 is a short pointer to that context, not a substitute for it.
 
 ```bash
-backbone agent restart                                 # stop me; fresh session one minute later
+backbone agent restart                                 # stop me; start a fresh session immediately
 backbone agent restart --runtime claude --model opus   # continue in Claude Code with Opus
 backbone agent restart --in 3h20m --message "Resume from HANDOFF.md, section 'PR 12'"
 backbone agent restart --at 2026-09-23T09:00           # local time; an offset is honoured
@@ -123,6 +125,13 @@ backbone agent inspect $BACKBONE_AGENT                 # the transition's status
 - The wait is between the stop and the start; the stop itself is immediate.
 - `--resume` needs the same CLI; a cross-CLI resume is refused with the reason.
 - `--runtime` and `--model` are recorded on the agent, as with `agent start`.
+  A registration-bound collaboration credential may select them for its own
+  current registration; changing a peer requires an operator credential.
+  Older shared credentials retain their existing authority and cannot select
+  runtime/model, even when explicitly passing the saved value. The managed CLI
+  picks up its current private profile without restarting. If the profile is
+  unavailable, ask an operator to restore it; do not load the operator key.
+  Switching runtime clears the previous runtime’s unattended permission.
 - One open transition per agent; a second request is refused until it ends.
 - The result is `pending`, `completed` (with the launch's readiness and the
   message outcome) or `failed` with the reason. A session someone started by

@@ -13,7 +13,7 @@ Existing reports from before this feature remain readable and are not broadcast.
 `telegram_delivery` in report JSON distinguishes pending, sending, sent and
 not_requested. The saved report survives delivery failures. Retries are normally
 deduplicated; a crash after Telegram accepts a message but before its receipt is
-saved can cause a duplicate bearing the same report ID. Report retention still applies.
+saved can cause a duplicate bearing the same report ID.
 
 Read reports with `backbone updates`, `backbone updates --agent NAME --history`,
 or `backbone updates show ID`; in Telegram use `/updates`, `/updates NAME`,
@@ -94,7 +94,7 @@ Pages contain five entries by default, at most 20 (`--limit`). When there are mo
 an exact next-page command with `--cursor`. JSON readers use `next_cursor` with
 the same filters. New publications do not enter that page sequence: restart the
 query without a cursor to refresh it. History is newest publication ID first.
-Registered-agent changes and retention can remove entries during browsing.
+Registered-agent changes can remove entries during browsing.
 Cursors authenticate the entire page boundary with a private process key.
 Modified cursors are rejected. A service restart expires cursors; refresh the
 view without `--cursor` to continue. The saved reports and history remain intact.
@@ -181,10 +181,10 @@ the same name again creates a new author, so old reports cannot become its work.
 The shared latest view includes current registrations; full history includes
 forgotten authors, explicitly labelled. Agent filters refer to current identities.
 
-The six-hour prune job uses `timing.delivery_retention_days` (30 days by default)
-for report history too, retaining each author's latest report even if old or
-inactive. This prevents inactivity from disappearing into “no report yet.” Retry
-keys live with their reports and expire when those historical records are pruned.
+Reports and their retry keys are kept: the prune job no longer removes them, so
+an old report can still be discussed in its [conversation](conversations.md),
+keyed by the report's own ID (`conversation_id`). Reports pruned by an earlier
+version are gone.
 The single initial migration and installed-schema repair add the report store
 and nullable author identity to existing databases on service startup.
 

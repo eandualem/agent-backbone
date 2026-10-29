@@ -220,7 +220,11 @@ def read_state_file(
         started_at=started_at,
         plan_file=data.get("plan_file"),
         plan_title=data.get("plan_title"),
-        session_id=data.get("session_id") or None,
+        session_id=(
+            data["session_id"]
+            if isinstance(data.get("session_id"), str) and data["session_id"]
+            else None
+        ),
         runtime=data.get("runtime") or None,
         model=data["model"] if isinstance(data.get("model"), str) and data["model"] else None,
         last_message=data.get("last_message") or None,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 from sqlalchemy import text
 
@@ -82,10 +83,13 @@ class AgentRepo(Repo):
                 text(
                     """INSERT INTO agents
                        (name, dir, runtime, model, repo, tags, env, description,
-                        always_on, unattended, inbox_only, created_at, updated_at)
+                        always_on, unattended, inbox_only, created_at, updated_at, report_identity)
                        VALUES (:name, :dir, :runtime, :model, :repo, :tags, :env,
-                               :description, :always_on, :unattended, :inbox_only, :now, :now)
+                               :description, :always_on, :unattended, :inbox_only,
+                               :now, :now, :identity)
                        ON CONFLICT(name) DO UPDATE SET
+                         report_identity = COALESCE(agents.report_identity,
+                                                    excluded.report_identity),
                          dir = excluded.dir,
                          runtime = excluded.runtime,
                          model = excluded.model,
@@ -100,6 +104,7 @@ class AgentRepo(Repo):
                 ),
                 {
                     "name": name,
+                    "identity": uuid.uuid4().hex,
                     "dir": dir,
                     "runtime": runtime,
                     "model": model,
@@ -114,7 +119,9 @@ class AgentRepo(Repo):
                 },
             )
 
-    async def update_fields(self, name: str, changes: dict) -> bool:
+    async def update_fields(
+        self, name: str, changes: dict, *, expected_registration_id: str | None = None
+    ) -> bool:
         """Update only supplied fields, without recreating a forgotten agent."""
         allowed = {
             "dir",
@@ -143,10 +150,11 @@ class AgentRepo(Repo):
                 "unattended = CASE WHEN runtime != :runtime THEN 0 ELSE unattended END"
             )
         assignments.append("updated_at = :now")
+        guard = " AND report_identity = :identity" if expected_registration_id is not None else ""
         async with self._tx() as conn:
             result = await conn.execute(
-                text(f"UPDATE agents SET {', '.join(assignments)} WHERE name = :name"),
-                {**values, "name": name, "now": now_iso()},
+                text(f"UPDATE agents SET {', '.join(assignments)} WHERE name = :name{guard}"),
+                {**values, "name": name, "now": now_iso(), "identity": expected_registration_id},
             )
             return bool(result.rowcount)
 
@@ -173,13 +181,80 @@ class AgentRepo(Repo):
                 {"at": at, "name": name},
             )
 
+    async def registration_name(self, identity: str) -> str | None:
+        async with self._tx() as conn:
+            return await conn.scalar(
+                text("SELECT name FROM agents WHERE report_identity=:identity"),
+                {"identity": identity},
+            )
+
+    async def registration_matches(self, name: str, identity: str | None) -> bool:
+        if not identity:
+            return False
+        async with self._tx() as conn:
+            return bool(
+                await conn.scalar(
+                    text("SELECT 1 FROM agents WHERE name=:name AND report_identity=:identity"),
+                    {"name": name, "identity": identity},
+                )
+            )
+
     async def delete(self, name: str) -> bool:
         async with self._tx() as conn:
+            if conn.dialect.name == "postgresql":
+                # Serialize retirement with bound acknowledgment writes.
+                await conn.execute(
+                    text("SELECT 1 FROM agents WHERE name=:name FOR UPDATE"), {"name": name}
+                )
+            # Retain bodies and history, but never hand them to a reused name.
+            await conn.execute(
+                text(
+                    "INSERT INTO deliveries (operation_id,kind,repo,issue_number,target_entity,"
+                    "session_name,outcome,source,preview,created_at,registration_id) "
+                    "SELECT operation_id,delivery_kind,repo,issue_number,"
+                    "COALESCE(target_entity,session_name),session_name,'expired',"
+                    "'registration-retired',substr(message,1,120),:now,registration_id "
+                    "FROM message_queue WHERE session_name=:name "
+                    "AND status IN ('pending','in_progress','checkpoint','uncertain')"
+                ),
+                {"name": name, "now": now_iso()},
+            )
+            await conn.execute(
+                text(
+                    "UPDATE message_queue SET status='expired', delivered_at=:now, leased_at=NULL "
+                    "WHERE session_name=:name "
+                    "AND status IN ('pending','in_progress','checkpoint','uncertain')"
+                ),
+                {"name": name, "now": now_iso()},
+            )
+            await conn.execute(
+                text(
+                    "UPDATE event_outbox SET status='skipped', updated_at=:now "
+                    "WHERE recipient=:name AND status IN ('pending','failed')"
+                ),
+                {"name": name, "now": now_iso()},
+            )
+            await conn.execute(
+                text(
+                    "UPDATE deliveries SET superseded_at=:now WHERE session_name=:name "
+                    "AND superseded_at IS NULL"
+                ),
+                {"name": name, "now": now_iso()},
+            )
             await conn.execute(
                 text("DELETE FROM agent_watches WHERE agent_name = :name"), {"name": name}
             )
             await conn.execute(
                 text("DELETE FROM agent_subscriptions WHERE agent_name = :name"), {"name": name}
+            )
+            # A replacement registration must not inherit a prior acknowledgment.
+            # Publication receipts and delivery history remain available.
+            await conn.execute(
+                text(
+                    "UPDATE acknowledgments SET acknowledged_at='', cleared_at=:now, "
+                    "cleared_comment_id=NULL WHERE target_entity=:name"
+                ),
+                {"name": name, "now": now_iso()},
             )
             result = await conn.execute(
                 text("DELETE FROM agents WHERE name = :name"), {"name": name}
@@ -207,7 +282,10 @@ class AgentRepo(Repo):
         )
         values = {"old": name, "new": new_name}
         async with self._tx() as conn:
-            exists = await conn.execute(text("SELECT 1 FROM agents WHERE name = :old"), values)
+            lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
+            exists = await conn.execute(
+                text("SELECT 1 FROM agents WHERE name = :old" + lock), values
+            )
             if not exists.first():
                 raise KeyError(name)
             for table, column in (*references, ("swarms", "initiator"), ("swarms", "coordinator")):

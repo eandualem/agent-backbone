@@ -42,7 +42,12 @@ def repo(tmp_path: Path) -> Path:
     return repo
 
 
-async def test_a_deleted_worktree_is_pruned_and_the_name_is_reusable(repo: Path):
+@pytest.mark.parametrize("alias", [False, True])
+async def test_a_deleted_worktree_is_pruned_and_the_name_is_reusable(repo: Path, alias):
+    if alias:
+        linked = repo.with_name("alias")
+        linked.symlink_to(repo, target_is_directory=True)
+        repo = linked
     worktree, branch = await create_worktree(repo, "sw")
     assert worktree.is_dir() and branch == "swarm/sw"
     shutil.rmtree(worktree)  # someone deleted the files by hand
@@ -88,3 +93,19 @@ async def test_a_real_git_error_is_still_reported(repo: Path, tmp_path: Path):
     stranger = tmp_path / "not-a-worktree"
     stranger.mkdir()
     assert await remove_worktree(repo, stranger) is False
+
+
+@pytest.mark.parametrize("ancestor", [".backbone", ".backbone/swarms"])
+async def test_redirected_parent_is_refused_before_any_git_write(repo, tmp_path, ancestor):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = repo / ancestor
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(outside, target_is_directory=True)
+    exclude = repo / ".git/info/exclude"
+    before = exclude.read_bytes()
+    with pytest.raises(RuntimeError, match="outside"):
+        await create_worktree(repo, "group")
+    assert list(outside.iterdir()) == []
+    assert exclude.read_bytes() == before
+    assert await remove_worktree(repo, link / "group") is False

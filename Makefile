@@ -3,7 +3,7 @@
 
 .DEFAULT_GOAL := help
 
-ALL_DIRS := src/ tests/
+ALL_DIRS := src/ tests/ tools/
 DEV_TMUX_TMPDIR ?= /tmp/backbone-dev-tmux-$(shell id -u)
 
 help: ## Show available commands

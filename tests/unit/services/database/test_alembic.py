@@ -30,6 +30,19 @@ _EXPECTED_TABLES = {
     "message_queue",
     "poll_cursors",
     "reports",
+    "documents",
+    "conversation_entries",
+    "conversation_reads",
+    "conversation_redeliveries",
+    "observed_sources",
+    "observed_versions",
+    "sheets",
+    "sheet_revisions",
+    "sheet_feedback",
+    "sheet_storage",
+    "document_storage",
+    "current_plans",
+    "current_plan_requests",
     "review_lifecycle",
     "settings",
     "signing_audit",
@@ -52,8 +65,22 @@ _EXPECTED_INDEXES = {
     "idx_state_history_at",
     "uq_agents_report_identity",
     "uq_reports_request",
+    "uq_documents_request",
+    "uq_sheet_revision_request",
+    "idx_sheet_revision_history",
+    "uq_sheet_feedback_request",
+    "uq_documents_predecessor",
+    "idx_documents_root",
+    "idx_documents_created",
+    "idx_conversation_entries",
+    "uq_conversation_request",
+    "idx_conversation_operation",
+    "idx_conversation_revision",
+    "uq_observed_source_generation",
+    "idx_observed_versions",
     "idx_reports_author",
     "idx_reports_created",
+    "idx_current_plan_requests_created",
     "idx_reports_supersedes",
     "idx_reports_telegram",
     "idx_reports_audio",
@@ -140,12 +167,14 @@ async def test_direct_migrations_bootstrap_fresh_persistent_db(tmp_path):
         )
         await db.queue.enqueue(session_name="ike", message="hello", delivery_kind="direct_message")
         assert (await queue_row(db, 1))["status"] == "pending"
+        transition = await db.transitions.create(agent_name="ike", registration_id="a" * 32)
+        assert transition["registration_id"] == "a" * 32
     finally:
         await db.stop()
 
 
 async def test_direct_migrations_refuse_unstamped_partial_schema(tmp_path):
-    from sqlalchemy import inspect
+    from sqlalchemy import inspect, text
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'partial.db'}"
     db = BackboneDB(url)
@@ -155,9 +184,15 @@ async def test_direct_migrations_refuse_unstamped_partial_schema(tmp_path):
             await conn.run_sync(
                 lambda sync: metadata.create_all(sync, tables=[metadata.tables["deliveries"]])
             )
-        delivery_id = await db.deliveries.record(
-            issue_number=7, target_entity="worker", session_name="worker", outcome="offline"
-        )
+            delivery_id = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO deliveries "
+                        "(issue_number, target_entity, session_name, outcome, created_at) "
+                        "VALUES (7, 'worker', 'worker', 'offline', '2026-01-01') RETURNING id"
+                    )
+                )
+            ).scalar_one()
 
         with pytest.raises(RuntimeError, match="refusing to stamp partial schema"):
             await db._run_migrations()
@@ -311,7 +346,10 @@ async def test_pre_diagnostics_database_gains_schema_without_losing_history(
         assert delivery["id"] == delivery_id
         assert delivery["outcome"] == "offline" and delivery["operation_id"] is None
         queue = await queue_row(db, enqueued.id)
-        assert queue["status"] == "pending"
+        assert queue["status"] == "expired"  # no proven registration binding
+        history = await db.deliveries.query(session_name="worker")
+        assert any(row["source"] == "registration-unbound" for row in history)
+        assert queue["delivered_at"] is not None
         assert queue["message"] == "preserve this queued message" and queue["operation_id"] is None
         async with db.engine.connect() as conn:
             revision = (
@@ -600,8 +638,14 @@ async def test_restamp_on_old_sqlite_keeps_the_dead_column(tmp_path, monkeypatch
 async def test_migration_holds_checkpoint_dedup_after_old_stamp(tmp_path):
     from sqlalchemy import text
 
+    from agent_backbone.config import AgentSpec
+    from agent_backbone.services.agents import AgentStore
+
     url = f"sqlite+aiosqlite:///{tmp_path / 'checkpoint-upgrade.db'}"
     async with BackboneDB.connect(url) as db:
+        store = AgentStore(db, tmp_path)
+        await store.start()
+        await store.register(AgentSpec(name="worker", dir=str(tmp_path), runtime="codex"))
         receipt = await db.queue.enqueue(
             session_name="worker", message="keep", delivery_kind="direct_message"
         )
@@ -798,3 +842,91 @@ async def test_populated_report_upgrade_preserves_history_and_separates_retry_ke
         ] == "Yes."
         retried, created = await db.reports.publish(publication())
         assert not created and retried["id"] == old["id"]
+
+
+@pytest.mark.parametrize("existing", [False, True])
+async def test_sqlite_file_is_private_before_connection(tmp_path, existing):
+    import os
+
+    from sqlalchemy import text
+
+    target = tmp_path / "private" / "backbone.db"
+    if existing:
+        target.parent.mkdir()
+        target.touch(mode=0o666)
+        target.chmod(0o666)
+    old = os.umask(0)
+    try:
+        engine = build_engine(f"sqlite+aiosqlite:///{target}")
+    finally:
+        os.umask(old)
+    try:
+        assert target.stat().st_mode & 0o777 == 0o600
+        async with engine.connect() as connection:
+            assert (await connection.execute(text("SELECT 1"))).scalar_one() == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize("memory", [True, False])
+@pytest.mark.parametrize("uri", ["true", "1", "yes", "on"])
+async def test_sqlite_uri_permissions_target_the_actual_database(
+    tmp_path, monkeypatch, memory, uri
+):
+    from sqlalchemy import text
+
+    from agent_backbone.services.database.engine import build_engine
+
+    monkeypatch.chdir(tmp_path)
+    mode = "mode=memory&cache=shared&" if memory else ""
+    engine = build_engine(f"sqlite+aiosqlite:///file:shared%20db?{mode}uri={uri}")
+    try:
+        async with engine.connect() as connection:
+            assert (await connection.execute(text("SELECT 1"))).scalar() == 1
+    finally:
+        await engine.dispose()
+    assert not (tmp_path / "file:shared%20db").exists()
+    if memory:
+        assert list(tmp_path.iterdir()) == []
+    else:
+        assert (tmp_path / "shared db").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.skipif(
+    sqlite3.sqlite_version_info < (3, 35, 0), reason="DROP COLUMN needs SQLite 3.35+"
+)
+async def test_existing_acknowledgments_gain_reset_tracking(tmp_path):
+    from sqlalchemy import text
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'before-ack-reset.db'}"
+    async with BackboneDB.connect(url) as db:
+        await db.acks.record(7, "app", repo="acme/app")
+        async with db.engine.begin() as conn:
+            await conn.execute(text("ALTER TABLE acknowledgments DROP COLUMN cleared_at"))
+            await conn.execute(text("ALTER TABLE acknowledgments DROP COLUMN cleared_comment_id"))
+    async with BackboneDB.connect(url) as db:
+        assert await db.acks.exists(7, "app", repo="acme/app")
+        await db.acks.clear(7, "app", repo="acme/app", comment_id=123)
+        cleared, comment_id = await db.acks.reset_boundary(7, "app", repo="acme/app")
+        assert cleared and comment_id == 123
+        assert not await db.acks.exists(7, "app", repo="acme/app")
+
+
+async def test_fresh_migration_includes_case_insensitive_event_index(tmp_path):
+    """Autogenerate omits this expression index; verify migration-only initialization."""
+    from sqlalchemy import text
+
+    db = BackboneDB(f"sqlite+aiosqlite:///{tmp_path / 'expression-index.db'}")
+    db._engine = build_engine(db.url)
+    try:
+        await db._run_migrations()
+        async with db.engine.connect() as conn:
+            definition = await conn.scalar(
+                text(
+                    "SELECT sql FROM sqlite_master WHERE type='index' "
+                    "AND name='idx_events_delivery_id_lower'"
+                )
+            )
+        assert definition and "lower(delivery_id)" in definition
+    finally:
+        await db._engine.dispose()

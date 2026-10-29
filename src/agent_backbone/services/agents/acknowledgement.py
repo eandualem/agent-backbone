@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Iterable
 from pathlib import Path
 
 _TAIL_BLOCK = 64 * 1024
@@ -39,6 +40,31 @@ def _read_tail(action_log: str | Path | None, max_lines: int) -> list[dict]:
     return entries
 
 
+def read_comment_receipts(action_log: str | Path | None):
+    """Stream retained publication evidence, independent of the recent-command tail."""
+    if action_log is None:
+        return
+    log_path = Path(action_log).expanduser()
+    for path in (log_path.parent / "comment-receipts").glob("*.json"):
+        try:
+            entry = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(entry, dict):
+            yield entry
+    try:
+        with log_path.open(errors="replace") as file:
+            for line in file:
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(entry, dict):
+                    yield entry
+    except OSError:
+        return
+
+
 def _repo_matches(entry: dict, repo: str) -> bool:
     """Scoped lookups require the entry to name the same repository.
 
@@ -58,6 +84,8 @@ def find_outgoing_comment(
     *,
     repo: str = "",
     include_intent: bool = True,
+    comment_id: int | None = None,
+    registrations: dict[str, str] | None = None,
 ) -> str | None:
     """Session that recently commented on an issue according to the hook action log.
 
@@ -65,16 +93,39 @@ def find_outgoing_comment(
     "issue": 42, "repo": "owner/name"}``.
     """
     now = time.time()
-    for entry in _read_tail(action_log, max_lines):
+    current_names = {identity: name for name, identity in (registrations or {}).items() if identity}
+    entries = (
+        read_comment_receipts(action_log)
+        if comment_id is not None
+        else _read_tail(action_log, max_lines)
+    )
+    latest: tuple[float, str | None] | None = None
+    for entry in entries:
         if entry.get("action") != "comment" or entry.get("issue") != issue_number:
             continue
         if not include_intent and entry.get("phase") != "succeeded":
             continue
+        if comment_id is not None and (
+            type(comment_id) is not int
+            or comment_id <= 0
+            or type(entry.get("comment_id")) is not int
+            or entry.get("comment_id") != comment_id
+            or entry.get("phase") != "succeeded"
+        ):
+            continue
         if not _repo_matches(entry, repo):
             continue
-        if now - float(entry.get("ts", 0)) <= recency_seconds:
+        if comment_id is not None:
+            timestamp = entry.get("ts", 0)
+            if isinstance(timestamp, (int, float)) and (latest is None or timestamp > latest[0]):
+                identity = entry.get("registration_id")
+                latest = (
+                    timestamp,
+                    (current_names.get(identity) if isinstance(identity, str) else None),
+                )
+        elif now - float(entry.get("ts", 0)) <= recency_seconds:
             return entry.get("session")
-    return None
+    return latest[1] if latest else None
 
 
 def find_outgoing_pull_request(
@@ -87,6 +138,7 @@ def find_outgoing_pull_request(
     base_repo: str = "",
     include_intent: bool = True,
     at: float | None = None,
+    registrations: dict[str, str] | None = None,
 ) -> str | None:
     """Session that ran ``gh pr create`` from this head repository and branch
     within ``recency_seconds`` of ``at`` (default now).
@@ -106,6 +158,7 @@ def find_outgoing_pull_request(
     if not head_ref or not (head_repo or base_repo):
         return None
     now = time.time() if at is None else at
+    current_names = {identity: name for name, identity in (registrations or {}).items() if identity}
     for entry in _read_tail(action_log, max_lines):
         if entry.get("action") != "pull_request":
             continue
@@ -121,7 +174,9 @@ def find_outgoing_pull_request(
         if (entry.get("branch") or "") != head_ref:
             continue
         if abs(now - float(entry.get("ts", 0))) <= recency_seconds:
-            return entry.get("session")
+            # The latest matching publication owns attribution, even if retired.
+            identity = entry.get("registration_id")
+            return current_names.get(identity) if isinstance(identity, str) else None
     return None
 
 
@@ -132,29 +187,67 @@ def has_commented_on_issue(
     max_lines: int = 200,
     *,
     repo: str = "",
+    since: float | None = None,
+    reset_comment_id: int | None = None,
+    receipts: Iterable[dict] | None = None,
+    registration_id: str | None = None,
 ) -> bool:
-    """Whether a session has ever commented on this issue (per action log)."""
-    for entry in _read_tail(action_log, max_lines):
+    """Whether this registration published after the latest acknowledgment reset.
+
+    The caller resolves the session's current registration from the database.
+    Receipt names may predate a rename; the stable registration is authoritative.
+    """
+    if not registration_id:
+        return False
+    latest: dict[tuple[str, int], dict] = {}
+    for entry in read_comment_receipts(action_log) if receipts is None else receipts:
         if (
             entry.get("action") == "comment"
             and entry.get("phase") == "succeeded"
+            and type(entry.get("comment_id")) is int
+            and entry["comment_id"] > 0
             and entry.get("issue") == issue_number
-            and entry.get("session") == session
             and _repo_matches(entry, repo)
+            and isinstance(entry.get("ts", 0), (int, float))
+        ):
+            key = ((entry.get("repo") or "").casefold(), entry["comment_id"])
+            if key not in latest or entry.get("ts", 0) > latest[key].get("ts", 0):
+                latest[key] = entry
+    for entry in latest.values():
+        if entry.get("registration_id") == registration_id and (
+            since is None
+            or (
+                entry.get("edited") is True
+                and isinstance(entry.get("ts"), (int, float))
+                and entry["ts"] > since
+            )
+            or (
+                entry["comment_id"] >= reset_comment_id
+                if reset_comment_id
+                else isinstance(entry.get("ts"), (int, float)) and entry["ts"] > since
+            )
         ):
             return True
     return False
 
 
-def rotate_action_log(action_log: str | Path, keep_lines: int = 2000) -> int:
+def rotate_action_log(
+    action_log: str | Path, keep_lines: int = 2000, *, receipt_retention_days: int = 30
+) -> int:
     """Keep the newest ``keep_lines`` entries of the action log. Returns lines dropped.
 
-    The hook appends forever; nothing else prunes the file. Runs in the
-    prune job. The rewrite is atomic; a line the hook appends during it is
-    lost, which costs at most one acknowledgement that GitHub confirms on
-    the next poll anyway.
+    Successful comment receipts are immutable separate files, so rotation cannot
+    discard an unprocessed or concurrently appended publication. Those files use
+    the configured delivery retention period.
     """
     log_path = Path(action_log).expanduser()
+    cutoff = time.time() - receipt_retention_days * 86400
+    for path in (log_path.parent / "comment-receipts").glob("*.json"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink(missing_ok=True)
+        except OSError:
+            continue
     try:
         lines = log_path.read_text(errors="replace").splitlines()
     except OSError:
@@ -163,6 +256,9 @@ def rotate_action_log(action_log: str | Path, keep_lines: int = 2000) -> int:
         return 0
     kept = lines[-keep_lines:]
     tmp = log_path.with_name(f".{log_path.name}.{os.getpid()}.tmp")
-    tmp.write_text("\n".join(kept) + "\n")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as file:
+        os.fchmod(file.fileno(), 0o600)
+        file.write("\n".join(kept) + "\n")
     os.replace(tmp, log_path)
     return len(lines) - len(kept)

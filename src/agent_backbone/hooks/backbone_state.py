@@ -220,6 +220,8 @@ def _gh_arguments(argv: list[str]) -> tuple[list[str], dict[str, str]] | None:
                 return None
             options[values[key]] = value
         elif arg in flags:
+            if arg == "--edit-last":
+                options["edit-last"] = "true"
             continue
         elif arg.startswith("-"):
             return None
@@ -242,6 +244,8 @@ def comment_action_from_argv(argv: list[str], now: float) -> dict | None:
     if len(operands) != 1 or not operands[0].isdigit():
         return None
     action = {"ts": now, "action": "comment", "issue": int(operands[0])}
+    if options.get("edit-last"):
+        action["edited"] = True
     if options.get("repo"):
         action["repo"] = options["repo"]
     return action
@@ -386,9 +390,76 @@ def shell_actions(command: str | list[str], cwd: str | None, now: float) -> list
     return actions
 
 
+def _comment_receipts(actions: list[dict], response: object, *, shell: bool) -> list[dict]:
+    """Bind comment actions to the concrete publication URL returned by the tool."""
+    if isinstance(response, str):
+        try:
+            decoded = json.loads(response)
+        except ValueError:
+            decoded = response
+    else:
+        decoded = response
+    outputs = [decoded] if isinstance(decoded, str) else []
+    if isinstance(decoded, dict):
+        outputs.append(decoded.get("html_url"))
+        if shell:
+            outputs += [decoded.get(key) for key in ("stdout", "output")]
+            content = decoded.get("llmContent")
+            if isinstance(content, str) and content.startswith("Output: "):
+                outputs.append(content.removeprefix("Output: "))
+        structured = decoded.get("structuredContent")
+        if isinstance(structured, dict):
+            outputs.append(structured.get("html_url"))
+        content_items = decoded.get("content")
+        for item in content_items if isinstance(content_items, list) else []:
+            if isinstance(item, dict) and item.get("type") == "text":
+                if shell:
+                    outputs.append(item.get("text"))
+                try:
+                    result = json.loads(item.get("text", ""))
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(result, dict):
+                    outputs.append(result.get("html_url"))
+    receipts = {}
+    for output in outputs:
+        if not isinstance(output, str):
+            continue
+        for repo, issue, comment in re.findall(
+            r"(?m)^https://github\.com/([^/\s]+/[^/\s]+)/(?:issues|pull)/(\d+)"
+            r"#issuecomment-(\d+)\s*$",
+            output,
+        ):
+            receipts.setdefault((repo.casefold(), int(issue)), []).append(int(comment))
+    groups = {}
+    for action in actions:
+        if action.get("action") == "comment" and action.get("phase") == "succeeded":
+            repo = (action.get("repo") or "").casefold()
+            if repo.startswith("github.com/"):
+                repo = repo.removeprefix("github.com/")
+                action["repo"] = repo
+            if not repo:
+                matches = [
+                    (key, ids) for key, ids in receipts.items() if key[1] == action.get("issue")
+                ]
+                if len(matches) != 1:
+                    continue
+                (repo, _), _ = matches[0]
+                action["repo"] = repo
+            groups.setdefault((repo, action.get("issue")), []).append(action)
+    for key, published in groups.items():
+        ids = receipts.get(key, [])
+        if len(published) == 1:
+            ids = list(dict.fromkeys(ids))
+        if len(ids) == len(published):
+            for action, comment_id in zip(published, ids, strict=True):
+                action["comment_id"] = comment_id
+    return actions
+
+
 def action_records(payload: dict, now: float, *, phase: str) -> list[dict]:
-    """Stamp intent or confirmed success separately so only success acknowledges."""
-    return [
+    """Only an exact successful publication receipt can acknowledge a comment."""
+    actions = [
         {**action, "phase": phase}
         for action in tool_actions(
             payload.get("tool_name", "") or "",
@@ -397,6 +468,12 @@ def action_records(payload: dict, now: float, *, phase: str) -> list[dict]:
             now,
         )
     ]
+    return _comment_receipts(
+        actions,
+        payload.get("tool_response"),
+        shell=payload.get("tool_name")
+        in {"Bash", "shell", "shell_command", "exec_command", "run_shell_command"},
+    )
 
 
 def response_succeeded(response: object) -> bool:
@@ -770,22 +847,35 @@ def launch_state_path(state_dir: Path, agent: str, launch_id: object) -> Path | 
     return state_dir / "launches" / agent / f"{identity}.json"
 
 
+def _private_directory(path: Path) -> None:
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.chmod(0o700)
+
+
+def _private_write(path: Path, text: str, *, append: bool = False) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_APPEND if append else os.O_TRUNC)
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, "a" if append else "w", encoding="utf-8") as file:
+        os.fchmod(file.fileno(), 0o600)
+        file.write(text)
+
+
 def write_state(state_dir: Path, agent: str, record: dict) -> None:
-    state_dir.mkdir(parents=True, exist_ok=True)
+    _private_directory(state_dir)
     plan_text = record.pop("plan_text", None)
     if plan_text is not None:
         plans_dir = state_dir / "plans"
-        plans_dir.mkdir(parents=True, exist_ok=True)
+        _private_directory(plans_dir)
         plan_path = plans_dir / f"{agent}.md"
-        plan_path.write_text(plan_text)
+        _private_write(plan_path, plan_text)
         record["plan_file"] = str(plan_path)
     targets = [state_dir / f"{agent}.json"]
     if scoped := launch_state_path(state_dir, agent, record.get("launch_id")):
         targets.insert(0, scoped)
     for target in targets:
-        target.parent.mkdir(parents=True, exist_ok=True)
+        _private_directory(target.parent)
         tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(record))
+        _private_write(tmp, json.dumps(record))
         os.replace(tmp, target)
 
 
@@ -801,7 +891,8 @@ def remember_usage_session(state_dir: Path, agent: str, record: dict) -> None:
         f"{agent}\0{runtime}\0{session_id}\0{launch or chr(45)}".encode()
     ).hexdigest()
     directory = state_dir / "usage-sessions"
-    directory.mkdir(parents=True, exist_ok=True)
+    _private_directory(state_dir)
+    _private_directory(directory)
     target = directory / (identity + ".json")
     if target.exists():
         return  # identity is immutable; collection consumes it after the DB commit
@@ -814,14 +905,35 @@ def remember_usage_session(state_dir: Path, agent: str, record: dict) -> None:
     if launch:
         value["launch_id"] = launch
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(value))
+    _private_write(tmp, json.dumps(value))
     os.replace(tmp, target)
 
 
 def append_action(state_dir: Path, agent: str, action: dict) -> None:
-    state_dir.mkdir(parents=True, exist_ok=True)
-    with (state_dir / "actions.jsonl").open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps({**action, "session": agent}) + "\n")
+    _private_directory(state_dir)
+    record = (
+        json.dumps(
+            {
+                **action,
+                "session": agent,
+                "registration_id": os.environ.get("BACKBONE_REGISTRATION_ID", ""),
+            }
+        )
+        + "\n"
+    )
+    if (
+        action.get("action") == "comment"
+        and action.get("phase") == "succeeded"
+        and type(action.get("comment_id")) is int
+        and action["comment_id"] > 0
+    ):
+        receipts = state_dir / "comment-receipts"
+        _private_directory(receipts)
+        target = receipts / (hashlib.sha256(record.encode()).hexdigest() + ".json")
+        temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+        _private_write(temporary, record)
+        os.replace(temporary, target)
+    _private_write(state_dir / "actions.jsonl", record, append=True)
 
 
 CONTEXT_DIR = "context"
@@ -844,14 +956,15 @@ def offer_context(state_dir: Path, agent: str, key: str, text: str) -> bool:
     Checked before the receipt, against the hook's rename of ``.md`` to
     ``.taken``: an offer the hook takes meanwhile is never written again."""
     directory = _context_dir(state_dir, agent)
-    directory.mkdir(parents=True, exist_ok=True)
+    _private_directory(state_dir)
+    _private_directory(directory)
     target = directory / f"{key}.md"
     if target.exists():
         return True
     if (directory / f"{key}.taken").exists():
         return False
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    tmp.write_text(text, encoding="utf-8")
+    _private_write(tmp, text)
     os.replace(tmp, target)
     return True
 
@@ -1011,15 +1124,16 @@ def offer_steer(
     only within that turn of that conversation. Without them, the session's
     next tool call takes the offer, whichever turn that is."""
     directory = _steer_dir(state_dir, agent, launch_id)
-    directory.mkdir(parents=True, exist_ok=True)
+    _private_directory(state_dir)
+    _private_directory(directory)
     if (directory / f"{key}.taken").exists():
         return False
     marks = {name: value for name, value in (turn or {}).items() if value is not None}
     if marks:
-        (directory / f"{key}.turn").write_text(json.dumps(marks), encoding="utf-8")
+        _private_write(directory / f"{key}.turn", json.dumps(marks))
     target = directory / f"{key}.md"
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    tmp.write_text(text, encoding="utf-8")
+    _private_write(tmp, text)
     os.replace(tmp, target)
     return True
 
@@ -1216,11 +1330,15 @@ if __name__ == "__main__" and sys.argv[1:] == ["--shell-actions"]:
         raise ValueError("unknown action phase")
     print(
         json.dumps(
-            [
-                {**action, "phase": phase}
-                for action in shell_actions(
-                    request.get("command", ""), request.get("cwd"), time.time()
-                )
-            ]
+            action_records(
+                {
+                    "tool_name": "Bash",
+                    "tool_input": {"command": request.get("command", "")},
+                    "cwd": request.get("cwd"),
+                    "tool_response": request.get("response"),
+                },
+                time.time(),
+                phase=phase,
+            )
         )
     )

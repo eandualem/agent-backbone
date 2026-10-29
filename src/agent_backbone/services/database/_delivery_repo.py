@@ -33,9 +33,10 @@ class DeliveryRepo(Repo):
                 text(
                     """INSERT INTO deliveries
                        (operation_id, kind, repo, issue_number, target_entity, session_name,
-                        outcome, source, preview, created_at)
+                        outcome, source, preview, created_at, registration_id)
                        VALUES (:operation_id, :kind, :repo, :issue_number, :target_entity,
-                               :session_name, :outcome, :source, :preview, :created_at)
+                               :session_name, :outcome, :source, :preview, :created_at,
+                               (SELECT report_identity FROM agents WHERE name=:session_name))
                        RETURNING id"""
                 ),
                 {
@@ -92,9 +93,10 @@ class DeliveryRepo(Repo):
                 text(
                     """INSERT INTO deliveries
                        (operation_id, kind, repo, issue_number, target_entity, session_name,
-                        outcome, source, preview, created_at)
+                        outcome, source, preview, created_at, registration_id)
                        VALUES (:operation_id, 'issue', :repo, :issue_number, :target_entity,
-                               :session_name, 'attempting', :source, :preview, :now)
+                               :session_name, 'attempting', :source, :preview, :now,
+                               (SELECT report_identity FROM agents WHERE name=:session_name))
                        ON CONFLICT (repo, issue_number, session_name)
                        WHERE kind = 'issue'
                          AND issue_number IS NOT NULL
@@ -220,6 +222,7 @@ class DeliveryRepo(Repo):
                 text(
                     f"""SELECT d.* FROM deliveries d
                        WHERE d.kind = 'issue' AND d.source != 'github-outbox'
+                         AND d.superseded_at IS NULL
                          AND d.issue_number IS NOT NULL
                          AND d.outcome IN ({placeholders})
                          AND NOT EXISTS (

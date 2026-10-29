@@ -16,6 +16,7 @@ from agent_backbone.config import (
     BackboneConfig,
     BackboneSection,
     RoutingConfig,
+    agents_from_rows,
 )
 from agent_backbone.models import (
     CommentData,
@@ -290,8 +291,8 @@ async def api_app(config):
         app.state.config = replace(app.state.config, agents=new_config.agents)
 
     store = AgentStore(db, config.data_dir, on_change=_publish)
-    store._agents = config.agents
-    store._config = config
+    store._agents = agents_from_rows(await db.agents.list())
+    store._config = replace(config, agents=store.agents)
     app.state.agent_store = store
     app.state.feed = SessionFeed(lambda: app.state.config)
     app.state.issue_closed_hooks = ()

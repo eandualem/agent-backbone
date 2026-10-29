@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent_backbone.config import AgentSpec, bootstrap_config
+from agent_backbone.config import AgentSpec, agents_from_rows, bootstrap_config
 from agent_backbone.services.agents import (
     approve_agent,
     deny_agent,
@@ -26,6 +26,12 @@ from agent_backbone.templates import read_template
 
 _MOD = "agent_backbone.services.agents.launch"
 _BASE = "agent_backbone.services.runtimes.base"
+
+
+def _registered_db():
+    db = AsyncMock()
+    db.agents.list.return_value = [{"name": "ike", "report_identity": "a" * 32}]
+    return db
 
 
 @pytest.fixture(autouse=True)
@@ -451,27 +457,66 @@ class TestDenyAgent:
 class TestStartAgentScrubsSecrets:
     """A started agent inherits the launch contract and nothing else (issue #81)."""
 
-    async def test_secrets_are_scrubbed_from_the_session(self, tmp_path):
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    async def test_secrets_are_scrubbed_from_the_session(self, tmp_path, runtime):
         data_dir = tmp_path / "data"
         data_dir.mkdir()
-        (data_dir / ".env").write_text("BACKBONE_API_KEY=k\nMY_OWN_SECRET=s\n")
+        (data_dir / ".env").write_text("BACKBONE_API_KEY=k\nMY_OWN_SECRET=s\nBACKBONE_PORT=8234\n")
         project = tmp_path / "project"
         project.mkdir()
-        spec = AgentSpec(name="ike", dir=str(project), runtime="shell")
+        spec = AgentSpec(name="worker", dir=str(project), runtime=runtime)
 
         config = bootstrap_config(data_dir)
         with (
             patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
             patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
         ):
-            assert (await start_agent(spec, config, wait=False)).ok is True
+            with patch(f"{_BASE}.resolve_command", return_value="/usr/bin/cli"):
+                assert (await start_agent(spec, config, wait=False)).ok is True
 
         scrub = start.await_args.kwargs["scrub"]
         assert "BACKBONE_API_KEY" in scrub
         assert "GITHUB_TOKEN" in scrub  # a known name, even absent from .env
         assert "MY_OWN_SECRET" in scrub  # whatever the user put in .env
         # The launch contract itself is untouched.
-        assert start.await_args.kwargs["environment"]["BACKBONE_AGENT"] == "ike"
+        from agent_backbone.config import agent_api_key
+
+        exported = start.await_args.kwargs["environment"]
+        assert exported["BACKBONE_AGENT"] == "worker"
+        assert exported["BACKBONE_API_KEY"] == agent_api_key("k")
+        assert exported["BACKBONE_API_KEY"] != "k"
+        assert exported["BACKBONE_PORT"] == "8234"
+        assert exported["BACKBONE_HOST"] == config.backbone.host
+
+        # Exercise an actual shell child after the runtime's default secret-name
+        # filtering, not merely the tmux launch arguments.
+        import fnmatch
+        import os
+        import subprocess
+        import sys
+
+        child_env = {k: v for k, v in os.environ.items() if not k.startswith("BACKBONE_")}
+        child_env.update(exported)
+        child_env = {
+            k: v
+            for k, v in child_env.items()
+            if not any(
+                fnmatch.fnmatch(k.upper(), pattern) for pattern in ("*KEY*", "*TOKEN*", "*SECRET*")
+            )
+        }
+        script = (
+            "from agent_backbone.config import bootstrap_config,agent_api_key; "
+            "from pathlib import Path; import sys; "
+            "assert bootstrap_config(Path(sys.argv[1])).api_key == agent_api_key('k')"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(data_dir)],
+            env=child_env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
 
     @pytest.mark.parametrize("runtime", sorted(RUNTIMES))
     async def test_env_values_are_on_no_command_line(self, tmp_path, runtime):
@@ -546,7 +591,9 @@ class TestStartAgentBrief:
     def _spec(tmp_path, runtime):
         project = tmp_path / "project"
         project.mkdir(exist_ok=True)
-        return AgentSpec(name="ike", dir=str(project), runtime=runtime, repo="acme/app")
+        return AgentSpec(
+            name="ike", dir=str(project), runtime=runtime, repo="acme/app", registration_id="a" * 32
+        )
 
     @staticmethod
     def _launch():
@@ -560,23 +607,38 @@ class TestStartAgentBrief:
 
     @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
     async def test_starter_policies_reach_the_fresh_launch(self, tmp_path, runtime):
+        from agent_backbone.hooks.backbone_state import take_context
+
         config = bootstrap_config(tmp_path / "data")
         starters = ("starter-collaboration", "starter-continuity", "starter-learning")
         config = replace(config, launch=replace(config.launch, shared_policy=starters))
-        db = AsyncMock()
+        brief = tmp_path / "large-brief.md"
+        policy = "Keep the complete policy.\n" * 1500 + "Final instruction."
+        brief.write_text(policy)
+        db = _registered_db()
         db.queue.retire_pending_briefs.return_value = 0
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait:
-            result = await start_agent(self._spec(tmp_path, runtime), config, db=db)
+            result = await start_agent(
+                self._spec(tmp_path, runtime), config, brief_file=brief, db=db
+            )
         assert result.ok and result.ready == "ready"
         command = started.await_args.kwargs["command"]
         if runtime == "claude":
             content = Path(command[command.index("--append-system-prompt-file") + 1]).read_text()
         elif runtime == "opencode":
-            content = command[command.index("--prompt") + 1]
+            helper = next(i for i, arg in enumerate(command) if arg.endswith("_opencode_launch.py"))
+            content = Path(command[helper + 2]).read_text()
         else:
-            db.queue.enqueue.assert_awaited_once()
-            content = db.queue.enqueue.await_args.kwargs["message"]
+            launch_id = started.await_args.kwargs["environment"]["BACKBONE_LAUNCH_ID"]
+            assert take_context(config.state_dir, "ike", "another-launch") == []
+            (content,) = take_context(config.state_dir, "ike", launch_id)
+            assert take_context(config.state_dir, "ike", launch_id) == []
+        db.queue.enqueue.assert_not_awaited()
+        assert "--prompt" not in command
+        assert policy in content
+        assert policy not in " ".join(command)
+        assert len(" ".join(command).encode()) < 16000
         for name in starters:
             assert content.count(f"## Shared policy: {name}") == 1
             assert read_template(name).strip() in content
@@ -584,7 +646,7 @@ class TestStartAgentBrief:
 
     async def test_claude_gets_the_brief_at_launch(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
-        db = AsyncMock()
+        db = _registered_db()
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait:
             result = await start_agent(self._spec(tmp_path, "claude"), config, db=db)
@@ -595,7 +657,7 @@ class TestStartAgentBrief:
 
     async def test_aider_gets_the_brief_queued_as_its_first_message(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
-        db = AsyncMock()
+        db = _registered_db()
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait:
             result = await start_agent(self._spec(tmp_path, "aider"), config, db=db)
@@ -610,7 +672,7 @@ class TestStartAgentBrief:
 
     async def test_a_swarm_role_brief_replaces_the_common_brief(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
-        db = AsyncMock()
+        db = _registered_db()
         role = tmp_path / "role.md"
         role.write_text("You are the scout.")
         exists, start, _cmd, _trust, _wait = self._launch()
@@ -620,7 +682,7 @@ class TestStartAgentBrief:
 
     async def test_a_launch_stops_when_earlier_briefs_cannot_be_retired(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
-        db = AsyncMock()
+        db = _registered_db()
         db.queue.retire_pending_briefs.side_effect = RuntimeError("database is locked")
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait:
@@ -631,7 +693,7 @@ class TestStartAgentBrief:
 
     async def test_a_launch_stops_when_its_brief_cannot_be_queued(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
-        db = AsyncMock()
+        db = _registered_db()
         db.queue.retire_pending_briefs.return_value = 0
         db.queue.enqueue.side_effect = RuntimeError("database is locked")
         exists, start, _cmd, _trust, _wait = self._launch()
@@ -640,21 +702,20 @@ class TestStartAgentBrief:
         assert result.ok is False
         started.assert_not_awaited()
 
-    async def test_a_resumed_conversation_that_never_got_its_brief_is_sent_the_current_one(
-        self, tmp_path
-    ):
+    async def test_an_unsupported_resume_never_queues_a_brief(self, tmp_path):
         config = bootstrap_config(tmp_path / "data")
-        db = AsyncMock()
+        db = _registered_db()
         db.queue.retire_pending_briefs.return_value = 1  # the earlier session ended first
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start, _cmd, _trust, _wait:
-            await start_agent(self._spec(tmp_path, "aider"), config, resume=True, db=db)
-        db.queue.enqueue.assert_awaited_once()
+            result = await start_agent(self._spec(tmp_path, "aider"), config, resume=True, db=db)
+        assert not result.ok
+        db.queue.enqueue.assert_not_awaited()
 
     async def test_a_message_brief_is_queued_before_the_session_exists(self, tmp_path):
         """Nothing sent once the session is ready can overtake it."""
         config = bootstrap_config(tmp_path / "data")
-        db = AsyncMock()
+        db = _registered_db()
         db.queue.retire_pending_briefs.return_value = 0
 
         async def session_starts(*_args, **_kwargs):
@@ -669,7 +730,7 @@ class TestStartAgentBrief:
     @pytest.mark.parametrize("runtime", ["claude", "aider", "shell"])
     async def test_a_launch_retires_briefs_queued_for_an_earlier_one(self, tmp_path, runtime):
         config = bootstrap_config(tmp_path / "data")
-        db = AsyncMock()
+        db = _registered_db()
         db.queue.retire_pending_briefs.return_value = 1
         exists, start, _cmd, _trust, _wait = self._launch()
 
@@ -686,7 +747,7 @@ class TestStartAgentBrief:
     @pytest.mark.parametrize("resume", [False, True])
     async def test_a_shell_gets_no_brief(self, tmp_path, resume):
         config = bootstrap_config(tmp_path / "data")
-        db = AsyncMock()
+        db = _registered_db()
         db.queue.retire_pending_briefs.return_value = 0
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start, _cmd, _trust, _wait:
@@ -707,11 +768,13 @@ class TestStartAgentBrief:
     async def test_a_resumed_session_is_never_sent_its_brief_as_a_message(self, tmp_path, runtime):
         """#294: a peer's message can imitate a chat message, never a hook's context."""
         config = bootstrap_config(tmp_path / "data")
-        db = AsyncMock()
+        db = _registered_db()
         db.queue.retire_pending_briefs.return_value = 0
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start, _cmd, _trust, _wait:
-            await start_agent(self._spec(tmp_path, runtime), config, resume=True, db=db)
+            await start_agent(
+                self._spec(tmp_path, runtime), config, resume=True, session_id="saved-id", db=db
+            )
         db.queue.enqueue.assert_not_awaited()
 
     @pytest.mark.parametrize(
@@ -726,11 +789,13 @@ class TestStartAgentBrief:
         from agent_backbone.services.agents.launch import REFRESHED_BRIEF_HEADER
 
         config = bootstrap_config(tmp_path / "data")
-        db = AsyncMock()
+        db = _registered_db()
         db.queue.retire_pending_briefs.return_value = retired
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait:
-            await start_agent(self._spec(tmp_path, runtime), config, resume=True, db=db)
+            await start_agent(
+                self._spec(tmp_path, runtime), config, resume=True, session_id="saved-id", db=db
+            )
         db.queue.enqueue.assert_not_awaited()
         launch_id = started.await_args.kwargs["environment"]["BACKBONE_LAUNCH_ID"]
         (offered,) = take_context(config.state_dir, "ike", launch_id)
@@ -747,20 +812,27 @@ class TestStartAgentBrief:
     )
     async def test_a_resume_stops_when_its_brief_cannot_be_handed_over(self, tmp_path, failure):
         config = bootstrap_config(tmp_path / "data")
-        db = AsyncMock()
+        db = _registered_db()
         db.queue.retire_pending_briefs.return_value = 0
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait, failure:
-            result = await start_agent(self._spec(tmp_path, "claude"), config, resume=True, db=db)
+            result = await start_agent(
+                self._spec(tmp_path, "claude"), config, resume=True, session_id="saved-id", db=db
+            )
         assert result.ok is False
         started.assert_not_awaited()
 
     @pytest.mark.parametrize(
         "runtime", [rt for rt in RUNTIMES if RUNTIMES[rt].brief_refresh == "hook_context"]
     )
-    async def test_a_resume_stops_when_the_refresh_hook_cannot_be_wired(self, tmp_path, runtime):
+    @pytest.mark.parametrize("resume", [False, True])
+    async def test_a_resume_stops_when_the_refresh_hook_cannot_be_wired(
+        self, tmp_path, runtime, resume
+    ):
+        if not resume and RUNTIMES[runtime].brief_mode != "hook_context":
+            return  # Fresh system-prompt launches do not need a context offer.
         config = bootstrap_config(tmp_path / "data")
-        db = AsyncMock()
+        db = _registered_db()
         db.queue.retire_pending_briefs.return_value = 0
         exists, start, _cmd, _trust, _wait = self._launch()
         with (
@@ -771,7 +843,13 @@ class TestStartAgentBrief:
             _wait,
             patch.object(RUNTIMES[runtime], "hook_launch_args", return_value=[]),
         ):
-            result = await start_agent(self._spec(tmp_path, runtime), config, resume=True, db=db)
+            result = await start_agent(
+                self._spec(tmp_path, runtime),
+                config,
+                resume=resume,
+                session_id="saved-id" if resume else None,
+                db=db,
+            )
         assert result.ok is False
         started.assert_not_awaited()
 
@@ -784,7 +862,7 @@ class TestStartAgentBrief:
         spec = replace(self._spec(tmp_path, "codex"), env={"CODEX_HOME": str(agents.parent)})
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start, _cmd, _trust, _wait:
-            result = await start_agent(spec, config, db=AsyncMock())
+            result = await start_agent(spec, config, db=_registered_db())
         assert f"user-level instructions: {agents}" in result.evidence
 
     async def test_native_memory_that_is_on_is_named_at_start(self, tmp_path):
@@ -796,7 +874,7 @@ class TestStartAgentBrief:
         spec = replace(self._spec(tmp_path, "codex"), env={"CODEX_HOME": str(home)})
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start, _cmd, _trust, _wait:
-            result = await start_agent(spec, config, db=AsyncMock())
+            result = await start_agent(spec, config, db=_registered_db())
         assert any(line.startswith("native memory: memories are on") for line in result.evidence)
 
     async def test_unknown_runtime_is_refused(self, tmp_path):
@@ -812,7 +890,7 @@ class TestStartAgentBrief:
         spec = replace(self._spec(tmp_path, "codex"), unattended=True)
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait, _codex_sandbox(linux=False):
-            result = await start_agent(spec, config, db=AsyncMock())
+            result = await start_agent(spec, config, db=_registered_db())
         assert result.ok
         command = started.await_args.kwargs["command"]
         assert command[1:7] == ["-a", "never", "-s", "workspace-write", "--add-dir", "/cache"]
@@ -828,10 +906,16 @@ class TestStartAgentBrief:
         (worktree / ".git").write_text(f"gitdir: {main_git / 'worktrees' / 'wt'}\n")
         (main_git / "worktrees" / "wt" / "gitdir").write_text(str(worktree / ".git"))
         (main_git / "worktrees" / "wt" / "commondir").write_text("../..")
-        spec = AgentSpec(name="ike", dir=str(worktree), runtime="codex", repo="acme/app")
+        spec = AgentSpec(
+            name="ike",
+            dir=str(worktree),
+            runtime="codex",
+            repo="acme/app",
+            registration_id="a" * 32,
+        )
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait, _codex_sandbox(linux=False):
-            assert (await start_agent(spec, config, db=AsyncMock())).ok
+            assert (await start_agent(spec, config, db=_registered_db())).ok
         command = started.await_args.kwargs["command"]
         assert command[1:3] == ["--add-dir", str(main_git / "objects")]
         assert str(main_git / "worktrees" / "wt" / "index.lock") in command
@@ -839,7 +923,7 @@ class TestStartAgentBrief:
         # A directory with no Git metadata has nothing to open.
         plain = self._spec(tmp_path, "codex")
         with exists, start as started, _cmd, _trust, _wait:
-            assert (await start_agent(plain, config, db=AsyncMock())).ok
+            assert (await start_agent(plain, config, db=_registered_db())).ok
         assert "--add-dir" not in started.await_args.kwargs["command"]
 
     @pytest.mark.parametrize("unattended", [False, True])
@@ -849,7 +933,7 @@ class TestStartAgentBrief:
         (spec.path / ".git").mkdir()
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait, _codex_sandbox(linux=False):
-            assert (await start_agent(spec, config, db=AsyncMock())).ok
+            assert (await start_agent(spec, config, db=_registered_db())).ok
         command = started.await_args.kwargs["command"]
         grant = command.index("--add-dir")
         assert command[grant + 1] == str((spec.path / ".git" / "objects").resolve())
@@ -870,7 +954,7 @@ class TestStartAgentBrief:
         (git / "index").write_bytes(b"")
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait, _codex_sandbox(linux=True):
-            assert (await start_agent(spec, config, db=AsyncMock())).ok
+            assert (await start_agent(spec, config, db=_registered_db())).ok
         command = started.await_args.kwargs["command"]
         roots = [command[i + 1] for i, arg in enumerate(command) if arg == "--add-dir"]
         git_roots = [str((git / name).resolve()) for name in ("objects", "refs", "logs")]
@@ -881,7 +965,9 @@ class TestStartAgentBrief:
         config = bootstrap_config(tmp_path / "data")
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait:
-            assert (await start_agent(self._spec(tmp_path, runtime), config, db=AsyncMock())).ok
+            assert (
+                await start_agent(self._spec(tmp_path, runtime), config, db=_registered_db())
+            ).ok
         assert started.await_args.kwargs["mouse"] is (runtime == "codex")
 
     async def test_auto_review_setting_reaches_the_runtime(self, tmp_path):
@@ -889,7 +975,9 @@ class TestStartAgentBrief:
         config = replace(config, launch=replace(config.launch, auto_review=True))
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait:
-            assert (await start_agent(self._spec(tmp_path, "codex"), config, db=AsyncMock())).ok
+            assert (
+                await start_agent(self._spec(tmp_path, "codex"), config, db=_registered_db())
+            ).ok
         assert "--approve-for-me" in started.await_args.kwargs["command"]
 
     @pytest.mark.parametrize(
@@ -912,7 +1000,7 @@ class TestStartAgentBrief:
         assert spec.swarm == "audit" and not spec.unattended
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait:
-            assert (await start_agent(spec, config, db=AsyncMock())).ok
+            assert (await start_agent(spec, config, db=_registered_db())).ok
         command = started.await_args.kwargs["command"]
         assert ("never" in command) is never_asks
         assert "--auto" not in command  # OpenCode's switch is never the swarm's call
@@ -923,7 +1011,7 @@ class TestStartAgentBrief:
         spec = replace(self._spec(tmp_path, "aider"), unattended=True)
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait:
-            result = await start_agent(spec, config, db=AsyncMock())
+            result = await start_agent(spec, config, db=_registered_db())
         assert result.ok is False
         assert "no unattended switch" in result.evidence[0]
         started.assert_not_awaited()
@@ -947,7 +1035,9 @@ class TestStartingState:
         with (
             patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True),
             patch(f"{_MOD}.capture_pane", side_effect=_capture),
-            patch(f"{_MOD}.session_exists", new_callable=AsyncMock, side_effect=[False, True]),
+            patch(
+                f"{_MOD}.session_exists", new_callable=AsyncMock, side_effect=[False, False, True]
+            ),
         ):
             result = await start_agent(spec, config)
 
@@ -1050,21 +1140,24 @@ class TestResumeBySessionId:
             patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
         ):
             result = await start_agent(spec, config, resume=True, wait=False)
-        assert start.await_args.kwargs["command"][1:3] == ["resume", "--last"]
-        assert any(f"belongs to {previous_runtime}" in line for line in result.evidence)
+        assert not result.ok
+        start.assert_not_awaited()
+        assert any("no resumable session identity" in line for line in result.evidence)
 
-    async def test_without_a_known_session_the_runtimes_own_resume_is_used(self, tmp_path):
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    async def test_without_a_known_session_resume_refuses_to_guess(self, tmp_path, runtime):
         config = bootstrap_config(tmp_path / "data")
         project = tmp_path / "project"
         project.mkdir()
-        spec = AgentSpec(name="ike", dir=str(project), runtime="codex")
+        spec = AgentSpec(name="ike", dir=str(project), runtime=runtime)
         with (
             patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=False),
             patch(f"{_MOD}.start_session", new_callable=AsyncMock, return_value=True) as start,
             patch(f"{_BASE}.resolve_command", return_value="/usr/bin/codex"),
         ):
-            await start_agent(spec, config, resume=True, wait=False)
-        assert start.await_args.kwargs["command"][1:3] == ["resume", "--last"]
+            result = await start_agent(spec, config, resume=True, wait=False)
+        assert not result.ok
+        start.assert_not_awaited()
 
     async def test_a_plain_start_is_fresh_and_points_at_the_saved_conversation(self, tmp_path):
         """Resuming is the owner's call: a saved id is never used unless asked
@@ -1177,7 +1270,7 @@ class TestHookWiringReachesTheSession:
         assert "--auto" in launched["command"]
         content = json.loads(launched["environment"]["OPENCODE_CONFIG_CONTENT"])
         assert content == original  # the wrapper composes the final inherited environment
-        assert launched["command"][1].endswith("_opencode_launch.py")
+        assert any(arg.endswith("_opencode_launch.py") for arg in launched["command"])
         assert json.loads(spec.env["OPENCODE_CONFIG_CONTENT"]) == original
 
     async def test_gemini_and_opencode_get_their_hook_environment(self, tmp_path):
@@ -1199,7 +1292,10 @@ class TestHookWiringReachesTheSession:
             env = start.await_args.kwargs["environment"]
             if runtime == "opencode":
                 assert key not in env  # composed after inheriting tmux's environment
-                assert start.await_args.kwargs["command"][1].endswith("_opencode_launch.py")
+                assert any(
+                    arg.endswith("_opencode_launch.py")
+                    for arg in start.await_args.kwargs["command"]
+                )
             else:
                 assert key in env
             assert env["BACKBONE_AGENT"] == f"{runtime}-agent"
@@ -1317,7 +1413,7 @@ async def test_claude_consent_rides_only_in_an_unattended_launch(tmp_path, monke
     spec = replace(TestStartAgentBrief._spec(tmp_path, "claude"), unattended=unattended)
     exists, start, command, trust, wait = TestStartAgentBrief._launch()
     with exists, start as started, command, trust, wait:
-        result = await start_agent(spec, config, db=AsyncMock())
+        result = await start_agent(spec, config, db=_registered_db())
     assert result.ok
     launched = started.await_args.kwargs["command"]
     assert launched.count("--settings") == 1
@@ -1412,6 +1508,24 @@ class TestSkillsAtLaunch:
         )
         assert str(store) in result.evidence[0]
 
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+    async def test_redirected_skill_directory_prevents_launch(self, tmp_path, runtime):
+        self._store(tmp_path, tags="all")
+        config = bootstrap_config(tmp_path / "data")
+        project, outside = tmp_path / "project", tmp_path / "outside"
+        project.mkdir()
+        outside.mkdir()
+        from agent_backbone.services.runtimes import RUNTIMES
+
+        directory = Path(RUNTIMES[runtime].skill_dirs[0]).parts[0]
+        (project / directory).symlink_to(outside, target_is_directory=True)
+        spec = AgentSpec(name="worker", dir=str(project), runtime=runtime)
+        result, start = await self._start(spec, config)
+        assert not result.ok
+        start.assert_not_awaited()
+        assert "outside" in result.evidence[0]
+        assert not list(outside.iterdir())
+
     async def test_an_untagged_agent_gets_no_links_and_no_noise(self, tmp_path):
         self._store(tmp_path)
         config = bootstrap_config(tmp_path / "data")
@@ -1498,17 +1612,14 @@ class TestResumeOnlyTheLastLaunchesSession:
             patch(f"{_BASE}.resolve_command", return_value=f"/usr/bin/{spec.runtime}"),
         ):
             result = await start_agent(spec, config, resume=resume, wait=False)
-        return start.await_args.kwargs["command"], result.evidence
+        return start.await_args.kwargs["command"] if start.await_count else None, result.evidence
 
     @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
     async def test_an_earlier_sessions_id_is_not_resumed(self, tmp_path, runtime):
         config, spec = self._setup(tmp_path, runtime, reported_by_last_launch=False)
         command, evidence = await self._start(config, spec, resume=True)
-        assert "old-sess" not in command
-        assert any(
-            "last launch reported no session id" in line and "earlier session" in line
-            for line in evidence
-        )
+        assert command is None
+        assert any("no resumable session identity" in line for line in evidence)
         _, fresh = await self._start(config, spec, resume=False)
         assert not any("still available" in line for line in fresh)
 
@@ -1522,6 +1633,33 @@ class TestResumeOnlyTheLastLaunchesSession:
         else:
             assert "old-sess" in command
         assert any("resuming the session the last launch reported" in line for line in evidence)
+
+    @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode", "gemini"])
+    async def test_malformed_hook_id_falls_back_to_exact_launch_identity(self, tmp_path, runtime):
+        from agent_backbone.services.agents import write_starting_marker
+
+        config, spec = self._setup(tmp_path, runtime, reported_by_last_launch=True)
+        write_starting_marker(
+            config.state_dir, spec.name, 3.0, launch_id="L2", opened=(runtime, "saved-session")
+        )
+        write_state_file(
+            config.state_dir,
+            spec.name,
+            {
+                "state": "idle",
+                "ts": 4.0,
+                "runtime": runtime,
+                "launch_id": "L2",
+                "session_id": {"invalid": "object"},
+            },
+        )
+        command, evidence = await self._start(config, spec, resume=True)
+        if runtime == "opencode":
+            selected = next(arg for arg in command if arg.startswith('{"model"'))
+            assert json.loads(selected)["resume"] == "saved-session"
+        else:
+            assert "saved-session" in command
+        assert any("last launch opened: saved-session" in line for line in evidence)
 
 
 @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
@@ -1617,9 +1755,9 @@ async def test_a_launch_tmux_refused_records_no_conversation(tmp_path):
         failed = await start_agent(spec, config, session_id="X", wait=False)
         result = await start_agent(spec, config, resume=True, wait=False)
     assert not failed.ok
-    command = start.await_args.kwargs["command"]
-    assert "X" not in command and "Y" not in command
-    assert any("is from an earlier session" in line for line in result.evidence)
+    assert not result.ok
+    assert start.await_count == 1
+    assert any("no resumable session identity" in line for line in result.evidence)
 
 
 async def test_a_launch_killed_after_its_hook_reported_stays_the_last_launch(tmp_path):
@@ -1677,7 +1815,7 @@ async def test_a_launch_killed_after_its_hook_reported_stays_the_last_launch(tmp
         ("codex", True, False),
         ("opencode", False, True),
         ("opencode", True, False),
-        ("shell", True, True),  # a plain shell has no conversation to resume
+        ("shell", False, True),  # a plain shell has no conversation to resume
     ],
 )
 async def test_a_fresh_start_is_recorded_before_the_readiness_wait(
@@ -1689,7 +1827,13 @@ async def test_a_fresh_start_is_recorded_before_the_readiness_wait(
     await db.agents.upsert("ike", dir=str(tmp_path), description="", unattended=False, **common)
     await db.agents.conversation_started("ike", "2026-10-13T19:59:43.000000Z")
     config = bootstrap_config(tmp_path / "data")
-    spec = AgentSpec(name="ike", dir=str(tmp_path), runtime=runtime)
+    spec = agents_from_rows(await db.agents.list()).get("ike")
+    if resume:
+        write_state_file(
+            config.state_dir,
+            "ike",
+            {"state": "idle", "ts": time.time(), "session_id": "saved-id", "runtime": runtime},
+        )
     seen = {}
 
     async def waiting(*args, **kwargs):
@@ -1722,7 +1866,7 @@ async def test_a_resume_of_another_conversation_by_id_starts_over(
     write_starting_marker(config.state_dir, "ike", 1.0, launch_id="L1")
     report = {"state": "idle", "ts": 2.0, "session_id": "current", "runtime": runtime}
     write_state_file(config.state_dir, "ike", {**report, "launch_id": "L1"})
-    spec = AgentSpec(name="ike", dir=str(tmp_path), runtime=runtime)
+    spec = agents_from_rows(await db.agents.list()).get("ike")
     with (
         patch(f"{_MOD}.session_exists", AsyncMock(return_value=False)),
         patch(f"{_MOD}.start_session", AsyncMock(return_value=True)),
@@ -1733,13 +1877,32 @@ async def test_a_resume_of_another_conversation_by_id_starts_over(
 
 
 async def test_a_failed_start_record_never_fails_a_running_session(tmp_path):
-    db = AsyncMock()
+    db = _registered_db()
     db.agents.conversation_started.side_effect = RuntimeError("database is locked")
     config = bootstrap_config(tmp_path / "data")
-    spec = AgentSpec(name="ike", dir=str(tmp_path), runtime="claude")
+    spec = AgentSpec(name="ike", dir=str(tmp_path), runtime="claude", registration_id="a" * 32)
     with (
         patch(f"{_MOD}.session_exists", AsyncMock(return_value=False)),
         patch(f"{_MOD}.start_session", AsyncMock(return_value=True)),
         patch(f"{_BASE}.resolve_command", return_value="/bin/claude"),
     ):
         assert (await start_agent(spec, config, db=db, wait=False)).ok
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_launch_exports_current_registration_for_publication_receipts(db, tmp_path, runtime):
+    from agent_backbone.services.agents import AgentStore
+
+    store = AgentStore(db, tmp_path)
+    await store.start()
+    spec = await store.register(AgentSpec(name="worker", dir=str(tmp_path), runtime=runtime))
+    identity = next(
+        row["report_identity"] for row in await db.agents.list() if row["name"] == spec.name
+    )
+    with (
+        patch(f"{_MOD}.session_exists", return_value=False),
+        patch(f"{_MOD}.start_session", return_value=True) as start,
+        patch(f"{_BASE}.resolve_command", return_value=f"/bin/{runtime}"),
+    ):
+        assert (await start_agent(spec, store.config, db=db, wait=False)).ok
+    assert start.call_args.kwargs["environment"]["BACKBONE_REGISTRATION_ID"] == identity

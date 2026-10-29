@@ -8,25 +8,43 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   drives tmux sessions that run as your OS user. There is no isolation
   between agents: every agent can read every other agent's files, and any
   agent can call the API if you give it the key.
-- **One key, full admin.** `BACKBONE_API_KEY` guards every authenticated
-  route (everything except `/health`, the HMAC-checked webhook, and the
-  generated API description at `/docs`, `/redoc` and `/openapi.json`) with the
-  same weight: change settings, register/start/stop/forget agents, send
-  messages, read and stream every registered agent's terminal. There is no
-  scoped or read-only credential yet. When `docs/getting-started.md` says
-  "give the key to an agent so it can message others", that agent can then
-  do everything you can do through the API — hand it out deliberately, to
-  agents whose instructions you control.
+- **Separate operator and collaboration credentials.** The `.env`
+  `BACKBONE_API_KEY` is the operator credential. New launches receive a derived
+  registration-bound agent credential in that variable instead. It allows discovery, messages,
+  terminal reads and peer lifecycle using saved settings. It also allows runtime/model
+  selection through `agent restart` for its own current registration. This identity
+  is authenticated by the credential, not by a sender name or registration header.
+  The restart remains bound to that registration while waiting; replacing the
+  registration invalidates it. Scoped Socket.IO connections are disconnected before
+  further events or data when their registration is retired. Changing runtime clears unattended permission.
+  Older shared collaboration credentials keep their previous authority and cannot
+  select runtime/model. Private profiles provide upgraded credentials to existing
+  managed CLI launches without a restart; no operator key is exposed.
+  Settings, new agent
+  registrations, other runtime/model changes, directory/environment changes, tags, shared
+  skills and policies, owner enrollment and externally pushed state require
+  the operator credential. Swarms may use stored runtime defaults; member
+  runtime/model overrides, forgetting an agent and fleet snapshot restoration require the operator.
+  `backbone doctor` also requires an operator terminal because it opens and checks
+  the database directly; an agent can use `backbone status` for API-backed health.
+  Agent credentials use the
+  running API and cannot use the CLI's direct database fallback.
+  This is an API authority boundary, not OS isolation: an unrestricted process
+  running as the same OS user can still read `.env`, modify the database or
+  use tmux directly. Existing processes are not restarted or stripped of
+  previously obtained credentials by an upgrade.
 - **Reach is limited to registered agents.** The API captures, streams and
   types into *registered* agents only (`GET /api/sessions/{name}/terminal`,
   the `/terminal` namespace, `POST /messages`, plan control). Other tmux
   sessions of the same user are refused with 404, even though the process
-  could reach them. `GET /plans/{name}` and Telegram `/viewplan` read plan
+  could reach them. Unregistered sessions may appear in the session list, but
+  their state and terminal content are not inspected. `GET /plans/{name}` and Telegram `/viewplan` read plan
   text only from `<state_dir>/plans/`, whatever path the state record names.
 - **Approvals are typed for you, decided by you.** `agent approve` answers
   a runtime's permission dialog with its affirmative key. It refuses when
   no dialog is on screen and it records who approved what, but it does not
-  judge the command — whoever holds the key (a person or a coordinator
+  judge the command. Generic permission answers refuse plan dialogs; use the
+  dedicated plan controls for those. Whoever holds the key (a person or a coordinator
   agent) does. Plan approval, which can run a whole plan unattended, stays
   off by default (`security.allow_remote_plan_control`).
 - **Unattended operation depends on the runtime's sandbox.** See
@@ -47,8 +65,25 @@ The backbone can type into your agents' terminals. Treat it accordingly.
   so they can be exported into its session, and `agent set` warns about
   entries that look like secrets. Credentials stay in each tool's own
   credential store.
-- **Agents do not hold the backbone's keys.** An agent session gets the
-  launch contract and nothing else; see below.
+- **Agents receive a collaboration credential.** Launchers strip the operator
+  key and other service secrets, then export the derived agent key; see below.
+
+## Retained notifications and registration changes
+
+Queued messages, failed delivery attempts and GitHub outbox entries belong to
+one agent registration. Forgetting that agent retires its outstanding work;
+registering the same name again does not inherit it. Renaming or updating an
+existing registration preserves its identity. Delivery checks the identity
+under the same lifecycle lock used by registration changes before any paste.
+
+Retries also recheck the current GitHub issue and routing audience. A removed
+recipient, closed issue or completed review notification is retired instead
+of replayed. This does not authenticate GitHub text or a claimed sender.
+
+On upgrade, outstanding legacy queue rows without a registration identity are
+retired with their text retained in history. Legacy outbox and failed-delivery
+records without that identity cannot be pasted. Inspect the history and send
+new messages deliberately when needed; the migration does not guess ownership.
 
 ## Unattended agents and writable directories
 
@@ -110,17 +145,20 @@ whatever you configured on the agent with `agent set env=`:
 
 | Variable | Why |
 |---|---|
+| `BACKBONE_API_KEY` | derived collaboration credential, never the operator key |
 | `BACKBONE_AGENT` | the agent's name — its `from:` identity for `backbone tell` |
 | `BACKBONE_RUNTIME` | which runtime is in the pane |
 | `BACKBONE_STATE_DIR` | where the shipped hooks write state |
 | `BACKBONE_LAUNCH_ID` | this launch, so a late hook from an earlier launch is ignored |
 | `BACKBONE_OPERATION_ID` | the start operation that launched it, when there is one |
 
-It does **not** get the backbone's secrets. `BACKBONE_API_KEY`,
+It does **not** get the backbone's operator key or service secrets. The inherited
+`BACKBONE_API_KEY`,
 `GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`,
 `GITHUB_APP_PRIVATE_KEY_PATH`, `TELEGRAM_TOKEN`, `BACKBONE_DATABASE_URL`
 (a PostgreSQL URL carries the password) and **every other key assigned in
-`<data_dir>/.env`** are stripped from the session. Check it
+`<data_dir>/.env`** are stripped from the session. The derived collaboration
+key is then supplied separately. Check it
 yourself in any agent's pane:
 
 ```bash
@@ -142,7 +180,9 @@ Two mechanisms, because either alone leaves a hole:
    every user, or in the pane's start command. Because tmux sets `TERM`,
    `SHELL` and `PATH` over the session environment when it starts the pane,
    the launched process reads the values again from a private file in the
-   temporary directory (mode 0600, removed once read). This catches what mechanism 1 cannot: variables *you*
+   temporary directory (mode 0600, removed once read). The loader refuses symlinks
+   and checks the file against the launch-time content digest before applying it.
+   This catches what mechanism 1 cannot: variables *you*
    exported in the shell you ran `backbone up` from, and a long-lived tmux
    server that was polluted by an older backbone before you upgraded.
 
@@ -152,16 +192,33 @@ else you exported (an `ANTHROPIC_API_KEY`, a `GITHUB_OAUTH_TOKEN` of your
 own) reaches the agent as it always did; that is your environment, not
 the backbone's.
 
-An agent's own `env` still wins over the strip, but it holds settings,
-not credentials: its values are stored in plain text in the database. An
-agent that calls the HTTP API directly, rather than through the CLI, reads
-the key from `<data_dir>/.env` as the CLI does (`backbone secrets path`
-prints where it is). Handing it the key is the deliberate act described
-under "One key, full admin" above. Tools such as `gh`, `claude` and `codex`
-keep their sign-in in their own credential store, which a session uses
-without any variable.
+An agent's own `env` holds settings, not credentials: its values are stored in
+plain text in the database. It cannot override the reserved `BACKBONE_API_KEY`.
+An agent uses its inherited key for direct HTTP calls and the CLI; the CLI does
+not load `.env` when an agent credential is present. Operator commands run from
+an operator terminal with the original `.env` key. Tools such as `gh`, `claude`
+and `codex` use their own credential stores.
 Note that `BACKBONE_DATA_DIR` is *not* stripped: it is not a secret, and
 agents need it to find the same backbone you are running.
+
+## Known limitation: remote approval request binding
+
+Remote Allow/Deny remains available on Codex and the other supported runtimes.
+Backbone checks the visible dialog and sends the runtime's approval or denial
+keys. Telegram buttons also check a fingerprint of the prompt they were created
+for. These checks and the keypress are separate operations: a dialog can change
+between them, so the answer is not atomically bound to a native request ID.
+This limitation also applies to remote plan decisions when enabled. Do not treat
+an approval event as proof that a particular native request was answered.
+
+A stronger request-bound integration remains future work. In the inspected
+[Codex approval implementation](https://github.com/openai/codex/blob/970111f6cb62cc02fe36a82ea7d71b37a2889c97/codex-rs/core/src/tools/approvals.rs#L495-L518),
+configuration-sourced `PermissionRequest` hooks can resolve a request before
+StrictAutoReview or Guardian review runs. Returning `Allow` through that hook
+could therefore skip automatic review. Backbone retains its existing terminal
+controls; it does not use this proposed hook channel to answer approvals.
+A future integration must bind the exact request while preserving the runtime's
+review and permission checks, without removing existing functionality.
 
 ## Defaults
 
@@ -171,15 +228,15 @@ agents need it to find the same backbone you are running.
 | Bind address | `127.0.0.1` | `backbone.host` — put TLS and auth in front before exposing |
 | CORS | Off | `backbone.cors_origins` |
 | Webhook | Rejected unless `GITHUB_WEBHOOK_SECRET` is set and the HMAC matches | — |
-| Telegram | Bot does not start without `telegram.allowed_chat_ids`; unlisted chats are ignored | — |
+| Telegram | Bot requires allowed chats; instructions, lifecycle commands and approval buttons additionally require a numeric ID in `telegram.allowed_user_ids` | Empty user lists refuse control; group membership is insufficient |
 | Remote plan approve/reject | Off (they act on a waiting agent) — bounded: the runtime's own plan keys, sent only while its plan dialog is on screen, refused for runtimes without a plan mode; a rejection's feedback goes through `safe_deliver` as a recorded message | `security.allow_remote_plan_control = true` |
-| Remote permission approval (`agent approve`, the Telegram **Allow** / **Deny** buttons) | On — bounded: the runtime's affirmative or refusing key only (Deny: Escape, verified for Claude Code, Codex, Gemini CLI, OpenCode and Deep Code, refused elsewhere), only while its dialog is on screen, only to a registered agent, every answer recorded as an `approval` / `denial` event with who asked (a Telegram button records `telegram:<user id>`, and is bound to the prompt it was raised for — a stale button answers nothing) | `security.allow_remote_approval = false` |
+| Remote permission approval (`agent approve`, the Telegram **Allow** / **Deny** buttons) | On — bounded: the runtime's affirmative or refusing key only (Deny: Escape, verified for Claude Code, Codex, Gemini CLI, OpenCode and Deep Code, refused elsewhere), only while its dialog is on screen, only to a registered agent, every answer recorded as an `approval` / `denial` event with who asked (a Telegram button records `telegram:<user id>`, and checks the prompt fingerprint before answering; see the [request-binding limitation](#known-limitation-remote-approval-request-binding)) | `security.allow_remote_approval = false` |
 | Unattended swarm members | On for members on a sandboxed runtime only (Codex, `-a never` inside its workspace-write sandbox: worktree, temp, network); members without a sandbox keep asking | `swarm.unattended_members = false` |
 | Terminal streaming | Read-only, registered agents only; the Socket.IO `/terminal` namespace has no input event | — |
 | Agent output (`agent output`, `GET /api/sessions/{name}/output`) | Read-only, registered agents only; reads the agent's user-facing messages, complete, from the runtime's own transcript for Claude Code, Codex, Gemini CLI and OpenCode (including messages that scrolled off or never showed on screen), a bounded page at a time with explicit offsets to read further; tool activity and thinking are not exposed; else the visible screen | — |
-| Steering (`tell --steer`, `POST /api/steer`) | Text reaches a working agent mid-turn as hook context on Claude Code and Codex, or as a user message in the running turn on OpenCode, with a provenance envelope; no keystrokes, so it cannot overwrite a draft or answer a dialog; refused (nothing queued) when the agent is not working or the runtime has no hook context. Same credential as `tell`: the API key, all-or-nothing | — |
+| Steering (`tell --steer`, `POST /api/steer`) | Text reaches a working agent mid-turn as hook context on Claude Code and Codex, or as a user message in the running turn on OpenCode, with a provenance envelope; no keystrokes, so it cannot overwrite a draft or answer a dialog; refused (nothing queued) when the agent is not working or the runtime has no hook context. Same collaboration or operator credential as `tell` | — |
 | Secrets | Backbone secrets live only in `<data_dir>/.env` (mode 0600) or the environment — never in the database. Per-agent `env` is for settings: its values are stored in plain text in the database, and `agent set` warns about entries that look like secrets | — |
-| Secrets in agent sessions | Stripped: an agent inherits `BACKBONE_AGENT`/`BACKBONE_RUNTIME`/`BACKBONE_STATE_DIR` and its own `env`, never the backbone's `.env` | an agent that calls the API reads the key from `<data_dir>/.env`; other credentials stay in each tool's own store |
+| Secrets in agent sessions | Stripped at launch: an agent inherits `BACKBONE_AGENT`/`BACKBONE_RUNTIME`/`BACKBONE_STATE_DIR` and its own `env`, never the backbone's `.env` | launch environments stay unchanged; managed CLI calls refresh scoped credentials from their profile; other credentials stay in each tool's own store |
 | Hook script | Standard library only, runs as your user, writes only under `<data_dir>/state` | — |
 | Busy agents | Never interrupted: `priority` only bypasses "someone is typing" and the settle window | — |
 
@@ -213,11 +270,19 @@ safe. What it does:
 All agents typically share one token, so GitHub shows the same author for
 every comment. The `[from:<agent>]` prefix and the `from:<agent>` label are
 conventions, not authentication. With the shipped hooks installed, an
-agent's own `gh issue comment` calls are logged locally and used for
-acknowledgement, which does not depend on the prefix. If you need real
+agent's own successful comment calls are logged with the returned comment ID
+and the registration ID exported at launch. Only a receipt matching the current
+registration, repository, issue and comment ID can attribute an incoming comment
+to that agent. A prefix or nearby command intent cannot acknowledge work or
+suppress notifications. Older sessions need a normal restart to emit bound
+receipts; unbound receipts remain as history and cannot acknowledge work
+automatically. Pull-request actions also need the current registration before
+acknowledging linked issues. Forgetting an agent clears its stored
+acknowledgements, while a rename retains its registration. The local hook log remains writable to an
+unrestricted process running as the same OS user. If you need real
 per-agent identity, each agent needs its own GitHub account. Keep its token
 out of the agent's `env`, which is stored in plain text in the database;
-there is no per-agent credential store yet.
+there is no per-agent GitHub credential store yet.
 
 ## Known limitations
 
@@ -250,3 +315,67 @@ there is no per-agent credential store yet.
 4. Your webhook secret is not an example one.
 5. `security.allow_remote_plan_control` is only on if you are comfortable
    with Telegram-approved plans running unattended.
+
+HTTP requests are limited to 1 MiB before parsing, including webhooks and
+Socket.IO polling; document publication uses its larger documented wire limit.
+Socket.IO also limits each incoming message to 1 MiB. In explicitly
+unauthenticated mode, requests must use a local or configured bind hostname,
+and browser origins must match that host or an explicitly configured CORS origin.
+Socket.IO checks same-origin requests when no CORS origins are configured.
+
+Telegram message bodies use the same provenance-line quoting as peer messages;
+display names cannot insert brackets or line breaks into the envelope. A display
+name remains a label, not proof of identity or owner confirmation.
+
+Fleet snapshot `created_by` and resume `resumed_by` values are caller-supplied
+claims, not authenticated identities. CLI views label them as claimed actors.
+
+Notifications are submitted only when the foreground executable matches the
+selected agent runtime. A saved runtime setting or tmux environment variable is
+not proof that a model still occupies the terminal. Plain shells and unidentified
+receivers retain notifications as data in `backbone inbox`, without pasting or
+pressing Enter; these held rows require explicit acknowledgement. A runtime
+running through an unrecognized wrapper is also held rather than guessed.
+A native launcher that reports a version number as its process name is
+recognized by its absolute installed launcher path; only the foreground process
+group leader counts, never a launch helper's child process.
+
+
+Owned data and hook-state directories are private (0700); hook records, plans,
+action logs and SQLite database files are created with mode 0600 regardless of
+umask. Existing hook files are repaired when rewritten; database file permissions
+are repaired when opened. This protects against other OS users, not an unrestricted
+process running as the same account. Keep backups equally private.
+
+
+The manual release workflow pins action commits and the uv version. Build/test
+runs with read-only repository access; a separate job creates the source tag
+before a publication job receives the PyPI token. Existing tags stop publication
+for operator inspection. A failed publication can leave the source tag present;
+resolve that state explicitly before retrying. No release runs on pushes or merges.
+
+
+Acknowledgment resets are retained per repository, issue and agent. A retained
+publication receipt must match or follow the newest resetting comment ID, even
+when webhooks arrive out of order or before their completion receipts. Resets
+without a comment ID and edits of existing comments use the receipt completion
+time. A newer reset racing with restoration prevents that restore.
+
+Successful comment receipts are stored as separate private files before the
+rolling action log is appended. They survive action-log rotation and use
+`timing.delivery_retention_days` for retention. Successful comment edits retain
+their completion time, because editing an old comment keeps its original ID.
+
+### Existing-session credential pickup
+
+Managed CLI sessions can read daemon-maintained collaboration-only profiles from
+`<data_dir>/agent-credentials/`. These `.env` files are private and never contain
+the operator key. The CLI rejects symlinks, unsafe permissions, malformed files
+and launch mismatches. Its profile pins the endpoint and registration; the API
+rejects a profile request after that registration is retired. Missing credentials
+never trigger an operator `.env` or direct-database fallback. See
+[configuration](configuration.md) for provisioning status and migration behavior.
+
+This is scoped collaboration access, not cryptographic sender authentication.
+Signed-author enrollment remains separate. An unrestricted same-user process can
+read or alter private files; these profiles do not create OS-level isolation.

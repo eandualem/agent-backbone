@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import patch
@@ -9,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from agent_backbone.config import BackboneSection
+from agent_backbone.services.agents import write_starting_marker, write_state_file
 from agent_backbone.services.agents.transitions import (
     DEFAULT_DELAY_SECONDS,
     MAX_DELAY_SECONDS,
@@ -19,6 +21,7 @@ from agent_backbone.services.agents.transitions import (
     request_transition,
     validate_transition,
 )
+from agent_backbone.services.runtimes import RUNTIMES
 
 _RUNTIME = "agent_backbone.services.runtimes.base.Runtime"
 
@@ -50,8 +53,50 @@ class TestValidate:
                 config, _spec(config), TransitionRequest(runtime="codex", resume=True)
             )
 
-    def test_same_cli_resume_passes(self, config):
-        validate_transition(config, _spec(config), TransitionRequest(runtime="claude", resume=True))
+    @pytest.mark.parametrize("runtime", sorted(RUNTIMES))
+    def test_resume_requires_exact_support_and_current_identity(self, config, runtime):
+        spec = replace(_spec(config), runtime=runtime)
+        request = TransitionRequest(resume=True)
+        with pytest.raises(ValueError, match="resum"):
+            validate_transition(config, spec, request)
+        write_state_file(
+            config.state_dir,
+            spec.name,
+            {
+                "state": "idle",
+                "ts": time.time(),
+                "runtime": runtime,
+                "session_id": {"invalid": "object"},
+            },
+        )
+        with pytest.raises(ValueError, match="resum"):
+            validate_transition(config, spec, request)
+        write_state_file(
+            config.state_dir,
+            spec.name,
+            {
+                "state": "idle",
+                "ts": time.time(),
+                "runtime": runtime,
+                "session_id": "saved",
+            },
+        )
+        if RUNTIMES[runtime].supports_exact_resume:
+            validate_transition(config, spec, request)
+            write_starting_marker(config.state_dir, spec.name, time.time(), launch_id="new")
+            with pytest.raises(ValueError, match="no resumable session identity"):
+                validate_transition(config, spec, request)
+            write_starting_marker(
+                config.state_dir,
+                spec.name,
+                time.time(),
+                launch_id="resumed",
+                opened=(runtime, "saved"),
+            )
+            validate_transition(config, spec, request)
+        else:
+            with pytest.raises(ValueError, match="cannot resume an exact session"):
+                validate_transition(config, spec, request)
 
     def test_unknown_or_missing_runtime(self, config):
         with pytest.raises(ValueError, match="Unknown runtime"):
