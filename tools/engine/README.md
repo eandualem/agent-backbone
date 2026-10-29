@@ -1,7 +1,10 @@
 # Portable engine builder
 
-This native Apple Silicon builder produces the immutable engine consumed by the
-combined application installer. It builds Backbone from an exact Git commit and
+This native builder produces the immutable engine consumed by the combined
+application installer. The complete current input lock is Apple Silicon macOS.
+Intel macOS and both glibc Linux architecture locks are **prepared only**: they
+cannot build until their missing native inputs and notice metadata are reviewed.
+It builds Backbone from an exact Git commit and
 uses pinned CPython, runtime wheels, build-backend wheels and tmux inputs. It never
 copies a development environment. Python 3.11+ and Git are build-host prerequisites.
 No dependency resolution or download happens during `build`.
@@ -64,6 +67,50 @@ acceptance against the exact candidate. A successful build sets
 first-agent or publication acceptance. Other Mac/Linux targets need their own
 reviewed inputs and native verification; this lock does not claim their support.
 
+## Target preparation and native inspection
+
+`--target` selects a lock before the command, for example
+`python3 -I -B tools/engine/build.py --target x86_64-unknown-linux-gnu fetch --inputs /path/to/cache`.
+The three prepared locks pin all 44 runtime wheels, seven build wheels and the
+published CPython asset digest. A digest from the release API is not a local
+download or execution receipt. The locks retain null tmux binary/build/notice
+hashes and list the missing inputs; there is no placeholder hash or fallback to
+another target. `build` refuses a prepared lock before staging or execution.
+Fetching its public inputs does not change that status.
+
+Completing a target requires the native tmux binary, `BUILD.json` and notices;
+target-specific Python notice metadata and binary correspondence; and a native
+wheel source-notice reconciliation. Locks can name `python_notice_metadata` and
+`native_notice_metadata` files beside the builder. Their native inputs must be
+verified on a matching host before changing `prepared_only`. Native build-host
+architecture is checked, Darwin Rosetta translation is refused, and GNU targets
+require glibc. Linux user-mode emulation cannot be reliably excluded by these
+local checks: native acceptance needs independently confirmed runner provenance.
+The receipt records that limitation. These checks do not provision a runner.
+
+The builder checks every Mach-O or ELF binary and retains
+`engine-native-report.json` in the immutable inventory. Mach-O inspection records
+the selected architecture, minimum-OS load commands and dependency/search paths;
+relative dylib references must resolve to shipped files. Each binary must declare
+the payload-relative search paths needed for its `@rpath` dependencies; inherited
+loader-stack search paths are not accepted by this static check.
+Relocatable object files are classified separately from executable entrypoints.
+Static ELF engine entrypoints are refused because their glibc/NSS requirements
+cannot be inferred from dynamic symbol versions. ELF inspection checks class,
+byte order, architecture, interpreter, SONAMEs and
+payload-relative search paths, recording GLIBC/GLIBCXX/CXXABI requirements.
+tmux may use only system dependencies. Other binaries can resolve shipped
+dependencies through payload-relative loader paths. These are static checks,
+not execution on the minimum supported OS. The selected Linux wheel tags allow
+up to glibc 2.39; actual ABI requirements come from the produced binaries, and
+no Linux minimum is claimed from filenames alone.
+
+Linux output publication uses `renameat2(RENAME_NOREPLACE)` and fails if the host
+libc, kernel or filesystem does not support it. macOS retains
+`renamex_np(RENAME_EXCL)`. Neither path falls back to an overwrite-prone
+check followed by ordinary rename. Platform unit tests exercise the native
+operation on the host running them; they are not combined-installer acceptance.
+
 ## Rechecking CPython notice provenance
 
 Download the full upstream archive using `full_archive_url` in
@@ -77,8 +124,45 @@ python3 -I -B tools/engine/build.py verify-notices /path/to/full-archive.tar.zst
 This verifies the entire archive hash, reads `python/PYTHON.json`, compares all
 14 retained notice files byte-for-byte, and checks the three recorded installed
 binary samples. The wheel notice inventory covers license texts provided by each
-wheel; a complete audit of bundled native third-party components is still a
-publication step. tmux provenance is the supplied hashed build receipt and notices.
+wheel. Additional native notices are retained in `licenses/native/`, with a
+hashed `native-notices.json` index. This index is bound to the exact Python
+archive and all 13 native wheel inputs; changing those inputs requires updating
+the source correspondence. The builder validates each retained notice and each
+component's byte range before taking its private tooling snapshot.
+
+The additional notices include libuv (including its incorporated tree and network
+code), llhttp, http-parser, Tk, Tcl Thread, Itcl, HACL* and CPython's incorporated
+component notices, including mimalloc. The Rust inventory retains all 295 registry
+packages in the four matching-version source locks for cryptography,
+pydantic-core, watchfiles and ironcalc. It records declared and selected licenses,
+including the additional Unicode terms where required, and retains all supplied
+license/notice texts. Missing crate notice files are taken from the upstream
+commit identified by that crate's `.cargo_vcs_info.json`; r-efi's notice is in
+its `AUTHORS` file.
+
+This is deliberately a conservative source inventory: build, development and
+other-target packages are included. It is **not** proof that an upstream wheel
+was built from that exact source archive, with those enabled features, or that
+every listed crate is linked. Exact compiled closure and upstream compiler /
+standard-library provenance remain unverified. These limits are also recorded
+in the payload metadata; `release_ready` remains false.
+
+Retain the cached upstream files named in `native-notices.json` to reproduce the
+source comparison offline:
+
+```sh
+python3 -I -B tools/engine/verify_native_sources.py /path/to/source-cache
+```
+
+This checks all 320 source files by hash, all 585 notice excerpts byte-for-byte,
+and every registry package/checksum against the four source Cargo locks. Wheel
+source and crate license/NOTICE membership, source versions and supplemental
+notice commit/repository correspondence are checked too. Declared PKG-INFO
+License-File and Cargo license-file paths are included, as is the LICENCE spelling. Sources are read into
+a bounded, hash-verified snapshot before inspection, so a concurrent cache update
+cannot replace verified bytes. It
+does not download, execute source, resolve dependencies or compile anything.
+tmux provenance remains the supplied hashed build receipt and notices.
 
 `verify` checks internal consistency, not authenticity of an untrusted download.
 The installer must verify its trusted archive/manifest checksum and use the full

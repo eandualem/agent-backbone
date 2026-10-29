@@ -34,6 +34,47 @@ from pathlib import Path, PurePosixPath
 ROOT = Path(__file__).resolve().parent
 LOCK = ROOT / "aarch64-apple-darwin.json"
 EXCLUDED = {"engine-manifest.json", "engine-file-inventory-v1.json"}
+TARGETS = {
+    "aarch64-apple-darwin": ("Darwin", "arm64"),
+    "x86_64-apple-darwin": ("Darwin", "x86_64"),
+    "aarch64-unknown-linux-gnu": ("Linux", "aarch64"),
+    "x86_64-unknown-linux-gnu": ("Linux", "x86_64"),
+}
+
+
+def notice_metadata_path(kind, lock=None):
+    lock = json.loads(LOCK.read_text()) if lock is None else lock
+    default = (
+        kind + "-notices.json" if lock.get("target") in {None, "aarch64-apple-darwin"} else None
+    )
+    name = lock.get(kind + "_notice_metadata", default)
+    require(isinstance(name, str), "Target notice metadata is not prepared")
+    require(str(relative_path(name)) == Path(name).name, "Invalid notice metadata filename")
+    return ROOT / name
+
+
+def require_native_target(lock):
+    target = lock.get("target")
+    require(target in TARGETS, "Unknown engine target")
+    require(
+        (platform.system(), platform.machine()) == TARGETS[target],
+        "Engine target requires a matching native build host OS/architecture; "
+        "Linux emulation is not detected",
+    )
+    require(
+        lock.get("prepared_only") is not True,
+        "Target inputs are prepared only; missing: " + ", ".join(lock.get("missing_inputs", [])),
+    )
+    if platform.system() == "Linux":
+        require(platform.libc_ver()[0] == "glibc", "GNU target requires a glibc build host")
+    if platform.system() == "Darwin":
+        translated = subprocess.run(
+            ["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        require(translated.stdout.strip() != "1", "Translated build hosts are unsupported")
 
 
 def require(condition, message):
@@ -340,7 +381,7 @@ def verify_payload(payload):
     target = manifest["target"]
     checksum = manifest["files"]["sha256"]
     require(
-        re.fullmatch(r"[0-9a-f]{40}", commit) and target == "aarch64-apple-darwin",
+        re.fullmatch(r"[0-9a-f]{40}", commit) and target in TARGETS,
         "Invalid source commit or target",
     )
     require(
@@ -361,6 +402,26 @@ def verify_payload(payload):
     )
     receipt = json.loads((payload / "engine-build-receipt.json").read_text(encoding="utf-8"))
     require(receipt["source_commit"] == commit, "Source receipt does not match manifest")
+    if "engine-native-report.json" in rows:
+        report = json.loads((payload / "engine-native-report.json").read_text())
+        require(
+            report["target"] == target and receipt.get("target") == target,
+            "Native target evidence does not match manifest",
+        )
+        names = [row["path"] for row in report["binaries"]]
+        require(
+            len(names) == len(set(names)) and {"python/bin/python3", "libexec/tmux"} <= set(names),
+            "Native report omits engine entrypoints",
+        )
+        require(
+            all(
+                row["path"] in rows and row["sha256"] == rows[row["path"]].get("sha256")
+                for row in report["binaries"]
+            ),
+            "Native report differs from inventory",
+        )
+    else:
+        require(target == "aarch64-apple-darwin", "Target requires native build evidence")
     metadata_files = list(
         payload.glob("python/lib/python*/site-packages/agent_backbone-*.dist-info/METADATA")
     )
@@ -411,11 +472,124 @@ print(json.dumps(rows))"""
     return sorted(rows, key=lambda row: row["name"].lower())
 
 
-def add_notices(payload, inputs, lock, python, env):
-    upstream = json.loads((ROOT / "python-notices.json").read_text())
+def native_notice_material(lock=None):
+    """Validate source attribution and retained bytes before copying any notices.
+
+    This is a conservative source inventory, not a compiled dependency SBOM.
+    Binding it to exact inputs prevents silently reusing it after wheel upgrades.
+    """
+    metadata = notice_metadata_path("native", lock).read_bytes()
+    document = json.loads(metadata)
+    require(document["schema_version"] == 1, "Unsupported native notice schema")
     require(
-        upstream["install_only_archive_sha256"] == lock["python"]["sha256"],
-        "Python notice source does not match archive",
+        document["complete_compiled_component_attestation"] is False,
+        "Source inventory must not claim compiled component attestation",
+    )
+    sources = {item["id"]: item for item in document["sources"]}
+    require(len(sources) == len(document["sources"]), "Duplicate native notice source")
+    wheel_fields = {"name", "version", "filename", "sha256", "source_id"}
+    for item in document["wheels"]:
+        require(set(item) == wheel_fields, "Incomplete native wheel identity")
+        source = sources.get(item["source_id"], {})
+        require(
+            source.get("name", "").replace("_", "-") == item["name"].replace("_", "-")
+            and source.get("version") == item["version"],
+            "Native wheel/source version mismatch",
+        )
+    require(
+        sources.get("cpython", {}).get("version") == document["python_version"],
+        "Native Python/source version mismatch",
+    )
+    if lock is not None:
+        require(
+            document["target"] == lock["target"]
+            and document["python_archive_sha256"] == lock["python"]["sha256"]
+            and document["python_version"] == lock["python"]["version"],
+            "Native notice target/Python input mismatch",
+        )
+        wheels = {item["name"]: item for item in lock["runtime_wheels"]}
+        require(
+            {item["name"] for item in document["wheels"]}
+            == {
+                item["name"]
+                for item in wheels.values()
+                if not item["filename"].endswith("-none-any.whl")
+            },
+            "Native notice wheel membership mismatch",
+        )
+        for item in document["wheels"]:
+            require(
+                item["name"] in wheels
+                and all(
+                    wheels[item["name"]].get(k) == item[k] for k in wheel_fields - {"source_id"}
+                ),
+                "Native notice wheel input mismatch",
+            )
+    files = {"native-notices.json": metadata}
+    for item in document["files"]:
+        name = str(relative_path(item["path"]))
+        require(name == Path(name).name and name not in files, "Invalid native notice filename")
+        source = ROOT / "notices" / name
+        verify_input(source, item)
+        data = source.read_bytes()
+        require(
+            len(data) == item["bytes"] and hashlib.sha256(data).hexdigest() == item["sha256"],
+            "Native notice changed while reading",
+        )
+        files[name] = data
+    expected_crates = {sid for root in document["rust_roots"] for sid in root["registry_packages"]}
+    require(
+        expected_crates == {sid for sid in sources if sid.startswith("crate:")},
+        "Rust source membership differs from root inventories",
+    )
+    components = [
+        c["source_id"]
+        for c in document["components"]
+        if c.get("kind") == "rust-source-lock-package"
+    ]
+    require(
+        len(components) == len(set(components)) and set(components) == expected_crates,
+        "Missing or duplicate Rust component notices",
+    )
+    require(
+        {w["source_id"] for w in document["wheels"]}
+        <= {c["source_id"] for c in document["components"]},
+        "Missing wheel source component notices",
+    )
+    for component in document["components"]:
+        require(component["source_id"] in sources, "Missing native notice source")
+        notices = component.get("notices", [component.get("notice")])
+        require(isinstance(notices, list) and notices, "Missing native component notices")
+        for notice in notices:
+            require(isinstance(notice, dict), "Missing native component notice")
+            require(
+                notice.get("source_id", component["source_id"]) in sources,
+                "Missing native notice source",
+            )
+            name, offset, size = notice["file"], notice["offset"], notice["bytes"]
+            require(
+                name in files
+                and name != "native-notices.json"
+                and type(offset) is int
+                and type(size) is int
+                and offset >= 0
+                and size > 0,
+                "Invalid native notice location",
+            )
+            data = files[name][offset : offset + size]
+            require(
+                len(data) == size and hashlib.sha256(data).hexdigest() == notice["sha256"],
+                "Native component notice mismatch",
+            )
+    return files
+
+
+def add_notices(payload, inputs, lock, python, env):
+    upstream = json.loads(notice_metadata_path("python", lock).read_text())
+    require(
+        upstream["target"] == lock["target"]
+        and upstream["install_only_archive_sha256"] == lock["python"]["sha256"],
+        "Python notice target/input mismatch",
     )
     notices = payload / "licenses/python"
     notices.mkdir(parents=True)
@@ -438,6 +612,10 @@ def add_notices(payload, inputs, lock, python, env):
     tmux_notices.mkdir()
     for name in ("LICENSES.txt", "BUILD.json"):
         shutil.copyfile(inputs / lock["tmux"][name]["filename"], tmux_notices / name)
+    native = payload / "licenses/native"
+    native.mkdir()
+    for name, data in native_notice_material(lock).items():
+        (native / name).write_bytes(data)
     write_json(
         payload / "engine-license-inventory.json",
         {
@@ -446,6 +624,11 @@ def add_notices(payload, inputs, lock, python, env):
             "python_notices": "licenses/python",
             "tmux_notices": "licenses/tmux",
             "upstream_python": upstream,
+            "native_components": {
+                "path": "licenses/native/native-notices.json",
+                "sha256": digest(native / "native-notices.json"),
+                "scope": "conservative source notices; not a compiled-component attestation",
+            },
         },
     )
 
@@ -455,11 +638,23 @@ def input_items(lock):
         lock["python"],
         *lock["build_wheels"],
         *lock["runtime_wheels"],
-        *(lock["tmux"][key] for key in ("binary", "LICENSES.txt", "BUILD.json")),
+        *(
+            lock["tmux"][key]
+            for key in ("binary", "LICENSES.txt", "BUILD.json")
+            if lock["tmux"][key] is not None
+        ),
     ]
 
 
 def validate_inputs(inputs, lock):
+    require(lock.get("prepared_only") is not True, "Target input lock is prepared only")
+    require(
+        all(
+            isinstance(lock.get("tmux", {}).get(key), dict)
+            for key in ("binary", "LICENSES.txt", "BUILD.json")
+        ),
+        "Missing pinned tmux input receipts",
+    )
     seen = set()
     for item in input_items(lock):
         name = item["filename"]
@@ -674,21 +869,246 @@ def reject_build_paths(payload, stage):
             )
 
 
+def inspect_native_payload(payload, target, env):
+    """Inspect shipped binaries on a matching host; report ABI requirements.
+
+    Header/linkage inspection cannot establish execution on an older OS. Relative
+    loader paths must stay inside the payload; undeclared host libraries fail.
+    """
+    require(target in TARGETS, "Unknown native target")
+    system, architecture = TARGETS[target]
+    rows = []
+    macho = {
+        b"\xcf\xfa\xed\xfe",
+        b"\xfe\xed\xfa\xcf",
+        b"\xca\xfe\xba\xbe",
+        b"\xbe\xba\xfe\xca",
+        b"\xca\xfe\xba\xbf",
+        b"\xbf\xba\xfe\xca",
+    }
+    for path in sorted(payload.rglob("*")):
+        if not path.is_file():
+            continue
+        with path.open("rb") as stream:
+            header = stream.read(20)
+        magic = header[:4]
+        if magic not in macho and magic != b"\x7fELF":
+            continue
+        name = path.relative_to(payload).as_posix()
+        row = {"path": name, "sha256": digest(path)}
+        entrypoint = name in {
+            "libexec/tmux",
+            "python/bin/python",
+            "python/bin/python3",
+            "python/bin/python3.13",
+        }
+        if system == "Darwin":
+            require(magic in macho, "Non-Mach-O native input on macOS")
+            arches = run(["/usr/bin/lipo", "-archs", path], env=env).split()
+            require(architecture in arches, f"Native architecture mismatch: {name}")
+            header_text = run(["/usr/bin/otool", "-arch", architecture, "-hv", path], env=env)
+            kinds = re.findall(r"\b(OBJECT|EXECUTE|DYLIB|BUNDLE)\b", header_text)
+            require(len(kinds) == 1, "Unsupported Mach-O file type")
+            kind = kinds[0]
+            require(not entrypoint or kind == "EXECUTE", "Engine entrypoint is not executable")
+            linkage = run(["/usr/bin/otool", "-arch", architecture, "-L", path], env=env)
+            dependencies = [
+                line.strip().split(" (", 1)[0] for line in linkage.splitlines()[1:] if line.strip()
+            ]
+            identities = [
+                line.strip()
+                for line in run(
+                    ["/usr/bin/otool", "-arch", architecture, "-D", path], env=env
+                ).splitlines()[1:]
+                if line.strip()
+            ]
+            require(
+                all(not name.startswith("/") for name in identities), "Absolute Mach-O install name"
+            )
+            dependencies = [name for name in dependencies if name not in identities]
+            require(dependencies or not entrypoint, f"Missing native linkage: {name}")
+            commands = run(["/usr/bin/otool", "-arch", architecture, "-l", path], env=env)
+            rpaths = re.findall(r"cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset \d+\)", commands)
+            search_directories = []
+            for entry in rpaths:
+                require(
+                    entry.startswith(("@loader_path/", "@executable_path/")),
+                    "Mach-O search path is not payload-relative",
+                )
+                anchor, relative = entry.split("/", 1)
+                base = path.parent if anchor == "@loader_path" else payload / "python/bin"
+                directory = (base / relative).resolve()
+                require(
+                    directory.is_relative_to(payload.resolve()),
+                    "Mach-O search path escapes payload",
+                )
+                search_directories.append(directory)
+            for dependency in dependencies:
+                if dependency.startswith(("/usr/lib/", "/System/Library/")):
+                    continue
+                require(name != "libexec/tmux", "tmux has non-system dylibs")
+                if dependency.startswith("@rpath/"):
+                    relative = relative_path(dependency.removeprefix("@rpath/"))
+                    require(
+                        any(
+                            (directory / relative).resolve().is_relative_to(payload.resolve())
+                            and (directory / relative).is_file()
+                            for directory in search_directories
+                        ),
+                        "Native rpath dependency is not shipped in declared search paths",
+                    )
+                else:
+                    require(
+                        dependency.startswith(("@loader_path/", "@executable_path/")),
+                        f"Non-system absolute native dependency: {name}",
+                    )
+                    anchor, relative = dependency.split("/", 1)
+                    base = path.parent if anchor == "@loader_path" else payload / "python/bin"
+                    require(
+                        (base / relative).resolve().is_relative_to(payload.resolve()),
+                        "Native loader path escapes payload",
+                    )
+                    require((base / relative).is_file(), "Native loader dependency is not shipped")
+            minimums = re.findall(r"^\s+minos ([\d.]+)$", commands, re.MULTILINE)
+            if not minimums:
+                minimums = re.findall(
+                    r"cmd LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version ([\d.]+)", commands
+                )
+            require(minimums or kind == "OBJECT", f"Missing native minimum-OS metadata: {name}")
+            row.update(
+                architectures=arches,
+                dependencies=dependencies,
+                minimum_os=minimums,
+                search_paths=rpaths,
+                file_type=kind,
+            )
+        else:
+            require(
+                magic == b"\x7fELF" and len(header) == 20 and header[4:6] == b"\x02\x01",
+                "Expected little-endian ELF64",
+            )
+            machine = int.from_bytes(header[18:20], "little")
+            kind = {1: "REL", 2: "EXEC", 3: "DYN"}.get(int.from_bytes(header[16:18], "little"))
+            require(kind is not None, "Unsupported ELF file type")
+            require(
+                not entrypoint or kind in {"EXEC", "DYN"}, "Engine entrypoint is not executable"
+            )
+            require(
+                machine == {"x86_64": 62, "aarch64": 183}[architecture],
+                f"Native architecture mismatch: {name}",
+            )
+            dynamic = run(["/usr/bin/readelf", "--wide", "--dynamic", path], env=env)
+            needed = re.findall(r"\(NEEDED\).*?\[([^]]+)\]", dynamic)
+            rpaths = re.findall(r"\((?:RPATH|RUNPATH)\).*?\[([^]]+)\]", dynamic)
+            search = []
+            for value in rpaths:
+                for entry in value.split(":"):
+                    require(
+                        entry.startswith(("$ORIGIN/", "${ORIGIN}/"))
+                        or entry in {"$ORIGIN", "${ORIGIN}"},
+                        "ELF search path is not payload-relative",
+                    )
+                    suffix = entry.replace("${ORIGIN}", "$ORIGIN").removeprefix("$ORIGIN")
+                    location = (path.parent / suffix.lstrip("/")).resolve()
+                    require(
+                        location.is_relative_to(payload.resolve()),
+                        "ELF search path escapes payload",
+                    )
+                    search.append(location)
+            system_libraries = {
+                "libc.so.6",
+                "libm.so.6",
+                "libpthread.so.0",
+                "libdl.so.2",
+                "librt.so.1",
+                "libutil.so.1",
+                "libgcc_s.so.1",
+                "libstdc++.so.6",
+                "ld-linux-x86-64.so.2",
+                "ld-linux-aarch64.so.1",
+            }
+            for dependency in needed:
+                require("/" not in dependency, "ELF dependency must be a SONAME")
+                require(
+                    dependency in system_libraries
+                    or (name != "libexec/tmux" and any((d / dependency).is_file() for d in search)),
+                    f"Unresolved non-system ELF dependency: {dependency}",
+                )
+            program = run(["/usr/bin/readelf", "--wide", "--program-headers", path], env=env)
+            interpreters = re.findall(r"Requesting program interpreter: ([^]]+)\]", program)
+            expected = {
+                "x86_64": "/lib64/ld-linux-x86-64.so.2",
+                "aarch64": "/lib/ld-linux-aarch64.so.1",
+            }[architecture]
+            require(not interpreters or interpreters == [expected], "Unexpected ELF interpreter")
+            require(
+                not entrypoint or (interpreters == [expected] and bool(needed)),
+                "Static ELF engine entrypoints are unsupported",
+            )
+            versions = run(["/usr/bin/readelf", "--wide", "--version-info", path], env=env)
+            requirements = sorted(set(re.findall(r"\b(?:GLIBC|GLIBCXX|CXXABI)_[\d.]+", versions)))
+            row.update(
+                architectures=[architecture],
+                dependencies=needed,
+                search_paths=rpaths,
+                interpreters=interpreters,
+                symbol_version_requirements=requirements,
+                file_type=kind,
+                linkage="dynamic" if needed or interpreters else "no_dynamic_dependencies",
+            )
+        rows.append(row)
+    require(
+        {"python/bin/python3", "libexec/tmux"} <= {r["path"] for r in rows},
+        "Missing native engine entrypoint",
+    )
+    return {
+        "schema_version": 1,
+        "target": target,
+        "binaries": rows,
+        "actual_minimum_os_execution": False,
+        "static_component_abi_verified": False,
+    }
+
+
 def publish_exclusively(source, destination):
     """Atomically refuse every pre-existing destination on the native build host."""
-    require(platform.system() == "Darwin", "Exclusive publication requires macOS")
-    rename = ctypes.CDLL(None, use_errno=True).renamex_np
-    rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
-    rename.restype = ctypes.c_int
-    # macOS sys/stdio.h: RENAME_EXCL; available since macOS 10.12.
-    if rename(os.fsencode(source), os.fsencode(destination), 0x00000004) != 0:
+    system = platform.system()
+    require(system in {"Darwin", "Linux"}, "Exclusive publication requires macOS or Linux")
+    libc = ctypes.CDLL(None, use_errno=True)
+    if system == "Darwin":
+        rename = libc.renamex_np
+        rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        rename.restype = ctypes.c_int
+        # macOS sys/stdio.h: RENAME_EXCL; available since macOS 10.12.
+        result = rename(os.fsencode(source), os.fsencode(destination), 0x00000004)
+    else:
+        require(hasattr(libc, "renameat2"), "libc has no atomic no-replace rename")
+        rename = libc.renameat2
+        rename.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        rename.restype = ctypes.c_int
+        # Linux AT_FDCWD and RENAME_NOREPLACE. Unsupported kernels/filesystems
+        # fail; never substitute a check-then-rename that can overwrite a race.
+        result = rename(-100, os.fsencode(source), -100, os.fsencode(destination), 1)
+    if result != 0:
         error = ctypes.get_errno()
         raise OSError(error, os.strerror(error), str(destination))
 
 
 def verify_upstream_notices(archive):
     """Compare retained notices and binary samples with the pinned full archive."""
-    upstream = json.loads((ROOT / "python-notices.json").read_text(encoding="utf-8"))
+    upstream = json.loads(notice_metadata_path("python").read_text(encoding="utf-8"))
+    lock = json.loads(LOCK.read_text())
+    require(
+        upstream["target"] == lock["target"]
+        and upstream["install_only_archive_sha256"] == lock["python"]["sha256"],
+        "Python notice target/input mismatch",
+    )
     verify_input(archive, {"sha256": upstream["full_archive_sha256"]})
 
     def member(name):
@@ -718,6 +1138,7 @@ def verify_upstream_notices(archive):
             "Upstream binary sample mismatch",
         )
     return {
+        "target": lock["target"],
         "notices_verified": len(upstream["files"]),
         "binary_samples_verified": len(upstream["install_only_comparison"]),
     }
@@ -726,10 +1147,7 @@ def verify_upstream_notices(archive):
 def build(repository, commit, inputs, output, lock):
     """Build in a fresh sibling directory and publish only after all checks pass."""
     require(re.fullmatch(r"[0-9a-f]{40}", commit), "Source must be a full commit ID")
-    require(
-        (platform.system(), platform.machine()) == ("Darwin", "arm64"),
-        "This lock requires a native Apple Silicon build host",
-    )
+    require_native_target(lock)
     require(not output.exists() and not output.is_symlink(), "Output already exists")
     validate_inputs(inputs, lock)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -812,7 +1230,7 @@ def build(repository, commit, inputs, output, lock):
         payload = stage / "payload"
         extract_archive(runtime_archive, payload)
         python = payload / "python/bin/python3"
-        upstream = json.loads((ROOT / "python-notices.json").read_text(encoding="utf-8"))
+        upstream = json.loads(notice_metadata_path("python", lock).read_text(encoding="utf-8"))
         for sample in upstream["install_only_comparison"]:
             verify_input(payload / "python" / str(relative_path(sample["path"])), sample)
         identity = json.loads(
@@ -825,7 +1243,10 @@ def build(repository, commit, inputs, output, lock):
                 env=env,
             )
         )
-        require(identity == ["arm64", lock["python"]["version"]], "Python identity mismatch")
+        require(
+            identity == [TARGETS[lock["target"]][1], lock["python"]["version"]],
+            "Python identity mismatch",
+        )
         install_wheels(python, lock["runtime_wheels"], inputs, stage, env)
         python_run(
             python,
@@ -848,16 +1269,8 @@ def build(repository, commit, inputs, output, lock):
         tmux = payload / "libexec/tmux"
         shutil.copyfile(inputs / lock["tmux"]["binary"]["filename"], tmux)
         tmux.chmod(0o755)
-        require(
-            run(["/usr/bin/lipo", "-archs", tmux], cwd=stage, env=env).split() == ["arm64"],
-            "tmux architecture mismatch",
-        )
-        linkage = run(["/usr/bin/otool", "-L", tmux], cwd=stage, env=env).splitlines()[1:]
-        require(
-            linkage
-            and all(line.strip().startswith(("/usr/lib/", "/System/Library/")) for line in linkage),
-            "tmux has non-system dylibs",
-        )
+        native_report = inspect_native_payload(payload, lock["target"], env)
+        write_json(payload / "engine-native-report.json", native_report)
         require(
             run([tmux, "-V"], cwd=stage, env=env).strip() == "tmux " + lock["tmux"]["version"],
             "tmux version mismatch",
@@ -868,13 +1281,20 @@ def build(repository, commit, inputs, output, lock):
             {
                 "schema_version": 1,
                 "source_commit": commit,
+                "target": lock["target"],
+                "host_checks": {
+                    "system": platform.system(),
+                    "machine": platform.machine(),
+                    "linux_emulation_independently_excluded": False,
+                },
                 "source_tree": run(
                     [git, "-C", repository, "rev-parse", commit + "^{tree}"], cwd=stage, env=env
                 ).strip(),
                 "source_date_epoch": int(epoch),
                 "input_lock_sha256": digest(LOCK),
                 "builder_sha256": digest(Path(__file__)),
-                "python_notice_metadata_sha256": digest(ROOT / "python-notices.json"),
+                "python_notice_metadata_sha256": digest(notice_metadata_path("python", lock)),
+                "native_notice_metadata_sha256": digest(notice_metadata_path("native", lock)),
                 "wheel": {
                     "filename": wheel.name,
                     "sha256": digest(wheel),
@@ -947,20 +1367,35 @@ def build(repository, commit, inputs, output, lock):
 
 def snapshot_builder(destination):
     """Copy the executed builder and all local inputs into private immutable staging."""
-    destination.mkdir(mode=0o700)
-    metadata = (ROOT / "python-notices.json").read_bytes()
+    lock = json.loads(LOCK.read_text())
+    require(lock.get("prepared_only") is not True, "Target input lock is prepared only")
+    python_metadata = notice_metadata_path("python", lock)
+    metadata = python_metadata.read_bytes()
+    upstream = json.loads(metadata)
+    require(
+        upstream["target"] == lock["target"]
+        and upstream["install_only_archive_sha256"] == lock["python"]["sha256"],
+        "Python notice target/input mismatch",
+    )
     files = {
         "build.py": Path(__file__).read_bytes(),
         LOCK.name: LOCK.read_bytes(),
-        "python-notices.json": metadata,
+        python_metadata.name: metadata,
     }
-    for item in json.loads(metadata)["files"]:
+    for item in upstream["files"]:
         name = str(relative_path(item["path"]))
         source = ROOT / "notices" / name
         verify_input(source, item)
         data = source.read_bytes()
         require(hashlib.sha256(data).hexdigest() == item["sha256"], "Notice changed while copying")
         files["notices/" + name] = data
+    for name, data in native_notice_material(lock).items():
+        files[
+            notice_metadata_path("native", lock).name
+            if name == "native-notices.json"
+            else "notices/" + name
+        ] = data
+    destination.mkdir(mode=0o700)
     for name, data in files.items():
         target = destination / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -969,7 +1404,9 @@ def snapshot_builder(destination):
 
 
 def main(*, snapshot=False):
+    global LOCK
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target", choices=sorted(TARGETS))
     commands = parser.add_subparsers(dest="command", required=True)
     fetch = commands.add_parser("fetch", help="fetch hash-locked public binary inputs")
     fetch.add_argument("--inputs", type=Path, required=True)
@@ -985,6 +1422,8 @@ def main(*, snapshot=False):
     verify = commands.add_parser("verify", help="verify exact immutable payload inventory")
     verify.add_argument("payload", type=Path)
     args = parser.parse_args()
+    if args.target:
+        LOCK = ROOT / (args.target + ".json")
     if args.command == "build" and not snapshot:
         # Execute the copied script itself: the receipt hashes exactly the code,
         # lock and notices used even if the caller checks out another revision.
