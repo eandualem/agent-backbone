@@ -97,7 +97,7 @@ def test_opencode_standalone_install_is_found_after_daemon_start(tmp_path, monke
 
     runtime = RUNTIMES["opencode"]
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-path"))
     monkeypatch.setattr(base, "_FALLBACK_DIRS", ())
     assert not runtime.available()
     executable = tmp_path / ".opencode/bin/opencode"

@@ -115,7 +115,7 @@ async def test_new_runtime_install_reaches_first_agent_launch_with_old_daemon_pa
     body, store, _ = scenario
     runtime = RUNTIMES[body.agent.runtime]
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-path"))
     monkeypatch.setattr(base, "_FALLBACK_DIRS", (tmp_path / ".local/bin",))
     monkeypatch.setattr(type(runtime), "available", base.Runtime.available)
     monkeypatch.setattr(type(runtime), "installed_version", base.Runtime.installed_version)
