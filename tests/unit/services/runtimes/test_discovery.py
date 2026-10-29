@@ -68,6 +68,7 @@ def test_discovery_requires_executable_fallback(runtime, tmp_path, monkeypatch):
     from agent_backbone.services.runtimes import base
 
     monkeypatch.setattr(base, "_FALLBACK_DIRS", (tmp_path,))
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(base.shutil, "which", lambda name: None)
     candidate = tmp_path / runtime.binary
     candidate.write_text("#!/bin/sh\nexit 0\n")
@@ -89,3 +90,45 @@ def test_nonexecutable_fallback_does_not_hide_later_executable(tmp_path, monkeyp
     monkeypatch.setattr(base, "_FALLBACK_DIRS", (first, second))
     monkeypatch.setattr(base.shutil, "which", lambda name: None)
     assert base.resolve_command("tool") == str(second / "tool")
+
+
+def test_opencode_standalone_install_is_found_after_daemon_start(tmp_path, monkeypatch):
+    from agent_backbone.services.runtimes import base
+
+    runtime = RUNTIMES["opencode"]
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setattr(base, "_FALLBACK_DIRS", ())
+    assert not runtime.available()
+    executable = tmp_path / ".opencode/bin/opencode"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\nprintf '2.1.4\\n'\n")
+    executable.chmod(0o600)
+    assert not runtime.available()
+    executable.chmod(0o700)
+    assert runtime.discovery()["available"] is True
+    assert runtime.installed_version() == "2.1.4"
+    assert runtime.setup_error() is None
+    assert str(executable) in runtime.build_command()
+    executable.unlink()
+    assert not runtime.available()  # no positive-path cache
+
+
+def test_opencode_path_precedence_does_not_hide_unsupported_version(tmp_path, monkeypatch):
+    from agent_backbone.services.runtimes import base
+
+    runtime = RUNTIMES["opencode"]
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(base, "_FALLBACK_DIRS", ())
+    chosen = tmp_path / "chosen/opencode"
+    fallback = tmp_path / ".opencode/bin/opencode"
+    for executable, version in ((chosen, "1.19.5"), (fallback, "2.1.4")):
+        executable.parent.mkdir(parents=True)
+        executable.write_text(f"#!/bin/sh\nprintf '{version}\\n'\n")
+        executable.chmod(0o700)
+    monkeypatch.setenv("PATH", str(chosen.parent))
+    assert runtime.resolve_binary() == str(chosen)
+    assert runtime.installed_version() == "1.19.5"
+    assert "2.1.4" in runtime.setup_error()
+    with pytest.raises(RuntimeError, match="2.1.4"):
+        runtime.build_command()

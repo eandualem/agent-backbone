@@ -107,6 +107,48 @@ async def test_first_agent_receipt_retries_without_relaunch_or_duplicate_greetin
     assert [name for name in scenario[1].agents.names if name.startswith("guide")] == ["guide"]
 
 
+async def test_new_runtime_install_reaches_first_agent_launch_with_old_daemon_path(
+    scenario, db, tmp_path, monkeypatch
+):
+    from agent_backbone.services.runtimes import base
+
+    body, store, _ = scenario
+    runtime = RUNTIMES[body.agent.runtime]
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setattr(base, "_FALLBACK_DIRS", (tmp_path / ".local/bin",))
+    monkeypatch.setattr(type(runtime), "available", base.Runtime.available)
+    monkeypatch.setattr(type(runtime), "installed_version", base.Runtime.installed_version)
+    before = list(store.agents.names)
+    assert (await run(scenario, db))["code"] == "runtime_missing"
+    assert store.agents.names == before
+
+    directory = ".opencode/bin" if runtime.id == "opencode" else ".local/bin"
+    executable = tmp_path / directory / runtime.binary
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\nprintf '2.1.4\\n'\n")
+    executable.chmod(0o700)
+    original_launch = onboarding.start_agent.side_effect
+    commands = []
+
+    async def launch(spec, config, **kwargs):
+        command = runtime.build_command(
+            model=spec.model,
+            data_dir=config.data_dir,
+            state_dir=config.state_dir,
+            brief_file=kwargs["brief_file"],
+        )
+        assert str(executable) in command
+        commands.append(command)
+        return await original_launch(spec, config, **kwargs)
+
+    monkeypatch.setattr(onboarding, "start_agent", AsyncMock(side_effect=launch))
+    assert runtime.discovery()["available"] is True
+    assert (await run(scenario, db))["code"] == "agent_ready"
+    assert (await run(scenario, db))["code"] == "agent_ready"
+    assert len(commands) == 1 and onboarding.safe_deliver.await_count == 1
+
+
 async def test_permission_wait_is_visible_and_retry_does_not_restart(scenario, db):
     scenario[2]["state"] = AgentState.WAITING_FOR_HUMAN
     first = await run(scenario, db)
