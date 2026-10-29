@@ -354,6 +354,7 @@ def test_pending_health_retry_preserves_completed_assets_and_service(
     monkeypatch.setattr(service, "setup_binary", lambda: tmp_path / "bin/backbone")
     start = Mock(return_value=True)
     monkeypatch.setattr(service, "start_setup_service", start)
+    monkeypatch.setattr(onboarding, "_READINESS_SECONDS", 0.01)
     observed = {
         "data_dir": body["data_dir"],
         "installation": "created",
@@ -361,7 +362,11 @@ def test_pending_health_retry_preserves_completed_assets_and_service(
         "api_url": None,
         "health": "unknown",
     }
-    monkeypatch.setattr(onboarding, "_observe", AsyncMock(side_effect=lambda *args: dict(observed)))
+    monkeypatch.setattr(
+        onboarding,
+        "_observe",
+        AsyncMock(side_effect=lambda *args, **kwargs: (dict(observed), "Not ready.")),
+    )
     code, result = invoke(tmp_path, capsys, body)
     assert code == 3 and result["code"] == "service_unavailable"
     definition = service_path.read_bytes()
@@ -374,6 +379,198 @@ def test_pending_health_retry_preserves_completed_assets_and_service(
     assert policy.read_text() == "Owner edit"
     assert service_path.read_bytes() == definition
     assert start.call_count == 1
+
+
+async def test_cold_service_ready_after_old_window_succeeds_without_restart(config, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(onboarding, "monotonic", lambda: clock[0])
+
+    async def advance(delay):
+        clock[0] += delay
+
+    async def observe(*args, **kwargs):
+        data = onboarding._observation_data(config, "created")
+        data["health"] = "healthy" if clock[0] >= 5.8 else "unknown"
+        return data, "Not ready."
+
+    monkeypatch.setattr(onboarding.asyncio, "sleep", advance)
+    monkeypatch.setattr(onboarding, "_observe", observe)
+    start = Mock(side_effect=AssertionError("observation must not restart services"))
+    monkeypatch.setattr(service, "start_setup_service", start)
+    observed, detail = await onboarding._wait_for_service(config)
+    assert observed["health"] == "healthy" and detail == ""
+    assert clock[0] == 6.0
+    start.assert_not_called()
+
+
+async def test_readiness_window_includes_probe_time_and_retains_reason(config, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(onboarding, "monotonic", lambda: clock[0])
+
+    async def advance(delay):
+        clock[0] += delay
+
+    async def observe(*args, **kwargs):
+        clock[0] += 4.0
+        return onboarding._observation_data(config, "created"), "Identity authentication failed."
+
+    monkeypatch.setattr(onboarding.asyncio, "sleep", advance)
+    probe = AsyncMock(side_effect=observe)
+    monkeypatch.setattr(onboarding, "_observe", probe)
+    observed, detail = await onboarding._wait_for_service(config)
+    assert observed["health"] == "unknown"
+    assert "30 seconds" in detail and "Identity authentication failed" in detail
+    assert probe.await_count == 7  # elapsed probe time consumes the window too
+
+
+async def test_stalled_readiness_probe_is_cancelled_at_deadline(config, monkeypatch):
+    import asyncio
+
+    cancelled = []
+
+    async def stall(*args, **kwargs):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.append(True)
+
+    monkeypatch.setattr(onboarding, "_READINESS_SECONDS", 0.01)
+    monkeypatch.setattr(onboarding, "_observe", stall)
+    observed, detail = await onboarding._wait_for_service(config)
+    assert observed["health"] == "unknown" and cancelled == [True]
+    assert "observation did not finish" in detail
+
+
+def test_readiness_deadline_also_bounds_executor_shutdown(config, monkeypatch, tmp_path):
+    import asyncio
+    import subprocess
+    import time
+
+    unit = tmp_path / "unit"
+    unit.touch()
+    monkeypatch.setattr(service, "setup_service_path", lambda: unit)
+    monkeypatch.setattr(service, "setup_service_owner", lambda: config.data_dir.resolve())
+    monkeypatch.setattr(onboarding, "_READINESS_SECONDS", 0.05)
+    timeouts = []
+
+    def slow_manager(command, **kwargs):
+        timeout = kwargs["timeout"]
+        timeouts.append(timeout)
+        time.sleep(timeout)
+        raise subprocess.TimeoutExpired(command, timeout)
+
+    monkeypatch.setattr(service.subprocess, "run", slow_manager)
+    monkeypatch.setattr(onboarding._common, "api", AsyncMock(return_value=None))
+    started = time.monotonic()
+    observed, _ = asyncio.run(onboarding._wait_for_service(config))
+    # Includes default-executor shutdown, as cmd_setup does before emitting JSONL.
+    assert time.monotonic() - started < 0.5
+    assert timeouts and all(0 < timeout <= 0.05 for timeout in timeouts)
+    assert observed["health"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "identity,health,expected",
+    [
+        (None, None, "identity endpoint did not respond"),
+        ((401, {"detail": "private-secret"}), None, "authentication failed (HTTP 401)"),
+        ((503, {"detail": "private-secret"}), None, "identity endpoint returned HTTP 503"),
+        ((200, {"data_dir": "/private-secret"}), None, "selected data directory"),
+        ("matched", None, "health endpoint did not respond"),
+        ("matched", (503, {"detail": "private-secret"}), "health endpoint returned HTTP 503"),
+        ("matched", (200, {"healthy": "private-secret"}), "invalid health result"),
+        (
+            "matched",
+            (
+                200,
+                {
+                    "healthy": False,
+                    "components": {
+                        "database": {"healthy": False, "error": "private-secret"},
+                        "private-secret": {"healthy": False},
+                    },
+                },
+            ),
+            "Unhealthy components: database.",
+        ),
+    ],
+)
+async def test_setup_observation_diagnostics_are_actionable_and_redacted(
+    config, monkeypatch, identity, health, expected
+):
+    monkeypatch.setattr(service, "setup_service_path", lambda: None)
+    if identity == "matched":
+        identity = (200, {"data_dir": str(config.data_dir)})
+    request = AsyncMock(side_effect=[identity, health])
+    monkeypatch.setattr(onboarding._common, "api", request)
+    observed, detail = await onboarding._observe(config, "created")
+    assert expected in detail and "private-secret" not in detail
+    assert observed["health"] != "healthy"
+    assert request.await_count == (
+        2 if identity == (200, {"data_dir": str(config.data_dir)}) else 1
+    )
+
+
+@pytest.mark.parametrize("system", ["Linux", "Darwin"])
+@pytest.mark.parametrize("failure", ["exit", "missing", "timeout", "oserror"])
+def test_setup_manager_errors_report_operation_without_raw_output(
+    tmp_path, monkeypatch, system, failure
+):
+    import subprocess
+
+    monkeypatch.setattr(service.platform, "system", lambda: system)
+    monkeypatch.setattr(service, "setup_service_path", lambda: tmp_path / "private-secret")
+    monkeypatch.setattr(service, "loaded_setup_service_owner", lambda: None)
+    monkeypatch.setattr(service, "setup_service_state", lambda: "installed")
+    responses = {
+        "exit": subprocess.CompletedProcess([], 7, b"private-secret", b"private-secret"),
+        "missing": FileNotFoundError("private-secret"),
+        "timeout": subprocess.TimeoutExpired("private-secret", 15, stderr=b"private-secret"),
+        "oserror": OSError("private-secret"),
+    }
+    response = responses[failure]
+    run = (
+        Mock(side_effect=response)
+        if isinstance(response, Exception)
+        else Mock(return_value=response)
+    )
+    monkeypatch.setattr(service.subprocess, "run", run)
+    with pytest.raises(service.SetupServiceError) as error:
+        service.start_setup_service(tmp_path / "data")
+    assert "private-secret" not in str(error.value)
+    assert ("systemctl" if system == "Linux" else "launchctl") in str(error.value)
+    assert {
+        "exit": "exit 7",
+        "missing": "not available",
+        "timeout": "15 seconds",
+        "oserror": "could not be executed",
+    }[failure] in str(error.value)
+    assert run.call_count == 1
+
+
+def test_setup_service_failure_keeps_retry_state_and_emits_diagnostics(
+    tmp_path, capsys, offline, monkeypatch
+):
+    body = payload(tmp_path, service="user")
+    monkeypatch.setattr(service, "setup_service_path", lambda: tmp_path / "unit")
+    monkeypatch.setattr(service, "setup_binary", lambda: tmp_path / "bin/backbone")
+    monkeypatch.setattr(service.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(service, "setup_service_owner", lambda: None)
+    monkeypatch.setattr(
+        service,
+        "start_setup_service",
+        Mock(
+            side_effect=service.SetupServiceError(
+                "Service command `systemctl --user daemon-reload` failed (exit 1)."
+            )
+        ),
+    )
+    code, result = invoke(tmp_path, capsys, body)
+    assert code == 3 and result["code"] == "service_unavailable"
+    assert result["retry"] == "same_request"
+    assert result["completed_steps"] == ["preflight", "data", "starters"]
+    assert "exit 1" in result["message"] and "journalctl --user" in result["message"]
+    assert (Path(body["data_dir"]) / ".env").is_file()
 
 
 @pytest.mark.parametrize(

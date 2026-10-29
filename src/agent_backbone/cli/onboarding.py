@@ -14,6 +14,7 @@ import sqlite3
 import sys
 from contextlib import closing
 from pathlib import Path
+from time import monotonic
 
 from dotenv import dotenv_values
 from pydantic import TypeAdapter, ValidationError
@@ -37,6 +38,7 @@ from agent_backbone.templates import core_starter_content
 
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 ADAPTER = TypeAdapter(SetupRequest)
+_READINESS_SECONDS = 30.0
 
 
 def add_setup_parser(sub) -> None:
@@ -260,33 +262,96 @@ async def _endpoint_occupied(config):
     return await asyncio.to_thread(connect)
 
 
-async def _observe(config, installation):
-    data = {
+def _observation_data(config, installation):
+    return {
         "data_dir": str(config.data_dir),
         "installation": installation,
         "service_state": "unknown",
         "api_url": None,
         "health": "unknown",
     }
+
+
+async def _observe(config, installation, *, deadline=None):
+    data = _observation_data(config, installation)
     path = service.setup_service_path()
     if path is None:
         data["service_state"] = "unsupported"
     elif not path.exists():
         data["service_state"] = "not_installed"
     elif service.setup_service_owner() == config.data_dir.resolve():
-        data["service_state"] = service.setup_service_state()
+        remaining = 3.0 if deadline is None else min(3.0, deadline - monotonic())
+        if remaining <= 0:
+            return data, "Service readiness observation did not finish."
+        # Cancelling a to_thread await does not stop its worker. Bound the
+        # underlying manager command too, so asyncio.run's executor shutdown
+        # cannot add a fresh three-second probe after the readiness deadline.
+        data["service_state"] = await asyncio.to_thread(
+            service.setup_service_state, timeout=remaining
+        )
     identity = await _common.api(config, "GET", "/api/setup/identity", timeout=2)
-    if (
-        identity
-        and identity[0] == 200
-        and isinstance(identity[1], dict)
-        and identity[1].get("data_dir") == str(config.data_dir)
-    ):
-        data["api_url"] = _common.api_url(config, "")
-        health = await _common.api(config, "GET", "/health", timeout=2)
-        if health and health[0] == 200 and isinstance(health[1], dict):
-            data["health"] = "healthy" if health[1].get("healthy") else "unhealthy"
-    return data
+    if identity is None:
+        return (
+            data,
+            "The service identity endpoint did not respond; check local address/proxy settings.",
+        )
+    if identity[0] in (401, 403):
+        return (
+            data,
+            f"Service identity authentication failed (HTTP {identity[0]}). Preserve credentials.",
+        )
+    if identity[0] != 200:
+        return data, f"The service identity endpoint returned HTTP {identity[0]}."
+    if not isinstance(identity[1], dict) or identity[1].get("data_dir") != str(config.data_dir):
+        return data, "The responding service did not confirm the selected data directory."
+    data["api_url"] = _common.api_url(config, "")
+    health = await _common.api(config, "GET", "/health", timeout=2)
+    if health is None:
+        return data, "The service health endpoint did not respond."
+    if health[0] != 200:
+        return data, f"The service health endpoint returned HTTP {health[0]}."
+    if not isinstance(health[1], dict) or type(health[1].get("healthy")) is not bool:
+        return data, "The service health endpoint returned an invalid health result."
+    data["health"] = "healthy" if health[1]["healthy"] else "unhealthy"
+    if data["health"] == "healthy":
+        return data, ""
+    # Only fixed component names are safe to include; never echo exception text
+    # or arbitrary response bodies from an unverified/misconfigured endpoint.
+    components = health[1].get("components", {})
+    failed = [
+        name
+        for name in ("database", "agents", "scheduler", "github", "integrations", "sources")
+        if isinstance(components, dict)
+        and isinstance(components.get(name), dict)
+        and components[name].get("healthy") is False
+    ]
+    detail = (
+        "Unhealthy components: " + ", ".join(failed) + "."
+        if failed
+        else "Service health is unhealthy."
+    )
+    return data, detail
+
+
+async def _wait_for_service(config):
+    """Allow cold startup, bounding observation time without restarting a service."""
+    deadline = monotonic() + _READINESS_SECONDS
+    observed = _observation_data(config, "created")
+    detail = "Service readiness observation did not finish."
+    while (remaining := deadline - monotonic()) > 0:
+        try:
+            observed, detail = await asyncio.wait_for(
+                _observe(config, "created", deadline=deadline), timeout=remaining
+            )
+        except TimeoutError:
+            break
+        if observed["health"] == "healthy":
+            return observed, ""
+        await asyncio.sleep(min(0.5, max(0, deadline - monotonic())))
+    return observed, (
+        f"Service health was not confirmed within {_READINESS_SECONDS:g} seconds. "
+        f"{detail} {service.setup_service_guidance()}"
+    )
 
 
 def _owned_file(receipt, path, text):
@@ -371,7 +436,7 @@ async def _initialize(request: SetupInitialize, output):
             receipt.completed("preflight")
         if not fresh:
             config = await _inspect_existing(boot)
-            observed = await _observe(config, "existing_preserved")
+            observed, _ = await _observe(config, "existing_preserved")
             final = result(
                 "initialize",
                 "existing_preserved",
@@ -391,12 +456,17 @@ async def _initialize(request: SetupInitialize, output):
                     "An initialized installation file is missing; it was not recreated.",
                 )
             config = await _common.read_client_config(data_dir, strict=True, operator_file=True)
-            final = dict(receipt.record["result"], data=await _observe(config, "created"))
+            observed, detail = (
+                await _wait_for_service(config)
+                if request.service == "user"
+                else await _observe(config, "created")
+            )
+            final = dict(receipt.record["result"], data=observed)
             if request.service == "user" and final["data"]["health"] != "healthy":
                 return result(
                     "initialize",
                     "service_unavailable",
-                    "Service health is not confirmed; the installation was preserved.",
+                    detail + " The installation was preserved.",
                     data=final["data"],
                     steps=receipt.record["completed_steps"],
                 )
@@ -486,35 +556,39 @@ async def _initialize(request: SetupInitialize, output):
             path, content = Path(definition["path"]), definition["content"]
             _owned_file(receipt, path, content)
             receipt.save(pending="service")
-            if not service.start_setup_service(data_dir):
+            failure = "The loaded service does not confirm this installation's ownership."
+            try:
+                started = service.start_setup_service(data_dir)
+            except service.SetupServiceError as exc:
+                started, failure = False, str(exc)
+            if not started:
+                observed, _ = await _observe(
+                    await _common.read_client_config(data_dir, strict=True, operator_file=True),
+                    "created",
+                )
                 return result(
                     "initialize",
                     "service_unavailable",
-                    "Service installation needs attention; its files were retained.",
-                    data=await _observe(
-                        await _common.read_client_config(data_dir, strict=True, operator_file=True),
-                        "created",
-                    ),
+                    f"{failure} Its files were retained. {service.setup_service_guidance()}",
+                    data=observed,
                     steps=receipt.record["completed_steps"],
                 )
             receipt.completed("service")
             output.step("service", "completed")
         config = await _common.read_client_config(data_dir, strict=True, operator_file=True)
-        observed = await _observe(config, "created")
-        if request.service == "user":
-            for _ in range(10):
-                if observed["health"] == "healthy":
-                    break
-                await asyncio.sleep(0.5)
-                observed = await _observe(config, "created")
-            if observed["health"] != "healthy":
-                return result(
-                    "initialize",
-                    "service_unavailable",
-                    "Service health is not confirmed.",
-                    data=observed,
-                    steps=receipt.record["completed_steps"],
-                )
+        observed, detail = (
+            await _wait_for_service(config)
+            if request.service == "user"
+            else await _observe(config, "created")
+        )
+        if request.service == "user" and observed["health"] != "healthy":
+            return result(
+                "initialize",
+                "service_unavailable",
+                detail,
+                data=observed,
+                steps=receipt.record["completed_steps"],
+            )
         final = result(
             "initialize",
             "initialized",

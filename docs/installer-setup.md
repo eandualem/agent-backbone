@@ -51,6 +51,25 @@ installs a macOS LaunchAgent or Linux systemd user service and observes its heal
 fallback for an unsupported service manager. An occupied service address or
 unrelated service definition is a conflict, not permission to replace it.
 
+After the service manager accepts startup, initialization allows a 30-second
+readiness observation window for cold starts. It confirms the selected data
+directory through the authenticated identity endpoint before accepting service
+health. A running service process alone is not readiness. The finite result keeps
+the same schema, codes and retry fields; `service_unavailable` explains whether
+the service command, identity authentication, installation identity or health
+check failed and points to status/log commands. Raw manager output, credentials
+and endpoint error bodies are not copied into the result.
+
+If startup is still incomplete, retain the exact request and installed provider
+version. A retry waits for readiness again without restarting a service step
+already recorded as completed, rewriting credentials or replacing edited assets.
+Do not reset receipts to recover a slow startup. On Linux, inspect
+`systemctl --user status agent-backbone.service` and
+`journalctl --user -u agent-backbone.service -n 80 --no-pager`; on macOS, inspect
+`backbone service status` and the installation's `backbone.log` and
+`backbone.out.log`. Keep credentials and unrelated log content private when
+sharing a diagnostic excerpt.
+
 An existing installation returns `existing_preserved` with observed connection
 and service state. It does not migrate the database, change secrets, replace the
 service, assign policies or launch agents. Only a private setup operation receipt
