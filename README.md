@@ -1,5 +1,7 @@
 <div align="center">
 
+# Agent Backbone
+
 <img src="docs/media/banner.png" alt="agent-backbone: your terminal agents, working as a team" width="720">
 
 **Agents across different AI CLIs and projects, working as one personal team.**<br>
@@ -12,7 +14,7 @@ Develop specialists whose experience carries into your next project.
 [![Downloads](https://img.shields.io/pypi/dm/agent-backbone)](https://pypistats.org/packages/agent-backbone)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-[Watch](#watch) · [Quick start](#quick-start) · [Why Backbone](#why-backbone) · [Docs](docs/INDEX.md) · [Security](docs/security.md)
+[Website](https://agentinterface.dev/agent-backbone/) · [Watch](#watch) · [Quick start](#quick-start) · [Why Backbone](#why-backbone) · [Docs](docs/INDEX.md) · [Security](docs/security.md)
 
 </div>
 
@@ -109,7 +111,7 @@ alone does not make it more capable. [Try that collaboration](docs/team.md#try-a
 
 ## Use a desktop workspace
 
-Agent Interface provides a native desktop for Backbone: terminals alongside
+[Agent Interface](https://agentinterface.dev/) provides a native desktop for Backbone: terminals alongside
 team, activity, usage, skills and policy views. Its **Reports & updates** view brings together progress reports, saved
 answers and Documents. Rich HTML Documents currently render on macOS.
 Connect it to a running Backbone.
