@@ -117,6 +117,16 @@ include the selected runtime. Claude Code, Codex and OpenCode support this actio
 OpenCode must be version 2.1.4 or newer before registration. Other adapters report an unavailable installer path with their normal agent-start
 flow as fallback. See the generated [capability contract](runtime-capabilities.md).
 
+Runtime lookup is repeated by the service when first-agent setup runs. An
+OpenCode standalone install in `~/.opencode/bin` is discoverable even if it was
+installed after the service started. Existing PATH and standard package-manager
+locations take precedence; the service does not silently switch away from a
+selected older executable. Use the [OpenCode V2 installer](https://opencode.ai/v2/docs/)
+(`https://opencode.ai/v2/install` or `npm install -g @opencode/cli`), then verify
+the selected `opencode --version` is at least 2.1.4. The V1 installer and V2 share
+the command name; discovery of a binary is not proof of version compatibility
+or authentication.
+
 The running service executes first-agent setup through operator-only
 `POST /api/setup/first-agent`. It verifies core prerequisites, prepares
 installation-owned hooks, registers a new agent and starts it with the selected
