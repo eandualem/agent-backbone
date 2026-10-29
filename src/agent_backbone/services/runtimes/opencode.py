@@ -176,6 +176,15 @@ class OpenCode(Runtime):
         match = re.match(r"(\d+)\.(\d+)\.(\d+)", version)
         return tuple(map(int, match.groups())) if match else ()
 
+    def resolve_binary(self) -> str | None:
+        if path := super().resolve_binary():
+            return path
+        # The standalone installer can run after the daemon has started. Probe
+        # its standard location on every lookup without replacing PATH choices
+        # or importing a caller's environment into the long-running service.
+        candidate = Path.home() / ".opencode/bin/opencode"
+        return str(candidate) if candidate.is_file() and os.access(candidate, os.X_OK) else None
+
     def build_command(self, **kwargs):
         if not self.available():
             raise RuntimeError(f"Runtime '{self.id}' binary not found: {self.binary}")

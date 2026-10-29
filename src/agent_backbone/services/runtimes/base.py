@@ -372,16 +372,20 @@ class Runtime:
 
     # --- launch --------------------------------------------------------------
 
+    def resolve_binary(self) -> str | None:
+        """Find this runtime now, including any adapter-specific install location."""
+        return resolve_command(self.binary) if self.binary else None
+
     def available(self) -> bool:
         """Whether the binary is installed (a shell always is)."""
-        return self.binary is None or resolve_command(self.binary) is not None
+        return self.binary is None or self.resolve_binary() is not None
 
     def installed_version(self) -> str | None:
         """The installed CLI's version, the first ``N.N[.N]`` that ``--version``
         prints as a word of its own, with any prerelease suffix (``0.157.1-alpha.1``);
         ``None`` when it cannot be read (#359). A CLI that prints it differently
         overrides this in its own module."""
-        path = resolve_command(self.binary) if self.binary else None
+        path = self.resolve_binary()
         if path is None:
             return None
         try:
@@ -650,7 +654,7 @@ class Runtime:
         self.check_unattended(unattended)  # a shell has no switch either
         if self.binary is None:
             return None
-        resolved = resolve_command(self.binary)
+        resolved = self.resolve_binary()
         if resolved is None:
             raise RuntimeError(f"Runtime '{self.id}' binary not found: {self.binary}")
         brief = Path(brief_file) if brief_file is not None else None
@@ -1130,7 +1134,7 @@ class Runtime:
         current = await query_format_vars(session_name, "command=#{pane_current_command}")
         if current.get("command") == self.binary:
             return True
-        launcher = resolve_command(self.binary)
+        launcher = self.resolve_binary()
         if launcher is None:
             return False
         expected = Path(launcher).resolve()

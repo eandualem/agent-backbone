@@ -191,7 +191,7 @@ def setup_service_owner() -> Path | None:
         return None
 
 
-def setup_service_state() -> str:
+def setup_service_state(*, timeout: float = 3.0) -> str:
     """Bounded observation for the installer's finite action."""
     path = setup_service_path()
     if path is None:
@@ -205,7 +205,9 @@ def setup_service_state() -> str:
         else ("systemctl", "--user", "is-active", "agent-backbone.service")
     )
     try:
-        response = subprocess.run(command, capture_output=True, text=True, timeout=3, check=False)
+        response = subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout, check=False
+        )
     except FileNotFoundError:
         return "unsupported"
     except (OSError, subprocess.TimeoutExpired):
@@ -252,6 +254,22 @@ def loaded_setup_service_owner() -> Path | None:
         return None
 
 
+class SetupServiceError(RuntimeError):
+    """A bounded, credential-free service-manager failure for installer output."""
+
+
+def setup_service_guidance() -> str:
+    if platform.system() == "Linux":
+        return (
+            "Inspect `systemctl --user status agent-backbone.service` and "
+            "`journalctl --user -u agent-backbone.service -n 80 --no-pager`."
+        )
+    return (
+        "Inspect `backbone service status` and the installation's "
+        "backbone.log and backbone.out.log."
+    )
+
+
 def start_setup_service(data_dir: Path) -> bool:
     """Start a newly owned definition. Never boot out or replace a service."""
     path = setup_service_path()
@@ -262,21 +280,35 @@ def start_setup_service(data_dir: Path) -> bool:
         return False
     if setup_service_state() == "running":
         return owner == data_dir.resolve()
+    mac = platform.system() == "Darwin"
     commands = (
         [("launchctl", "bootstrap", _gui_domain(), str(path))]
-        if platform.system() == "Darwin"
+        if mac
         else [
             ("systemctl", "--user", "daemon-reload"),
             ("systemctl", "--user", "enable", "--now", "agent-backbone.service"),
         ]
     )
-    try:
-        return all(
-            subprocess.run(command, capture_output=True, timeout=15, check=False).returncode == 0
-            for command in commands
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+    for command in commands:
+        # Never relay raw manager output: it can contain environment values or
+        # arbitrary text from a service definition. The command and exit status
+        # identify which operation failed without exposing those details.
+        label = "launchctl bootstrap" if mac else " ".join(command)
+        try:
+            response = subprocess.run(command, capture_output=True, timeout=15, check=False)
+        except FileNotFoundError as exc:
+            raise SetupServiceError(f"Service manager {command[0]} is not available.") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise SetupServiceError(
+                f"Service command `{label}` timed out after 15 seconds."
+            ) from exc
+        except OSError as exc:
+            raise SetupServiceError(f"Service command `{label}` could not be executed.") from exc
+        if response.returncode:
+            raise SetupServiceError(
+                f"Service command `{label}` failed (exit {response.returncode})."
+            )
+    return True
 
 
 _NOT_FOUND = 127  # the shell's own code for a missing command

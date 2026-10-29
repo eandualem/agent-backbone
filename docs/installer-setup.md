@@ -51,6 +51,25 @@ installs a macOS LaunchAgent or Linux systemd user service and observes its heal
 fallback for an unsupported service manager. An occupied service address or
 unrelated service definition is a conflict, not permission to replace it.
 
+After the service manager accepts startup, initialization allows a 30-second
+readiness observation window for cold starts. It confirms the selected data
+directory through the authenticated identity endpoint before accepting service
+health. A running service process alone is not readiness. The finite result keeps
+the same schema, codes and retry fields; `service_unavailable` explains whether
+the service command, identity authentication, installation identity or health
+check failed and points to status/log commands. Raw manager output, credentials
+and endpoint error bodies are not copied into the result.
+
+If startup is still incomplete, retain the exact request and installed provider
+version. A retry waits for readiness again without restarting a service step
+already recorded as completed, rewriting credentials or replacing edited assets.
+Do not reset receipts to recover a slow startup. On Linux, inspect
+`systemctl --user status agent-backbone.service` and
+`journalctl --user -u agent-backbone.service -n 80 --no-pager`; on macOS, inspect
+`backbone service status` and the installation's `backbone.log` and
+`backbone.out.log`. Keep credentials and unrelated log content private when
+sharing a diagnostic excerpt.
+
 An existing installation returns `existing_preserved` with observed connection
 and service state. It does not migrate the database, change secrets, replace the
 service, assign policies or launch agents. Only a private setup operation receipt
@@ -97,6 +116,16 @@ is required and nullable. Hooks must contain unique canonical runtime IDs and
 include the selected runtime. Claude Code, Codex and OpenCode support this action;
 OpenCode must be version 2.1.4 or newer before registration. Other adapters report an unavailable installer path with their normal agent-start
 flow as fallback. See the generated [capability contract](runtime-capabilities.md).
+
+Runtime lookup is repeated by the service when first-agent setup runs. An
+OpenCode standalone install in `~/.opencode/bin` is discoverable even if it was
+installed after the service started. Existing PATH and standard package-manager
+locations take precedence; the service does not silently switch away from a
+selected older executable. Use the [OpenCode V2 installer](https://opencode.ai/v2/docs/)
+(`https://opencode.ai/v2/install` or `npm install -g @opencode/cli`), then verify
+the selected `opencode --version` is at least 2.1.4. The V1 installer and V2 share
+the command name; discovery of a binary is not proof of version compatibility
+or authentication.
 
 The running service executes first-agent setup through operator-only
 `POST /api/setup/first-agent`. It verifies core prerequisites, prepares
