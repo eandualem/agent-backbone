@@ -371,7 +371,7 @@ def test_package_notice_inventory_requires_notices(tmp_path, monkeypatch, missin
         ] == ["licenses/LICENSE"]
 
 
-@pytest.mark.parametrize("change", [None, "hash", "missing", "component"])
+@pytest.mark.parametrize("change", [None, "hash", "missing", "component", "target"])
 def test_notice_copy_checks_sources_and_component_paths(tmp_path, monkeypatch, change):
     source, _, metadata = notice_fixture(tmp_path, monkeypatch)
     if change == "hash":
@@ -380,6 +380,9 @@ def test_notice_copy_checks_sources_and_component_paths(tmp_path, monkeypatch, c
         (source / "notices/LICENSE.txt").unlink()
     elif change == "component":
         metadata["components"][0]["license_paths"] = ["licenses/absent"]
+        engine.write_json(source / "python-notices.json", metadata)
+    elif change == "target":
+        metadata["target"] = "x86_64-apple-darwin"
         engine.write_json(source / "python-notices.json", metadata)
     root = tmp_path / "payload"
     root.mkdir()
@@ -415,7 +418,12 @@ def test_build_executes_snapshot_when_checkout_changes(tmp_path, monkeypatch, ca
         " print(Path(__file__).with_name('lock.json').read_text())\n"
     )
     lock = source / "lock.json"
-    lock.write_text('{"version":"original"}')
+    original_lock = {
+        **json.loads(engine.LOCK.read_text()),
+        "version": "original",
+        "runtime_wheels": [],
+    }
+    engine.write_json(lock, original_lock)
     monkeypatch.setattr(engine, "__file__", str(script))
     monkeypatch.setattr(engine, "LOCK", lock)
     original_run = engine.run
@@ -449,7 +457,7 @@ def test_build_executes_snapshot_when_checkout_changes(tmp_path, monkeypatch, ca
         ],
     )
     engine.main()
-    assert json.loads(capsys.readouterr().out) == {"version": "original"}
+    assert json.loads(capsys.readouterr().out) == original_lock
 
 
 def test_wrong_host_does_not_create_output(tmp_path, monkeypatch):
@@ -491,6 +499,33 @@ def test_native_notice_inventory_cannot_follow_changed_binary_inputs(change):
     message = "target/Python input mismatch" if change in {"target", "python"} else "[Nn]otice"
     with pytest.raises(ValueError, match=message):
         engine.native_notice_material(lock)
+
+
+@pytest.mark.parametrize("notice", ["python", "native"])
+def test_stale_notices_fail_before_snapshot_is_written(tmp_path, monkeypatch, notice):
+    lock = json.loads(engine.LOCK.read_text())
+    metadata = json.loads(engine.notice_metadata_path(notice, lock).read_text())
+    metadata["target"] = "x86_64-apple-darwin"
+    engine.write_json(tmp_path / (notice + "-notices.json"), metadata)
+    lock[notice + "_notice_metadata"] = notice + "-notices.json"
+    # Keep other metadata/notices intact, replacing only the selected document.
+    original_path = engine.notice_metadata_path
+    monkeypatch.setattr(
+        engine,
+        "notice_metadata_path",
+        lambda kind, selected=None: (
+            tmp_path / (notice + "-notices.json")
+            if kind == notice
+            else original_path(kind, selected)
+        ),
+    )
+    lock_path = tmp_path / engine.LOCK.name
+    engine.write_json(lock_path, lock)
+    monkeypatch.setattr(engine, "LOCK", lock_path)
+    destination = tmp_path / "snapshot"
+    with pytest.raises(ValueError, match="target/.* mismatch"):
+        engine.snapshot_builder(destination)
+    assert not destination.exists()
 
 
 @pytest.mark.parametrize(
@@ -560,6 +595,7 @@ def test_native_notice_tampering_refused_before_snapshot(tmp_path, monkeypatch, 
         "crate_declared",
         "crate_declared_missing",
         "crate_declared_ok",
+        "crate_inherited_ok",
         "prepared_ok",
     ],
 )
@@ -593,7 +629,7 @@ def test_source_verifier_checks_upstream_crate_notice_correspondence(tmp_path, m
     ]
     if change == "omitted_notice":
         crate_members.append(("demo-1.0.0/NOTICE", tarfile.REGTYPE, "required attribution"))
-    if change and change.startswith("crate_declared"):
+    if change and (change.startswith("crate_declared") or change == "crate_inherited_ok"):
         name, kind, content = crate_members[0]
         crate_members[0] = (name, kind, content + 'license-file="./legal/TERMS.md"\n')
         if change != "crate_declared_missing":
@@ -718,8 +754,9 @@ def test_source_verifier_checks_upstream_crate_notice_correspondence(tmp_path, m
         "wheel_maturin_duplicate_ok",
         "wheel_inherited_ok",
         "crate_declared_ok",
+        "crate_inherited_ok",
     }:
-        members = ["demo-1.0.0/legal/TERMS.md"] if change == "crate_declared_ok" else [member]
+        members = ["demo-1.0.0/legal/TERMS.md"] if change.startswith("crate_") else [member]
         if change == "wheel_maturin_duplicate_ok":
             members.append("demo-1.0.0/LEGAL.md")
         for retained_member in members:
@@ -729,7 +766,10 @@ def test_source_verifier_checks_upstream_crate_notice_correspondence(tmp_path, m
                 "bytes": len(b"required attribution"),
                 "sha256": hashlib.sha256(b"required attribution").hexdigest(),
             }
-            if change == "crate_declared_ok":
+            if change.startswith("crate_"):
+                if change == "crate_inherited_ok":
+                    notice.pop("source_id")
+                    data["components"][0]["source_member"] = notice.pop("source_member")
                 data["components"][0]["notices"].append(notice)
             else:
                 data["components"].append(
@@ -1049,12 +1089,34 @@ def test_elf_inspection_rejects_wrong_architecture_and_host_dependencies(
         ]
 
 
-@pytest.mark.parametrize("change", [None, "arch", "dependency", "rpath", "minimum"])
+@pytest.mark.parametrize(
+    "change",
+    [
+        None,
+        "arch",
+        "dependency",
+        "rpath",
+        "minimum",
+        "loader_ok",
+        "loader_missing",
+        "executable_ok",
+        "executable_missing",
+        "rpath_ok",
+        "rpath_missing",
+        "rpath_escape",
+    ],
+)
 def test_macho_inspection_distinguishes_install_name_from_dependency(tmp_path, monkeypatch, change):
     for name in ["python/bin/python3", "libexec/tmux", "python/lib/extra.dylib"]:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"\xcf\xfa\xed\xfe")
+    if change in {"loader_ok", "executable_ok", "rpath_ok", "rpath_escape"}:
+        dependency = tmp_path / "python/lib/required.dylib"
+        if change == "rpath_escape":
+            dependency.symlink_to(Path(__file__).resolve())
+        else:
+            dependency.write_bytes(b"fixture library")
 
     def run(argv, **kwargs):
         path = argv[-1]
@@ -1075,22 +1137,34 @@ def test_macho_inspection_distinguishes_install_name_from_dependency(tmp_path, m
                 if change == "dependency"
                 else "/usr/lib/libSystem.B.dylib"
             )
+            if path.name == "extra.dylib" and change:
+                if change.startswith("loader_"):
+                    dependency = "@loader_path/required.dylib"
+                elif change.startswith("executable_"):
+                    dependency = "@executable_path/../lib/required.dylib"
+                elif change.startswith("rpath_"):
+                    dependency = "@rpath/required.dylib"
             return str(path) + ":\n" + prefix + "\t" + dependency + " (compatibility version 1.0)\n"
         if change == "minimum":
             return ""
         result = "    cmd LC_BUILD_VERSION\n    minos 11.0\n"
         if change == "rpath":
             result += "    cmd LC_RPATH\n    cmdsize 32\n    path /opt/local/lib (offset 12)\n"
+        if change and change.startswith("rpath_") and path.name == "extra.dylib":
+            result += "    cmd LC_RPATH\n    cmdsize 32\n    path @loader_path/. (offset 12)\n"
         return result
 
     monkeypatch.setattr(engine, "run", run)
-    if change:
+    if change and not change.endswith("_ok"):
         with pytest.raises(ValueError):
             engine.inspect_native_payload(tmp_path, "aarch64-apple-darwin", {})
     else:
         report = engine.inspect_native_payload(tmp_path, "aarch64-apple-darwin", {})
         assert len(report["binaries"]) == 3
-        assert all(b["dependencies"] == ["/usr/lib/libSystem.B.dylib"] for b in report["binaries"])
+        if change is None:
+            assert all(
+                b["dependencies"] == ["/usr/lib/libSystem.B.dylib"] for b in report["binaries"]
+            )
 
 
 @pytest.mark.parametrize("target", [t for t in engine.TARGETS if t != "aarch64-apple-darwin"])

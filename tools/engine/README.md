@@ -91,6 +91,9 @@ The receipt records that limitation. These checks do not provision a runner.
 The builder checks every Mach-O or ELF binary and retains
 `engine-native-report.json` in the immutable inventory. Mach-O inspection records
 the selected architecture, minimum-OS load commands and dependency/search paths;
+relative dylib references must resolve to shipped files. Each binary must declare
+the payload-relative search paths needed for its `@rpath` dependencies; inherited
+loader-stack search paths are not accepted by this static check.
 Relocatable object files are classified separately from executable entrypoints.
 Static ELF engine entrypoints are refused because their glibc/NSS requirements
 cannot be inferred from dynamic symbol versions. ELF inspection checks class,

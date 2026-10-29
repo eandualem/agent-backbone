@@ -199,12 +199,16 @@ def verify_sources(cache, target="aarch64-apple-darwin"):
                         "Missing declared crate notice",
                     )
                     required.add(declared)
-            retained = {n["source_member"] for n in component["notices"] if n["source_id"] == sid}
+            retained = {
+                n.get("source_member", component.get("source_member"))
+                for n in component["notices"]
+                if n.get("source_id", sid) == sid
+            }
             require(
                 required <= retained, f"Crate notice members missing: {sorted(required - retained)}"
             )
             for notice in component["notices"]:
-                external = sources[notice["source_id"]]
+                external = sources[notice.get("source_id", sid)]
                 if external.get("format") != "raw":
                     continue
                 vcs = json.loads(read(sid, prefix + "/.cargo_vcs_info.json"))

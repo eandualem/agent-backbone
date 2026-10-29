@@ -587,8 +587,9 @@ def native_notice_material(lock=None):
 def add_notices(payload, inputs, lock, python, env):
     upstream = json.loads(notice_metadata_path("python", lock).read_text())
     require(
-        upstream["install_only_archive_sha256"] == lock["python"]["sha256"],
-        "Python notice source does not match archive",
+        upstream["target"] == lock["target"]
+        and upstream["install_only_archive_sha256"] == lock["python"]["sha256"],
+        "Python notice target/input mismatch",
     )
     notices = payload / "licenses/python"
     notices.mkdir(parents=True)
@@ -926,12 +927,36 @@ def inspect_native_payload(payload, target, env):
             )
             dependencies = [name for name in dependencies if name not in identities]
             require(dependencies or not entrypoint, f"Missing native linkage: {name}")
+            commands = run(["/usr/bin/otool", "-arch", architecture, "-l", path], env=env)
+            rpaths = re.findall(r"cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset \d+\)", commands)
+            search_directories = []
+            for entry in rpaths:
+                require(
+                    entry.startswith(("@loader_path/", "@executable_path/")),
+                    "Mach-O search path is not payload-relative",
+                )
+                anchor, relative = entry.split("/", 1)
+                base = path.parent if anchor == "@loader_path" else payload / "python/bin"
+                directory = (base / relative).resolve()
+                require(
+                    directory.is_relative_to(payload.resolve()),
+                    "Mach-O search path escapes payload",
+                )
+                search_directories.append(directory)
             for dependency in dependencies:
                 if dependency.startswith(("/usr/lib/", "/System/Library/")):
                     continue
                 require(name != "libexec/tmux", "tmux has non-system dylibs")
                 if dependency.startswith("@rpath/"):
-                    relative_path(dependency.removeprefix("@rpath/"))
+                    relative = relative_path(dependency.removeprefix("@rpath/"))
+                    require(
+                        any(
+                            (directory / relative).resolve().is_relative_to(payload.resolve())
+                            and (directory / relative).is_file()
+                            for directory in search_directories
+                        ),
+                        "Native rpath dependency is not shipped in declared search paths",
+                    )
                 else:
                     require(
                         dependency.startswith(("@loader_path/", "@executable_path/")),
@@ -943,19 +968,7 @@ def inspect_native_payload(payload, target, env):
                         (base / relative).resolve().is_relative_to(payload.resolve()),
                         "Native loader path escapes payload",
                     )
-            commands = run(["/usr/bin/otool", "-arch", architecture, "-l", path], env=env)
-            rpaths = re.findall(r"cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset \d+\)", commands)
-            for entry in rpaths:
-                require(
-                    entry.startswith(("@loader_path/", "@executable_path/")),
-                    "Mach-O search path is not payload-relative",
-                )
-                anchor, relative = entry.split("/", 1)
-                base = path.parent if anchor == "@loader_path" else payload / "python/bin"
-                require(
-                    (base / relative).resolve().is_relative_to(payload.resolve()),
-                    "Mach-O search path escapes payload",
-                )
+                    require((base / relative).is_file(), "Native loader dependency is not shipped")
             minimums = re.findall(r"^\s+minos ([\d.]+)$", commands, re.MULTILINE)
             if not minimums:
                 minimums = re.findall(
@@ -1354,29 +1367,35 @@ def build(repository, commit, inputs, output, lock):
 
 def snapshot_builder(destination):
     """Copy the executed builder and all local inputs into private immutable staging."""
-    destination.mkdir(mode=0o700)
     lock = json.loads(LOCK.read_text())
     require(lock.get("prepared_only") is not True, "Target input lock is prepared only")
     python_metadata = notice_metadata_path("python", lock)
     metadata = python_metadata.read_bytes()
+    upstream = json.loads(metadata)
+    require(
+        upstream["target"] == lock["target"]
+        and upstream["install_only_archive_sha256"] == lock["python"]["sha256"],
+        "Python notice target/input mismatch",
+    )
     files = {
         "build.py": Path(__file__).read_bytes(),
         LOCK.name: LOCK.read_bytes(),
         python_metadata.name: metadata,
     }
-    for item in json.loads(metadata)["files"]:
+    for item in upstream["files"]:
         name = str(relative_path(item["path"]))
         source = ROOT / "notices" / name
         verify_input(source, item)
         data = source.read_bytes()
         require(hashlib.sha256(data).hexdigest() == item["sha256"], "Notice changed while copying")
         files["notices/" + name] = data
-    for name, data in native_notice_material().items():
+    for name, data in native_notice_material(lock).items():
         files[
             notice_metadata_path("native", lock).name
             if name == "native-notices.json"
             else "notices/" + name
         ] = data
+    destination.mkdir(mode=0o700)
     for name, data in files.items():
         target = destination / name
         target.parent.mkdir(parents=True, exist_ok=True)
