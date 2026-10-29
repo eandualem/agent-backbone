@@ -242,6 +242,7 @@ def cmd_runtimes(args: argparse.Namespace) -> int:
                     ("Compatibility", check["reason"]),
                     ("Executable", check["path"] or "not found"),
                     ("Version", check["version"] or "unknown"),
+                    ("Version probe", check["version_error"] or "no error"),
                     ("Details", check["message"]),
                 ],
             )

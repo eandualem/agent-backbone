@@ -912,7 +912,8 @@ def test_cancel_cli_uses_only_cancellation_endpoint(tmp_path, capsys, monkeypatc
         },
     }
     monkeypatch.setattr(onboarding._common, "read_client_config", AsyncMock(return_value=object()))
-    monkeypatch.setattr(onboarding._common, "request_not_sent", lambda path: False)
+    not_sent = Mock(return_value=False)
+    monkeypatch.setattr(onboarding._common, "request_not_sent", not_sent)
     if response == "cancelled":
         answer = (
             200,
@@ -937,6 +938,8 @@ def test_cancel_cli_uses_only_cancellation_endpoint(tmp_path, capsys, monkeypatc
     api.assert_awaited_once()
     assert api.await_args.args[1:3] == ("POST", "/api/setup/first-agent/cancel")
     assert api.await_args.kwargs["json_body"] == body
+    if response == "lost":
+        not_sent.assert_called_once_with("/api/setup/first-agent/cancel")
     assert result["action"] == "cancel_first_agent"
     assert code == (0 if response == "cancelled" else 3)
     if response != "cancelled":

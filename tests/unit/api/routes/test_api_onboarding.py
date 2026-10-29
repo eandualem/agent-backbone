@@ -138,3 +138,77 @@ async def test_cancellation_accepts_largest_original_request(
     )
     assert response.status_code == 200
     execute.assert_awaited_once()
+
+
+@pytest.mark.parametrize("probe_fails", [False, True])
+async def test_compatibility_batch_survives_client_cancellation_and_drains_workers(
+    monkeypatch, probe_fails
+):
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+
+    from starlette.datastructures import State
+
+    from agent_backbone.api.routes import agents
+
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    release = threading.Event()
+    calls = []
+
+    def slow_probe():
+        calls.append("slow")
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(5)
+        return {"compatible": True}
+
+    def other_probe():
+        calls.append("other")
+        if probe_fails:
+            raise ValueError("probe failed")
+        return {"compatible": True}
+
+    def runtime(name, probe):
+        return SimpleNamespace(
+            id=name,
+            display_name=name,
+            models=[],
+            available=lambda: True,
+            setup_compatibility=probe,
+        )
+
+    monkeypatch.setattr(
+        agents,
+        "RUNTIMES",
+        {"slow": runtime("slow", slow_probe), "other": runtime("other", other_probe)},
+    )
+    monkeypatch.setattr(agents, "require_operator", AsyncMock())
+    request = SimpleNamespace(app=SimpleNamespace(state=State()))
+    first = asyncio.create_task(agents.list_runtimes(request, check_setup=True))
+    followers = []
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        batch = request.app.state.runtime_setup_checks
+        followers = [
+            asyncio.create_task(agents.list_runtimes(request, check_setup=True)) for _ in range(8)
+        ]
+        await asyncio.sleep(0)
+        assert request.app.state.runtime_setup_checks is batch
+        assert not batch.done()
+        assert calls.count("slow") == 1
+    finally:
+        release.set()
+        results = await asyncio.gather(*followers, return_exceptions=True)
+        await asyncio.gather(first, return_exceptions=True)
+    assert sorted(calls) == ["other", "slow"]
+    if probe_fails:
+        assert all(isinstance(result, ValueError) for result in results)
+    else:
+        assert all([row.id for row in result] == ["slow", "other"] for result in results)
+    # Results are shared only while in flight; a later request observes changes.
+    await asyncio.gather(agents.list_runtimes(request, check_setup=True), return_exceptions=True)
+    assert sorted(calls) == ["other", "other", "slow", "slow"]
