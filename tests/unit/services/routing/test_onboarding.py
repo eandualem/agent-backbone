@@ -1,12 +1,13 @@
 """The same finite setup behavior for every required interactive runtime."""
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
 from agent_backbone.config import AgentSpec
-from agent_backbone.models import DeliveryOutcome, SetupFirstAgent
+from agent_backbone.models import DeliveryOutcome, SetupCancelFirstAgent, SetupFirstAgent
 from agent_backbone.services.agents import AgentState, AgentStore, StartResult, StateSnapshot
 from agent_backbone.services.database import SetupReceipt
 from agent_backbone.services.routing import DeliveryReport, onboarding
@@ -79,6 +80,7 @@ async def scenario(request, db, tmp_path, monkeypatch):
     monkeypatch.setattr(onboarding, "agent_state", snapshot)
     monkeypatch.setattr(type(RUNTIMES[request.param]), "available", lambda self: True)
     monkeypatch.setattr(type(RUNTIMES[request.param]), "installed_version", lambda self: "2.1.4")
+    monkeypatch.setattr(type(RUNTIMES[request.param]), "setup_error", lambda self: None)
     monkeypatch.setattr(
         onboarding,
         "safe_deliver",
@@ -389,7 +391,12 @@ async def test_runtime_preflight_refuses_before_registration(scenario, db, monke
 @pytest.mark.parametrize("version,refused", [(None, True), ("1.18.32", True), ("2.1.4", False)])
 def test_opencode_setup_version_gate(version, refused, monkeypatch):
     runtime = RUNTIMES["opencode"]
-    monkeypatch.setattr(type(runtime), "installed_version", lambda self: version)
+    monkeypatch.setattr(type(runtime), "resolve_binary", lambda self: "/mock/opencode")
+    monkeypatch.setattr(
+        type(runtime),
+        "_version_at",
+        lambda self, path: (version, None if version else "invalid_output"),
+    )
     assert bool(runtime.setup_error()) is refused
 
 
@@ -560,3 +567,142 @@ async def test_post_insert_metadata_change_retains_owned_registration_for_retry(
         assert "agent" in receipt.record["completed_steps"]
         assert "agent" in receipt.record["result"]["completed_steps"]
     assert onboarding.start_agent.await_count == 1
+
+
+def cancellation(body):
+    return SetupCancelFirstAgent.model_validate(
+        {**body.model_dump(), "action": "cancel_first_agent"}
+    )
+
+
+async def test_cancel_preflight_survives_retry_and_prevents_delayed_launch(
+    scenario, db, monkeypatch
+):
+    body, store, _ = scenario
+    runtime = RUNTIMES[body.agent.runtime]
+    monkeypatch.setattr(type(runtime), "setup_error", lambda self: "Update the selected runtime.")
+    assert (await run(scenario, db))["code"] == "runtime_permission"
+    cancel = cancellation(body)
+    result = await onboarding.cancel_first_agent(cancel, store.config)
+    assert result == {
+        "action": "cancel_first_agent",
+        "status": "completed",
+        "code": "request_cancelled",
+        "message": "This setup request is cancelled; a new request may be submitted.",
+        "retry": "new_request",
+        "completed_steps": [],
+        "data": {"cancelled_request_id": body.request_id, "can_start_new_request": True},
+    }
+    receipt = SetupReceipt(store.config.data_dir, body.model_dump())
+    before = receipt.path.read_bytes()
+    # A later process reads the durable marker; no previous in-memory result is needed.
+    assert await onboarding.cancel_first_agent(cancel, store.config) == result
+    monkeypatch.setattr(type(runtime), "setup_error", lambda self: None)
+    replay = await run(scenario, db)
+    assert (replay["code"], replay["status"], replay["retry"]) == (
+        "request_cancelled",
+        "failed",
+        "new_request",
+    )
+    assert receipt.path.read_bytes() == before
+    assert not store.agents.get(body.agent.name)
+    assert not Path(body.agent.directory).exists()
+    onboarding.start_agent.assert_not_awaited()
+    onboarding.safe_deliver.assert_not_awaited()
+    # The original ID remains input-bound; changing tool/input does not reuse it.
+    altered = cancellation(body.model_copy(update={"start_greeting": not body.start_greeting}))
+    assert (await onboarding.cancel_first_agent(altered, store.config))[
+        "code"
+    ] == "request_conflict"
+    fresh = body.model_copy(update={"request_id": "replacement"})
+    assert (await onboarding.first_agent(fresh, store.config, store, db))["code"] == "agent_ready"
+    assert onboarding.start_agent.await_count == 1
+    assert receipt.path.read_bytes() == before
+
+
+async def test_cancel_before_request_arrives_does_not_probe_runtime(scenario, db, monkeypatch):
+    body, store, _ = scenario
+
+    def unexpected(*args):
+        raise AssertionError("runtime probe after cancellation")
+
+    monkeypatch.setattr(type(RUNTIMES[body.agent.runtime]), "available", unexpected)
+    assert (await onboarding.cancel_first_agent(cancellation(body), store.config))[
+        "status"
+    ] == "completed"
+    assert (await run(scenario, db))["code"] == "request_cancelled"
+    onboarding.start_agent.assert_not_awaited()
+    onboarding.safe_deliver.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"completed_steps": ["preflight"]},
+        {"registration_pending": True},
+        {"registration_id": "registered"},
+        {"launch_operation": "launch"},
+        {"greeting_operation": "send"},
+        {"future_effect": None},
+    ],
+)
+async def test_cancellation_refuses_partial_or_unfamiliar_effects(scenario, changes):
+    body, store, _ = scenario
+    with SetupReceipt(store.config.data_dir, body.model_dump()) as receipt:
+        receipt.save(**changes)
+        before = receipt.path.read_bytes()
+    result = await onboarding.cancel_first_agent(cancellation(body), store.config)
+    assert result["code"] == "cancellation_unsafe" and result["retry"] == "none"
+    assert receipt.path.read_bytes() == before
+    onboarding.start_agent.assert_not_awaited()
+
+
+async def test_cancellation_never_stops_or_changes_completed_agent(scenario, db):
+    body, store, state = scenario
+    assert (await run(scenario, db))["code"] == "agent_ready"
+    registered = store.agents.get(body.agent.name)
+    receipt = SetupReceipt(store.config.data_dir, body.model_dump())
+    before = receipt.path.read_bytes()
+    result = await onboarding.cancel_first_agent(cancellation(body), store.config)
+    assert result["code"] == "cancellation_unsafe"
+    assert store.agents.get(body.agent.name) == registered and state["live"]
+    assert receipt.path.read_bytes() == before
+    assert (await run(scenario, db))["code"] == "agent_ready"
+    assert onboarding.start_agent.await_count == 1
+
+
+async def test_concurrent_first_agent_owns_lock_until_outcome(scenario, db, monkeypatch):
+    body, store, _ = scenario
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = onboarding.detect_repo
+
+    async def paused(path):
+        entered.set()
+        await release.wait()
+        return await original(path)
+
+    monkeypatch.setattr(onboarding, "detect_repo", paused)
+    operation = asyncio.create_task(run(scenario, db))
+    await entered.wait()
+    try:
+        busy = await onboarding.cancel_first_agent(cancellation(body), store.config)
+        assert busy["code"] == "outcome_unknown" and busy["retry"] == "same_request"
+    finally:
+        release.set()
+        first = await operation
+    assert first["code"] == "agent_ready"
+    assert (await onboarding.cancel_first_agent(cancellation(body), store.config))[
+        "code"
+    ] == "cancellation_unsafe"
+    assert onboarding.start_agent.await_count == 1
+
+
+async def test_cancellation_refuses_wrong_installation_without_receipt(scenario):
+    body, store, _ = scenario
+    cancel = cancellation(body).model_copy(
+        update={"data_dir": str(store.config.data_dir / "other")}
+    )
+    assert (await onboarding.cancel_first_agent(cancel, store.config))[
+        "code"
+    ] == "installation_conflict"
+    assert not (store.config.data_dir / "setup-receipts").exists()

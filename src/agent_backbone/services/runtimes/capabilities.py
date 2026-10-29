@@ -217,7 +217,7 @@ CAPABILITIES: tuple[Capability, ...] = (
     ),
     _row(
         "installer-first-agent",
-        "Explicit first-agent setup with durable retry receipts",
+        "Explicit first-agent setup with durable retry and preflight cancellation receipts",
         "services/routing/onboarding.py; cli/onboarding.py; Runtime.prepare_setup_hooks",
         fallback=(
             "Use the documented agent-start flow; do not retry an uncertain launch "

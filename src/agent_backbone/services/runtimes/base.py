@@ -385,9 +385,12 @@ class Runtime:
         prints as a word of its own, with any prerelease suffix (``0.157.1-alpha.1``);
         ``None`` when it cannot be read (#359). A CLI that prints it differently
         overrides this in its own module."""
-        path = self.resolve_binary()
+        return self._version_at(self.resolve_binary())[0]
+
+    def _version_at(self, path: str | None) -> tuple[str | None, str | None]:
+        """Probe one selected path; return a classification, never process output."""
         if path is None:
-            return None
+            return None, "missing"
         try:
             done = subprocess.run(
                 [path, "--version"],
@@ -397,10 +400,39 @@ class Runtime:
                 timeout=10,
                 check=False,
             )
-        except (OSError, subprocess.TimeoutExpired):
-            return None
-        match = _VERSION.search(done.stdout) if done.returncode == 0 else None
-        return match.group(1) if match else None
+        except subprocess.TimeoutExpired:
+            return None, "timeout"
+        except OSError:
+            return None, "unavailable"
+        if done.returncode != 0:
+            return None, "nonzero_exit"
+        match = _VERSION.search(done.stdout)
+        if not match or len(match.group(1)) > 100:
+            return None, "invalid_output"
+        return match.group(1), None
+
+    def setup_compatibility(self) -> dict:
+        """Opt-in bounded executable/version observation, never authentication."""
+        path = self.resolve_binary()
+        version, error = self._version_at(path) if self.setup_hooks else (None, None)
+        compatible = self.setup_hooks and path is not None
+        reason = (
+            "compatible" if compatible else "runtime_missing" if self.setup_hooks else "unsupported"
+        )
+        return {
+            "compatible": compatible,
+            "reason": reason,
+            "message": {
+                "compatible": (
+                    "The selected runtime meets setup prerequisites; authentication is unverified."
+                ),
+                "runtime_missing": "The selected runtime executable was not found.",
+                "unsupported": "First-agent setup is unavailable for this runtime.",
+            }[reason],
+            "path": path,
+            "version": version,
+            "version_error": error,
+        }
 
     def user_instructions(self, env: dict[str, str], project: Path | None = None) -> list[Path]:
         """The user-level instruction files this CLI adds to its sessions, as it

@@ -81,7 +81,7 @@ class SetupReceipt:
                     or self.record.get("request_id") != self.request_id
                 ):
                     raise ValueError("invalid receipt")
-                if self.record.get("fingerprint") != self.fingerprint:
+                if self.record.get("fingerprint") != self.fingerprint and not self.cancelled:
                     raise SetupReceiptError(
                         "request_conflict", "This request ID already belongs to different input."
                     )
@@ -140,6 +140,16 @@ class SetupReceipt:
         if step not in steps:
             steps.append(step)
         self.save(pending=None)
+
+    @property
+    def cancelled(self) -> bool:
+        # Older providers compare fingerprints literally. They must reject a
+        # cancelled request too, rather than ignoring an unfamiliar state flag.
+        return self.record.get("fingerprint") == f"cancelled:{self.fingerprint}"
+
+    def cancel(self) -> None:
+        """Retain a tombstone for this exact input while holding the setup lock."""
+        self.save(fingerprint=f"cancelled:{self.fingerprint}")
 
     def __exit__(self, *args) -> None:
         if self._lock is not None:
