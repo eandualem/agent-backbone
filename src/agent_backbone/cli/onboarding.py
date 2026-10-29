@@ -302,7 +302,9 @@ async def _observe(config, installation, *, deadline=None):
         )
     if identity[0] != 200:
         return data, f"The service identity endpoint returned HTTP {identity[0]}."
-    if not isinstance(identity[1], dict) or identity[1].get("data_dir") != str(config.data_dir):
+    if not isinstance(identity[1], dict) or identity[1].get("data_dir") != str(
+        config.data_dir.resolve()
+    ):
         return data, "The responding service did not confirm the selected data directory."
     data["api_url"] = _common.api_url(config, "")
     health = await _common.api(config, "GET", "/health", timeout=2)

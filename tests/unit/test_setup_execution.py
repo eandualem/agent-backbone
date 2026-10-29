@@ -511,6 +511,50 @@ async def test_setup_observation_diagnostics_are_actionable_and_redacted(
     )
 
 
+async def test_setup_identity_matches_canonical_data_directory(tmp_path, monkeypatch):
+    from agent_backbone.config import bootstrap_config
+
+    actual = tmp_path / "actual"
+    actual.mkdir()
+    link = tmp_path / "selected"
+    link.symlink_to(actual, target_is_directory=True)
+    config = bootstrap_config(link)
+    monkeypatch.setattr(service, "setup_service_path", lambda: None)
+    monkeypatch.setattr(
+        onboarding._common,
+        "api",
+        AsyncMock(
+            side_effect=[
+                (200, {"data_dir": str(actual)}),
+                (200, {"healthy": True}),
+            ]
+        ),
+    )
+    observed, detail = await onboarding._observe(config, "created")
+    assert observed["health"] == "healthy" and detail == ""
+
+
+def test_setup_enable_failure_after_reload_reports_failing_command(tmp_path, monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(service.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(service, "setup_service_path", lambda: tmp_path / "unit")
+    monkeypatch.setattr(service, "loaded_setup_service_owner", lambda: None)
+    monkeypatch.setattr(service, "setup_service_state", lambda: "installed")
+    run = Mock(
+        side_effect=[
+            subprocess.CompletedProcess([], 0, b"", b""),
+            subprocess.CompletedProcess([], 7, b"private-secret", b"private-secret"),
+        ]
+    )
+    monkeypatch.setattr(service.subprocess, "run", run)
+    with pytest.raises(service.SetupServiceError) as error:
+        service.start_setup_service(tmp_path / "data")
+    assert "systemctl --user enable --now agent-backbone.service" in str(error.value)
+    assert "exit 7" in str(error.value) and "private-secret" not in str(error.value)
+    assert run.call_count == 2
+
+
 @pytest.mark.parametrize("system", ["Linux", "Darwin"])
 @pytest.mark.parametrize("failure", ["exit", "missing", "timeout", "oserror"])
 def test_setup_manager_errors_report_operation_without_raw_output(
@@ -570,7 +614,21 @@ def test_setup_service_failure_keeps_retry_state_and_emits_diagnostics(
     assert result["retry"] == "same_request"
     assert result["completed_steps"] == ["preflight", "data", "starters"]
     assert "exit 1" in result["message"] and "journalctl --user" in result["message"]
-    assert (Path(body["data_dir"]) / ".env").is_file()
+    data = Path(body["data_dir"])
+    credential = (data / ".env").read_bytes()
+    policy = data / "templates/policies/starter-authority.md"
+    policy.write_text("Owner edit")
+    start = service.start_setup_service
+    start.side_effect = None
+    start.return_value = True
+    observed = onboarding._observation_data(onboarding.bootstrap_config(data), "created")
+    observed["health"] = "healthy"
+    monkeypatch.setattr(onboarding, "_observe", AsyncMock(return_value=(observed, "")))
+    code, result = invoke(tmp_path, capsys, body)
+    assert code == 0 and result["code"] == "initialized"
+    assert start.call_count == 2
+    assert (data / ".env").read_bytes() == credential
+    assert policy.read_text() == "Owner edit"
 
 
 @pytest.mark.parametrize(
