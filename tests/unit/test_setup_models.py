@@ -34,7 +34,9 @@ FIRST_AGENT = {
 }
 
 
-@pytest.mark.parametrize("payload", [INITIALIZE, FIRST_AGENT])
+@pytest.mark.parametrize(
+    "payload", [INITIALIZE, FIRST_AGENT, FIRST_AGENT | {"action": "cancel_first_agent"}]
+)
 def test_exact_setup_contract_round_trips(payload):
     assert ADAPTER.validate_python(payload).model_dump() == payload
 
@@ -80,3 +82,8 @@ def test_setup_brief_is_exactly_one_explicit_choice(brief):
     request["agent"]["brief"] = brief
     with pytest.raises(ValidationError):
         ADAPTER.validate_python(request)
+
+
+def test_cancellation_reconstructs_the_exact_original_input():
+    cancel = ADAPTER.validate_python(FIRST_AGENT | {"action": "cancel_first_agent"})
+    assert cancel.original().model_dump() == FIRST_AGENT

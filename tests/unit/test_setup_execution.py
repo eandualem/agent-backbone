@@ -889,3 +889,124 @@ def test_unsupported_hardlinks_have_actionable_result_without_partial_file(
     assert result["retry"] == "new_request"
     assert not (Path(body["data_dir"]) / ".env").exists()
     assert not list(Path(body["data_dir"]).glob(".setup-*"))
+
+
+@pytest.mark.parametrize("response", ["cancelled", "lost", "conflict", "unsupported"])
+def test_cancel_cli_uses_only_cancellation_endpoint(tmp_path, capsys, monkeypatch, response):
+    from agent_backbone.models import setup_result
+
+    body = {
+        "schema_version": 1,
+        "request_id": "cancel-original",
+        "action": "cancel_first_agent",
+        "data_dir": str(tmp_path / "data"),
+        "hooks": ["codex"],
+        "start_greeting": False,
+        "agent": {
+            "name": "guide",
+            "directory": str(tmp_path / "project"),
+            "create_directory": True,
+            "runtime": "codex",
+            "model": None,
+            "brief": {"template": "orchestrator-v1"},
+        },
+    }
+    monkeypatch.setattr(onboarding._common, "read_client_config", AsyncMock(return_value=object()))
+    monkeypatch.setattr(onboarding._common, "request_not_sent", lambda path: False)
+    if response == "cancelled":
+        answer = (
+            200,
+            setup_result(
+                "cancel_first_agent",
+                "request_cancelled",
+                "Cancelled.",
+                status="completed",
+                retry="new_request",
+                data={"cancelled_request_id": body["request_id"], "can_start_new_request": True},
+            ),
+        )
+    elif response == "conflict":
+        answer = (200, setup_result("cancel_first_agent", "request_conflict", "Input differs."))
+    elif response == "unsupported":
+        answer = (404, {})
+    else:
+        answer = None
+    api = AsyncMock(return_value=answer)
+    monkeypatch.setattr(onboarding._common, "api", api)
+    code, result = invoke(tmp_path, capsys, body)
+    api.assert_awaited_once()
+    assert api.await_args.args[1:3] == ("POST", "/api/setup/first-agent/cancel")
+    assert api.await_args.kwargs["json_body"] == body
+    assert result["action"] == "cancel_first_agent"
+    assert code == (0 if response == "cancelled" else 3)
+    if response != "cancelled":
+        assert result["status"] != "completed"
+    assert not (tmp_path / "data").exists()
+
+
+def test_cancel_validation_cannot_execute(tmp_path, capsys, monkeypatch):
+    from agent_backbone.models import SetupCancelFirstAgent
+
+    body = {
+        "schema_version": 1,
+        "request_id": "cancel-original",
+        "action": "cancel_first_agent",
+        "data_dir": str(tmp_path / "data"),
+        "hooks": ["codex"],
+        "start_greeting": False,
+        "agent": {
+            "name": "guide",
+            "directory": str(tmp_path / "project"),
+            "create_directory": True,
+            "runtime": "codex",
+            "model": None,
+            "brief": {"template": "orchestrator-v1"},
+        },
+    }
+    assert SetupCancelFirstAgent.model_validate(body).original().action == "first_agent"
+    monkeypatch.setattr(onboarding, "_execute", AsyncMock(side_effect=AssertionError("executed")))
+    code, result = invoke(tmp_path, capsys, body, validate=True)
+    assert code == 0 and result["code"] == "validated"
+    assert not (tmp_path / "data").exists()
+
+
+def test_cancel_cli_accepts_largest_original_request(tmp_path, capsys):
+    from agent_backbone.models import SETUP_BODY_BYTES, SETUP_CANCEL_BODY_BYTES
+
+    body = {
+        "schema_version": 1,
+        "request_id": "boundary",
+        "action": "first_agent",
+        "data_dir": str(tmp_path / "data"),
+        "hooks": ["codex"],
+        "start_greeting": False,
+        "agent": {
+            "name": "guide",
+            "directory": "/workspace/guide",
+            "create_directory": True,
+            "runtime": "codex",
+            "model": None,
+            "brief": {"text": "x"},
+        },
+    }
+
+    def encode():
+        return json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
+
+    needed = SETUP_BODY_BYTES - len(encode())
+    body["agent"]["brief"]["text"] += "界" * (needed // 3) + "x" * (needed % 3)
+    source = tmp_path / "max-request.json"
+    args = build_parser().parse_args(["setup", "--file", str(source), "--jsonl", "--validate"])
+    assert len(encode()) == SETUP_BODY_BYTES
+    source.write_bytes(encode())
+    assert args.func(args) == 0
+    body["action"] = "cancel_first_agent"
+    assert len(encode()) == SETUP_CANCEL_BODY_BYTES
+    source.write_bytes(encode())
+    assert args.func(args) == 0
+    source.write_bytes(encode() + b" ")
+    assert args.func(args) == 2
+    body["action"] = "first_agent"
+    source.write_bytes(encode() + b" ")
+    assert args.func(args) == 2
+    assert not (tmp_path / "data").exists()

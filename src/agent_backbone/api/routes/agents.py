@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime
@@ -274,11 +275,22 @@ async def inspect_agent(
 
 
 @router.get("/runtimes", response_model=list[RuntimeInfo])
-async def list_runtimes():
+async def list_runtimes(request: Request, check_setup: bool = False):
     """Supported runtimes and whether their binary is installed."""
+    checks = {}
+    if check_setup:
+        await require_operator(request)
+        values = await asyncio.gather(
+            *(asyncio.to_thread(rt.setup_compatibility) for rt in RUNTIMES.values())
+        )
+        checks = dict(zip(RUNTIMES, values, strict=True))
     return [
         RuntimeInfo(
-            id=rt.id, display_name=rt.display_name, available=rt.available(), models=list(rt.models)
+            id=rt.id,
+            display_name=rt.display_name,
+            available=rt.available(),
+            models=list(rt.models),
+            setup_compatibility=checks.get(rt.id),
         )
         for rt in RUNTIMES.values()
     ]

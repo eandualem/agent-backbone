@@ -210,5 +210,7 @@ than claiming that running agents or installing policies demonstrates a working 
 
 For a desktop installer, use `backbone setup --schema` and
 `backbone docs installer-setup`. The finite JSONL initialize and first-agent
-actions require an operator process and retain retry identities. They are
+actions require an operator process and retain retry identities. The cancellation
+action can retire an exact first-agent request before any setup step completes,
+so an installer can safely offer a different tool; it never stops an agent. They are
 optional; the interactive commands in this playbook remain available.

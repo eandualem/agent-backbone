@@ -211,9 +211,20 @@ def cmd_runtimes(args: argparse.Namespace) -> int:
     """Every runtime, whether its binary is installed, and example model ids."""
     from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
 
+    checks = (
+        {rt.id: rt.setup_compatibility() for rt in REGISTRY.values()}
+        if getattr(args, "check_setup", False)
+        else {}
+    )
     if getattr(args, "json", False):
         _common.print_json(
-            {"schema_version": 1, "items": [rt.discovery() for rt in REGISTRY.values()]}
+            {
+                "schema_version": 1,
+                "items": [
+                    {**rt.discovery(), **({"setup_compatibility": checks[rt.id]} if checks else {})}
+                    for rt in REGISTRY.values()
+                ],
+            }
         )
         return 0
 
@@ -223,6 +234,17 @@ def cmd_runtimes(args: argparse.Namespace) -> int:
         rows.append((rt.id, rt.display_name, installed, rt.reports_state))
     print_table("Runtimes", ("CLI", "Name", "Availability", "State reporting"), rows)
     for rt in REGISTRY.values():
+        if checks:
+            check = checks[rt.id]
+            print_record(
+                rt.id + " setup",
+                [
+                    ("Compatibility", check["reason"]),
+                    ("Executable", check["path"] or "not found"),
+                    ("Version", check["version"] or "unknown"),
+                    ("Details", check["message"]),
+                ],
+            )
         if rt.unattended_args:
             wall = "sandboxed" if rt.sandboxed else "no sandbox"
             unattended = f"{' '.join(rt.unattended_args)} ({wall})"

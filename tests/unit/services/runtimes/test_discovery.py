@@ -132,3 +132,80 @@ def test_opencode_path_precedence_does_not_hide_unsupported_version(tmp_path, mo
     assert "2.1.4" in runtime.setup_error()
     with pytest.raises(RuntimeError, match="2.1.4"):
         runtime.build_command()
+
+
+@pytest.mark.parametrize("runtime_id", ["claude", "codex", "opencode"])
+def test_opt_in_compatibility_reports_the_exact_selected_executable(
+    runtime_id, tmp_path, monkeypatch
+):
+    from agent_backbone.services.runtimes import base
+
+    runtime = RUNTIMES[runtime_id]
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setattr(base, "_FALLBACK_DIRS", ())
+    binary = tmp_path / runtime.binary
+    assert runtime.setup_compatibility()["reason"] == "runtime_missing"
+    binary.write_text("#!/bin/sh\nprintf '2.2.2\\n'\n")
+    binary.chmod(0o700)
+    status = runtime.setup_compatibility()
+    assert status["compatible"] is True
+    assert status["path"] == str(binary) and status["version"] == "2.2.2"
+    assert status["version_error"] is None
+    assert "authentication is unverified" in status["message"]
+
+
+@pytest.mark.parametrize(
+    "failure,reason",
+    [
+        ("timeout", "timeout"),
+        ("missing_file", "unavailable"),
+        ("nonzero", "nonzero_exit"),
+        ("unparseable", "invalid_output"),
+    ],
+)
+def test_opencode_probe_failures_are_not_old_version_errors(failure, reason, monkeypatch):
+    import subprocess
+
+    from agent_backbone.services.runtimes import base
+
+    runtime = RUNTIMES["opencode"]
+    monkeypatch.setattr(type(runtime), "resolve_binary", lambda self: "/selected/opencode")
+
+    def probe(args, **kwargs):
+        assert args == ["/selected/opencode", "--version"] and kwargs["timeout"] == 10
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args, 10, output="private-output")
+        if failure == "missing_file":
+            raise OSError("private-error")
+        return subprocess.CompletedProcess(
+            args, 1 if failure == "nonzero" else 0, stdout="private-output", stderr="private-error"
+        )
+
+    monkeypatch.setattr(base.subprocess, "run", probe)
+    status = runtime.setup_compatibility()
+    assert status["reason"] == "version_unavailable" and status["version_error"] == reason
+    assert status["compatible"] is False and status["version"] is None
+    assert "private-" not in json.dumps(status)
+    assert "did not report a usable version" in runtime.setup_error()
+
+
+def test_old_path_binary_is_reported_without_silently_switching(tmp_path, monkeypatch):
+    from agent_backbone.services.runtimes import base
+
+    runtime = RUNTIMES["opencode"]
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(base, "_FALLBACK_DIRS", ())
+    old, new = tmp_path / "bin/opencode", tmp_path / ".opencode/bin/opencode"
+    for binary, version in ((old, "1.19.5"), (new, "2.2.2")):
+        binary.parent.mkdir(parents=True)
+        binary.write_text(f"#!/bin/sh\nprintf '{version}\\n'\n")
+        binary.chmod(0o700)
+    monkeypatch.setenv("PATH", str(old.parent))
+    status = runtime.setup_compatibility()
+    assert status["reason"] == "version_unsupported" and status["version_error"] is None
+    assert status["path"] == str(old) and status["version"] == "1.19.5"
+    assert "older PATH executable" in status["message"]
+    old.unlink()
+    assert runtime.setup_compatibility()["compatible"] is True
+    assert runtime.setup_compatibility()["path"] == str(new)

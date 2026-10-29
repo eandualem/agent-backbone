@@ -25,6 +25,8 @@ from agent_backbone.fs import AtomicCreateUnsupported
 from agent_backbone.fs import atomic_create_text as _exclusive_file
 from agent_backbone.models import (
     SETUP_BODY_BYTES,
+    SETUP_CANCEL_BODY_BYTES,
+    SetupCancelFirstAgent,
     SetupFirstAgent,
     SetupInitialize,
     SetupRequest,
@@ -42,7 +44,9 @@ _READINESS_SECONDS = 30.0
 
 
 def add_setup_parser(sub) -> None:
-    parser = sub.add_parser("setup", help="initialize an installation or create its first agent")
+    parser = sub.add_parser(
+        "setup", help="initialize an installation, create or cancel first-agent setup"
+    )
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--file", help="request JSON file, or - for stdin")
     source.add_argument("--schema", action="store_true", help="print the accepted request schema")
@@ -107,19 +111,26 @@ def cmd_setup(args: argparse.Namespace) -> int:
     action = "validate"
     try:
         if args.file == "-":
-            raw = sys.stdin.buffer.read(SETUP_BODY_BYTES + 1)
+            raw = sys.stdin.buffer.read(SETUP_CANCEL_BODY_BYTES + 1)
         else:
             with open(args.file, "rb") as stream:
-                raw = stream.read(SETUP_BODY_BYTES + 1)
-        if len(raw) > SETUP_BODY_BYTES:
+                raw = stream.read(SETUP_CANCEL_BODY_BYTES + 1)
+        if len(raw) > SETUP_CANCEL_BODY_BYTES:
             raise ValueError("request too large")
         data = json.loads(raw, object_pairs_hook=_unique_object)
+        if len(raw) > SETUP_BODY_BYTES and (
+            not isinstance(data, dict) or data.get("action") != "cancel_first_agent"
+        ):
+            raise ValueError("request too large")
         if isinstance(data, dict):
             if isinstance(data.get("request_id"), str) and _REQUEST_ID.fullmatch(
                 data["request_id"]
             ):
                 output.request_id = data["request_id"]
-            if data.get("action") in ("initialize", "first_agent") and not args.validate:
+            if (
+                data.get("action") in ("initialize", "first_agent", "cancel_first_agent")
+                and not args.validate
+            ):
                 action = data["action"]
         request = ADAPTER.validate_python(data)
     except (OSError, ValueError, ValidationError, RecursionError):
@@ -209,10 +220,15 @@ def _safe_directory(path: Path):
 async def _execute(request, output):
     if isinstance(request, SetupFirstAgent):
         config = await _common.read_client_config(request.data_dir, strict=True, operator_file=True)
-        response = await _common.api(
-            config, "POST", "/api/setup/first-agent", json_body=request.model_dump(), timeout=120
+        endpoint = (
+            "/api/setup/first-agent/cancel"
+            if isinstance(request, SetupCancelFirstAgent)
+            else "/api/setup/first-agent"
         )
-        if response is None and _common.request_not_sent("/api/setup/first-agent"):
+        response = await _common.api(
+            config, "POST", endpoint, json_body=request.model_dump(), timeout=120
+        )
+        if response is None and _common.request_not_sent(endpoint):
             return result(
                 request.action,
                 "service_unavailable",
