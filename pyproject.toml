@@ -1,6 +1,6 @@
 [project]
 name = "agent-backbone"
-version = "0.4.2"
+version = "0.4.3"
 description = "Bring agents across AI CLIs and projects into one personal team, with communication, coordination and continuity."
 dynamic = ["readme"]
 requires-python = ">=3.11"
