@@ -63,13 +63,17 @@ Settings live in the database and are changed with
 
 ### Select your starting practices
 
-Three bundled policies provide a working model for collaborating, retaining context
-and developing expertise. Read them, then choose the set you want:
+Six bundled policies cover collaboration, swarms, continuity, specialist expertise,
+artifacts and authority. Fresh `core-v1` installer setup selects all six and makes
+editable copies. For the manual `backbone init` flow, read and select them:
 
 ```bash
 backbone templates show starter-collaboration
+backbone templates show starter-swarms
 backbone templates show starter-continuity
 backbone templates show starter-learning
+backbone templates show starter-artifacts
+backbone templates show starter-authority
 backbone templates use
 ```
 
@@ -79,10 +83,13 @@ the command, or assign the starters to a tag instead. Inspect the output above
 before deciding.
 
 ```bash
-backbone templates use starter-collaboration starter-continuity starter-learning
+backbone templates use starter-collaboration starter-swarms starter-continuity \
+  starter-learning starter-artifacts starter-authority
 ```
 
-Nothing is assigned merely by installing or upgrading.
+Installing the package alone and upgrading do not replace policy assignments.
+Existing local copies, including those from installer setup, remain unchanged;
+see the [team guide](team.md#choose-your-starting-practices) before adopting new text.
 The selected practices reach agents at fresh starts. You can change them with
 `backbone templates edit NAME`, replace the list with `templates use NAME...`, or
 remove all global policies with `templates use --clear`. Local edits survive

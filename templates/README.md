@@ -8,8 +8,9 @@ They are shipped with the package; Python loads them from here in a checkout.
 - `swarm/{coordinator,scout,coder,reviewer,worker}.md`: role instructions.
 - `swarm/kickoff.md`: the coordinator's initial task message.
 - `policies/`: editable working practices assigned globally or to agent tags.
-  Setup offers `starter-collaboration`, `starter-continuity` and `starter-learning`;
-  selection is explicit, and existing installations keep their assignments.
+  Fresh `core-v1` installer setup selects `starter-collaboration`, `starter-swarms`,
+  `starter-continuity`, `starter-learning`, `starter-artifacts` and `starter-authority`.
+  Manual `backbone init` offers selection; existing installs retain their assignments.
 
 These files are generic. What you write for your own fleet — edited copies of
 them and your policies — is your configuration, not Backbone code: it lives in
@@ -31,7 +32,8 @@ rules) belongs in this repository.
   with `backbone templates use NAME`, or *tag-scoped* when assigned with
   `--tag TAG` to the agents carrying that tag. Write it as rules, not a
   description; keep it to what the whole group must do the same way; name no
-  agent. The three starters teach collaboration, continuity and developing expertise;
+  agent. The six starters teach ownership, swarms, continuity, expertise, artifacts
+  and authority;
   `policies/python-example.md` is a separate optional example. See the
   [team guide](../docs/team.md) for selection, customization and a first collaboration.
 - **Agent instruction** (a repository's `AGENTS.md`/`CLAUDE.md`): the project's

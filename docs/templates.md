@@ -49,7 +49,7 @@ backbone templates init                       # adds bundled defaults you have n
 reports the directory. Both warn when files are left under the old default
 location, where they are no longer read. Policy assignments stay database settings (below); a
 fresh machine restores them with `backbone templates use`. Nothing in this
-repository is user-specific: it ships generic defaults, three starter policies and a Python example,
+repository is user-specific: it ships generic defaults, six starter policies and a Python example,
 and the [templates README](../templates/README.md) explains which kind of text
 belongs where.
 
@@ -65,10 +65,12 @@ wait until you close it; configure its wait option in `$VISUAL` or `$EDITOR`.
 
 ## Starting practices
 
-The [team guide](team.md) introduces `starter-collaboration`, `starter-continuity`
-and `starter-learning`. They give new agents a practical model for working together
-and carrying useful experience into later projects. Setup selects them explicitly;
-installation and upgrades never replace existing assignments. You can edit, replace
+The [team guide](team.md) introduces `starter-collaboration`, `starter-swarms`,
+`starter-continuity`, `starter-learning`, `starter-artifacts` and `starter-authority`.
+They explain ownership, parallel work, expertise, retained context and authority.
+Fresh `core-v1` installer setup assigns all six and creates editable copies; manual
+`backbone init` offers a selection command. Package installation and upgrades never
+replace existing assignments or local copies. You can edit, replace
 or remove any of them using the controls below. Working practices do not change
 authentication, authorization or runtime confinement.
 

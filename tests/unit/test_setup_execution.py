@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -51,7 +52,13 @@ def test_initialize_creates_editable_core_and_retry_preserves_user_edits(tmp_pat
     data = Path(body["data_dir"])
     before = (data / ".env").read_bytes()
     assert b"BACKBONE_API_KEY=" in before
-    policy = data / "templates/policies/starter-artifacts.md"
+    policy = data / "templates/policies/starter-swarms.md"
+    assert policy.is_file()
+    with sqlite3.connect(data / "backbone.db") as connection:
+        (assigned,) = connection.execute(
+            "SELECT value FROM settings WHERE key = ?", ("agents.shared_policy",)
+        ).fetchone()
+    assert "starter-swarms" in json.loads(assigned)
     policy.write_text("Owner's editable policy\n")
     code, again = invoke(tmp_path, capsys, body)
     assert code == 0 and again["code"] == "initialized"
