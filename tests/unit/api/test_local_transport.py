@@ -25,7 +25,8 @@ def root():
 
 def test_listener_is_private_and_removed_on_close(root):
     path = root / "api.sock"
-    with local.private_listener(root, str(path)):
+    with local.private_listener(root, str(path)) as listener:
+        assert not listener.get_inheritable()
         assert path.stat().st_mode & 0o777 == 0o600
         # Another startup cannot mistake a bound, not-yet-served socket for stale.
         with pytest.raises(ValueError, match="already in use"):
@@ -144,6 +145,8 @@ def test_configured_server_passes_private_listener_and_existing_tcp_socket(root)
 
         def run(*, sockets):
             assert sockets[0] is tcp
+            tcp.set_inheritable.assert_called_once_with(False)
+            assert not sockets[1].get_inheritable()
             assert sockets[1].family == socket.AF_UNIX
             assert path.stat().st_mode & 0o777 == 0o600
 
@@ -313,3 +316,67 @@ async def test_real_uvicorn_serves_tcp_and_unix_and_cleans_up(root, api_app):
         tcp.close()
     assert not path.exists()
     assert tcp.fileno() == -1 and unix.fileno() == -1
+
+
+@pytest.mark.parametrize("event_loop", ["asyncio", "uvloop"])
+def test_runtime_child_cannot_retain_listeners_across_upgrade(root, monkeypatch, event_loop):
+    import json
+    import sys
+    from types import SimpleNamespace
+
+    from agent_backbone.cli.server import _run_server
+    from agent_backbone.config import AgentsConfig, build_config
+
+    runner = asyncio.run if event_loop == "asyncio" else pytest.importorskip("uvloop").run
+    config = build_config(
+        root,
+        settings={"backbone.socket_path": str(root / "api.sock"), "backbone.port": 0},
+        agents=AgentsConfig(),
+        env={},
+    )
+    app = SimpleNamespace(state=SimpleNamespace())
+    monkeypatch.setattr("agent_backbone.api.app.create_app", lambda config: app)
+
+    async def child_probe(sockets):
+        # Force uvloop's fork path on macOS too: its posix_spawn path closes
+        # inherited descriptors, concealing the Linux subprocess behavior.
+        child = await asyncio.subprocess.create_subprocess_exec(
+            sys.executable,
+            "-I",
+            "-c",
+            "import os, sys, json\n"
+            "retained = []\n"
+            "for fd in map(int, sys.argv[1:]):\n"
+            " try: os.fstat(fd); retained.append(fd)\n"
+            " except OSError: pass\n"
+            "print(json.dumps(retained), flush=True)\n"
+            "sys.stdin.read()\n",
+            *(str(listener.fileno()) for listener in sockets),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            preexec_fn=os.getpid,
+        )
+        try:
+            retained = json.loads(await asyncio.wait_for(child.stdout.readline(), 5))
+            assert retained == []
+            endpoint = sockets[0].getsockname()
+            for listener in sockets:
+                listener.close()
+            # A still-running child must not prevent the replacement daemon
+            # from binding the same TCP endpoint after graceful shutdown.
+            with socket.socket() as replacement:
+                replacement.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                replacement.bind(endpoint)
+                replacement.listen()
+            assert child.returncode is None
+        finally:
+            child.terminate()
+            await asyncio.wait_for(child.communicate(), 5)
+
+    def run(server, *, sockets):
+        runner(child_probe(sockets))
+        server.started = True
+
+    monkeypatch.setattr(uvicorn.Server, "run", run)
+    _run_server(config)
+    assert not (root / "api.sock").exists()

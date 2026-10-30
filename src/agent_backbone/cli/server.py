@@ -135,6 +135,10 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
             with private_listener(config.data_dir, config.backbone.socket_path) as local:
                 tcp = server.config.bind_socket()
                 try:
+                    # Uvicorn marks prebound sockets inheritable for worker
+                    # processes. We run one worker; runtime children must not
+                    # retain the port across a graceful upgrade.
+                    tcp.set_inheritable(False)
                     server.run(sockets=[tcp, local])
                 finally:
                     tcp.close()
