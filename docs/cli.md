@@ -250,8 +250,10 @@ code on disk with what it started as and, when they differ and nothing is
 being routed, re-executes `backbone up` in place
 (`backbone.restart_on_upgrade`, on by default). So `uv tool upgrade`, or
 pulling the checkout, is enough to trigger automatic re-exec. Unlike that
-in-process replacement, `backbone upgrade` and `backbone service restart`
-restart the installed login service and carry the Linux session risk above.
+in-process replacement, `backbone service restart` restarts the installed
+login service and carries the Linux session risk above. `backbone upgrade`
+carries that risk when the login service is installed; otherwise it cycles
+the detached backbone session.
 A development checkout switched to another branch is left alone — that is
 development, not an upgrade; the restart happens when the branch the
 backbone started on moves.
