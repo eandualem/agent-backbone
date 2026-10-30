@@ -1,23 +1,45 @@
 # Keep an agent's current plan visible
 
-Use a Current plan for a short checklist of what the agent is working on now,
-what comes next and what can wait. The agent authors the checklist and checks off
-completed items. The person reads it and sends questions or requests to change
-priorities. It is separate from runtime status, native plan-approval dialogs,
-progress reports and longer-lived spreadsheet trackers.
+Use a Current plan to show **one concrete task the agent is working on now** and
+the real steps needed to reach its outcome. For example, “Fix export validation”
+can include reproducing the failure, implementing the correction, getting the
+required review and verifying the result. A list such as “Track exports, receive
+analytics, coordinate onboarding” combines unrelated workstreams; it does not
+explain how to finish one task. Keep those other commitments in the project's
+chosen memory or a tracker.
+
+The agent authors the steps and marks their actual progress. Include investigation,
+implementation, review, a person or peer's input, verification and publication
+where the task actually needs them. These are examples, not mandatory stages or
+new approval requirements. The person reads the plan and can ask questions or
+request a change of direction. A Current plan is separate from runtime status,
+native plan-approval dialogs, progress reports and longer-lived spreadsheet trackers.
 
 Use a title of a few words and roughly three to seven steps, each two to five
-words. Keep `detail` empty or one short clause. Name a blocked step’s dependency
-briefly, such as “reviewer · review” or “you · scope decision”. Put explanations
-and evidence in a report or conversation, rather than expanding the checklist.
+words. Use as many steps as the task needs, rather than padding it to a fixed count.
+The `now`, `next` and `later` sections group steps within that same task, not
+different tasks or a backlog. Keep `detail` empty or one short clause. For a
+`blocked` step, name who or what it waits on and the result needed to proceed:
+“Waiting on reviewer for patch review” or “Waiting on you to confirm export scope”.
+Waiting is not active execution; set `in_progress` when actually working on the
+step. Dependencies are authored explanations, not machine-resolved links: do not
+parse names or punctuation in `detail` to infer cross-agent relationships.
+Put longer explanations and evidence in a report or conversation.
 These are authoring guidelines, not new schema limits.
 
-Refresh when work changes and daily when useful. Carry unfinished items and their
-IDs forward. Remove completed items when moving to new work; use a new plan ID for
-a new plan. Nothing clears at midnight, and Backbone does not choose, schedule,
-execute or complete the work. An empty item list means no current items; a missing
-record means the agent has never published a retained plan. An update at least
-24 hours old is marked stale, not complete.
+Refresh at meaningful step changes, when a dependency changes, and daily when
+useful. Keep the same `plan_id` while working on the same task, preserving IDs of
+continuing steps and showing completed steps as `done`. A different concrete task
+gets a new `plan_id` and its own step IDs; do not carry unrelated unfinished items
+into it. Before replacing an unfinished task's plan, retain the task, any dependency,
+`plan_id` and step IDs in the project's chosen memory or a tracker.
+When returning to that task, reuse its plan and continuing step
+IDs, reconcile its steps against current facts, and publish against the latest
+base revision. The provider does not retain the replaced checklist. Nothing clears
+at midnight, and Backbone does not choose, schedule, execute or complete the work.
+An empty item list means no current items; a missing record means the agent has
+never published a retained plan. An update at least 24 hours old is marked stale,
+not complete.
 
 ## Publish and read
 
@@ -45,26 +67,46 @@ Files or stdin (`--file -`) are client input, not required repository artifacts.
   "base_revision_id": null,
   "plan": {
     "plan_id": "33333333333333333333333333333333",
-    "title": "Validate the next change",
+    "title": "Fix export validation",
     "items": [{
       "item_id": "44444444444444444444444444444444",
-      "text": "Run the behavior checks",
+      "text": "Reproduce the export failure",
       "section": "now",
-      "status": "in_progress",
+      "status": "done",
       "detail": "",
       "references": [{"kind": "issue", "target": "example/app#42"}]
+    }, {
+      "item_id": "55555555555555555555555555555555",
+      "text": "Implement the correction",
+      "section": "now",
+      "status": "done",
+      "detail": "Regression checks passed"
+    }, {
+      "item_id": "66666666666666666666666666666666",
+      "text": "Obtain the required review",
+      "section": "now",
+      "status": "blocked",
+      "detail": "Waiting on reviewer for patch review"
+    }, {
+      "item_id": "77777777777777777777777777777777",
+      "text": "Integrate and verify exports",
+      "section": "next",
+      "status": "pending",
+      "detail": "After review findings are resolved"
     }]
   }
 }
 ```
 
 First publication requires `base_revision_id: null`. Later updates replace the
-whole short plan atomically and must name its current revision. Preserve continuing
-item IDs. Array order is authoritative: `now` items first, then `next`, then
+whole short plan atomically and must name its current revision, even when changing
+to a new task and `plan_id`. Preserve continuing item IDs within the same task.
+Array order is authoritative: `now` items first, then `next`, then
 `later`. Statuses are `pending`, `in_progress`, `blocked` and `done`; optional
-`detail` names dependencies, peers the item is waiting on, or other useful context. References use `issue` with
-`owner/repo#number`, `sheet` with its UUID hex ID, or `document` with a positive
-decimal revision ID. References are stored as data, not fetched or verified.
+`detail` names dependencies, peers the item is waiting on, or other useful context.
+References use `issue` with `owner/repo#number`, `sheet` with its UUID hex ID, or
+`document` with a positive decimal revision ID. References are stored as data, not
+fetched or verified.
 
 An accepted update returns `{receipt:{author_id,plan_id,revision_id,updated_at},
 created:true}`. A retry of the identical request/key returns the original receipt

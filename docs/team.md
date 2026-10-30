@@ -30,7 +30,8 @@ The package includes six editable starter policies:
 - **`starter-learning`** turns useful discoveries and corrections into scoped
   lessons, then tests and revises them through later work. It asks specialists to
   investigate useful alternatives and recommend concrete actions with reasons.
-- **`starter-artifacts`** selects the appropriate retained record and verifies it.
+- **`starter-artifacts`** selects the appropriate retained record and verifies it;
+  a Current plan describes one concrete task's steps and named dependencies.
 - **`starter-authority`** carries authorized work forward while respecting the
   user's decisions, external commitments and runtime boundaries.
 
