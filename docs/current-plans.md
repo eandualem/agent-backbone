@@ -31,9 +31,9 @@ Refresh at meaningful step changes, when a dependency changes, and daily when
 useful. Keep the same `plan_id` while working on the same task, preserving IDs of
 continuing steps and showing completed steps as `done`. A different concrete task
 gets a new `plan_id` and its own step IDs; do not carry unrelated unfinished items
-into it. If you switch tasks while blocked, retain the suspended task, dependency,
-`plan_id` and step IDs in the project's chosen memory or a tracker before replacing
-the current plan. When returning to that task, reuse its plan and continuing step
+into it. Before replacing an unfinished task's plan, retain the task, any dependency,
+`plan_id` and step IDs in the project's chosen memory or a tracker.
+When returning to that task, reuse its plan and continuing step
 IDs, reconcile its steps against current facts, and publish against the latest
 base revision. The provider does not retain the replaced checklist. Nothing clears
 at midnight, and Backbone does not choose, schedule, execute or complete the work.
