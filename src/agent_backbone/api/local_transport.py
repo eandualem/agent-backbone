@@ -135,7 +135,8 @@ def _bound_listener(path: Path):
         path.chmod(0o600)
         identity = path.lstat().st_ino
         connection.listen(128)
-        connection.set_inheritable(True)
+        # A runtime child must never keep this listener alive after shutdown.
+        connection.set_inheritable(False)
         yield connection
     finally:
         connection.close()

@@ -234,25 +234,37 @@ the new scheduling.
 
 ## `backbone upgrade [--check] [--no-restart]`
 
-New code in, one restart, agents untouched. Upgrades the package through
+Upgrades the package through
 the installer that put it there (`uv tool upgrade agent-backbone` or
 `pipx upgrade agent-backbone`; a development checkout runs whatever is
 checked out, so nothing is downloaded), then restarts the backbone: the
 login service when it is installed, otherwise the `backbone up --detach`
 tmux session. Waits for the API to answer and prints the running version.
-Agents are tmux sessions and the queue is in the database, so the restart
-loses nothing but a few seconds of API. `--check` only reports the
-installed version and the newest on PyPI.
+The queue remains in the database. On Linux, a service-manager restart can
+terminate a tmux server started inside the service cgroup, including its agent
+sessions. Do not use a service restart to preserve active sessions. `--check`
+only reports the installed version and the newest on PyPI.
 
 The running backbone also restarts itself: once a minute it compares the
 code on disk with what it started as and, when they differ and nothing is
 being routed, re-executes `backbone up` in place
 (`backbone.restart_on_upgrade`, on by default). So `uv tool upgrade`, or
-pulling the checkout, is enough; `backbone upgrade` is the same thing
-done now. A development checkout switched to another branch is left
-alone — that is development, not an upgrade; the restart happens when
-the branch the backbone started on moves. `backbone service restart` is
-the plain building block.
+pulling the checkout, is enough to trigger automatic re-exec. Unlike that
+in-process replacement, `backbone service restart` restarts the installed
+login service and carries the Linux session risk above. `backbone upgrade`
+carries that risk when the login service is installed; otherwise it cycles
+the detached backbone session.
+A development checkout switched to another branch is left alone — that is
+development, not an upgrade; the restart happens when the branch the
+backbone started on moves.
+
+Automatic re-exec keeps the daemon process alive and closes its listeners before
+rebinding. Listener descriptors are not passed to runtime children. Releases
+0.4.0–0.4.2 could leak prebound listeners to Linux children when the private
+socket was enabled, causing re-exec to fail and systemd to terminate sessions.
+Installing corrected code cannot remove descriptors already held by those
+children. For an affected installation, finish active work before a controlled
+service restart; do not assume the first upgrade preserves those sessions.
 
 `upgrade --no-restart` obtains a hold from the running API before installing code.
 The hold lasts until a manual service restart, even if installation fails after
