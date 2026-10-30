@@ -613,6 +613,7 @@ class TestStartAgentBrief:
         from agent_backbone.templates import core_starter_content
 
         starters = tuple(core_starter_content()[0]["policies"])
+        assert "starter-swarms" in starters
         config = replace(config, launch=replace(config.launch, shared_policy=starters))
         brief = tmp_path / "large-brief.md"
         policy = "Keep the complete policy.\n" * 1500 + "Final instruction."

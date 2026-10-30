@@ -58,7 +58,14 @@ def test_initialize_creates_editable_core_and_retry_preserves_user_edits(tmp_pat
         (assigned,) = connection.execute(
             "SELECT value FROM settings WHERE key = ?", ("agents.shared_policy",)
         ).fetchone()
-    assert "starter-swarms" in json.loads(assigned)
+    assert json.loads(assigned) == [
+        "starter-collaboration",
+        "starter-swarms",
+        "starter-continuity",
+        "starter-learning",
+        "starter-artifacts",
+        "starter-authority",
+    ]
     policy.write_text("Owner's editable policy\n")
     code, again = invoke(tmp_path, capsys, body)
     assert code == 0 and again["code"] == "initialized"
