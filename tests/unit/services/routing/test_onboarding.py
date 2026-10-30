@@ -238,6 +238,35 @@ async def test_missing_core_never_assigns_or_launches(scenario, db):
     onboarding.start_agent.assert_not_awaited()
 
 
+@pytest.mark.parametrize("select_swarms", [False, True])
+async def test_original_core_can_start_and_retry_but_selected_swarms_must_be_readable(
+    scenario, db, select_swarms
+):
+    _, store, state = scenario
+    policies = [
+        "starter-collaboration",
+        "starter-continuity",
+        "starter-learning",
+        "starter-artifacts",
+        "starter-authority",
+    ]
+    if select_swarms:
+        policies.append("starter-swarms")
+    await store.set_setting("agents.shared_policy", policies)
+    (store.config.data_dir / "templates/policies/starter-swarms.md").write_text("")
+    if select_swarms:
+        assert (await run(scenario, db))["code"] == "starter_conflict"
+        onboarding.start_agent.assert_not_awaited()
+    else:
+        state["state"] = AgentState.WAITING_FOR_HUMAN
+        assert (await run(scenario, db))["code"] == "runtime_permission"
+        state["state"] = AgentState.IDLE
+        assert (await run(scenario, db))["code"] == "agent_ready"
+        assert onboarding.start_agent.await_count == 1
+        assert onboarding.safe_deliver.await_count == 1
+    assert store.config.launch.shared_policy == tuple(policies)
+
+
 async def test_registration_interruption_never_adopts_unknown_registration(scenario, db):
     body, store, _ = scenario
     with SetupReceipt(store.config.data_dir, body.model_dump()) as receipt:

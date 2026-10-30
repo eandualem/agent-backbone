@@ -75,7 +75,14 @@ def test_init_copies_legacy_and_never_overwrites(tmp_path, capsys):
 
 
 def test_starter_setup_preserves_customization_and_can_be_removed(tmp_path, capsys):
-    starters = ["starter-collaboration", "starter-continuity", "starter-learning"]
+    starters = [
+        "starter-collaboration",
+        "starter-swarms",
+        "starter-continuity",
+        "starter-learning",
+        "starter-artifacts",
+        "starter-authority",
+    ]
     with patch.object(_common, "api_up", AsyncMock(return_value=False)):
         assert run(["init"]) == 0
         capsys.readouterr()

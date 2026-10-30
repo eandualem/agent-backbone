@@ -5,6 +5,11 @@ personal team. It provides communication, coordination and continuity, with work
 practices you can shape. Specialists can investigate, work together and preserve
 what they learn, so later projects can draw on that experience.
 
+Keep one continuing agent responsible for each repository or task and its
+integrated result. Consult specialists for advice; use one or more swarms for
+parallel slices while the continuing owner manages their scopes and integration.
+Do not create a second independent owner on the same repository for capacity.
+
 Start with one repository and a useful collaboration. You do not need a management
 hierarchy, a coordination repository or a fixed workflow. The models do the
 reasoning; your goals, feedback and the team's retained work shape its expertise.
@@ -13,21 +18,31 @@ models or automatically decide which lessons are true.
 
 ## Choose your starting practices
 
-The package includes three editable starter policies:
+The package includes six editable starter policies:
 
 - **`starter-collaboration`** keeps responsibility clear, helps agents find and
   consult peers, and distinguishes a delivered request from a finished result.
+- **`starter-swarms`** helps the continuing repository or task owner choose and
+  coordinate temporary parallel work without creating competing owners. Detailed
+  member instructions remain in the common and role-specific swarm templates.
 - **`starter-continuity`** preserves current context, reasoning and commitments
   across fresh sessions without imposing a memory layout on repositories.
 - **`starter-learning`** turns useful discoveries and corrections into scoped
-  lessons, then tests and revises them through later work.
+  lessons, then tests and revises them through later work. It asks specialists to
+  investigate useful alternatives and recommend concrete actions with reasons.
+- **`starter-artifacts`** selects the appropriate retained record and verifies it.
+- **`starter-authority`** carries authorized work forward while respecting the
+  user's decisions, external commitments and runtime boundaries.
 
 Read them and select the practices you want agents to receive:
 
 ```bash
 backbone templates show starter-collaboration
+backbone templates show starter-swarms
 backbone templates show starter-continuity
 backbone templates show starter-learning
+backbone templates show starter-artifacts
+backbone templates show starter-authority
 backbone templates use
 ```
 
@@ -37,18 +52,22 @@ the command, or assign the starters to a tag instead. Inspect the output above
 before deciding.
 
 ```bash
-backbone templates use starter-collaboration starter-continuity starter-learning
+backbone templates use starter-collaboration starter-swarms starter-continuity \
+  starter-learning starter-artifacts starter-authority
 ```
 
-Installation and upgrades do not select them for you. Once selected, they
-are included in fresh agent instructions through the existing brief mechanism.
+The installer's fresh `core-v1` setup selects all six and creates editable copies.
+Installing the Python package alone or running `backbone init` does not select
+policies; the command above does. Existing installations and upgrades preserve
+assignments and local copies. Once selected, the policies are included in fresh
+agent instructions through the existing brief mechanism.
 See “Brief reaches a fresh session before other work” in
 [runtime coverage](runtime-capabilities.md) for adapter limits.
 
 ```bash
 backbone templates preview app       # after registering the agent
 backbone templates edit starter-learning
-backbone templates use starter-collaboration starter-continuity  # remove one
+backbone templates use starter-collaboration starter-continuity  # keep only these two
 backbone templates use --clear       # remove all global policies
 ```
 
@@ -56,6 +75,12 @@ You can edit, replace or remove these practices. Remove an unwanted policy from
 each applicable global/tag assignment. Deleting a local starter copy restores its
 bundled text; deleting a custom-only policy blocks launch while it remains assigned.
 A same-name local edit replaces its bundled text and stays unchanged on upgrades.
+This also applies to the editable copies created by `core-v1` setup. To adopt a
+new starter on an existing installation, inspect the current global assignment
+and add its name while retaining the policies you want. Review updated bundled
+text against any local copy before deliberately merging changes; do not delete
+your overrides or rerun setup to reset them. Adding a starter does not refresh
+existing copies of the other starters.
 Without a local override, package updates supply the next version. Additional
 policies are composed as text, so resolve contradictions explicitly rather than
 assuming the last paragraph wins. Preview before a fresh start at a safe stopping

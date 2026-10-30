@@ -3,6 +3,7 @@
   "profile": "core-v1",
   "policies": [
     "starter-collaboration",
+    "starter-swarms",
     "starter-continuity",
     "starter-learning",
     "starter-artifacts",
