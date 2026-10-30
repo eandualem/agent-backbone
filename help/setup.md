@@ -45,24 +45,29 @@ approve the steps, then continue.
 
 ### Choose starting practices
 
-Before starting agents, read `backbone docs team` and the three starter policies:
+Before starting agents, read `backbone docs team` and the six starter policies:
 
 ```bash
 backbone templates show starter-collaboration
+backbone templates show starter-swarms
 backbone templates show starter-continuity
 backbone templates show starter-learning
+backbone templates show starter-artifacts
+backbone templates show starter-authority
 backbone templates use
 ```
 
 Explain the starting model: a continuing repository agent owns context and the
-integrated result, consults specialists and brings in temporary help as useful.
+integrated result, consults specialists and manages swarms for useful parallel work.
+Do not start a second independent owner on the same repository for capacity.
 It is an editable recommendation, not a required hierarchy. The practices preserve
 reasoning, check whether lessons transfer, and revise them after feedback.
 
 For a new team, select the practices as part of setup:
 
 ```bash
-backbone templates use starter-collaboration starter-continuity starter-learning
+backbone templates use starter-collaboration starter-swarms starter-continuity \
+  starter-learning starter-artifacts starter-authority
 ```
 
 This replaces the global assignment. If policies are already selected, keep the

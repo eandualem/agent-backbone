@@ -45,15 +45,26 @@ GREETING = (
     "Wait for my answer before creating agents, changing projects or making commitments."
 )
 
+# Keep the original core-v1 prerequisites valid when new defaults are added.
+# Existing installations retain their assignments and may have a pending request.
+_CORE_V1_POLICIES = (
+    "starter-collaboration",
+    "starter-continuity",
+    "starter-learning",
+    "starter-artifacts",
+    "starter-authority",
+)
+
 
 def _core(config, spec, brief):
     profile, _ = core_starter_content()
-    if not set(profile["policies"]).issubset(config.launch.shared_policy):
+    if not set(_CORE_V1_POLICIES).issubset(config.launch.shared_policy):
         raise SetupReceiptError(
             "starter_conflict", "Assign the core starter policies before adding an agent."
         )
-    for name in profile["policies"]:
-        read_template(name, config.template_dirs)
+    for name in config.launch.shared_policy:
+        if name in _CORE_V1_POLICIES or name in profile["policies"]:
+            read_template(name, config.template_dirs)
     store = config.skills.store_path
     selected = select_skills(read_store(store), spec.tags, spec.name) if store else []
     if not set(profile["skills"]).issubset(skill.name for skill in selected):

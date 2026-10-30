@@ -67,7 +67,7 @@ See “Brief reaches a fresh session before other work” in
 ```bash
 backbone templates preview app       # after registering the agent
 backbone templates edit starter-learning
-backbone templates use starter-collaboration starter-continuity  # remove one
+backbone templates use starter-collaboration starter-continuity  # keep only these two
 backbone templates use --clear       # remove all global policies
 ```
 

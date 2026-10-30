@@ -19,12 +19,14 @@ backbone status
 Without a login service (for example, in a container), use `backbone up --detach`.
 Run `backbone doctor` if setup needs attention.
 
-The starter policies teach collaboration, continuity and learning from feedback.
+The six starter policies cover collaboration, swarms, continuity, expertise,
+artifacts and authority.
 For a **new installation**, read `backbone docs team` and select them before
 starting agents:
 
 ```bash
-backbone templates use starter-collaboration starter-continuity starter-learning
+backbone templates use starter-collaboration starter-swarms starter-continuity \
+  starter-learning starter-artifacts starter-authority
 ```
 
 On an existing installation, inspect assignments with `backbone templates use`
