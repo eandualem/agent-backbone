@@ -1,10 +1,11 @@
 # Work as a team
 
 Keep responsibility clear so parallel work does not produce competing decisions.
-Unless the user chooses another arrangement, keep one continuing agent responsible
-for a repository's context and integrated result. Consult specialists and bring in
-temporary helpers when their expertise or independent judgment will improve the
-work. No management hierarchy or coordinator is required for ordinary collaboration.
+Keep one continuing agent responsible for each repository or task: its context,
+decisions and integrated result. Do not run independent competing owners on the
+same repository. Consult specialists for their expertise; use swarms for temporary
+parallel work while the continuing owner retains responsibility. Ordinary peer
+consultation does not require a swarm or a management hierarchy.
 
 Use `backbone agent list` to discover peers by purpose and `backbone agent inspect`
 for current state and evidence. Give a collaborator the goal, relevant facts,

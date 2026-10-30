@@ -103,7 +103,8 @@ service, assign policies or launch agents. Only a private setup operation receip
 is added. The API URL is returned only when the operator-authenticated identity
 endpoint confirms the selected data directory.
 
-The core consists of the editable `starter-collaboration`, `starter-continuity`,
+The fresh core consists of the editable `starter-collaboration`, `starter-swarms`,
+`starter-continuity`,
 `starter-learning`, `starter-artifacts` and `starter-authority` policies; the
 `backbone-documents`, `backbone-reports`, `backbone-responses`, `backbone-sheets`
 and `backbone-conversations` skills; and an `orchestrator-v1` brief. Policies live
@@ -111,7 +112,10 @@ under `templates/policies`, the brief under `templates/onboarding`, and skills
 under `skills` in the installation's data directory. Existing instruction and
 skill readers expose the policies and skills. Users may edit these files.
 Completed steps are not reapplied while retrying later steps; edits made after
-a completed step are preserved.
+a completed step are preserved. First-agent setup also accepts the original five
+policy assignments from earlier `core-v1` installations; adding a new default
+does not make it a prerequisite for an existing installation or pending request.
+A selected starter must still be readable.
 
 ## First agent
 

@@ -146,7 +146,8 @@ For a **new installation**, read `backbone docs team` and select its starter
 practices before launching agents:
 
 ```bash
-backbone templates use starter-collaboration starter-continuity starter-learning
+backbone templates use starter-collaboration starter-swarms starter-continuity \
+  starter-learning starter-artifacts starter-authority
 ```
 
 On an existing installation, first inspect assignments with `backbone templates use`.

@@ -3,10 +3,11 @@
 Help is an on-demand playbook. Templates are the instructions Backbone supplies
 when an agent starts. Read `backbone docs templates` for the full reference.
 
-New teams can select `starter-collaboration`, `starter-continuity` and
-`starter-learning`: practical guidance for collaborating and carrying experience
-forward. Read `backbone docs team` and inspect current assignments before selecting
-them. The owner can edit, replace or remove these practices; they grant no permissions.
+Fresh `core-v1` installer setup selects six editable starters: `starter-collaboration`,
+`starter-swarms`, `starter-continuity`, `starter-learning`, `starter-artifacts` and
+`starter-authority`. Manual installations can select them too. They cover repository
+ownership, parallel work, expertise, context, retained work and authority.
+Read `backbone docs team` and inspect current assignments before selecting them. The owner can edit, replace or remove these practices; they grant no permissions.
 
 Before changing instructions, inspect the effective content and its source:
 
