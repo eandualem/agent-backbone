@@ -35,6 +35,11 @@ playbook for each; read it before first use):
   accept substantial work, reach a milestone, hit or clear a blocker, change
   direction, or finish; `backbone updates` reads everyone's. Short and
   conversational, for a teammate new to the project (`backbone help reports`).
+- **Show your current task**: a Current plan breaks one concrete task into its
+  real steps, including review and verification when needed. Keep unrelated
+  workstreams elsewhere. Use a new `plan_id` for a different task; a blocked step
+  names who or what it needs and the expected result. Read `backbone help current-plan`
+  before publishing or updating it. It is separate from a progress report.
 - **Unblock a peer**: when `inspect` shows `waiting_for_human (permission)`,
   `backbone agent approve <agent>` answers the prompt (audited). Never reach
   around it with raw `tmux send-keys`.
