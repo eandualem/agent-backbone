@@ -5,8 +5,8 @@ the real steps needed to reach its outcome. For example, “Fix export validatio
 can include reproducing the failure, implementing the correction, getting the
 required review and verifying the result. A list such as “Track exports, receive
 analytics, coordinate onboarding” combines unrelated workstreams; it does not
-explain how to finish one task. Keep those other commitments in the appropriate
-tracker or continuity notes.
+explain how to finish one task. Keep those other commitments in the project's
+chosen memory or a tracker.
 
 The agent authors the steps and marks their actual progress. Include investigation,
 implementation, review, a person or peer's input, verification and publication
@@ -31,13 +31,15 @@ Refresh at meaningful step changes, when a dependency changes, and daily when
 useful. Keep the same `plan_id` while working on the same task, preserving IDs of
 continuing steps and showing completed steps as `done`. A different concrete task
 gets a new `plan_id` and its own step IDs; do not carry unrelated unfinished items
-into it. If you switch tasks while blocked, retain the suspended task and its
-dependency in continuity notes or a tracker before replacing the current plan.
-The provider does not retain the replaced checklist. Nothing clears at midnight,
-and Backbone does not choose, schedule,
-execute or complete the work. An empty item list means no current items; a missing
-record means the agent has never published a retained plan. An update at least
-24 hours old is marked stale, not complete.
+into it. If you switch tasks while blocked, retain the suspended task, dependency,
+`plan_id` and step IDs in the project's chosen memory or a tracker before replacing
+the current plan. When returning to that task, reuse its plan and continuing step
+IDs, reconcile its steps against current facts, and publish against the latest
+base revision. The provider does not retain the replaced checklist. Nothing clears
+at midnight, and Backbone does not choose, schedule, execute or complete the work.
+An empty item list means no current items; a missing record means the agent has
+never published a retained plan. An update at least 24 hours old is marked stale,
+not complete.
 
 ## Publish and read
 
@@ -101,9 +103,10 @@ whole short plan atomically and must name its current revision, even when changi
 to a new task and `plan_id`. Preserve continuing item IDs within the same task.
 Array order is authoritative: `now` items first, then `next`, then
 `later`. Statuses are `pending`, `in_progress`, `blocked` and `done`; optional
-`detail` names dependencies, peers the item is waiting on, or other useful context. References use `issue` with
-`owner/repo#number`, `sheet` with its UUID hex ID, or `document` with a positive
-decimal revision ID. References are stored as data, not fetched or verified.
+`detail` names dependencies, peers the item is waiting on, or other useful context.
+References use `issue` with `owner/repo#number`, `sheet` with its UUID hex ID, or
+`document` with a positive decimal revision ID. References are stored as data, not
+fetched or verified.
 
 An accepted update returns `{receipt:{author_id,plan_id,revision_id,updated_at},
 created:true}`. A retry of the identical request/key returns the original receipt

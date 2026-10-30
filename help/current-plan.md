@@ -14,7 +14,10 @@ as a structured dependency. Read `backbone docs current-plans` for a full exampl
 Update at meaningful step or dependency changes and daily when useful. Keep the
 same plan and continuing step IDs for the same task; mark finished steps `done`.
 Start a new `plan_id` and new step IDs for a different task. Preserve a suspended
-task elsewhere before replacing its checklist: only the current plan is retained.
+task, dependency and IDs in the project's chosen memory or a tracker before
+replacing its checklist: only the current plan is retained. When returning to that
+task, reuse its plan and continuing step IDs, update the steps for current facts,
+and publish against the latest base revision.
 Backbone does not choose, schedule or execute the work.
 
 ```bash
@@ -31,10 +34,10 @@ backbone docs current-plans
 Discover the stable author ID first. Publish a small full snapshot with a fresh
 request ID, the current base revision (null only before the first publication),
 and plan/item IDs for the current task. A new task still uses the latest base
-revision; it does not reset that field to null. Section order is now, next, later; statuses are pending,
-in_progress, blocked and done. Completion is authored by the agent. A person asks
-or requests reprioritization through feedback, tied to the observed plan/revision
-and selected item IDs.
+revision; it does not reset that field to null. Section order is now, next, later;
+statuses are pending, in_progress, blocked and done. Completion is authored by
+the agent. A person asks or requests reprioritization through feedback, tied to
+the observed plan/revision and selected item IDs.
 
 A stale edit or feedback returns 409: preserve the draft, read current state and
 explicitly reconcile. An uncertain transport result is not failure proof; retry
