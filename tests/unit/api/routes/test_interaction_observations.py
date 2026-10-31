@@ -1,5 +1,6 @@
 """Historical observations retain identity and never manufacture quiet or state."""
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -371,16 +372,40 @@ async def test_session_feed_captures_identity_before_read_and_rejects_stale_regi
         await feed.close()
 
 
-async def test_stored_evidence_never_keeps_a_quoted_credential(api_app):
+async def test_observations_keep_only_fixed_evidence_descriptions(
+    api_app, api_client, auth_headers
+):
     db = api_app.state.db
     agent = await identity(db, "ike")
-    banner = "terminal shows a provider failure (codex): 401 Authorization: Bearer TEST_SECRET_123"
+    quoted = [
+        "terminal shows a provider failure (codex): 401 Authorization: Bearer SYNTHETIC_SECRET_1",
+        'terminal shows a provider failure (codex): api_key="SYNTHETIC_SECRET_2"',
+        "terminal shows a provider failure (codex): password='SYNTHETIC_SECRET_3'",
+        'terminal shows a provider failure (codex): {"api_key": "SYNTHETIC_SECRET_4"}',
+    ]
+    await sample(db, "ike", agent, 0)
     await db.state_history.observe_registered(
         [("ike", "blocked", "provider")],
         registrations={"ike": agent},
-        evidence={"ike": [banner, "see https://x.test/v1?api_key=TEST_SECRET_456"]},
+        evidence={"ike": quoted},
         recorder_id="one",
     )
     async with db.engine.begin() as conn:
-        stored = await conn.scalar(text("SELECT evidence FROM registered_state_observations"))
-    assert "TEST_SECRET" not in stored and "provider failure (codex): 401" in stored
+        stored = await conn.scalar(
+            text("SELECT evidence FROM registered_state_observations ORDER BY id DESC LIMIT 1")
+        )
+        # A row written before this rule still holds raw text; reads never return it.
+        await conn.execute(
+            text("UPDATE registered_state_observations SET evidence=:raw"),
+            {"raw": json.dumps(quoted)},
+        )
+    assert "SYNTHETIC_SECRET" not in stored
+    assert json.loads(stored) == ["terminal shows a provider failure (codex)"] * 4
+    spans = await api_client.get(
+        "/api/interactions/state-spans",
+        headers=auth_headers,
+        params={"since": at(0), "until": at(5)},
+    )
+    assert spans.status_code == 200, spans.text
+    assert "SYNTHETIC_SECRET" not in spans.text
+    assert "terminal shows a provider failure (codex)" in spans.text

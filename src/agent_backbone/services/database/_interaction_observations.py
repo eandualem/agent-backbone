@@ -6,6 +6,7 @@ from itertools import pairwise
 
 from sqlalchemy import select, text
 
+from agent_backbone.services.database._state_history_repo import stored_evidence
 from agent_backbone.services.database._time import format_iso, now_iso, parse_iso
 from agent_backbone.services.database.models import InteractionCaptureCheckpointORM
 
@@ -188,7 +189,7 @@ async def state_spans(conn, agent_id, since, until, high, *, after=None, limit=2
                 else [str(row["id"])],
                 "basis": "matching_samples" if paired else "point_observation",
                 "time_basis": "observed",
-                "evidence": json.loads(row["evidence"]),
+                "evidence": stored_evidence(json.loads(row["evidence"])),
             }
         )
     retained = await conn.scalar(

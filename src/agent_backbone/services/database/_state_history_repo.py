@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from datetime import timedelta
 
 from sqlalchemy import text
@@ -11,30 +10,12 @@ from sqlalchemy import text
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, format_iso, now_iso, parse_iso
 
-# Provider banners are terminal text and can quote a credential. Stored
-# evidence keeps the words that explain the state, never the secret.
-_SECRETS = (
-    re.compile(r"(?i)(bearer\s+)[^\s\"',;]+"),
-    re.compile(
-        r"(?i)((?:authorization|api[-_ ]?key|token|secret|password|passwd)\s*[:=]\s*)"
-        r"[^\s\"',;&]+"
-    ),
-    re.compile(r"(?i)([?&][^=&\s]*(?:key|token|secret|sig|password|auth)[^=&\s]*=)[^&\s]+"),
-    re.compile(r"(://[^/\s:@]+:)[^@\s]+(@)"),
-    re.compile(r"()\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[\w-]{10,})"),
-)
 
-
-def _redacted(evidence: list[str]) -> list[str]:
-    out = []
-    for line in evidence:
-        for pattern in _SECRETS:
-            line = pattern.sub(
-                lambda m: m.group(1) + "[redacted]" + (m.group(2) if m.lastindex == 2 else ""),
-                line,
-            )
-        out.append(line)
-    return out
+def stored_evidence(evidence: list[str]) -> list[str]:
+    """What a stored observation keeps of its evidence: each line's fixed
+    description, before any colon. Text after it can be terminal, hook or
+    provider content, which may quote a credential, so it is never kept."""
+    return [line.split(":", 1)[0].strip()[:120] for line in evidence[:10]]
 
 
 class StateHistoryRepo(Repo):
@@ -148,7 +129,7 @@ class StateHistoryRepo(Repo):
                         "reason": reason,
                         "at": at,
                         "recorder": recorder_id,
-                        "evidence": json.dumps(_redacted(evidence.get(name, []))),
+                        "evidence": json.dumps(stored_evidence(evidence.get(name, []))),
                         "cutoff": format_iso(parse_iso(at) - timedelta(seconds=60)),
                     },
                 )
