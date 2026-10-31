@@ -365,3 +365,18 @@ async def test_session_feed_captures_identity_before_read_and_rejects_stale_regi
         assert ids == [current] and current != old
     finally:
         await feed.close()
+
+
+async def test_stored_evidence_never_keeps_a_quoted_credential(api_app):
+    db = api_app.state.db
+    agent = await identity(db, "ike")
+    banner = "terminal shows a provider failure (codex): 401 Authorization: Bearer TEST_SECRET_123"
+    await db.state_history.observe_registered(
+        [("ike", "blocked", "provider")],
+        registrations={"ike": agent},
+        evidence={"ike": [banner, "see https://x.test/v1?api_key=TEST_SECRET_456"]},
+        recorder_id="one",
+    )
+    async with db.engine.begin() as conn:
+        stored = await conn.scalar(text("SELECT evidence FROM registered_state_observations"))
+    assert "TEST_SECRET" not in stored and "provider failure (codex): 401" in stored
