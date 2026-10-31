@@ -604,3 +604,65 @@ async def test_issue_retirement_is_a_recorded_terminal_event(
     assert detail["status"]["value"] == "issue_closed"
     assert not detail["status"]["delivered"]
     assert detail["lifecycle"]["items"][-1]["kind"] == "retired_issue_closed"
+
+
+# An owner rename between credential check and repository access must not
+# hand the old credential the name's new registration.
+@pytest.mark.parametrize("operation", ["detail", "list", "reply"])
+async def test_authenticated_registration_survives_name_reassignment(
+    api_app, api_client, auth_headers, transport, monkeypatch, operation
+):
+    db = api_app.state.db
+    old_id = await identity(db, "bell")
+    headers = {"Authorization": "Bearer " + agent_api_key(TEST_API_KEY, old_id)}
+    await send(
+        api_client,
+        auth_headers,
+        interaction={"actor": "owner"},
+        message="Private synthetic recipient body",
+    )
+    row = (await records(db))[0]
+    path = "/api/conversations/interaction/" + row["id"]
+    question = await api_client.post(
+        path + "/messages",
+        headers=auth_headers,
+        json={
+            "request_id": "fixture-question",
+            "recipient": "ike",
+            "text": "Private synthetic question",
+        },
+    )
+    assert question.status_code == 201
+    assert (await api_client.get(path, headers=headers)).status_code == 403
+    method = {"detail": "conversation", "list": "summaries", "reply": "post"}[operation]
+    original = getattr(db.conversations, method)
+
+    async def after_auth(*args, **kwargs):
+        # Simulate an owner rename in the interval after credential verification.
+        await db.agents.rename("bell", "old-bell")
+        await db.agents.rename("ike", "bell")
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(db.conversations, method, after_auth)
+    if operation == "detail":
+        result = await api_client.get(path, headers=headers)
+        assert result.status_code == 403, f"Leaked original context: HTTP {result.status_code}"
+    elif operation == "list":
+        result = await api_client.get("/api/conversations", headers=headers)
+        assert result.status_code == 403 or result.json()["items"] == [], (
+            "Leaked replacement registration conversation summary"
+        )
+    else:
+        result = await api_client.post(
+            path + "/messages",
+            headers=headers,
+            json={
+                "author": "bell",
+                "request_id": "old-credential-reply",
+                "text": "Synthetic forbidden reply",
+                "in_reply_to": question.json()["entry"]["id"],
+            },
+        )
+        assert result.status_code == 403, (
+            f"Accepted reply as replacement registration: HTTP {result.status_code}"
+        )

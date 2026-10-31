@@ -509,6 +509,7 @@ class ConversationRepo(Repo):
         artifact_id: str,
         *,
         reader: str | None = None,
+        reader_registration: str | None = None,
         before: int | None = None,
         after: int | None = None,
         limit: int = 50,
@@ -522,6 +523,8 @@ class ConversationRepo(Repo):
             artifact = await _artifact(conn, kind, artifact_id)
             if reader is not None:
                 agent_id = await _registration(conn, reader)
+                if reader_registration and agent_id != reader_registration:
+                    agent_id = None  # renamed since its credential was checked
                 if not agent_id or not await _participant(
                     conn, kind, artifact_id, artifact, agent_id
                 ):
@@ -597,6 +600,7 @@ class ConversationRepo(Repo):
         include_interactions: bool = True,
         keys: list[tuple[str, str]] = (),
         reader: str | None = None,
+        reader_registration: str | None = None,
         after: int | None = None,
         since: tuple[int, int | None] | None = None,
         limit: int = 50,
@@ -662,6 +666,8 @@ class ConversationRepo(Repo):
             cursor = await conn.scalar(select(func.max(_E.c.id))) or 0
             if reader is not None:
                 agent_id = await _registration(conn, reader)
+                if reader_registration and agent_id != reader_registration:
+                    agent_id = None  # renamed since its credential was checked
                 if agent_id is None:
                     return {"items": [], "next_after": None, "cursor": f"e{cursor}.{polled}"}
                 mine = or_(_E.c.author_id == agent_id, _E.c.recipient_id == agent_id)
@@ -743,6 +749,10 @@ class ConversationRepo(Repo):
             author_id = "" if author is None else await _identity(conn, author)
             if author_id is None:
                 raise KeyError(author)
+            if interaction_registration and author_id != interaction_registration:
+                raise ConversationRefused(
+                    403, "registration_changed", f"{author} is now a different registration."
+                )
             # A named recipient's row lock too comes before the conversation's,
             # in the same order as a reply; its refusal waits for the retry check.
             target = refused = None
