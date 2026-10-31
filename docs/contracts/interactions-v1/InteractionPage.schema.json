@@ -272,6 +272,116 @@
       "title": "ConversationCapability",
       "type": "object"
     },
+    "ConversationEntryMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "artifact_id": {
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "entry_id": {
+          "title": "Entry Id",
+          "type": "integer"
+        },
+        "entry_kind": {
+          "title": "Entry Kind",
+          "type": "string"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "author_type": {
+          "title": "Author Type",
+          "type": "string"
+        },
+        "author_id": {
+          "title": "Author Id",
+          "type": "string"
+        },
+        "author_name": {
+          "title": "Author Name",
+          "type": "string"
+        },
+        "recipient_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Recipient Id"
+        },
+        "recipient_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Recipient Name"
+        },
+        "in_reply_to": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "In Reply To"
+        },
+        "anchor": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Anchor"
+        },
+        "anchored_interaction_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Anchored Interaction Id"
+        }
+      },
+      "required": [
+        "kind",
+        "artifact_id",
+        "entry_id",
+        "entry_kind",
+        "created_at",
+        "author_type",
+        "author_id",
+        "author_name",
+        "recipient_id",
+        "recipient_name",
+        "in_reply_to",
+        "anchor",
+        "anchored_interaction_id"
+      ],
+      "title": "ConversationEntryMetadata",
+      "type": "object"
+    },
     "Coverage": {
       "additionalProperties": false,
       "properties": {
@@ -352,6 +462,19 @@
           "const": "observed_partial",
           "default": "observed_partial",
           "title": "State History",
+          "type": "string"
+        },
+        "message_intervals": {
+          "items": {
+            "$ref": "#/$defs/MessageCoverageInterval"
+          },
+          "title": "Message Intervals",
+          "type": "array"
+        },
+        "quiet_scope": {
+          "const": "capture_enabled_backbone_paths",
+          "default": "capture_enabled_backbone_paths",
+          "title": "Quiet Scope",
           "type": "string"
         }
       },
@@ -465,6 +588,17 @@
         },
         "conversation": {
           "$ref": "#/$defs/ConversationCapability"
+        },
+        "conversation_entry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationEntryMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -549,6 +683,31 @@
         "source"
       ],
       "title": "LifecycleEvent",
+      "type": "object"
+    },
+    "MessageCoverageInterval": {
+      "additionalProperties": false,
+      "properties": {
+        "since": {
+          "title": "Since",
+          "type": "string"
+        },
+        "until": {
+          "title": "Until",
+          "type": "string"
+        },
+        "completeness": {
+          "const": "complete_within_declared_scope",
+          "title": "Completeness",
+          "type": "string"
+        }
+      },
+      "required": [
+        "since",
+        "until",
+        "completeness"
+      ],
+      "title": "MessageCoverageInterval",
       "type": "object"
     },
     "Relation": {

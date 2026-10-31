@@ -140,6 +140,12 @@ async def event(
         return
     interaction_id = interaction_id or await find_operation(conn, operation_id)
     if not interaction_id:  # Legacy attempt: absence does not manufacture an original.
+        if outcome and outcome != "attempting":
+            await conn.execute(
+                text("""INSERT INTO interaction_capture_checkpoints
+                (recorder_id,at,reason) VALUES ('uncaptured',:at,'uncaptured_transport')"""),
+                {"at": at or now_iso()},
+            )
         return
     await conn.execute(
         text("""INSERT INTO interaction_events

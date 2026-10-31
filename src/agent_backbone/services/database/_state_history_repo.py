@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+from datetime import timedelta
+
 from sqlalchemy import text
 
 from agent_backbone.services.database._repo import Repo, diagnostic_mode
-from agent_backbone.services.database._time import cutoff_iso, now_iso
+from agent_backbone.services.database._time import cutoff_iso, format_iso, now_iso, parse_iso
 
 
 class StateHistoryRepo(Repo):
@@ -66,12 +69,62 @@ class StateHistoryRepo(Repo):
 
     async def prune(self) -> int:
         """Keep seven days plus each agent's last observation for durable deduplication."""
+        cutoff = cutoff_iso(days=7)
         async with self._tx() as conn:
             result = await conn.execute(
                 text(
                     """DELETE FROM agent_state_history WHERE at < :cutoff
                        AND id NOT IN (SELECT MAX(id) FROM agent_state_history GROUP BY agent)"""
                 ),
-                {"cutoff": cutoff_iso(days=7)},
+                {"cutoff": cutoff},
             )
-            return result.rowcount
+            count = result.rowcount
+            await conn.execute(
+                text("DELETE FROM registered_state_observations WHERE at < :cutoff"),
+                {"cutoff": cutoff},
+            )
+            await conn.execute(
+                text("DELETE FROM interaction_capture_checkpoints WHERE at < :cutoff"),
+                {"cutoff": cutoff},
+            )
+            return count
+
+    async def observe_registered(self, states, *, registrations, evidence, recorder_id):
+        """Record prospective stable identities; never resolve old observations by name.
+
+        Unchanged samples are limited to one per minute. Changes and recorder
+        boundaries retain their first sample. Missing observations remain gaps.
+        """
+        at = now_iso()
+        async with self._tx() as conn:
+            for name, state, reason in states:
+                identity = registrations.get(name)
+                if not identity:
+                    continue
+                await conn.execute(
+                    text("""
+                    INSERT INTO registered_state_observations
+                    (agent_id,name,state,reason,at,recorder_id,evidence)
+                    SELECT :identity,:name,:state,:reason,:at,:recorder,:evidence
+                    WHERE EXISTS (SELECT 1 FROM agents
+                                      WHERE name=:name AND report_identity=:identity)
+                    AND NOT EXISTS (
+                        SELECT 1 FROM registered_state_observations
+                        WHERE id=(SELECT MAX(id) FROM registered_state_observations
+                                  WHERE agent_id=:identity)
+                        AND recorder_id=:recorder AND state=:state
+                        AND (reason=:reason OR (reason IS NULL AND :reason IS NULL))
+                        AND at > :cutoff
+                    )
+                """),
+                    {
+                        "identity": identity,
+                        "name": name,
+                        "state": state,
+                        "reason": reason,
+                        "at": at,
+                        "recorder": recorder_id,
+                        "evidence": json.dumps(evidence.get(name, [])),
+                        "cutoff": format_iso(parse_iso(at) - timedelta(seconds=60)),
+                    },
+                )

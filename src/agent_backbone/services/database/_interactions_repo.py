@@ -10,15 +10,18 @@ import secrets
 from sqlalchemy import and_, case, exists, func, or_, select, text, update
 
 from agent_backbone.models import RETIREMENT_REASONS
+from agent_backbone.services.database import _interaction_observations as observations
 from agent_backbone.services.database._interaction_capture import capture
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 from agent_backbone.services.database.models import (
     AgentORM,
     ConversationEntryORM,
+    InteractionCaptureCheckpointORM,
     InteractionCoverageORM,
     InteractionEventORM,
     InteractionORM,
+    RegisteredStateObservationORM,
 )
 
 _A = AgentORM.__table__
@@ -74,12 +77,22 @@ class InteractionRepo(Repo):
             if conn.dialect.name == "postgresql":
                 # Drain earlier sequence allocations before freezing the watermark.
                 await conn.execute(
-                    text("LOCK TABLE interactions, interaction_events IN SHARE MODE")
+                    text(
+                        "LOCK TABLE interactions, interaction_events, "
+                        "registered_state_observations, "
+                        "interaction_capture_checkpoints IN SHARE MODE"
+                    )
                 )
             snapshot = {
                 "kind": "snapshot",
                 "window": [since, until],
                 "high": await conn.scalar(select(func.max(_E.c.id))) or 0,
+                "state_high": await conn.scalar(select(func.max(RegisteredStateObservationORM.id)))
+                or 0,
+                "checkpoint_high": await conn.scalar(
+                    select(func.max(InteractionCaptureCheckpointORM.id))
+                )
+                or 0,
                 "at": now_iso(),
             }
             token = self._encode(snapshot)
@@ -98,8 +111,61 @@ class InteractionRepo(Repo):
             reasons.append("body_retention_partial")
         if truncated:
             reasons.append("projection_limit")
-        # Legacy/imported paths can lack attribution; scope is always explicit.
-        reasons.append("legacy_history_not_reconstructed")
+        (
+            intervals,
+            complete,
+            interval_limit,
+            interval_reasons,
+        ) = await observations.message_intervals(conn, since, until, snapshot)
+        reasons.extend(interval_reasons)
+        # An unattributed sender might be this registration. Do not certify a
+        # per-agent quiet span over its recorded lifecycle by guessing a name.
+        projected = self._projection(snapshot["high"], bodies=False, until=until).subquery()
+        ambiguous = (
+            (
+                await conn.execute(
+                    select(
+                        projected.c.sender,
+                        projected.c.recipient,
+                        projected.c.accepted_at,
+                        projected.c.ended_at,
+                    )
+                    .where(
+                        projected.c.accepted_at < until,
+                        or_(projected.c.last_event_at >= since, projected.c.ended_at.is_(None)),
+                    )
+                    .limit(10001)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        if len(ambiguous) > 10000:
+            intervals = []
+            interval_limit = True
+            reasons.append("attribution_projection_limit")
+        else:
+            gaps = []
+            for item in ambiguous:
+                actors = [json.loads(item[column]) for column in ("sender", "recipient")]
+                if any(a["kind"] == "unknown" or a["attribution"] == "unverified" for a in actors):
+                    start, end = (
+                        max(since, item["accepted_at"]),
+                        min(until, item["ended_at"] or until),
+                    )
+                    if start < end:
+                        gaps.append((start, end))
+            if gaps:
+                reasons.append("unverified_actor_attribution")
+                intervals = observations.exclude_intervals(intervals, gaps)
+        complete = (
+            not interval_limit
+            and len(intervals) == 1
+            and intervals[0]["since"] == since
+            and intervals[0]["until"] == until
+        )
+        if not complete:
+            reasons.append("legacy_history_not_reconstructed")
         return {
             "since": since,
             "until": until,
@@ -107,10 +173,16 @@ class InteractionRepo(Repo):
             "retained_from": start,
             "body_retained_from": retained,
             "as_of": snapshot["at"],
-            "completeness": "partial" if start else "unavailable",
+            "completeness": "complete_within_declared_scope"
+            if complete and not truncated
+            else "partial"
+            if start
+            else "unavailable",
+            "message_intervals": intervals,
+            "quiet_scope": "capture_enabled_backbone_paths",
             "reasons": reasons,
             "declared_scope": _SCOPE,
-            "truncated": truncated,
+            "truncated": truncated or interval_limit,
             "state_history": "observed_partial",
         }
 
@@ -278,6 +350,50 @@ class InteractionRepo(Repo):
         )
         return {"items": selected, "next_cursor": next_cursor}
 
+    async def _conversation_entry(self, conn, row):
+        # Only capture-generated links can identify the source entry. Sender-
+        # supplied links are references, not proof that this is that entry.
+        for relation in json.loads(row["relations"]):
+            if relation.get("provenance") != "conversation_entry":
+                continue
+            target = relation["target"]
+            entry = (
+                (
+                    await conn.execute(
+                        select(_C).where(
+                            _C.c.id == target.get("entry_id"),
+                            _C.c.kind == target.get("artifact_kind"),
+                            _C.c.artifact_id == target["id"],
+                        )
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if entry:
+                return {
+                    key: entry[key]
+                    for key in (
+                        "kind",
+                        "artifact_id",
+                        "entry_kind",
+                        "created_at",
+                        "author_type",
+                        "author_id",
+                        "author_name",
+                        "recipient_id",
+                        "recipient_name",
+                        "in_reply_to",
+                    )
+                } | {
+                    "entry_id": entry["id"],
+                    "anchor": json.loads(entry["anchor"]) if entry["anchor"] else None,
+                    "anchored_interaction_id": entry["artifact_id"]
+                    if entry["kind"] == "interaction"
+                    else None,
+                }
+        return None
+
     async def _record(self, conn, row, high, actors):
         events = await self._events(conn, row["id"], high)
         attempts = self._attempts(events)
@@ -327,6 +443,7 @@ class InteractionRepo(Repo):
             "relations": relations,
             "relations_truncated": len(referring) > 200,
             "conversation": await self._conversation(conn, row, actors),
+            "conversation_entry": await self._conversation_entry(conn, row),
         }
 
     async def query(
@@ -660,3 +777,38 @@ class InteractionRepo(Repo):
 
         async with self._tx() as conn:
             await event(conn, operation_id, kind, **kwargs)
+
+    async def checkpoint(self, recorder_id):
+        async with self._tx() as conn:
+            await observations.checkpoint(conn, recorder_id)
+
+    async def state_spans(self, *, agent_id, since, until, limit=200, cursor=None, snapshot=None):
+        async with self._tx() as conn:
+            after = None
+            if cursor:
+                data = self._decode(cursor)
+                if data.get("kind") != "states" or data.get("scope") != [agent_id, since, until]:
+                    raise ValueError("State cursor belongs to different filters")
+                if snapshot and snapshot != data["snapshot"]:
+                    raise ValueError("Snapshot mismatch")
+                snapshot, after = data["snapshot"], data["after"]
+            snap, token = await self._snapshot(conn, since, until, snapshot)
+            items, coverage, next_after = await observations.state_spans(
+                conn, agent_id, since, until, snap.get("state_high", 0), after=after, limit=limit
+            )
+            return {
+                "schema_version": 1,
+                "items": items,
+                "coverage": coverage,
+                "snapshot": token,
+                "next_cursor": self._encode(
+                    {
+                        "kind": "states",
+                        "scope": [agent_id, since, until],
+                        "snapshot": token,
+                        "after": next_after,
+                    }
+                )
+                if next_after
+                else None,
+            }

@@ -42,3 +42,29 @@ retention boundaries, snapshot and any projection truncation. Retained metadata
 and excerpts are sensitive operator data, not automatically safe to export.
 Missing old bodies cannot be recovered. Pending delivery storage and existing
 conversation limits retain their own documented semantics.
+
+
+Registration-bound state observations are exposed separately at
+`GET /api/interactions/state-spans`. Omitting agent_id returns bounded all-agent
+pages for list-card strips. They begin with prospective SessionFeed samples;
+legacy name-only history is never attached to a new or renamed registration.
+Matching samples no more than120seconds apart support estimated spans; changes,
+recorder boundaries and longer gaps remain unknown. State is always sampled
+and partial. Unchanged samples are limited to one per minute; state changes
+retain their observed samples. Seven-day retention limits state and finite
+capture-checkpoint evidence, independently of message-body retention.
+
+Message coverage contains quiet-safe intervals for capture-enabled Backbone
+paths. These require finite recorder checkpoints and exclude missing transport,
+legacy originals, uncertain actor attribution, recorder/clock discontinuities
+and projection gaps. A complete message interval can have partial state coverage.
+Consumers must finish unfiltered message paging before claiming no captured
+messages within such an interval; private conversations outside Backbone are
+outside that claim. The complete window may remain partial while containing
+known subintervals. See the wire contract for exact boundaries and semantics.
+
+Captured conversation messages expose their actual source entry metadata,
+including stable entry ID/time, thread, original anchor, author and recipient.
+Only contiguous entries of the same thread may form a discussion run; A/B/A
+preserves three runs. A reference to an existing entry is not itself that entry,
+and transport redelivery never manufactures another discussion message.

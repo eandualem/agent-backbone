@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 17f683ce2e85
+Revision ID: 4b1986efd0bf
 Revises:
-Create Date: 2026-11-08 02:33:21.798295
+Create Date: 2026-11-08 02:34:20.616671
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "17f683ce2e85"
+revision: str = "4b1986efd0bf"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -371,6 +371,18 @@ def upgrade() -> None:
         sqlite_autoincrement=True,
     )
     op.create_table(
+        "interaction_capture_checkpoints",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("recorder_id", sa.Text(), nullable=False),
+        sa.Column("at", sa.Text(), nullable=False),
+        sa.Column("reason", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_interaction_capture_checkpoints")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("interaction_capture_checkpoints", schema=None) as batch_op:
+        batch_op.create_index("idx_interaction_checkpoints_time", ["at", "id"], unique=False)
+
+    op.create_table(
         "interaction_coverage",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("capture_started_at", sa.Text(), nullable=False),
@@ -551,6 +563,24 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_profile_identity")),
     )
+    op.create_table(
+        "registered_state_observations",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("agent_id", sa.Text(), nullable=False),
+        sa.Column("name", sa.Text(), nullable=False),
+        sa.Column("state", sa.Text(), nullable=False),
+        sa.Column("reason", sa.Text(), nullable=True),
+        sa.Column("at", sa.Text(), nullable=False),
+        sa.Column("recorder_id", sa.Text(), nullable=False),
+        sa.Column("evidence", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_registered_state_observations")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("registered_state_observations", schema=None) as batch_op:
+        batch_op.create_index(
+            "idx_registered_state_agent_time", ["agent_id", "at", "id"], unique=False
+        )
+
     op.create_table(
         "reports",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -954,6 +984,10 @@ def downgrade() -> None:
         batch_op.drop_index("idx_reports_audio")
 
     op.drop_table("reports")
+    with op.batch_alter_table("registered_state_observations", schema=None) as batch_op:
+        batch_op.drop_index("idx_registered_state_agent_time")
+
+    op.drop_table("registered_state_observations")
     op.drop_table("profile_identity")
     op.drop_table("poll_cursors")
     with op.batch_alter_table("observed_versions", schema=None) as batch_op:
@@ -1007,6 +1041,10 @@ def downgrade() -> None:
 
     op.drop_table("interaction_events")
     op.drop_table("interaction_coverage")
+    with op.batch_alter_table("interaction_capture_checkpoints", schema=None) as batch_op:
+        batch_op.drop_index("idx_interaction_checkpoints_time")
+
+    op.drop_table("interaction_capture_checkpoints")
     op.drop_table("fleet_snapshots")
     with op.batch_alter_table("events", schema=None) as batch_op:
         batch_op.drop_index("idx_events_delivery_id_lower")

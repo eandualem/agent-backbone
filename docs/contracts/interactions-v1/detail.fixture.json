@@ -113,5 +113,6 @@
     "reason": null,
     "total": 0,
     "last_entry_at": null
-  }
+  },
+  "conversation_entry": null
 }

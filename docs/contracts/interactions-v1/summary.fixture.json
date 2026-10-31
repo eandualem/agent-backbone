@@ -98,7 +98,9 @@
       "owner_questions"
     ],
     "truncated": false,
-    "state_history": "observed_partial"
+    "state_history": "observed_partial",
+    "message_intervals": [],
+    "quiet_scope": "capture_enabled_backbone_paths"
   },
   "conversation_supported": true
 }

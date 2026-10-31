@@ -81,3 +81,63 @@ now, not backdated to the original send.
 excerpts and conversation-anchored originals may remain. Do not use the body
 boundary as a history-start edge. Current transport status/counts are observed
 as of the snapshot, even when inspecting a historical window.
+
+
+## Observed state and chronological discussion entries (additive)
+
+`GET /api/interactions/state-spans` requires `since`, `until`; optional `agent_id`
+selects one registration. Omitting it returns one bounded all-registration page
+for list-card strips, with stable agent_id on each span. It
+accepts `snapshot`, `cursor`, `limit` (200, maximum500). It returns
+`StateSpanPage`, oldest first. This captures registration-bound observations
+prospectively from the existing SessionFeed, with the registration captured
+before reading state and checked again when recording it. Legacy name-only
+history is excluded; retirement and name reuse never reassign observations.
+
+A `matching_samples` span lies between two matching recorded state/reason
+observations from the same recorder, at most120seconds apart. It is a sampled
+estimate, not continuous measurement. A changed state, restart or larger gap
+is not bridged. `point_observation` has equal since/until and supplies a real
+sample without inventing duration. Everything outside returned spans remains
+unknown; follow every page before treating the returned set as exhaustive.
+`observation_ids`, actual first/last observation times and evidence stay
+inspectable. State coverage is always `sampled_partial` or `unavailable`.
+Unchanged samples are retained at most once per minute; changes are retained
+as observed. Existing monitor/API feed refreshes supply observations; there
+is no new background scheduler. Samples and capture checkpoints retain7days.
+
+Message coverage is independent. `coverage.message_intervals` lists finite
+intervals proven covered by the capture-enabled Backbone paths in
+`declared_scope`. Adjacent successful recorder checkpoints, at most120seconds
+apart, bound each interval. Restarts, missing heartbeats, uncaptured transport,
+legacy pending messages without originals and projection truncation prevent
+an unqualified complete-window claim. Overall completeness is
+`complete_within_declared_scope` only if the whole requested window is covered
+and the projection is not truncated. Body excerpt retention is independent.
+
+The consumer may assert **no captured Backbone messages** only within a
+returned complete message interval, after reading all unfiltered history
+pages for the registration and verifying no relevant logical messages overlap
+that interval. Partial sampled state does not negate complete message capture,
+and complete message capture does not prove continuous state or exclude
+private conversations outside Backbone. A current window can have a complete
+historical prefix and an unknown tail since the last checkpoint. Before the
+first checkpoint, and outside retained checkpoints, quiet remains unknown.
+
+`Interaction.conversation_entry` is nullable. When present it identifies the
+actual source conversation entry: kind/artifact_id, stable entry_id,
+entry_kind, created_at, author_type/author_id/author_name, recipient_id/name,
+in_reply_to, stored anchor, and anchored_interaction_id when kind=interaction.
+Owner author_id follows the existing conversation entry convention (empty
+string plus author_type=owner); the interaction's owner Actor remains explicit.
+Only a capture-generated source-entry relation supplies this field; a sender's
+reference to an entry does not turn their message into that entry. Retried
+transport retains the same entry identity/time. Use (kind,artifact_id) to group
+only contiguous rows: A/B/A remains three runs, each with its actual entries
+and times. Revision/status events are not fabricated as discussion messages.
+Existing older conversation entries remain readable through their authorized
+conversation API but are not backfilled into missing interaction history.
+
+Unknown/unverified actor lifecycles are also excluded from quiet-safe intervals:
+the provider cannot silently assume an unbound sender is unrelated to the selected
+registration. Known intervals before/after that uncertainty remain available.

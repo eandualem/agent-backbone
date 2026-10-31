@@ -11,6 +11,7 @@ from agent_backbone.api.interaction_models import (
     EventPage,
     Interaction,
     InteractionPage,
+    StateSpanPage,
     Summary,
 )
 from agent_backbone.services.database import format_iso
@@ -78,6 +79,30 @@ async def summary(
             item["state"] = str(state.state)
             item["reason"] = state.reason
     return result
+
+
+@router.get("/state-spans", response_model=StateSpanPage)
+async def state_spans(
+    agent_id: str | None = Query(default=None, min_length=32, max_length=32),
+    since: str = Query(max_length=100),
+    until: str = Query(max_length=100),
+    limit: int = Query(default=200, ge=1, le=500),
+    cursor: str | None = Query(default=None, max_length=4096),
+    snapshot: str | None = Query(default=None, max_length=4096),
+    db=Depends(get_db),
+):
+    since, until = window(since, until)
+    try:
+        return await db.interactions.state_spans(
+            agent_id=agent_id,
+            since=since,
+            until=until,
+            limit=limit,
+            cursor=cursor,
+            snapshot=snapshot,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.get("/{interaction_id}", response_model=Interaction)

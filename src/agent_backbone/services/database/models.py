@@ -1049,3 +1049,35 @@ class InteractionCoverageORM(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     capture_started_at: Mapped[str] = mapped_column(Text, nullable=False)
     retained_from: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class RegisteredStateObservationORM(Base):
+    """Prospective state samples, bound to the registration observed by the feed."""
+
+    __tablename__ = "registered_state_observations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent_id: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    at: Mapped[str] = mapped_column(Text, nullable=False)
+    recorder_id: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        Index("idx_registered_state_agent_time", "agent_id", "at", "id"),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class InteractionCaptureCheckpointORM(Base):
+    """Finite evidence of one capture-enabled provider's recording availability."""
+
+    __tablename__ = "interaction_capture_checkpoints"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    recorder_id: Mapped[str] = mapped_column(Text, nullable=False)
+    at: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    __table_args__ = (
+        Index("idx_interaction_checkpoints_time", "at", "id"),
+        {"sqlite_autoincrement": True},
+    )

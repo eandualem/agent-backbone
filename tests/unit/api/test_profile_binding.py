@@ -413,7 +413,7 @@ async def test_history_refuses_retired_or_mismatched_context(
         )
     else:
         monkeypatch.setattr(_server, "_socket", "/other-provider/tmux.sock")
-    await feed._record_history([("ike", "idle", None)])
+    await feed._record_history([("ike", "idle", None)], {}, {})
     observe.assert_not_awaited()
 
 

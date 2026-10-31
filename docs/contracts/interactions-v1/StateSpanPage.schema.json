@@ -1,0 +1,201 @@
+{
+  "$defs": {
+    "ObservedStateSpan": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "agent_id": {
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "name_at_observation": {
+          "title": "Name At Observation",
+          "type": "string"
+        },
+        "since": {
+          "title": "Since",
+          "type": "string"
+        },
+        "until": {
+          "title": "Until",
+          "type": "string"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        },
+        "first_observed_at": {
+          "title": "First Observed At",
+          "type": "string"
+        },
+        "last_observed_at": {
+          "title": "Last Observed At",
+          "type": "string"
+        },
+        "observation_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Observation Ids",
+          "type": "array"
+        },
+        "basis": {
+          "enum": [
+            "matching_samples",
+            "point_observation"
+          ],
+          "title": "Basis",
+          "type": "string"
+        },
+        "time_basis": {
+          "const": "observed",
+          "default": "observed",
+          "title": "Time Basis",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "agent_id",
+        "name_at_observation",
+        "since",
+        "until",
+        "state",
+        "reason",
+        "first_observed_at",
+        "last_observed_at",
+        "observation_ids",
+        "basis",
+        "evidence"
+      ],
+      "title": "ObservedStateSpan",
+      "type": "object"
+    },
+    "StateCoverage": {
+      "additionalProperties": false,
+      "properties": {
+        "since": {
+          "title": "Since",
+          "type": "string"
+        },
+        "until": {
+          "title": "Until",
+          "type": "string"
+        },
+        "retained_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Retained From"
+        },
+        "completeness": {
+          "enum": [
+            "sampled_partial",
+            "unavailable"
+          ],
+          "title": "Completeness",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        },
+        "max_sample_gap_seconds": {
+          "title": "Max Sample Gap Seconds",
+          "type": "integer"
+        },
+        "legacy_name_only_excluded": {
+          "title": "Legacy Name Only Excluded",
+          "type": "boolean"
+        },
+        "unknown_outside_returned_spans": {
+          "title": "Unknown Outside Returned Spans",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "since",
+        "until",
+        "retained_from",
+        "completeness",
+        "reasons",
+        "max_sample_gap_seconds",
+        "legacy_name_only_excluded",
+        "unknown_outside_returned_spans"
+      ],
+      "title": "StateCoverage",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/ObservedStateSpan"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "coverage": {
+      "$ref": "#/$defs/StateCoverage"
+    },
+    "snapshot": {
+      "title": "Snapshot",
+      "type": "string"
+    },
+    "next_cursor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Next Cursor"
+    }
+  },
+  "required": [
+    "items",
+    "coverage",
+    "snapshot",
+    "next_cursor"
+  ],
+  "title": "StateSpanPage",
+  "type": "object"
+}
