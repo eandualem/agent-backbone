@@ -2,6 +2,44 @@
 
 The backbone can type into your agents' terminals. Treat it accordingly.
 
+To report a vulnerability, see [SECURITY.md](../SECURITY.md).
+
+## At a glance
+
+**What Backbone protects**
+
+- **Other OS accounts on the machine.** The API listens on `127.0.0.1` and
+  needs a key. Backbone's data and state directories are private (0700, files
+  0600). The optional [private Unix socket](api.md#private-local-transport)
+  refuses any connection from another user ID before reading the request.
+- **The network.** Nothing listens beyond localhost unless you change
+  `backbone.host`. GitHub webhooks need a matching signature, and Telegram
+  control needs an allowlisted user ID.
+- **Backbone's own secrets.** Agent sessions start without the operator key and
+  without anything in Backbone's `.env`. Each agent gets its own narrower key,
+  which cannot change settings or register agents.
+- **The message envelope.** A sender name cannot fake a second envelope or the
+  owner-confirmed marker. A sender with an enrolled signing key must sign every
+  request made under its name.
+
+**What Backbone does not protect**
+
+- **Agents from each other.** Every agent runs as your user. Any of them can
+  read the others' files, Backbone's `.env` and database, and its tmux sessions.
+- **Agents from the text they receive.** GitHub comments, Telegram messages and
+  peer messages arrive labelled with where they came from, but they are still
+  untrusted text. See [Prompt injection](#prompt-injection).
+- **Your machine from an unattended agent without a sandbox.** Claude Code,
+  OpenCode and Gemini CLI run without an OS sandbox when you make them
+  unattended. See [Unattended agents](#unattended-agents-and-writable-directories).
+- **Sender names.** Apart from signed senders, a name is what the caller says.
+- **The owner signing key.** It is an ordinary private file for now, readable by
+  any process running as your user (#323).
+
+Open security issues and known limitations are listed under
+[Known limitations](#known-limitations). How this is tested is under
+[What is tested and reviewed](#what-is-tested-and-reviewed).
+
 ## The model, honestly
 
 - **One trusted user, one machine.** The backbone runs as your OS user and
@@ -305,6 +343,60 @@ there is no per-agent GitHub credential store yet.
   refused as `rate_limited` until 10 minutes pass without another failure.
   Validation fails closed, the owner is notified, and only the step that
   depends on the confirmation waits.
+- **Per-agent `env` values are stored in plain text.** There is no per-agent
+  secret store yet; keep credentials in each tool's own store (#430).
+- **A remote approval is not bound to one native request.** See
+  [remote approval request binding](#known-limitation-remote-approval-request-binding).
+
+## What is tested and reviewed
+
+- **Every pull request** and every push to `develop` and `main` runs lint,
+  format checks and the full test suite on Python 3.11, 3.12 and 3.13. The
+  tests need no services. tmux is mocked in them; `make smoke` checks the
+  terminal layer against a real tmux server on its own private socket.
+- **Tests aimed at the boundaries above**, in `tests/unit/`:
+  - `api/test_auth.py`: requests without a valid key are refused.
+  - `api/test_authority.py`: an agent's key cannot do what needs the
+    operator key.
+  - `api/test_local_transport.py`: the Unix socket refuses other user IDs and
+    unsafe socket paths.
+  - `test_signing.py` and `api/routes/test_api_signing.py`: signed senders,
+    checked against fixed test vectors in `tests/fixtures/signing_vectors.json`.
+  - `services/agents/test_launch.py`: Backbone's secrets are removed from agent
+    sessions and no value appears on a command line.
+- **Review.** Before a pull request opens, an AI reviewer running separately
+  from the agent that wrote the change reviews it, and the pull request
+  records which reviewer ran and what it found. Hosted automated reviewers
+  then review the pull request.
+- **The repository** has GitHub secret scanning and push protection on.
+- **Releases** are built by a manual workflow from `main` only, with action
+  versions pinned to commits. See [Verify a download](#verify-a-download).
+
+**Not done yet:** no third-party security audit, no fuzzing, and no static
+code scanning or dependency alerts in CI. Reviews are by AI models and
+automated tools, not by a dedicated human security reviewer.
+
+## Verify a download
+
+The release workflow records a signed build provenance attestation for each
+file it publishes to PyPI. The attestation ties the file's SHA-256 digest to
+this repository, the release workflow and the commit it was built from. It
+shows where the file came from; it does not show the code is safe.
+
+Download the file you are about to install, verify it with the GitHub CLI,
+then install that same file:
+
+```bash
+python3 -m pip download agent-backbone==VERSION --no-deps -d backbone-download
+gh attestation verify backbone-download/agent_backbone-VERSION-py3-none-any.whl \
+  --repo eandualem/agent-backbone \
+  --signer-workflow eandualem/agent-backbone/.github/workflows/release.yml
+uv tool install ./backbone-download/agent_backbone-VERSION-py3-none-any.whl
+```
+
+The source archive (`agent_backbone-VERSION.tar.gz`) verifies the same way.
+Version 0.4.4 and earlier were published before attestations were added and
+have none, so `gh attestation verify` reports no attestation for them.
 
 ## What to check before exposing anything
 
@@ -349,8 +441,9 @@ process running as the same account. Keep backups equally private.
 
 
 The manual release workflow pins action commits and the uv version. Build/test
-runs with read-only repository access; a separate job creates the source tag
-before a publication job receives the PyPI token. Existing tags stop publication
+runs with read-only repository access. A separate job attests the built files'
+provenance, and another creates the source tag before a publication job
+receives the PyPI token. Existing tags stop publication
 for operator inspection. A failed publication can leave the source tag present;
 resolve that state explicitly before retrying. No release runs on pushes or merges.
 
