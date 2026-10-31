@@ -232,6 +232,7 @@ async def test_unknown_actor_does_not_certify_quiet_but_preserves_known_prefix(a
     db = api_app.state.db
     for minute in (0, 1, 2, 3):
         await checkpoint(db, minute)
+    boundary = (await db.interactions.summary(since=at(0), until=at(3)))["coverage"]
     await db.interactions.capture(
         operation_id="unknown-fixture",
         message="illustrative unknown sender",
@@ -243,6 +244,9 @@ async def test_unknown_actor_does_not_certify_quiet_but_preserves_known_prefix(a
     c = (await db.interactions.summary(since=at(0), until=at(3)))["coverage"]
     assert c["completeness"] == "partial"
     assert "unverified_actor_attribution" in c["reasons"]
+    # The gap never moves where capture began.
+    assert c["capture_started_at"] == boundary["capture_started_at"] is not None
+    assert c["retained_from"] == boundary["retained_from"]
     assert [(i["since"], i["until"]) for i in c["message_intervals"]] == [
         (at(0), at(1)),
         (at(1, 30), at(3)),
