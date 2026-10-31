@@ -1175,3 +1175,40 @@ async def test_a_reset_holds_an_interrupted_paste_as_uncertain(
     (row,) = await _rows(db, "SELECT status, message FROM message_queue")
     assert row.status == "uncertain"
     assert f"owner-confirmed:{confirmation['confirmation_id']}" not in row.message
+
+
+async def test_a_confirmed_steer_never_makes_a_same_named_agent_a_participant(
+    api_client, auth_headers, api_app, key
+):
+    from agent_backbone.config import agent_api_key
+    from tests.conftest import TEST_API_KEY
+
+    db = api_app.state.db
+    await db.agents.upsert(
+        SENDER,
+        dir="/tmp",
+        runtime="claude",
+        model=None,
+        repo="",
+        tags=[],
+        env={},
+        description="",
+        unattended=False,
+    )
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE agents SET report_identity=:id WHERE name=:name"),
+            {"id": uuid.uuid4().hex, "name": SENDER},
+        )
+    same_name = (await _rows(db, f"SELECT report_identity FROM agents WHERE name='{SENDER}'"))[0][0]
+    offered = AsyncMock(return_value=SteerReport("offered", "ike", delivery_id=1))
+    with patch("agent_backbone.api.routes.messages.steer_agent", offered):
+        resp, _ = await _send(
+            api_client, auth_headers, db, key, _body(_confirmation()), path="/api/steer"
+        )
+    assert resp.status_code == 200
+    (interaction_id, sender) = (await _rows(db, "SELECT id, sender FROM interactions"))[0]
+    assert json.loads(sender)["kind"] == "external" and json.loads(sender)["id"] is None
+    agent = {"Authorization": "Bearer " + agent_api_key(TEST_API_KEY, same_name)}
+    read = await api_client.get(f"/api/conversations/interaction/{interaction_id}", headers=agent)
+    assert read.status_code == 403

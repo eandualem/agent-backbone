@@ -26,6 +26,19 @@ def owner() -> dict:
     }
 
 
+def external(name: str, attribution: str) -> dict:
+    """A sender outside the agent registry, such as an enrolled signing app:
+    sharing a name with an agent never makes it that agent."""
+    return {
+        "kind": "external",
+        "id": None,
+        "name": name,
+        "name_at_capture": name,
+        "attribution": attribution,
+        "retired": False,
+    }
+
+
 async def actor(
     conn, name: str, *, attribution: str = "unverified", registration: str | None = None
 ) -> dict:

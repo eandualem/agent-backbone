@@ -14,7 +14,7 @@ import uuid
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from agent_backbone.services.database._interaction_capture import actor, capture, event
+from agent_backbone.services.database._interaction_capture import capture, event, external
 from agent_backbone.services.database._queue_repo import _INSERT_COLUMNS
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso, parse_iso
@@ -709,7 +709,7 @@ class SigningRepo(Repo):
                 metadata=(queue or {}).get("interaction")
                 or {
                     "original_target": receipt["recipient"],
-                    "sender": await actor(conn, receipt["sender"], attribution="signed"),
+                    "sender": external(receipt["sender"], "signed"),
                 },
             )
             if queue is not None:
