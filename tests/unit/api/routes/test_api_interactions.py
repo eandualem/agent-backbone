@@ -666,3 +666,19 @@ async def test_authenticated_registration_survives_name_reassignment(
         assert result.status_code == 403, (
             f"Accepted reply as replacement registration: HTTP {result.status_code}"
         )
+
+
+async def test_forgetting_the_recipient_ends_its_queued_interaction(
+    api_app, api_client, auth_headers, transport
+):
+    db = api_app.state.db
+    transport[0].return_value.intelligence = SessionIntelligence.AGENT_WORKING
+    queued = await send(api_client, auth_headers)
+    assert (await db.queue.by_operation(queued.json()["operation_id"]))["status"] == "pending"
+    await db.agents.delete("ike")
+    detail = await db.interactions.detail((await records(db))[0]["id"])
+    assert any(
+        e["kind"] == "completed" and e["outcome"] == "registration_retired"
+        for e in detail["lifecycle"]["items"]
+    )
+    assert detail["status"]["value"] not in ("pending", "deferred")

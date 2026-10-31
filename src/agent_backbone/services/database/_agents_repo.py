@@ -7,6 +7,7 @@ import uuid
 
 from sqlalchemy import text
 
+from agent_backbone.services.database._interaction_capture import event
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import now_iso
 
@@ -219,14 +220,35 @@ class AgentRepo(Repo):
                 ),
                 {"name": name, "now": now_iso()},
             )
+            retired = (
+                await conn.execute(
+                    text(
+                        "SELECT id,operation_id,source FROM message_queue WHERE session_name=:name "
+                        "AND status IN ('pending','in_progress','checkpoint','uncertain')"
+                    ),
+                    {"name": name},
+                )
+            ).fetchall()
+            now = now_iso()
             await conn.execute(
                 text(
                     "UPDATE message_queue SET status='expired', delivered_at=:now, leased_at=NULL "
                     "WHERE session_name=:name "
                     "AND status IN ('pending','in_progress','checkpoint','uncertain')"
                 ),
-                {"name": name, "now": now_iso()},
+                {"name": name, "now": now},
             )
+            for queue_id, operation_id, source in retired:
+                # The interaction ends with its registration, as a retired queue row does.
+                await event(
+                    conn,
+                    operation_id,
+                    "completed",
+                    outcome="registration_retired",
+                    source=source or "",
+                    at=now,
+                    queue_id=queue_id,
+                )
             await conn.execute(
                 text(
                     "UPDATE event_outbox SET status='skipped', updated_at=:now "
