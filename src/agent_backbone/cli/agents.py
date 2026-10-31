@@ -933,6 +933,8 @@ async def _tell(args: argparse.Namespace) -> int:
         "message": text,
         "priority": args.priority,
     }
+    if not boot.client_agent and not os.environ.get("BACKBONE_AGENT"):
+        payload["interaction"] = {"actor": "owner"}
     result = await _common.api(boot, "POST", "/api/messages", json_body=payload, timeout=30.0)
     if result is None:
         print(_common.unreachable())
@@ -959,6 +961,8 @@ async def _tell(args: argparse.Namespace) -> int:
 
 async def _steer(boot, agent: str, text: str, sender: str) -> int:
     payload = {"target_session": agent, "from_entity": sender, "message": text}
+    if not boot.client_agent and not os.environ.get("BACKBONE_AGENT"):
+        payload["interaction"] = {"actor": "owner"}
     result = await _common.api(boot, "POST", "/api/steer", json_body=payload, timeout=30.0)
     if result is None:
         print(_common.unreachable())

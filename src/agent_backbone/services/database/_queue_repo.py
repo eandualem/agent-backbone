@@ -16,6 +16,7 @@ from agent_backbone.models import (
     SUBSCRIPTION_KIND,
 )
 from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
+from agent_backbone.services.database._interaction_capture import capture, event
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 
@@ -133,6 +134,17 @@ class QueueRepo(Repo):
             )
             return {row[0] for row in result}
 
+    async def pending_operation(self, session_name, message, sender, source_key):
+        async with self._tx() as conn:
+            return await conn.scalar(
+                text(
+                    "SELECT operation_id FROM message_queue WHERE session_name=:session "
+                    "AND dedup_key=:key AND delivery_kind!='issue' "
+                    "AND status IN ('pending','in_progress','checkpoint','uncertain')"
+                ),
+                {"session": session_name, "key": dedup_key_for(message, sender, source_key)},
+            )
+
     async def enqueue(
         self,
         *,
@@ -149,6 +161,7 @@ class QueueRepo(Repo):
         uncertain: bool = False,
         held_for_inbox: bool = False,
         priority: int = 0,
+        interaction: dict | None = None,
     ) -> EnqueueResult:
         """Store a message for later delivery.
 
@@ -196,6 +209,26 @@ class QueueRepo(Repo):
                 result = await conn.execute(text(sql), params)
                 row = result.fetchone()
                 if row is not None:
+                    await capture(
+                        conn,
+                        operation_id=params["operation_id"],
+                        message=message,
+                        sender=sender,
+                        recipient=session_name,
+                        kind=delivery_kind,
+                        source=source,
+                        metadata=interaction,
+                    )
+                    await event(
+                        conn,
+                        params["operation_id"],
+                        "queued",
+                        outcome=params["initial_status"],
+                        source=source,
+                        at=params["enqueued_at"],
+                        time_basis="recorded",
+                        queue_id=row._mapping["id"],
+                    )
                     return EnqueueResult("inserted", row._mapping["id"], params["operation_id"])
 
                 # Resolve the exact conflict key, including a row leased by a
@@ -571,6 +604,19 @@ class QueueRepo(Repo):
             if row is not None:
                 row = dict(row)
                 await self._ensure_operation_id(conn, row)
+                await event(
+                    conn,
+                    row["operation_id"],
+                    "completed",
+                    outcome=(
+                        "registration_retired" if reason == "registration_changed" else "cancelled"
+                    )
+                    if reason and reason != "already_delivered"
+                    else "delivered",
+                    source=row["source"],
+                    at=row["delivered_at"],
+                    queue_id=message_id,
+                )
         if row is not None and reason is not None:
             await self._record_lifecycle(row, f"retired_{reason}", reason=reason)
 
@@ -587,6 +633,24 @@ class QueueRepo(Repo):
         self, row, code: str, *, reason: str | None = None, delivery_id: int | None = None
     ) -> None:
         """Persist metadata after completion; diagnostics cannot roll back the queue."""
+        async with self._tx() as conn:
+            await event(
+                conn,
+                row.get("operation_id"),
+                code,
+                outcome=(
+                    "expired"
+                    if code == "queue_expired"
+                    else "delivered"
+                    if reason == "already_delivered"
+                    else "registration_retired"
+                    if reason == "registration_changed"
+                    else "cancelled"
+                ),
+                source=row["source"],
+                at=row.get("delivered_at") or now_iso(),
+                queue_id=row["id"],
+            )
         await DiagnosticRepo(self._engine).record(
             category="queue",
             code=code,
@@ -878,6 +942,16 @@ class QueueRepo(Repo):
             rows = [dict(r) for r in result.mappings()]
             for row in rows:
                 await self._ensure_operation_id(conn, row)
+                await event(
+                    conn,
+                    row["operation_id"],
+                    "acknowledged",
+                    outcome="acknowledged",
+                    source="agent-checkpoint",
+                    at=params["now"],
+                    time_basis="recorded",
+                    queue_id=row["id"],
+                )
                 await conn.execute(
                     text(
                         "INSERT INTO deliveries (operation_id,kind,repo,issue_number,target_entity,"

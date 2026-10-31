@@ -1,0 +1,368 @@
+{
+  "$defs": {
+    "Actor": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "agent",
+            "owner",
+            "external",
+            "unknown"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Id"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "name_at_capture": {
+          "title": "Name At Capture",
+          "type": "string"
+        },
+        "attribution": {
+          "enum": [
+            "credential_bound",
+            "operator_asserted",
+            "signed",
+            "unverified",
+            "system"
+          ],
+          "title": "Attribution",
+          "type": "string"
+        },
+        "retired": {
+          "default": false,
+          "title": "Retired",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "name",
+        "name_at_capture",
+        "attribution"
+      ],
+      "title": "Actor",
+      "type": "object"
+    },
+    "AgentSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/Actor"
+        },
+        "runtime": {
+          "title": "Runtime",
+          "type": "string"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        },
+        "counts": {
+          "$ref": "#/$defs/Counts"
+        },
+        "counterparties": {
+          "items": {
+            "$ref": "#/$defs/Actor"
+          },
+          "title": "Counterparties",
+          "type": "array"
+        },
+        "latest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LastInteraction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "previous": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LastInteraction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ticks": {
+          "items": {
+            "$ref": "#/$defs/Tick"
+          },
+          "title": "Ticks",
+          "type": "array"
+        },
+        "ticks_truncated": {
+          "title": "Ticks Truncated",
+          "type": "boolean"
+        },
+        "conversation_supported": {
+          "title": "Conversation Supported",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "agent",
+        "runtime",
+        "state",
+        "reason",
+        "counts",
+        "counterparties",
+        "latest",
+        "previous",
+        "ticks",
+        "ticks_truncated",
+        "conversation_supported"
+      ],
+      "title": "AgentSummary",
+      "type": "object"
+    },
+    "Counts": {
+      "additionalProperties": false,
+      "properties": {
+        "sent": {
+          "title": "Sent",
+          "type": "integer"
+        },
+        "received": {
+          "title": "Received",
+          "type": "integer"
+        },
+        "not_delivered": {
+          "title": "Not Delivered",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sent",
+        "received",
+        "not_delivered"
+      ],
+      "title": "Counts",
+      "type": "object"
+    },
+    "Coverage": {
+      "additionalProperties": false,
+      "properties": {
+        "since": {
+          "title": "Since",
+          "type": "string"
+        },
+        "until": {
+          "title": "Until",
+          "type": "string"
+        },
+        "capture_started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Capture Started At"
+        },
+        "retained_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Retained From"
+        },
+        "body_retained_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Retained From"
+        },
+        "as_of": {
+          "title": "As Of",
+          "type": "string"
+        },
+        "completeness": {
+          "enum": [
+            "partial",
+            "complete_within_declared_scope",
+            "unavailable"
+          ],
+          "title": "Completeness",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        },
+        "declared_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Declared Scope",
+          "type": "array"
+        },
+        "truncated": {
+          "title": "Truncated",
+          "type": "boolean"
+        },
+        "state_history": {
+          "const": "observed_partial",
+          "default": "observed_partial",
+          "title": "State History",
+          "type": "string"
+        }
+      },
+      "required": [
+        "since",
+        "until",
+        "capture_started_at",
+        "retained_from",
+        "as_of",
+        "completeness",
+        "reasons",
+        "declared_scope",
+        "truncated"
+      ],
+      "title": "Coverage",
+      "type": "object"
+    },
+    "LastInteraction": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "time": {
+          "title": "Time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "time"
+      ],
+      "title": "LastInteraction",
+      "type": "object"
+    },
+    "Tick": {
+      "additionalProperties": false,
+      "properties": {
+        "interaction_id": {
+          "title": "Interaction Id",
+          "type": "string"
+        },
+        "direction": {
+          "enum": [
+            "sent",
+            "received"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "time": {
+          "title": "Time",
+          "type": "string"
+        },
+        "time_basis": {
+          "enum": [
+            "recorded",
+            "observed",
+            "legacy"
+          ],
+          "title": "Time Basis",
+          "type": "string"
+        },
+        "delivered": {
+          "title": "Delivered",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "interaction_id",
+        "direction",
+        "time",
+        "time_basis",
+        "delivered"
+      ],
+      "title": "Tick",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/AgentSummary"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "snapshot": {
+      "title": "Snapshot",
+      "type": "string"
+    },
+    "coverage": {
+      "$ref": "#/$defs/Coverage"
+    },
+    "conversation_supported": {
+      "title": "Conversation Supported",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "items",
+    "snapshot",
+    "coverage",
+    "conversation_supported"
+  ],
+  "title": "Summary",
+  "type": "object"
+}

@@ -380,7 +380,7 @@ async def test_the_hint_waits_until_after_the_reply(config, db):
         reply = await send_message(
             MessageRequest(target_session="ike", from_entity="bell", message="hi"),
             background,
-            request=SimpleNamespace(state=SimpleNamespace()),
+            request=SimpleNamespace(state=SimpleNamespace(credential_role="operator")),
             config=config,
             db=db,
             feed=feed,

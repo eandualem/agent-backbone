@@ -10,6 +10,7 @@ from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from agent_backbone.api.interaction_models import InteractionInput
 from agent_backbone.services.agents import AgentState, EnrichedAgent
 
 T = TypeVar("T")
@@ -519,6 +520,7 @@ class MessageRequest(BaseModel):
     message: str
     priority: bool = False
     owner_confirmation: OwnerConfirmation | None = None
+    interaction: InteractionInput | None = None
 
     @field_validator("from_entity")
     @classmethod
@@ -535,6 +537,7 @@ class SteerRequest(BaseModel):
     from_entity: str
     message: str = Field(min_length=1, max_length=4000)
     owner_confirmation: OwnerConfirmation | None = None
+    interaction: InteractionInput | None = None
 
     _sender = field_validator("from_entity")(MessageRequest._sender_must_fit_the_envelope.__func__)
 

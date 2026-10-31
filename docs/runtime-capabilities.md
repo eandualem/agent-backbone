@@ -39,6 +39,7 @@ version differs.
 
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
+| Captured interaction history and message-anchored owner discussion | ✅ API capture/read checked; delivery retains its separate runtime coverage; no live model call. | ✅ API capture/read checked; delivery retains its separate runtime coverage; no live model call. | ✅ API capture/read checked; delivery retains its separate runtime coverage; no live model call. | ✅ API capture/read checked; delivery retains its separate runtime coverage; no live model call. | ✅ API capture/read checked; delivery retains its separate runtime coverage; no live model call. | ✅ API capture/read checked; delivery retains its separate runtime coverage; no live model call. | ✅ API capture/read checked; delivery retains its separate runtime coverage; no live model call. |
 | Owned Python launch helpers preserve the engine inventory | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Explicit first-agent setup with durable retry and preflight cancellation receipts | ✅ working-installation live check pending | ✅ working-installation live check pending | ❌ installer hook preparation is not implemented | ✅ working-installation live check pending | ❌ installer hook preparation is not implemented | ❌ installer hook preparation is not implemented | n/a |
 | Read-only runtime discovery for setup | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -100,6 +101,7 @@ version differs.
 
 | Capability | Fallback where it is unavailable |
 |---|---|
+| Captured interaction history and message-anchored owner discussion | Use Activity for partial delivery observations; original missing bodies cannot be recovered. |
 | Owned Python launch helpers preserve the engine inventory | Replace an older payload with a corrected build; reinstall saved hook and Chrome host commands with that build. Do not edit its inventory. |
 | Explicit first-agent setup with durable retry and preflight cancellation receipts | Use the documented agent-start flow; do not retry an uncertain launch or greeting as a new request. |
 | Read-only runtime discovery for setup | Binary presence is not login; use the runtime's visible sign-in flow. |

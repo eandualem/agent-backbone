@@ -22,6 +22,7 @@ from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
 from agent_backbone.services.database._documents_repo import DocumentRepo
 from agent_backbone.services.database._events_repo import EventRepo
 from agent_backbone.services.database._fleet_repo import FleetSnapshotRepo
+from agent_backbone.services.database._interactions_repo import InteractionRepo
 from agent_backbone.services.database._outbox_repo import OutboxRepo
 from agent_backbone.services.database._queue_repo import QueueRepo
 from agent_backbone.services.database._reports_repo import ReportRepo
@@ -225,6 +226,7 @@ class BackboneDB:
         self._engine: AsyncEngine | None = None
         engine = lambda: self.engine  # noqa: E731 — the repos read the live engine
         self.deliveries = DeliveryRepo(engine)
+        self.interactions = InteractionRepo(engine)
         self.queue = QueueRepo(engine)
         self.reports = ReportRepo(engine)
         self.documents = DocumentRepo(engine)

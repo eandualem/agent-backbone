@@ -14,6 +14,9 @@ from agent_backbone.services.database.backbone_db import BackboneDB, metadata
 from tests.support import queue_row
 
 _EXPECTED_TABLES = {
+    "interactions",
+    "interaction_events",
+    "interaction_coverage",
     "acknowledgments",
     "agent_states",
     "agent_state_history",
@@ -61,6 +64,10 @@ _EXPECTED_TABLES = {
 }
 
 _EXPECTED_INDEXES = {
+    "idx_interactions_sender",
+    "idx_interactions_recipient",
+    "idx_interaction_events_time",
+    "idx_interaction_events_operation",
     "idx_state_history_agent",
     "idx_state_history_at",
     "uq_agents_report_identity",

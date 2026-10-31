@@ -983,3 +983,57 @@ class CurrentPlanRequestORM(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     receipt: Mapped[str] = mapped_column(Text, nullable=False)
     __table_args__ = (Index("idx_current_plan_requests_created", "created_at"),)
+
+
+class InteractionORM(Base):
+    """Immutable accepted message; body pruning never changes its identity."""
+
+    __tablename__ = "interactions"
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    operation_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    accepted_at: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    sender: Mapped[str] = mapped_column(Text, nullable=False)
+    recipient: Mapped[str] = mapped_column(Text, nullable=False)
+    sender_id: Mapped[str | None] = mapped_column(Text)
+    recipient_id: Mapped[str | None] = mapped_column(Text)
+    original_target: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str | None] = mapped_column(Text)
+    body_format: Mapped[str] = mapped_column(Text, nullable=False, server_default="text")
+    preview: Mapped[str] = mapped_column(Text, nullable=False)
+    relations: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    __table_args__ = (
+        Index("idx_interactions_sender", "sender_id", "accepted_at"),
+        Index("idx_interactions_recipient", "recipient_id", "accepted_at"),
+    )
+
+
+class InteractionEventORM(Base):
+    """Append-only transport observations; never evidence of task completion."""
+
+    __tablename__ = "interaction_events"
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    interaction_id: Mapped[str] = mapped_column(Text, nullable=False)
+    operation_id: Mapped[str] = mapped_column(Text, nullable=False)
+    event_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    time: Mapped[str] = mapped_column(Text, nullable=False)
+    time_basis: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    delivery_id: Mapped[int | None] = mapped_column(BigInteger)
+    queue_id: Mapped[int | None] = mapped_column(BigInteger)
+    __table_args__ = (
+        Index("idx_interaction_events_time", "interaction_id", "time", "id"),
+        Index("idx_interaction_events_operation", "operation_id"),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class InteractionCoverageORM(Base):
+    __tablename__ = "interaction_coverage"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    capture_started_at: Mapped[str] = mapped_column(Text, nullable=False)
+    retained_from: Mapped[str] = mapped_column(Text, nullable=False)

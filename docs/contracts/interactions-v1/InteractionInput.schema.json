@@ -1,0 +1,101 @@
+{
+  "$defs": {
+    "RelationInput": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "reply_to",
+            "corrects",
+            "for_owner_request",
+            "asked_in_conversation",
+            "from_report"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/RelationTarget"
+        }
+      },
+      "required": [
+        "type",
+        "target"
+      ],
+      "title": "RelationInput",
+      "type": "object"
+    },
+    "RelationTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "interaction",
+            "report",
+            "conversation",
+            "owner_request"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "artifact_kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Kind"
+        },
+        "entry_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Entry Id"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "title": "RelationTarget",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Optional attribution and explicit links on an existing send request.",
+  "properties": {
+    "actor": {
+      "default": "agent",
+      "enum": [
+        "agent",
+        "owner"
+      ],
+      "title": "Actor",
+      "type": "string"
+    },
+    "relations": {
+      "items": {
+        "$ref": "#/$defs/RelationInput"
+      },
+      "maxItems": 20,
+      "title": "Relations",
+      "type": "array"
+    }
+  },
+  "title": "InteractionInput",
+  "type": "object"
+}
