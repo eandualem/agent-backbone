@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "items": [
+    {
+      "id": "101",
+      "agent_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "name_at_observation": "coordinator",
+      "since": "2026-10-31T10:00:00.000000Z",
+      "until": "2026-10-31T10:01:00.000000Z",
+      "state": "busy",
+      "reason": null,
+      "first_observed_at": "2026-10-31T10:00:00.000000Z",
+      "last_observed_at": "2026-10-31T10:01:00.000000Z",
+      "observation_ids": [
+        "101",
+        "102"
+      ],
+      "basis": "matching_samples",
+      "time_basis": "observed",
+      "evidence": [
+        "Illustrative fixture only; matching reconciled state samples"
+      ]
+    }
+  ],
+  "coverage": {
+    "since": "2026-10-31T10:00:00.000000Z",
+    "until": "2026-10-31T10:05:00.000000Z",
+    "retained_from": "2026-10-31T10:00:00.000000Z",
+    "completeness": "sampled_partial",
+    "reasons": [
+      "sampling_does_not_measure_continuous_state",
+      "legacy_name_only_excluded"
+    ],
+    "max_sample_gap_seconds": 120,
+    "legacy_name_only_excluded": true,
+    "unknown_outside_returned_spans": true
+  },
+  "snapshot": "illustrative-token-not-valid-for-requests",
+  "next_cursor": null
+}

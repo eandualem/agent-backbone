@@ -116,7 +116,8 @@
         "reason": null,
         "total": 0,
         "last_entry_at": null
-      }
+      },
+      "conversation_entry": null
     },
     {
       "id": "22222222222222222222222222222222",
@@ -212,7 +213,8 @@
         "reason": null,
         "total": 0,
         "last_entry_at": null
-      }
+      },
+      "conversation_entry": null
     },
     {
       "id": "33333333333333333333333333333333",
@@ -308,7 +310,8 @@
         "reason": null,
         "total": 0,
         "last_entry_at": null
-      }
+      },
+      "conversation_entry": null
     }
   ],
   "next_cursor": null,
@@ -332,6 +335,8 @@
       "owner_questions"
     ],
     "truncated": false,
-    "state_history": "observed_partial"
+    "state_history": "observed_partial",
+    "message_intervals": [],
+    "quiet_scope": "capture_enabled_backbone_paths"
   }
 }

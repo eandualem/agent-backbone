@@ -90,6 +90,28 @@ class ConversationCapability(Wire):
     last_entry_at: str | None
 
 
+class ConversationEntryMetadata(Wire):
+    kind: str
+    artifact_id: str
+    entry_id: int
+    entry_kind: str
+    created_at: str
+    author_type: str
+    author_id: str
+    author_name: str
+    recipient_id: str | None
+    recipient_name: str | None
+    in_reply_to: int | None
+    anchor: dict | None
+    anchored_interaction_id: str | None
+
+
+class MessageCoverageInterval(Wire):
+    since: str
+    until: str
+    completeness: Literal["complete_within_declared_scope"]
+
+
 class Interaction(Wire):
     id: str
     operation_id: str
@@ -108,6 +130,7 @@ class Interaction(Wire):
     relations: list[Relation]
     relations_truncated: bool = False
     conversation: ConversationCapability
+    conversation_entry: ConversationEntryMetadata | None = None
 
 
 class Coverage(Wire):
@@ -122,6 +145,8 @@ class Coverage(Wire):
     declared_scope: list[str]
     truncated: bool
     state_history: Literal["observed_partial"] = "observed_partial"
+    message_intervals: list[MessageCoverageInterval] = Field(default_factory=list)
+    quiet_scope: Literal["capture_enabled_backbone_paths"] = "capture_enabled_backbone_paths"
 
 
 class InteractionPage(Wire):
@@ -185,3 +210,38 @@ class InteractionInput(Wire):
 
     actor: Literal["agent", "owner"] = "agent"
     relations: list[RelationInput] = Field(default_factory=list, max_length=20)
+
+
+class ObservedStateSpan(Wire):
+    id: str
+    agent_id: str
+    name_at_observation: str
+    since: str
+    until: str
+    state: str
+    reason: str | None
+    first_observed_at: str
+    last_observed_at: str
+    observation_ids: list[str]
+    basis: Literal["matching_samples", "point_observation"]
+    time_basis: Literal["observed"] = "observed"
+    evidence: list[str]
+
+
+class StateCoverage(Wire):
+    since: str
+    until: str
+    retained_from: str | None
+    completeness: Literal["sampled_partial", "unavailable"]
+    reasons: list[str]
+    max_sample_gap_seconds: int
+    legacy_name_only_excluded: bool
+    unknown_outside_returned_spans: bool
+
+
+class StateSpanPage(Wire):
+    schema_version: Literal[1] = 1
+    items: list[ObservedStateSpan]
+    coverage: StateCoverage
+    snapshot: str
+    next_cursor: str | None

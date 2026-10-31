@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING
 
@@ -45,6 +46,7 @@ class SessionFeed:
         self._sio = sio
         self._ttl = ttl_seconds
         self._db = db
+        self._recorder_id = uuid.uuid4().hex
         self._history_task: asyncio.Task[None] | None = None
         self._closed = False
         self._cache: list[EnrichedAgent] = []
@@ -71,7 +73,9 @@ class SessionFeed:
         async with self._lock:
             if not force_refresh and self._fresh():
                 return self._cache
-            self._cache = await build_session_snapshot(self._config())
+            config = self._config()
+            registrations = {spec.name: spec.registration_id for spec in config.agents}
+            self._cache = await build_session_snapshot(config)
             if (
                 not self._closed
                 and self._db is not None
@@ -79,7 +83,9 @@ class SessionFeed:
             ):
                 self._history_task = asyncio.create_task(
                     self._record_history(
-                        [(a.name, a.state, a.reason) for a in self._cache if a.configured]
+                        [(a.name, a.state, a.reason) for a in self._cache if a.configured],
+                        registrations,
+                        {a.name: a.evidence for a in self._cache if a.configured},
                     )
                 )
                 try:
@@ -108,9 +114,18 @@ class SessionFeed:
                     self._history_task.cancel()
                 await asyncio.gather(self._history_task, return_exceptions=True)
 
-    async def _record_history(self, states: list[tuple[str, str, str | None]]) -> None:
+    async def _record_history(
+        self, states: list[tuple[str, str, str | None]], registrations, evidence
+    ) -> None:
         try:
             await self._db.state_history.observe(states)
+            await self._db.state_history.observe_registered(
+                states,
+                registrations=registrations,
+                evidence=evidence,
+                recorder_id=self._recorder_id,
+            )
+            await self._db.interactions.checkpoint(self._recorder_id)
         except Exception:
             log.exception("Failed to record state history (non-fatal)")
 

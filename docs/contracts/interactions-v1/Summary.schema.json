@@ -251,6 +251,19 @@
           "default": "observed_partial",
           "title": "State History",
           "type": "string"
+        },
+        "message_intervals": {
+          "items": {
+            "$ref": "#/$defs/MessageCoverageInterval"
+          },
+          "title": "Message Intervals",
+          "type": "array"
+        },
+        "quiet_scope": {
+          "const": "capture_enabled_backbone_paths",
+          "default": "capture_enabled_backbone_paths",
+          "title": "Quiet Scope",
+          "type": "string"
         }
       },
       "required": [
@@ -284,6 +297,31 @@
         "time"
       ],
       "title": "LastInteraction",
+      "type": "object"
+    },
+    "MessageCoverageInterval": {
+      "additionalProperties": false,
+      "properties": {
+        "since": {
+          "title": "Since",
+          "type": "string"
+        },
+        "until": {
+          "title": "Until",
+          "type": "string"
+        },
+        "completeness": {
+          "const": "complete_within_declared_scope",
+          "title": "Completeness",
+          "type": "string"
+        }
+      },
+      "required": [
+        "since",
+        "until",
+        "completeness"
+      ],
+      "title": "MessageCoverageInterval",
       "type": "object"
     },
     "Tick": {

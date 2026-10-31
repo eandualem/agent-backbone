@@ -13,6 +13,7 @@ import os
 import secrets
 import socket
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -23,7 +24,7 @@ from fastapi.responses import JSONResponse
 from agent_backbone.api.app import create_app
 from agent_backbone.config import BackboneConfig, BackboneSection, agents_from_rows
 from agent_backbone.services.agents import EnrichedAgent
-from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.database import BackboneDB, Limits, format_iso
 
 
 async def build(directory):
@@ -69,6 +70,15 @@ async def build(directory):
         )
     )
     ids = {r["name"]: r["report_identity"] for r in rows}
+    baseline = datetime.now(UTC) - timedelta(minutes=10)
+
+    def stamp(minute):
+        return format_iso(baseline + timedelta(minutes=minute))
+
+    with patch(
+        "agent_backbone.services.database._interaction_observations.now_iso", return_value=stamp(0)
+    ):
+        await db.interactions.checkpoint("illustrative-recorder")
     sender = await db.interactions.attribution("coordinator", ids["coordinator"])
     interaction = await db.interactions.capture(
         operation_id="1" * 32,
@@ -76,28 +86,76 @@ async def build(directory):
         sender="coordinator",
         recipient="researcher",
         source="fixture",
-        metadata={"sender": sender},
+        metadata={"sender": sender, "accepted_at": stamp(2)},
     )
-    await db.deliveries.record(
-        issue_number=None,
-        target_entity="researcher",
-        session_name="researcher",
-        outcome="delivered",
-        source="fixture",
-        operation_id="1" * 32,
-    )
+    with patch("agent_backbone.services.database._delivery_repo.now_iso", return_value=stamp(2.01)):
+        await db.deliveries.record(
+            issue_number=None,
+            target_entity="researcher",
+            session_name="researcher",
+            outcome="delivered",
+            source="fixture",
+            operation_id="1" * 32,
+        )
     owner = await db.interactions.attribution("", owner_origin=True)
-    await db.interactions.capture(
+    owner_interaction = await db.interactions.capture(
         operation_id="2" * 32,
         message="ILLUSTRATIVE FIXTURE: explain this example.",
         sender="",
         recipient="coordinator",
         source="fixture",
-        metadata={"sender": owner},
+        metadata={"sender": owner, "accepted_at": stamp(5)},
     )
     await db.interactions.observe(
-        "2" * 32, "queued", outcome="pending", source="fixture", time_basis="recorded"
+        "2" * 32, "queued", outcome="pending", source="fixture", time_basis="recorded", at=stamp(5)
     )
+
+    entry_ids = []
+    for minute, original in ((7, interaction), (8, owner_interaction), (9, interaction)):
+        with (
+            patch(
+                "agent_backbone.services.database._conversations_repo.now_iso",
+                return_value=stamp(minute),
+            ),
+            patch(
+                "agent_backbone.services.database._interaction_capture.now_iso",
+                return_value=stamp(minute),
+            ),
+        ):
+            entry, _, _ = await db.conversations.post(
+                "interaction",
+                original,
+                author=None,
+                request_id=f"fixture-discussion-{minute}",
+                text=f"ILLUSTRATIVE FIXTURE entry at minute {minute}; no delivery.",
+                recipient="coordinator",
+                limits=Limits(max_messages=100, owner_messages_per_hour=100),
+                compose=lambda entry, artifact: "ILLUSTRATIVE FIXTURE; delivery disabled",
+            )
+            entry_ids.append(entry["id"])
+    for minute in range(11):
+        states = [
+            ("coordinator", "busy" if minute < 4 or minute >= 9 else "idle", None),
+            ("researcher", "busy" if minute < 6 else "idle", None),
+        ]
+        if minute in (0, 10):
+            states.append(("writer", "offline", None))
+        with patch(
+            "agent_backbone.services.database._state_history_repo.now_iso",
+            return_value=stamp(minute),
+        ):
+            await db.state_history.observe_registered(
+                states,
+                registrations=ids,
+                evidence={name: ["ILLUSTRATIVE fixture samples; no live runtime"] for name in ids},
+                recorder_id="illustrative-recorder",
+            )
+        if minute:
+            with patch(
+                "agent_backbone.services.database._interaction_observations.now_iso",
+                return_value=stamp(minute),
+            ):
+                await db.interactions.checkpoint("illustrative-recorder")
 
     @app.middleware("http")
     async def only_fixture_surface(request, call_next):
@@ -128,6 +186,10 @@ async def build(directory):
         "data_dir": str(directory),
         "agents": ids,
         "interaction": interaction,
+        "owner_interaction": owner_interaction,
+        "discussion_entry_ids": entry_ids,
+        "illustrative_window": {"since": stamp(0), "until": stamp(10)},
+        "observations_are_fixtures": True,
         "real_agents": False,
         "model_calls": False,
         "service_manager": False,

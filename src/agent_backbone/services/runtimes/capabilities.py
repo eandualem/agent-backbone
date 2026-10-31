@@ -209,37 +209,37 @@ CAPABILITIES: tuple[Capability, ...] = (
         ),
         implemented=lambda rt: True,
         claude=_ok(
-            "tests/unit/api/routes/test_api_interactions.py",
+            "tests/unit/api/routes/test_interaction_observations.py",
             "API capture/read checked; delivery retains its separate runtime coverage; "
             "no live model call.",
         ),
         codex=_ok(
-            "tests/unit/api/routes/test_api_interactions.py",
+            "tests/unit/api/routes/test_interaction_observations.py",
             "API capture/read checked; delivery retains its separate runtime coverage; "
             "no live model call.",
         ),
         opencode=_ok(
-            "tests/unit/api/routes/test_api_interactions.py",
+            "tests/unit/api/routes/test_interaction_observations.py",
             "API capture/read checked; delivery retains its separate runtime coverage; "
             "no live model call.",
         ),
         gemini=_ok(
-            "tests/unit/api/routes/test_api_interactions.py",
+            "tests/unit/api/routes/test_interaction_observations.py",
             "API capture/read checked; delivery retains its separate runtime coverage; "
             "no live model call.",
         ),
         deepcode=_ok(
-            "tests/unit/api/routes/test_api_interactions.py",
+            "tests/unit/api/routes/test_interaction_observations.py",
             "API capture/read checked; delivery retains its separate runtime coverage; "
             "no live model call.",
         ),
         aider=_ok(
-            "tests/unit/api/routes/test_api_interactions.py",
+            "tests/unit/api/routes/test_interaction_observations.py",
             "API capture/read checked; delivery retains its separate runtime coverage; "
             "no live model call.",
         ),
         shell=_ok(
-            "tests/unit/api/routes/test_api_interactions.py",
+            "tests/unit/api/routes/test_interaction_observations.py",
             "API capture/read checked; delivery retains its separate runtime coverage; "
             "no live model call.",
         ),
