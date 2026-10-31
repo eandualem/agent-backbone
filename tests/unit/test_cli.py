@@ -878,6 +878,7 @@ class TestTell:
             "from_entity": "me",
             "message": "hello world",
             "priority": False,
+            "interaction": {"actor": "owner"},
         }
         assert kwargs["headers"] == {"Authorization": "Bearer k"}
         assert json.loads(capsys.readouterr().out)["ok"] is True

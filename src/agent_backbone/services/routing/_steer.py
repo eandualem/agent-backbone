@@ -79,6 +79,7 @@ async def steer_agent(
     relay: bool = False,
     operation_id: str | None = None,
     claim_token: str | None = None,
+    interaction: dict | None = None,
 ) -> SteerReport:
     """Offer ``text`` to the agent's current turn, or refuse with the reason.
 
@@ -156,6 +157,15 @@ async def steer_agent(
                 "claim_lost",
                 evidence=[*evidence, "another request took over this confirmation's offer"],
             )
+        await db.interactions.capture(
+            operation_id=operation_id,
+            message=text,
+            sender=sender,
+            recipient=session_name,
+            kind="steer",
+            source=STEER_SOURCE,
+            metadata=interaction,
+        )
         delivery_id = await db.deliveries.record(
             issue_number=None,
             target_entity=session_name,

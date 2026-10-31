@@ -350,6 +350,7 @@ async def _enqueue(
     priority: bool = False,
     held_for_inbox: bool = False,
     withdraw_context: Callable[[int], str] | None = None,
+    interaction: dict | None = None,
 ) -> _QueueReceipt:
     """Store the message; say what happened (``stored`` / ``already_queued`` /
     ``failed``), or None when there is nothing to store it in."""
@@ -386,6 +387,7 @@ async def _enqueue(
                 **({"uncertain": True} if uncertain else {}),
                 **({"held_for_inbox": True} if held_for_inbox else {}),
                 **({"priority": 1} if priority else {}),
+                **({"interaction": interaction} if interaction else {}),
             )
     except Exception as exc:
         log.error(
@@ -440,6 +442,7 @@ async def safe_deliver(
     event_id: int | None = None,
     once: bool = False,
     check_effect=None,
+    interaction: dict | None = None,
 ) -> DeliveryReport:
     """Deliver ``message`` to ``session_name`` if the agent can take it, else queue it.
 
@@ -498,6 +501,12 @@ async def safe_deliver(
                     queue_id=held["id"],
                     held_for_inbox=held["status"] == "checkpoint",
                 )
+
+    if db is not None and requeue and kind != "issue":
+        # Reuse a real pending queue operation, never correlate by preview/time.
+        pending = await db.queue.pending_operation(session_name, message, sender, source_key)
+        if pending:
+            operation_id = pending
 
     # 1. Issue queue gate
     if kind == "issue" and trackable_issue:
@@ -609,6 +618,7 @@ async def safe_deliver(
                 uncertain=uncertain,
                 priority=priority,
                 held_for_inbox=held_for_inbox,
+                interaction=interaction,
                 withdraw_context=lambda row_id: claim_context(
                     config.state_dir, session_name, str(row_id)
                 ),
@@ -751,6 +761,16 @@ async def safe_deliver(
             # held as uncertain, never pasted again (``_serialized``).
             await db.signing.attempt(operation_id, begun=True)
         await check_before_effect(guard)
+        if db is not None and requeue:
+            await db.interactions.capture(
+                operation_id=operation_id,
+                message=message,
+                sender=sender,
+                recipient=session_name,
+                kind=kind,
+                source=source,
+                metadata=interaction,
+            )
         pasted_at = time.time()
         note_submission(config.state_dir, session_name)
         try:

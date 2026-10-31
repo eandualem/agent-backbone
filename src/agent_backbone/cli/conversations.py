@@ -28,7 +28,17 @@ def add_conversation_parsers(subparsers) -> None:
         "conversations", help="read and reply in the conversations on artifacts"
     )
     read.add_argument(
-        "--kind", choices=("document", "response", "report", "skill", "policy", "plan", "sheet")
+        "--kind",
+        choices=(
+            "document",
+            "response",
+            "report",
+            "skill",
+            "policy",
+            "plan",
+            "sheet",
+            "interaction",
+        ),
     )
     read.add_argument("--limit", type=int, choices=range(1, 201), metavar="1–200", default=50)
     read.add_argument("--after", help="the next page: the cursor a previous list printed")
@@ -134,6 +144,15 @@ async def _run(args) -> int:
 
 def _print_conversation(data) -> None:
     responsible = data["responsible"]
+    if original := data.get("original_context"):
+        print_record(
+            "Original message",
+            [
+                ("Recorded", original["accepted_at"]),
+                ("Body retention", original["body"]["level"]),
+                ("Text", original["body"]["text"] or "Not retained"),
+            ],
+        )
     print_record(
         f"{data['kind'].capitalize()} {data['artifact_id']}",
         [

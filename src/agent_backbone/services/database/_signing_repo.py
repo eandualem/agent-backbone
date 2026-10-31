@@ -14,6 +14,7 @@ import uuid
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from agent_backbone.services.database._interaction_capture import actor, capture, event
 from agent_backbone.services.database._queue_repo import _INSERT_COLUMNS
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso, parse_iso
@@ -701,7 +702,29 @@ class SigningRepo(Repo):
                     {**receipt, "at": now_iso()},
                 )
             ).fetchone()
+            await capture(
+                conn,
+                operation_id=receipt["operation_id"],
+                message=receipt["text"],
+                sender=receipt["sender"],
+                recipient=receipt["delivered_to"],
+                kind=receipt["kind"],
+                source="owner_confirmation",
+                metadata=(queue or {}).get("interaction")
+                or {
+                    "original_target": receipt["recipient"],
+                    "sender": await actor(conn, receipt["sender"], attribution="signed"),
+                },
+            )
             if queue is not None:
+                await event(
+                    conn,
+                    receipt["operation_id"],
+                    "queued",
+                    outcome="pending",
+                    source="owner_confirmation",
+                    time_basis="recorded",
+                )
                 await conn.execute(
                     text(f"INSERT INTO message_queue {_INSERT_COLUMNS}"),
                     {

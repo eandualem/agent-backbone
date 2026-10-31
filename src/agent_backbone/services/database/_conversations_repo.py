@@ -19,6 +19,10 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import Text, and_, case, func, insert, not_, or_, select, text, update
 
 from agent_backbone.services.database._conversation_events import append_revision
+from agent_backbone.services.database._interaction_capture import actor, capture, event, owner
+from agent_backbone.services.database._interaction_conversations import (
+    artifact as interaction_artifact,
+)
 from agent_backbone.services.database._plan_conversations import artifact as plan_artifact
 from agent_backbone.services.database._plan_conversations import record_revision, version_page
 from agent_backbone.services.database._repo import Repo
@@ -56,7 +60,7 @@ _S = ObservedSourceORM.__table__
 _SHEET = SheetORM.__table__
 _V = ObservedVersionORM.__table__
 
-KINDS = ("document", "response", "report", "skill", "policy", "plan", "sheet")
+KINDS = ("document", "response", "report", "skill", "policy", "plan", "sheet", "interaction")
 """Kinds with an adapter in this release."""
 OBSERVED = ("skill", "policy")
 """Kinds whose versions are snapshots Backbone takes when it reads their source."""
@@ -112,6 +116,10 @@ def _title(value: str) -> str:
 
 async def _artifact(conn, kind: str, artifact_id: str, revision_ids=()) -> dict:
     """Its title and versions (oldest first), each with its author."""
+    if kind == "interaction":
+        if interaction := await interaction_artifact(conn, artifact_id):
+            return interaction
+        raise UnknownArtifact(f"No interaction {artifact_id}.")
     if kind == "sheet":
         if sheet := await sheet_artifact(conn, artifact_id, revision_ids):
             return sheet
@@ -343,6 +351,8 @@ async def _registration(conn, name: str) -> str | None:
 
 
 async def _participant(conn, kind, artifact_id, artifact, agent_id: str) -> bool:
+    if kind == "interaction":
+        return agent_id in artifact["interaction_participants"]
     if agent_id == artifact["responsible_id"]:
         return True
     return bool(
@@ -429,10 +439,47 @@ async def _queue(
     recipient: tuple[str, str],
     compose: Compose,
     operation_id: str,
+    retry_of: str | None = None,
 ) -> None:
     """Insert one delivery operation for an owner message, bound to the
     registration that was checked: never re-resolved from the name, so a
     replacement agent with that name cannot receive it."""
+    await capture(
+        conn,
+        operation_id=operation_id,
+        message=entry["text"],
+        sender="owner",
+        recipient=recipient[1],
+        source="conversation",
+        metadata={
+            "sender": owner(),
+            "retry_of": retry_of,
+            "recipient": await actor(
+                conn, recipient[1], registration=recipient[0], attribution="system"
+            ),
+            "relations": [
+                {
+                    "type": "asked_in_conversation",
+                    "target": {
+                        "kind": "conversation",
+                        "id": artifact["artifact_id"],
+                        "artifact_kind": artifact["kind"],
+                        "entry_id": entry["id"],
+                    },
+                    "recorded_at": entry["created_at"],
+                    "provenance": "conversation_entry",
+                }
+            ],
+        },
+    )
+    await event(
+        conn,
+        operation_id,
+        "queued",
+        outcome="pending",
+        source="conversation",
+        time_basis="recorded",
+    )
     await conn.execute(
         insert(_Q).values(
             operation_id=operation_id,
@@ -501,7 +548,7 @@ class ConversationRepo(Repo):
                     .distinct()
                 )
             ).all()
-            known = {}
+            known = dict(artifact.get("interaction_participants", {}))
             if artifact["responsible_id"]:
                 known[artifact["responsible_id"]] = artifact["responsible_name"]
             for person in people:
@@ -522,6 +569,7 @@ class ConversationRepo(Repo):
             "title": artifact["title"],
             "latest_revision_id": artifact["latest"]["revision_id"],
             **source,
+            **({"original_context": artifact["original_context"]} if kind == "interaction" else {}),
             "responsible": responsible,
             "participants": [
                 {
@@ -548,6 +596,7 @@ class ConversationRepo(Repo):
         self,
         *,
         kind: str | None = None,
+        include_interactions: bool = True,
         keys: list[tuple[str, str]] = (),
         reader: str | None = None,
         after: int | None = None,
@@ -587,6 +636,8 @@ class ConversationRepo(Repo):
             )
             .group_by(_E.c.kind, _E.c.artifact_id)
         )
+        if not include_interactions:
+            query = query.where(_E.c.kind != "interaction")
         if kind is not None:
             query = query.where(_E.c.kind == kind)
         if keys:
@@ -676,6 +727,7 @@ class ConversationRepo(Repo):
         anchor: dict | None = None,
         in_reply_to: int | None = None,
         resulting_revision_id: str | None = None,
+        interaction_registration: str | None = None,
         limits: Limits,
         compose: Compose,
     ) -> tuple[dict, bool, str | None]:
@@ -756,6 +808,18 @@ class ConversationRepo(Repo):
                     f"This conversation has reached {limits.max_messages:,} messages.",
                 )
             versions = {v["revision_id"]: v for v in artifact["versions"]}
+            if kind == "interaction" and (
+                resulting_revision_id is not None
+                or (
+                    anchor
+                    and (anchor.get("sheet") is not None or anchor.get("item_id") is not None)
+                )
+            ):
+                raise ConversationRefused(
+                    422,
+                    "invalid_anchor",
+                    "An original message has no editable revision, Sheet cells or checklist items.",
+                )
             if kind == "plan":
                 anchor = _plan_anchor(artifact, anchor)
                 if artifact["current"] is not None:
@@ -845,11 +909,108 @@ class ConversationRepo(Repo):
                     update(_E).where(_E.c.id == entry_id).values(operation_id=operation_id)
                 )
             row = (await conn.execute(_entries().where(_E.c.id == entry_id))).one()
+            if author is not None:
+                # Agent replies are owner-visible publications, not terminal deliveries.
+                operation = uuid.uuid4().hex
+                relations = [
+                    {
+                        "type": "asked_in_conversation",
+                        "target": {
+                            "kind": "conversation",
+                            "id": artifact_id,
+                            "artifact_kind": kind,
+                            "entry_id": entry_id,
+                        },
+                        "recorded_at": row.created_at,
+                        "provenance": "conversation_entry",
+                    }
+                ]
+                if in_reply_to is not None:
+                    parent_op = await conn.scalar(
+                        select(_E.c.operation_id).where(_E.c.id == in_reply_to)
+                    )
+                    if parent_op:
+                        from agent_backbone.services.database.models import InteractionORM
+
+                        parent_id = await conn.scalar(
+                            select(InteractionORM.id).where(
+                                InteractionORM.operation_id == parent_op
+                            )
+                        )
+                        if parent_id:
+                            relations.append(
+                                {
+                                    "type": "reply_to",
+                                    "target": {"kind": "interaction", "id": parent_id},
+                                    "recorded_at": row.created_at,
+                                    "provenance": "conversation_in_reply_to",
+                                }
+                            )
+                await capture(
+                    conn,
+                    operation_id=operation,
+                    message=text,
+                    sender=author,
+                    recipient="owner",
+                    source="conversation",
+                    metadata={
+                        "sender": await actor(
+                            conn,
+                            author,
+                            registration=author_id,
+                            attribution="credential_bound"
+                            if interaction_registration == author_id
+                            else "unverified",
+                        ),
+                        "recipient": owner(),
+                        "relations": relations,
+                    },
+                )
+                await event(
+                    conn,
+                    operation,
+                    "published",
+                    outcome="delivered",
+                    source="conversation",
+                    time_basis="recorded",
+                )
+                await conn.execute(
+                    update(_E).where(_E.c.id == entry_id).values(operation_id=operation)
+                )
+            if kind == "interaction":
+                await event(
+                    conn,
+                    artifact["operation_id"],
+                    "discussion",
+                    source="conversation",
+                    time_basis="recorded",
+                )
             return _entry(row), True, target[1] if target else None
 
     async def _recipient(self, conn, recipient: str | None, artifact: dict) -> tuple[str, str]:
         """``(registration ID, current name)`` of the agent an owner message goes to.
         Never a new agent that merely has a retired registration's name."""
+        if artifact["kind"] == "interaction":
+            participants = artifact["interaction_participants"]
+            if recipient is None:
+                if len(participants) != 1:
+                    raise ConversationRefused(
+                        422, "recipient_required", "Choose a participant in this message."
+                    )
+                recipient = next(iter(participants))
+            identity = (
+                recipient if recipient in participants else await _registration(conn, recipient)
+            )
+            if identity not in participants:
+                raise ConversationRefused(
+                    403,
+                    "not_participant",
+                    "Recipient is not a verified participant in this message.",
+                )
+            name = await _locked_name(conn, identity)
+            if not name:
+                raise ConversationRefused(422, "recipient_retired", "This participant is retired.")
+            return identity, name
         if recipient is None:
             agent_id = artifact["responsible_id"]
             if name := await _locked_name(conn, agent_id):
@@ -952,6 +1113,7 @@ class ConversationRepo(Repo):
                         recipient=(row.recipient_id, target),
                         compose=compose,
                         operation_id=operation_id,
+                        retry_of=row.operation_id,
                     )
                     result = "queued"
                 else:

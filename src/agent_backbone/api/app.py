@@ -197,6 +197,7 @@ def _register_jobs(app: FastAPI):
         receipts = await db.signing.prune_receipts()
         return {
             "deliveries": await db.deliveries.prune(days),
+            "interactions": await db.interactions.prune(days),
             "events": await db.events.prune(days),
             "state_history": await db.state_history.prune(),
             # A settled batch's hook receipt must not outlive its row: queue ids
@@ -584,6 +585,7 @@ def create_app(config: BackboneConfig | None = None):
     from agent_backbone.api.routes.fleet import router as fleet_router
     from agent_backbone.api.routes.help import router as help_router
     from agent_backbone.api.routes.integrations import router as integrations_router
+    from agent_backbone.api.routes.interactions import router as interactions_router
     from agent_backbone.api.routes.issues import router as issues_router
     from agent_backbone.api.routes.messages import router as messages_router
     from agent_backbone.api.routes.onboarding import router as onboarding_router
@@ -611,6 +613,7 @@ def create_app(config: BackboneConfig | None = None):
         fleet_router,
         help_router,
         integrations_router,
+        interactions_router,
         issues_router,
         messages_router,
         plans_router,

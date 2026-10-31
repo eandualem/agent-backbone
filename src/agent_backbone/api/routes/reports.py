@@ -119,7 +119,10 @@ async def schema():
 
 @router.post("", response_model=PublicationResult, operation_id="publish_progress_report")
 async def publish_report(
-    publication: PublishReport, response: Response, db: BackboneDB = Depends(get_db)
+    publication: PublishReport,
+    response: Response,
+    request: Request,
+    db: BackboneDB = Depends(get_db),
 ):
     """Publish a short report for a known agent. Reuse request_id on retries.
 
@@ -128,7 +131,12 @@ async def publish_report(
     notification; the integration delivers it to the configured agents group.
     """
     try:
-        record, created = await db.reports.publish(publication)
+        record, created = await db.reports.publish(
+            publication,
+            interaction_registration=getattr(request.state, "credential_registration", None)
+            if getattr(request.state, "credential_agent", None) == publication.agent
+            else None,
+        )
     except KeyError as exc:
         raise HTTPException(404, "agent is not registered") from exc
     except ReportForbidden as exc:

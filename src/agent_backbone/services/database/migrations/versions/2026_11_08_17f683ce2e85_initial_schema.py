@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 13c735b3064d
+Revision ID: 17f683ce2e85
 Revises:
-Create Date: 2026-11-02 16:35:10.045099
+Create Date: 2026-11-08 02:33:21.798295
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "13c735b3064d"
+revision: str = "17f683ce2e85"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -370,6 +370,65 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_fleet_snapshots")),
         sqlite_autoincrement=True,
     )
+    op.create_table(
+        "interaction_coverage",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("capture_started_at", sa.Text(), nullable=False),
+        sa.Column("retained_from", sa.Text(), nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_interaction_coverage")),
+    )
+    op.create_table(
+        "interaction_events",
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            autoincrement=True,
+            nullable=False,
+        ),
+        sa.Column("interaction_id", sa.Text(), nullable=False),
+        sa.Column("operation_id", sa.Text(), nullable=False),
+        sa.Column("event_key", sa.Text(), nullable=False),
+        sa.Column("kind", sa.Text(), nullable=False),
+        sa.Column("time", sa.Text(), nullable=False),
+        sa.Column("time_basis", sa.Text(), nullable=False),
+        sa.Column("outcome", sa.Text(), nullable=True),
+        sa.Column("source", sa.Text(), nullable=False),
+        sa.Column("delivery_id", sa.BigInteger(), nullable=True),
+        sa.Column("queue_id", sa.BigInteger(), nullable=True),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_interaction_events")),
+        sa.UniqueConstraint("event_key", name=op.f("uq_interaction_events_event_key")),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("interaction_events", schema=None) as batch_op:
+        batch_op.create_index("idx_interaction_events_operation", ["operation_id"], unique=False)
+        batch_op.create_index(
+            "idx_interaction_events_time", ["interaction_id", "time", "id"], unique=False
+        )
+
+    op.create_table(
+        "interactions",
+        sa.Column("id", sa.Text(), nullable=False),
+        sa.Column("operation_id", sa.Text(), nullable=False),
+        sa.Column("accepted_at", sa.Text(), nullable=False),
+        sa.Column("kind", sa.Text(), nullable=False),
+        sa.Column("sender", sa.Text(), nullable=False),
+        sa.Column("recipient", sa.Text(), nullable=False),
+        sa.Column("sender_id", sa.Text(), nullable=True),
+        sa.Column("recipient_id", sa.Text(), nullable=True),
+        sa.Column("original_target", sa.Text(), nullable=False),
+        sa.Column("body", sa.Text(), nullable=True),
+        sa.Column("body_format", sa.Text(), server_default="text", nullable=False),
+        sa.Column("preview", sa.Text(), nullable=False),
+        sa.Column("relations", sa.Text(), server_default="[]", nullable=False),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_interactions")),
+        sa.UniqueConstraint("operation_id", name=op.f("uq_interactions_operation_id")),
+    )
+    with op.batch_alter_table("interactions", schema=None) as batch_op:
+        batch_op.create_index(
+            "idx_interactions_recipient", ["recipient_id", "accepted_at"], unique=False
+        )
+        batch_op.create_index("idx_interactions_sender", ["sender_id", "accepted_at"], unique=False)
+
     op.create_table(
         "issue_dependencies",
         sa.Column("repo", sa.Text(), server_default="", nullable=False),
@@ -937,6 +996,17 @@ def downgrade() -> None:
         batch_op.drop_index("idx_deps_sub")
 
     op.drop_table("issue_dependencies")
+    with op.batch_alter_table("interactions", schema=None) as batch_op:
+        batch_op.drop_index("idx_interactions_sender")
+        batch_op.drop_index("idx_interactions_recipient")
+
+    op.drop_table("interactions")
+    with op.batch_alter_table("interaction_events", schema=None) as batch_op:
+        batch_op.drop_index("idx_interaction_events_time")
+        batch_op.drop_index("idx_interaction_events_operation")
+
+    op.drop_table("interaction_events")
+    op.drop_table("interaction_coverage")
     op.drop_table("fleet_snapshots")
     with op.batch_alter_table("events", schema=None) as batch_op:
         batch_op.drop_index("idx_events_delivery_id_lower")

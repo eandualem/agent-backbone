@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_backbone.api import confirmations, validation
 from agent_backbone.api.deps import get_config, get_db, get_feed, registered_agent_or_404
+from agent_backbone.api.interaction_capture import metadata as interaction_metadata
 from agent_backbone.api.models import (
     MessageRequest,
     MessageResponse,
@@ -33,6 +34,7 @@ from agent_backbone.services.routing import (
 )
 
 log = logging.getLogger(__name__)
+
 
 router = APIRouter(prefix="/api", tags=["messages"])
 
@@ -75,6 +77,7 @@ async def send_message(
         priority=body.priority,
         delivery_kind="direct_message",
         sender=body.from_entity,
+        interaction=await interaction_metadata(request, body, db),
     )
 
     log.info(
@@ -119,6 +122,7 @@ async def _confirmed_message(body, target, signed, request, config, db) -> Messa
         "source": "api-messages",
         "sender": body.from_entity,
         "priority": int(body.priority),
+        "interaction": await interaction_metadata(request, body, db),
     }
     outcome, row = await confirmations.admit(
         db, signed, receipt, queued, is_fresh=confirmations.fresh(confirmation, signed)
@@ -192,6 +196,7 @@ async def steer(
             config,
             db=db,
             sender=body.from_entity,
+            interaction=await interaction_metadata(request, body, db),
             relay=signed is not None,
         )
     else:
@@ -253,6 +258,7 @@ async def steer(
             config,
             db=db,
             sender=body.from_entity,
+            interaction=await interaction_metadata(request, body, db),
             confirmation_id=confirmation.confirmation_id,
             operation_id=row["operation_id"],
             claim_token=token,

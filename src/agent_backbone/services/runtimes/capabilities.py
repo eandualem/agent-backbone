@@ -201,6 +201,51 @@ _RESPONSE_DELIVERY = (
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
+        "interaction-history",
+        "Captured interaction history and message-anchored owner discussion",
+        "src/agent_backbone/api/routes/interactions.py",
+        fallback=(
+            "Use Activity for partial delivery observations; "
+            "original missing bodies cannot be recovered."
+        ),
+        implemented=lambda rt: True,
+        claude=_ok(
+            "tests/unit/api/routes/test_api_interactions.py",
+            "API capture/read checked; delivery retains its separate runtime coverage; "
+            "no live model call.",
+        ),
+        codex=_ok(
+            "tests/unit/api/routes/test_api_interactions.py",
+            "API capture/read checked; delivery retains its separate runtime coverage; "
+            "no live model call.",
+        ),
+        opencode=_ok(
+            "tests/unit/api/routes/test_api_interactions.py",
+            "API capture/read checked; delivery retains its separate runtime coverage; "
+            "no live model call.",
+        ),
+        gemini=_ok(
+            "tests/unit/api/routes/test_api_interactions.py",
+            "API capture/read checked; delivery retains its separate runtime coverage; "
+            "no live model call.",
+        ),
+        deepcode=_ok(
+            "tests/unit/api/routes/test_api_interactions.py",
+            "API capture/read checked; delivery retains its separate runtime coverage; "
+            "no live model call.",
+        ),
+        aider=_ok(
+            "tests/unit/api/routes/test_api_interactions.py",
+            "API capture/read checked; delivery retains its separate runtime coverage; "
+            "no live model call.",
+        ),
+        shell=_ok(
+            "tests/unit/api/routes/test_api_interactions.py",
+            "API capture/read checked; delivery retains its separate runtime coverage; "
+            "no live model call.",
+        ),
+    ),
+    _row(
         "bundle-bytecode",
         "Owned Python launch helpers preserve the engine inventory",
         "services/terminal/_sessions.py; services/runtimes/opencode.py; hooks/install.py",

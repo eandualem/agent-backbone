@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "items": [
+    {
+      "agent": {
+        "kind": "agent",
+        "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "coordinator",
+        "name_at_capture": "coordinator",
+        "attribution": "credential_bound",
+        "retired": false
+      },
+      "runtime": "codex",
+      "state": "idle",
+      "reason": null,
+      "counts": {
+        "sent": 1,
+        "received": 1,
+        "not_delivered": 0
+      },
+      "counterparties": [
+        {
+          "kind": "owner",
+          "id": "owner",
+          "name": "You",
+          "name_at_capture": "You",
+          "attribution": "operator_asserted",
+          "retired": false
+        },
+        {
+          "kind": "agent",
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "name": "researcher",
+          "name_at_capture": "researcher",
+          "attribution": "credential_bound",
+          "retired": false
+        }
+      ],
+      "latest": {
+        "id": "11111111111111111111111111111111",
+        "time": "2026-10-31T12:00:00+00:00"
+      },
+      "previous": null,
+      "ticks": [
+        {
+          "interaction_id": "11111111111111111111111111111111",
+          "direction": "sent",
+          "time": "2026-10-31T12:00:00+00:00",
+          "time_basis": "recorded",
+          "delivered": true
+        }
+      ],
+      "ticks_truncated": false,
+      "conversation_supported": true
+    },
+    {
+      "agent": {
+        "kind": "agent",
+        "id": "cccccccccccccccccccccccccccccccc",
+        "name": "writer",
+        "name_at_capture": "writer",
+        "attribution": "credential_bound",
+        "retired": false
+      },
+      "runtime": "claude",
+      "state": "offline",
+      "reason": null,
+      "counts": {
+        "sent": 0,
+        "received": 0,
+        "not_delivered": 0
+      },
+      "counterparties": [],
+      "latest": null,
+      "previous": null,
+      "ticks": [],
+      "ticks_truncated": false,
+      "conversation_supported": true
+    }
+  ],
+  "snapshot": "fixture-not-a-live-cursor",
+  "coverage": {
+    "since": "2026-10-31T11:00:00+00:00",
+    "until": "2026-10-31T13:00:00+00:00",
+    "capture_started_at": "2026-10-31T12:00:00+00:00",
+    "retained_from": "2026-10-31T12:00:00+00:00",
+    "body_retained_from": null,
+    "as_of": "2026-10-31T12:00:00+00:00",
+    "completeness": "partial",
+    "reasons": [
+      "window_precedes_capture",
+      "illustrative_fixture"
+    ],
+    "declared_scope": [
+      "backbone_messages",
+      "steers",
+      "artifact_conversations",
+      "owner_questions"
+    ],
+    "truncated": false,
+    "state_history": "observed_partial"
+  },
+  "conversation_supported": true
+}

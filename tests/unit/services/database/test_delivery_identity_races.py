@@ -113,7 +113,10 @@ async def test_enqueue_retries_if_the_conflicting_row_completed_before_lookup(
         async with original_tx() as conn:
 
             class CompletingConnection:
-                async def execute(self, statement, params):
+                async def scalar(self, statement, params=None):
+                    return await conn.scalar(statement, params)
+
+                async def execute(self, statement, params=None):
                     nonlocal completed
                     if not completed and "RETURNING id, operation_id" in str(statement):
                         # Model the PostgreSQL READ COMMITTED interleaving:
