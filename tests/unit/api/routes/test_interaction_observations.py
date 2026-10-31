@@ -382,6 +382,8 @@ async def test_observations_keep_only_fixed_evidence_descriptions(
         'terminal shows a provider failure (codex): api_key="SYNTHETIC_SECRET_2"',
         "terminal shows a provider failure (codex): password='SYNTHETIC_SECRET_3'",
         'terminal shows a provider failure (codex): {"api_key": "SYNTHETIC_SECRET_4"}',
+        "hook state 'busy' written 0s ago (fresh, Bearer SYNTHETIC_SECRET_5)",
+        "Authorization Basic SYNTHETIC_SECRET_6",
     ]
     await sample(db, "ike", agent, 0)
     await db.state_history.observe_registered(
@@ -400,7 +402,11 @@ async def test_observations_keep_only_fixed_evidence_descriptions(
             {"raw": json.dumps(quoted)},
         )
     assert "SYNTHETIC_SECRET" not in stored
-    assert json.loads(stored) == ["terminal shows a provider failure (codex)"] * 4
+    assert json.loads(stored) == [
+        *["terminal shows a provider failure"] * 4,
+        "hook state",
+        "unrecognized evidence",
+    ]
     spans = await api_client.get(
         "/api/interactions/state-spans",
         headers=auth_headers,
@@ -408,4 +414,4 @@ async def test_observations_keep_only_fixed_evidence_descriptions(
     )
     assert spans.status_code == 200, spans.text
     assert "SYNTHETIC_SECRET" not in spans.text
-    assert "terminal shows a provider failure (codex)" in spans.text
+    assert "terminal shows a provider failure" in spans.text

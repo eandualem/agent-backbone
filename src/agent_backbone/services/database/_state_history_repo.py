@@ -10,12 +10,46 @@ from sqlalchemy import text
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, format_iso, now_iso, parse_iso
 
+# Evidence lines quote terminal, hook and provider text, which can hold a
+# credential. A stored observation keeps only which known kind of evidence it
+# was: one of these constants, never characters copied from the line.
+_EVIDENCE = sorted(
+    (
+        "empty pane",
+        "hook state",
+        "hook state file",
+        "inbox-only agent",
+        "launch marker",
+        "no terminal output; using stale hook state",
+        "reason",
+        "task bound by swarm registration",
+        "terminal inconclusive",
+        "terminal inconclusive; falling back to stale hook state",
+        "terminal shows",
+        "terminal shows a busy marker",
+        "terminal shows a provider failure",
+        "terminal shows an empty prompt",
+        "terminal shows no plan dialog",
+        "terminal shows the plan dialog",
+        "terminal shows thinking/tool output",
+        "the choice dialog on screen beats the hook's permission",
+        "the dialog on screen beats the hook's idle",
+        "the plan dialog may still be open",
+        "unregistered session",
+        "waiting for runtime input acknowledgement",
+    ),
+    key=len,
+    reverse=True,
+)
+
 
 def stored_evidence(evidence: list[str]) -> list[str]:
-    """What a stored observation keeps of its evidence: each line's fixed
-    description, before any colon. Text after it can be terminal, hook or
-    provider content, which may quote a credential, so it is never kept."""
-    return [line.split(":", 1)[0].strip()[:120] for line in evidence[:10]]
+    """Each line's known evidence kind, or "unrecognized evidence"."""
+    return [
+        next((known for known in _EVIDENCE if line.startswith(known)), "unrecognized evidence")
+        for line in evidence[:10]
+        if isinstance(line, str)
+    ]
 
 
 class StateHistoryRepo(Repo):
