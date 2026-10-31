@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import Text, and_, case, func, insert, not_, or_, select, text, update
+from sqlalchemy import JSON, Text, and_, case, cast, func, insert, not_, or_, select, text, update
 
 from agent_backbone.services.database._conversation_events import append_revision
 from agent_backbone.services.database._interaction_capture import actor, capture, event, owner
@@ -39,6 +39,7 @@ from agent_backbone.services.database.models import (
     CurrentPlanORM,
     DiagnosticORM,
     DocumentORM,
+    InteractionORM,
     MessageQueueORM,
     ObservedSourceORM,
     ObservedVersionORM,
@@ -51,6 +52,7 @@ _A = AgentORM.__table__
 _D = DocumentORM.__table__
 _DG = DiagnosticORM.__table__
 _E = ConversationEntryORM.__table__
+_I = InteractionORM.__table__
 _P = CurrentPlanORM.__table__
 _Q = MessageQueueORM.__table__
 _R = ReportORM.__table__
@@ -342,6 +344,13 @@ async def _locked_name(conn, agent_id: str | None) -> str | None:
         .values(name=_A.c.name)
         .returning(_A.c.name)
     )
+
+
+def _attribution(conn, column):
+    """An actor's attribution from its stored JSON text, on either database."""
+    if conn.dialect.name == "postgresql":
+        return cast(column, JSON)["attribution"].as_string()
+    return func.json_extract(column, "$.attribution")
 
 
 async def _registration(conn, name: str) -> str | None:
@@ -686,6 +695,24 @@ class ConversationRepo(Repo):
                         _E.c.kind == "sheet",
                         _E.c.artifact_id.in_(
                             select(_SHEET.c.sheet_id).where(_SHEET.c.author_id == agent_id)
+                        ),
+                    ),
+                    # A verified sender or recipient of the original, as _participant reads it.
+                    and_(
+                        _E.c.kind == "interaction",
+                        _E.c.artifact_id.in_(
+                            select(_I.c.id).where(
+                                or_(
+                                    and_(
+                                        _I.c.sender_id == agent_id,
+                                        _attribution(conn, _I.c.sender) != "unverified",
+                                    ),
+                                    and_(
+                                        _I.c.recipient_id == agent_id,
+                                        _attribution(conn, _I.c.recipient) != "unverified",
+                                    ),
+                                )
+                            )
                         ),
                     ),
                 )

@@ -682,3 +682,38 @@ async def test_forgetting_the_recipient_ends_its_queued_interaction(
         for e in detail["lifecycle"]["items"]
     )
     assert detail["status"]["value"] not in ("pending", "deferred")
+
+
+async def test_a_verified_sender_finds_the_discussion_in_its_list(
+    api_app, api_client, auth_headers, transport
+):
+    db = api_app.state.db
+    bell = {"Authorization": "Bearer " + agent_api_key(TEST_API_KEY, await identity(db, "bell"))}
+    assert (await send(api_client, bell)).status_code == 200
+    row = (await records(db))[0]
+    path = "/api/conversations/interaction/" + row["id"]
+    asked = await api_client.post(
+        path + "/messages",
+        headers=auth_headers,
+        json={"request_id": "list-question", "recipient": "ike", "text": "Question for ike"},
+    )
+    assert asked.status_code == 201
+    assert (await api_client.get(path, headers=bell)).status_code == 200
+    listed = (await api_client.get("/api/conversations", headers=bell)).json()["items"]
+    assert [(i["kind"], i["artifact_id"]) for i in listed] == [("interaction", row["id"])]
+
+
+async def test_an_unverified_sender_name_does_not_list_the_discussion(
+    api_app, api_client, auth_headers, transport
+):
+    db = api_app.state.db
+    bell = {"Authorization": "Bearer " + agent_api_key(TEST_API_KEY, await identity(db, "bell"))}
+    assert (await send(api_client, auth_headers)).status_code == 200  # operator claims "bell"
+    row = (await records(db))[0]
+    asked = await api_client.post(
+        "/api/conversations/interaction/" + row["id"] + "/messages",
+        headers=auth_headers,
+        json={"request_id": "unverified-question", "recipient": "ike", "text": "Question"},
+    )
+    assert asked.status_code == 201
+    assert (await api_client.get("/api/conversations", headers=bell)).json()["items"] == []
