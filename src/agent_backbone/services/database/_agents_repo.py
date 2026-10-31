@@ -220,24 +220,19 @@ class AgentRepo(Repo):
                 ),
                 {"name": name, "now": now_iso()},
             )
+            now = now_iso()
+            # Events follow the rows this statement actually expired.
             retired = (
                 await conn.execute(
                     text(
-                        "SELECT id,operation_id,source FROM message_queue WHERE session_name=:name "
-                        "AND status IN ('pending','in_progress','checkpoint','uncertain')"
+                        "UPDATE message_queue SET status='expired', delivered_at=:now, "
+                        "leased_at=NULL WHERE session_name=:name "
+                        "AND status IN ('pending','in_progress','checkpoint','uncertain') "
+                        "RETURNING id,operation_id,source"
                     ),
-                    {"name": name},
+                    {"name": name, "now": now},
                 )
             ).fetchall()
-            now = now_iso()
-            await conn.execute(
-                text(
-                    "UPDATE message_queue SET status='expired', delivered_at=:now, leased_at=NULL "
-                    "WHERE session_name=:name "
-                    "AND status IN ('pending','in_progress','checkpoint','uncertain')"
-                ),
-                {"name": name, "now": now},
-            )
             for queue_id, operation_id, source in retired:
                 # The interaction ends with its registration, as a retired queue row does.
                 await event(
