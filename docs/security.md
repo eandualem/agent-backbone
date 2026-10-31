@@ -383,16 +383,23 @@ file it publishes to PyPI. The attestation ties the file's SHA-256 digest to
 this repository, the release workflow and the commit it was built from. It
 shows where the file came from; it does not show the code is safe.
 
-Download the file you are about to install, verify it with the GitHub CLI,
-then install that same file:
+Download the file you are about to install, check it against the commit its
+release tag points to, then install that same file. Set `version` to the
+release you want; each step runs only if the one before it succeeded:
 
 ```bash
-python3 -m pip download agent-backbone==VERSION --no-deps -d backbone-download
-gh attestation verify backbone-download/agent_backbone-VERSION-py3-none-any.whl \
+version=VERSION
+python3 -m pip download "agent-backbone==$version" --no-deps -d backbone-download &&
+commit=$(gh api "repos/eandualem/agent-backbone/commits/v$version" --jq .sha) &&
+gh attestation verify "backbone-download/agent_backbone-$version-py3-none-any.whl" \
   --repo eandualem/agent-backbone \
-  --signer-workflow eandualem/agent-backbone/.github/workflows/release.yml
-uv tool install ./backbone-download/agent_backbone-VERSION-py3-none-any.whl
+  --signer-workflow eandualem/agent-backbone/.github/workflows/release.yml \
+  --source-digest "${commit:?release commit not found}" &&
+uv tool install "./backbone-download/agent_backbone-$version-py3-none-any.whl"
 ```
+
+Checking the commit matters: it rejects a file the same workflow built for any
+other release or commit.
 
 The source archive (`agent_backbone-VERSION.tar.gz`) verifies the same way.
 Version 0.4.4 and earlier were published before attestations were added and
