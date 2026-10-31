@@ -36,6 +36,6 @@ limitation. Reports that make one of those limits worse are still welcome.
 
 ## Verifying a download
 
-Release files are built by this repository's release workflow and carry a
-signed build provenance record. See
+Releases after 0.4.4 are built by this repository's release workflow and carry
+a signed build provenance record. Earlier releases have none. See
 [Verify a download](docs/security.md#verify-a-download).
