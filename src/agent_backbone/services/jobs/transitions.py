@@ -242,7 +242,8 @@ async def _recovered_launch(db: BackboneDB, operation_id: str) -> str | None:
     someone else's) or it is recorded as failed. ``not_observed`` when the
     launch was requested but its readiness never recorded."""
     recorded = await db.transitions.launch_recovery(operation_id)
-    if recorded is not None and recorded != "requested":
+    incomplete = recorded in {"requested", "not_observed"}
+    if recorded is not None and not incomplete:
         return None if recorded in {"failed", "exited", "already_running"} else recorded
     # A later outcome write can fail independently of the optional diagnostic.
     # Consult that evidence before treating an incomplete intent as unobserved.
@@ -251,19 +252,19 @@ async def _recovered_launch(db: BackboneDB, operation_id: str) -> str | None:
             operation_id=operation_id, category="startup", limit=20
         )
     except Exception:
-        if recorded != "requested":
+        if not incomplete:
             raise
         log.warning("Optional startup evidence could not be read during recovery", exc_info=True)
         return "not_observed"
     if not records:
-        return "not_observed" if recorded == "requested" else None
+        return "not_observed" if incomplete else None
     # A retry that found the session running records "already_running" under
     # the same operation: that is not a launch outcome. With nothing else,
     # the session was running before this launch.
     codes = [record["code"] for record in records]
     outcomes = [r for r in records if r["code"] not in {"requested", "already_running"}]
     if not outcomes:
-        if "already_running" in codes and recorded != "requested":
+        if "already_running" in codes and not incomplete:
             return None
         await _cache_recovery(db, operation_id, "not_observed")
         return "not_observed"

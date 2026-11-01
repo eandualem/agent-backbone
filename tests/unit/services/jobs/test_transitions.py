@@ -925,14 +925,15 @@ async def test_failed_legacy_recovery_cache_does_not_change_known_launch_result(
 
 
 @pytest.mark.parametrize("outcome", ["failed", "exited", "ready"])
+@pytest.mark.parametrize("intent", ["requested", "not_observed"])
 async def test_incomplete_operational_intent_uses_later_diagnostic_outcome(
-    db, config, store, seams, outcome
+    db, config, store, seams, outcome, intent
 ):
     _, start, deliver = seams
     row = await db.transitions.create(agent_name="ike", message="continue")
     await db.transitions.mark_stopped(row["id"], start_at=PAST)
     await db.transitions.mark_launching(row["id"], "incomplete-intent")
-    await db.transitions.record_launch("incomplete-intent", "requested")
+    await db.transitions.record_launch("incomplete-intent", intent)
     await db.diagnostics.record(
         category="startup", operation_id="incomplete-intent", code=outcome, agent_name="ike"
     )
@@ -947,12 +948,15 @@ async def test_incomplete_operational_intent_uses_later_diagnostic_outcome(
         deliver.assert_not_awaited()
 
 
-async def test_required_intent_survives_unavailable_optional_diagnostics(db, config, store, seams):
+@pytest.mark.parametrize("intent", ["requested", "not_observed"])
+async def test_required_intent_survives_unavailable_optional_diagnostics(
+    db, config, store, seams, intent
+):
     _, start, deliver = seams
     row = await db.transitions.create(agent_name="ike", message="continue")
     await db.transitions.mark_stopped(row["id"], start_at=PAST)
     await db.transitions.mark_launching(row["id"], "durable-intent")
-    await db.transitions.record_launch("durable-intent", "requested")
+    await db.transitions.record_launch("durable-intent", intent)
     start.return_value = StartResult(ok=True, already_running=True)
     with (
         patch.object(db.diagnostics, "query", AsyncMock(side_effect=RuntimeError("unavailable"))),
