@@ -19,14 +19,15 @@ from agent_backbone.services.database._time import cutoff_iso, format_iso, now_i
 # Deliberately limited treatment of known credential forms. Debug evidence is
 # opt-in local detail, not a guarantee that arbitrary text is free of secrets.
 _CREDENTIALS = (
-    re.compile(
-        r"(?i)(\bauthorization[\"']?\s*[:=]?\s*[\"']?(?:bearer|basic|token)\s+)[^\s\"',;)]+"
-    ),
-    re.compile(r"(?i)(\bbearer\s+)[^\s\"',;)]+"),
+    # Mask labeled values before a header scheme can consume their labels.
     re.compile(
         r"(?i)((?:[\"']?(?:api[-_ ]?key|(?:access[_-]|refresh[_-])?token|secret|password|passwd)"
         r"[\"']?\s*[:=]\s*))(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s,;}&]+)"
     ),
+    re.compile(
+        r"(?i)(\bauthorization[\"']?\s*[:=]?\s*[\"']?(?:bearer|basic|token)\s+)[^\s\"',;)]+"
+    ),
+    re.compile(r"(?i)(\bbearer\s+)[^\s\"',;)]+"),
     re.compile(r"(://)[^/\s@]+(?=@)"),
 )
 

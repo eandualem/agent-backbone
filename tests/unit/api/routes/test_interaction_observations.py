@@ -384,7 +384,7 @@ async def test_debug_evidence_preserves_causes_and_masks_known_credential_values
         "terminal shows a provider failure (codex): password='SYNTHETIC_SECRET_3'",
         'terminal shows a provider failure (codex): {"api_key": "SYNTHETIC_SECRET_4"}',
         "hook state 'busy' written 0s ago (fresh, Bearer SYNTHETIC_SECRET_5)",
-        "Authorization Basic SYNTHETIC_SECRET_6",
+        'Authorization: Token token="SYNTHETIC_SECRET_6"',
         '{"Authorization": "Basic SYNTHETIC_SECRET_10"}',
         "{'Authorization': 'token SYNTHETIC_SECRET_11'}",
         "the failure on screen beats the hook's 'busy'",
