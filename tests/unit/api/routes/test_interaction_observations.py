@@ -373,23 +373,39 @@ async def test_session_feed_captures_identity_before_read_and_rejects_stale_regi
 
 
 @pytest.mark.parametrize(
-    "credential_line",
+    ("credential_line", "expected_line"),
     [
-        "terminal shows a provider failure (codex): 401 Authorization: Bearer SYNTHETIC_SECRET_1",
-        'terminal shows a provider failure (codex): api_key="SYNTHETIC_SECRET_2"',
-        "terminal shows a provider failure (codex): password='SYNTHETIC_SECRET_3'",
-        'terminal shows a provider failure (codex): {"api_key": "SYNTHETIC_SECRET_4"}',
-        "hook state 'busy' written 0s ago (fresh, Bearer SYNTHETIC_SECRET_5)",
-        "Authorization Basic SYNTHETIC_SECRET_6",
-        '{"Authorization": "Basic SYNTHETIC_SECRET_10"}',
-        "{'Authorization': 'token SYNTHETIC_SECRET_11'}",
-        'Authorization: Token token="SYNTHETIC_SECRET_12"',
-        "X-Auth-Token: Bearer SYNTHETIC_SECRET_13",
-        'Authorization: Bearer token="SYNTHETIC_SECRET_14"',
+        (
+            "terminal shows a provider failure (codex): 401 "
+            "Authorization: Bearer SYNTHETIC_SECRET_1",
+            "terminal shows a provider failure (codex): 401 Authorization: Bearer [redacted]",
+        ),
+        (
+            'terminal shows a provider failure (codex): api_key="SYNTHETIC_SECRET_2"',
+            "terminal shows a provider failure (codex): api_key=[redacted]",
+        ),
+        (
+            "terminal shows a provider failure (codex): password='SYNTHETIC_SECRET_3'",
+            "terminal shows a provider failure (codex): password=[redacted]",
+        ),
+        (
+            'terminal shows a provider failure (codex): {"api_key": "SYNTHETIC_SECRET_4"}',
+            'terminal shows a provider failure (codex): {"api_key": [redacted]}',
+        ),
+        (
+            "hook state 'busy' written 0s ago (fresh, Bearer SYNTHETIC_SECRET_5)",
+            "hook state 'busy' written 0s ago (fresh, Bearer [redacted])",
+        ),
+        ("Authorization Basic SYNTHETIC_SECRET_6", "Authorization Basic [redacted]"),
+        ('{"Authorization": "Basic SYNTHETIC_SECRET_10"}', '{"Authorization": "Basic [redacted]"}'),
+        ("{'Authorization': 'token SYNTHETIC_SECRET_11'}", "{'Authorization': 'token [redacted]'}"),
+        ('Authorization: Token token="SYNTHETIC_SECRET_12"', "Authorization: Token [redacted]"),
+        ("X-Auth-Token: Bearer SYNTHETIC_SECRET_13", "X-Auth-Token: [redacted] [redacted]"),
+        ('Authorization: Bearer token="SYNTHETIC_SECRET_14"', "Authorization: Bearer [redacted]"),
     ],
 )
 async def test_debug_evidence_preserves_causes_and_masks_known_credential_values(
-    api_app, api_client, auth_headers, credential_line
+    api_app, api_client, auth_headers, credential_line, expected_line
 ):
     db = api_app.state.db
     agent = await identity(db, "ike")
@@ -419,7 +435,8 @@ async def test_debug_evidence_preserves_causes_and_masks_known_credential_values
         )
     assert "SYNTHETIC_SECRET" not in stored
     saved = json.loads(stored)
-    assert saved[1:] == quoted[1:]
+    expected = [expected_line, *quoted[1:]]
+    assert saved == expected
     spans = await api_client.get(
         "/api/interactions/state-spans",
         headers=auth_headers,
@@ -427,8 +444,9 @@ async def test_debug_evidence_preserves_causes_and_masks_known_credential_values
     )
     assert spans.status_code == 200, spans.text
     assert "SYNTHETIC_SECRET" not in spans.text
-    assert "the failure on screen beats the hook" in spans.text
-    assert "Running basic tests for module" in spans.text
+    items = spans.json()["items"]
+    assert items
+    assert all(item["evidence"] == expected for item in items)
 
 
 async def test_standard_omits_copied_evidence_and_off_stops_observations(api_app):
