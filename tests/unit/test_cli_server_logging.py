@@ -340,3 +340,50 @@ async def test_websocket_protocol_does_not_log_credentials_or_wire_frames(
         assert "hook stale after 600s" in captured
         assert "ASGI application failed" in captured
         assert "WebSocket /socket.io/" in captured
+
+
+@pytest.mark.parametrize("app_first", [True, False])
+async def test_socketio_dependency_handlers_follow_capture_policy(
+    tmp_path, restore_logging, monkeypatch, app_first
+):
+    import contextlib
+    import io
+
+    import httpx
+
+    from agent_backbone.api.app import create_app
+
+    for name in ("socketio.server", "engineio.server"):
+        logger = logging.getLogger(name)
+        monkeypatch.setattr(logger, "handlers", [])
+        monkeypatch.setattr(logger, "level", logging.NOTSET)
+        monkeypatch.setattr(logger, "propagate", True)
+    direct, controlled = io.StringIO(), io.StringIO()
+    config = make_config(tmp_path, settings={"diagnostics.mode": "off"})
+    settings = log_config(config, None)
+    settings["handlers"]["default"]["stream"] = controlled
+    with contextlib.redirect_stderr(direct):
+        if app_first:
+            app = create_app(config)
+        logging.config.dictConfig(settings)
+        if not app_first:
+            app = create_app(config)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://localhost"
+        ) as client:
+            response = await client.get("/socket.io/?EIO=4&transport=polling&sid=SYNTHETIC_SESSION")
+        assert response.status_code == 400
+        assert not direct.getvalue() and not controlled.getvalue()
+
+        sio = app.other_asgi_app.state.sio
+        set_log_mode("standard")
+        await sio.eio._trigger_event("message", "synthetic-sid", "INVALID", run_async=False)
+        ordinary = controlled.getvalue()
+        assert "message async handler error (ValueError)" in ordinary
+        assert "Traceback" not in ordinary and "invalid literal" not in ordinary
+        assert not direct.getvalue()
+
+        set_log_mode("debug")
+        await sio.eio._trigger_event("message", "synthetic-sid", "INVALID", run_async=False)
+        assert "Traceback" in controlled.getvalue() and "invalid literal" in controlled.getvalue()
+        assert not direct.getvalue()

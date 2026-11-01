@@ -77,9 +77,24 @@ def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
             name: {
                 "handlers": [],
                 "propagate": True,
-                "level": "DEBUG" if name == "agent_backbone" else "INFO",
+                "level": (
+                    "DEBUG"
+                    if name == "agent_backbone"
+                    else "INFO"
+                    if name.startswith("uvicorn")
+                    else "WARNING"
+                ),
             }
-            for name in ("agent_backbone", "uvicorn", "uvicorn.error", "uvicorn.access")
+            for name in (
+                "agent_backbone",
+                "uvicorn",
+                "uvicorn.error",
+                "uvicorn.access",
+                "socketio",
+                "socketio.server",
+                "engineio",
+                "engineio.server",
+            )
         },
     }
 

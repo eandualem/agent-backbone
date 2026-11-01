@@ -65,6 +65,8 @@ WebSocket protocol DEBUG/TRACE records are excluded even in developer mode.
 HTTP and WebSocket access lines omit query values. Job and runtime diagnostic
 buffers check the persisted mode before collecting evidence; observations
 made while capture is off are not saved for publication after re-enabling it.
+Socket.IO and Engine.IO warnings and errors use the same capture policy and
+formatter; their protocol traffic logs are not enabled by developer mode.
 
 Turning capture off does not delete existing files or rows. The service does
 not create its optional log file until it has an enabled entry to write.
