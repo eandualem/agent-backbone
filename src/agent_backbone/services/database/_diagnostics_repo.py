@@ -122,6 +122,24 @@ class DiagnosticRepo(Repo):
     _last_warning = float("-inf")
     write_failures = 0
 
+    def _capture_failed(self) -> None:
+        """Expose missing evidence without logging SQL or its bound values."""
+        type(self).write_failures += 1
+        stamp = time.monotonic()
+        if stamp - type(self)._last_warning >= 60:
+            type(self)._last_warning = stamp
+            log.warning("Operational diagnostic could not be recorded; evidence is incomplete")
+
+    async def capture_enabled(self) -> bool:
+        """Gate optional in-memory observations using the persisted setting."""
+        try:
+            async with self._tx() as conn:
+                return await diagnostic_mode(conn) != "off"
+        except Exception:
+            # Unknown policy must not buffer evidence for later publication.
+            self._capture_failed()
+            return False
+
     async def record(
         self,
         *,
@@ -217,11 +235,7 @@ class DiagnosticRepo(Repo):
                 )
                 return result.scalar_one()
         except Exception:
-            type(self).write_failures += 1
-            stamp = time.monotonic()
-            if stamp - type(self)._last_warning >= 60:
-                type(self)._last_warning = stamp
-                log.warning("Operational diagnostic could not be recorded; evidence is incomplete")
+            self._capture_failed()
             return None
 
     @staticmethod

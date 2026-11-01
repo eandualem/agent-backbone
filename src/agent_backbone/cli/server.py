@@ -74,8 +74,27 @@ def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
         # The handler applies the current mode, including after a settings change.
         "root": {"handlers": ["default"], "level": "WARNING"},
         "loggers": {
-            name: {"handlers": [], "propagate": True, "level": "DEBUG"}
-            for name in ("agent_backbone", "uvicorn", "uvicorn.error", "uvicorn.access")
+            name: {
+                "handlers": [],
+                "propagate": True,
+                "level": (
+                    "DEBUG"
+                    if name == "agent_backbone"
+                    else "INFO"
+                    if name.startswith("uvicorn")
+                    else "WARNING"
+                ),
+            }
+            for name in (
+                "agent_backbone",
+                "uvicorn",
+                "uvicorn.error",
+                "uvicorn.access",
+                "socketio",
+                "socketio.server",
+                "engineio",
+                "engineio.server",
+            )
         },
     }
 
@@ -117,7 +136,7 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
                 port=config.backbone.port,
                 reload=True,
                 reload_dirs=["src"],
-                log_level="debug",
+                log_level="info",
                 log_config=logging_config,
             )
         finally:
@@ -136,7 +155,7 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
             app,
             host=config.backbone.host,
             port=config.backbone.port,
-            log_level="debug",
+            log_level="info",
             log_config=logging_config,
             workers=1,
             http=LocalPeerProtocol if config.backbone.socket_path else "auto",

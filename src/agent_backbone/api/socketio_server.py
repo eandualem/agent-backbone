@@ -58,6 +58,9 @@ def create_sio(cors_origins: list[str]) -> socketio.AsyncServer:
         async_mode="asgi",
         cors_allowed_origins=cors_origins or None,
         max_http_buffer_size=1_048_576,
+        # Explicit loggers prevent the libraries installing unfiltered stderr handlers.
+        logger=logging.getLogger("socketio.server"),
+        engineio_logger=logging.getLogger("engineio.server"),
     )
     sio.register_namespace(SessionsNamespace(SESSIONS_NAMESPACE))
     sio.register_namespace(TerminalNamespace("/terminal"))

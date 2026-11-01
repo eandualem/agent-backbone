@@ -150,3 +150,50 @@ async def test_observed_success_ends_episode_without_a_recovery_record(db, captu
     assert newest["operation_id"] != first["operation_id"]
     assert newest["occurrences"] == 1
     assert {newest["code"], first["code"]} == {"state_persistence_failed"}
+
+
+async def test_off_period_runtime_signals_are_not_reported_after_capture_resumes(db, config):
+    snapshot = StateSnapshot(
+        state=AgentState.BUSY,
+        diagnostics_observed=True,
+        diagnostics=(
+            RuntimeDiagnostic(code="request_error", model="disabled-model", http_status=400),
+        ),
+    )
+    await db.settings.set("diagnostics.mode", "off")
+    await observe_runtime(db, config, {"ike": snapshot})  # config still has its old mode
+    assert await db.diagnostics.query() == []
+    await db.settings.set("diagnostics.mode", "standard")
+    snapshot.diagnostics = ()
+    await observe_runtime(db, config, {"ike": snapshot})
+    assert await db.diagnostics.query() == []
+
+
+async def test_off_period_job_failure_does_not_create_a_later_recovery(db):
+    await db.settings.set("diagnostics.mode", "off")
+    await observe_job(db, source="prune", stage="run", error_type="OSError")
+    await db.settings.set("diagnostics.mode", "standard")
+    await observe_job(db, source="prune", stage="run")
+    assert await db.diagnostics.query() == []
+
+
+async def test_mode_change_during_runtime_capture_does_not_keep_signals(db, config):
+    record = db.diagnostics.record
+
+    async def disable_then_record(**values):
+        await db.settings.set("diagnostics.mode", "off")
+        return await record(**values)
+
+    snapshot = StateSnapshot(
+        state=AgentState.BUSY,
+        diagnostics_observed=True,
+        diagnostics=(
+            RuntimeDiagnostic(code="request_error", model="disabled-model", http_status=400),
+        ),
+    )
+    with patch.object(db.diagnostics, "record", side_effect=disable_then_record):
+        await observe_runtime(db, config, {"ike": snapshot})
+    await db.settings.set("diagnostics.mode", "standard")
+    snapshot.diagnostics = ()
+    await observe_runtime(db, config, {"ike": snapshot})
+    assert await db.diagnostics.query() == []
