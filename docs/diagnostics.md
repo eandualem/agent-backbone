@@ -144,6 +144,10 @@ deliveries. It includes normal blocking conditions and excludes other
 message kinds and GitHub outbox work. Its count is not a system-wide count
 of bugs or lost messages.
 
+A job operation that is observed succeeding ends its in-memory failure episode,
+even when logging is off or the recovery record cannot be saved. A later failure
+starts a new episode; absence of a recovery row is not proof of continued failure.
+
 An outbox recipient that fails before it reaches delivery, for example
 because the issue or queue lookup could not reach GitHub, is recorded as
 `outbox_recipient_failed` (category `delivery`). The record carries the
