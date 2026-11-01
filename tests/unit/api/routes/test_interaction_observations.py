@@ -372,23 +372,34 @@ async def test_session_feed_captures_identity_before_read_and_rejects_stale_regi
         await feed.close()
 
 
-async def test_debug_evidence_preserves_causes_and_masks_known_credential_values(
-    api_app, api_client, auth_headers
-):
-    db = api_app.state.db
-    agent = await identity(db, "ike")
-    await db.settings.set("diagnostics.mode", "debug")
-    quoted = [
+@pytest.mark.parametrize(
+    "credential_line",
+    [
         "terminal shows a provider failure (codex): 401 Authorization: Bearer SYNTHETIC_SECRET_1",
         'terminal shows a provider failure (codex): api_key="SYNTHETIC_SECRET_2"',
         "terminal shows a provider failure (codex): password='SYNTHETIC_SECRET_3'",
         'terminal shows a provider failure (codex): {"api_key": "SYNTHETIC_SECRET_4"}',
         "hook state 'busy' written 0s ago (fresh, Bearer SYNTHETIC_SECRET_5)",
-        'Authorization: Token token="SYNTHETIC_SECRET_6"',
+        "Authorization Basic SYNTHETIC_SECRET_6",
         '{"Authorization": "Basic SYNTHETIC_SECRET_10"}',
         "{'Authorization': 'token SYNTHETIC_SECRET_11'}",
+        'Authorization: Token token="SYNTHETIC_SECRET_12"',
+        "X-Auth-Token: Bearer SYNTHETIC_SECRET_13",
+        'Authorization: Bearer token="SYNTHETIC_SECRET_14"',
+    ],
+)
+async def test_debug_evidence_preserves_causes_and_masks_known_credential_values(
+    api_app, api_client, auth_headers, credential_line
+):
+    db = api_app.state.db
+    agent = await identity(db, "ike")
+    await db.settings.set("diagnostics.mode", "debug")
+    quoted = [
+        credential_line,
         "the failure on screen beats the hook's 'busy'",
         "no active permission dialog; the hook does not prove a human wait",
+        "Running basic tests for module",
+        "hook state 'busy' written 0s ago (fresh)",
     ]
     await sample(db, "ike", agent, 0)
     await db.state_history.observe_registered(
@@ -408,9 +419,7 @@ async def test_debug_evidence_preserves_causes_and_masks_known_credential_values
         )
     assert "SYNTHETIC_SECRET" not in stored
     saved = json.loads(stored)
-    assert "(codex): 401 Authorization: Bearer [redacted]" in saved[0]
-    assert "hook state 'busy' written 0s ago (fresh, Bearer [redacted])" == saved[4]
-    assert saved[-2:] == quoted[-2:]
+    assert saved[1:] == quoted[1:]
     spans = await api_client.get(
         "/api/interactions/state-spans",
         headers=auth_headers,
@@ -418,7 +427,8 @@ async def test_debug_evidence_preserves_causes_and_masks_known_credential_values
     )
     assert spans.status_code == 200, spans.text
     assert "SYNTHETIC_SECRET" not in spans.text
-    assert "terminal shows a provider failure" in spans.text
+    assert "the failure on screen beats the hook" in spans.text
+    assert "Running basic tests for module" in spans.text
 
 
 async def test_standard_omits_copied_evidence_and_off_stops_observations(api_app):
@@ -679,9 +689,13 @@ def test_limited_credential_forms_preserve_ordinary_basic_explanations():
         "Authorization: token ghp_SYNTHETICSECRET8",
         "https://ghp_SYNTHETICSECRET9@github.com/org/repo",
         "Invalid API key sk-ant-SYNTHETIC_SECRET_7",
+        'Authorization: Bearer token="SYNTHETIC_SECRET_12"',
+        'Authorization: Token token="SYNTHETIC_SECRET_13"',
+        "X-Auth-Token: Bearer SYNTHETIC_SECRET_14",
     ]
     saved = stored_evidence(lines)
     assert saved[0] == lines[0]
+    assert stored_evidence(saved) == saved
     assert "SYNTHETIC" not in "\n".join(saved)
     assert saved[2] == "https://[redacted]@github.com/org/repo"
     assert saved[3] == "Invalid API key [redacted]"

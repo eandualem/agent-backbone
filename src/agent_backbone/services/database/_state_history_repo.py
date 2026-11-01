@@ -19,7 +19,6 @@ from agent_backbone.services.database._time import cutoff_iso, format_iso, now_i
 # Deliberately limited treatment of known credential forms. Debug evidence is
 # opt-in local detail, not a guarantee that arbitrary text is free of secrets.
 _CREDENTIALS = (
-    # Mask labeled values before a header scheme can consume their labels.
     re.compile(
         r"(?i)((?:[\"']?(?:api[-_ ]?key|(?:access[_-]|refresh[_-])?token|secret|password|passwd)"
         r"[\"']?\s*[:=]\s*))(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s,;}&]+)"
@@ -43,9 +42,26 @@ def stored_evidence(evidence: list[str]) -> list[str]:
     for line in evidence[:10]:
         if not isinstance(line, str):
             continue
-        for pattern in _CREDENTIALS:
-            line = pattern.sub(lambda match: match[1] + "[redacted]", line)
-        result.append(_TOKEN_VALUES.sub("[redacted]", line)[:2000])
+        # Match the original text: replacing a scheme/label first must not hide
+        # another pattern's credential. Merge overlapping value ranges once.
+        ranges = [
+            (match.end(1), match.end())
+            for pattern in _CREDENTIALS
+            for match in pattern.finditer(line)
+        ]
+        ranges.extend(match.span() for match in _TOKEN_VALUES.finditer(line))
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(ranges):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        parts, cursor = [], 0
+        for start, end in merged:
+            parts.extend((line[cursor:start], "[redacted]"))
+            cursor = end
+        parts.append(line[cursor:])
+        result.append("".join(parts)[:2000])
     return result
 
 
