@@ -11,6 +11,7 @@ import pytest
 
 from agent_backbone.base import log_policy, set_log_mode
 from agent_backbone.cli.server import log_config
+from agent_backbone.config import AgentsConfig, AgentSpec
 from tests.conftest import make_config
 
 _LINE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z (INFO|WARNING) [\w.]+: ")
@@ -163,11 +164,21 @@ def test_reload_factory_uses_the_actual_listener_endpoint(tmp_path, monkeypatch)
     assert "BACKBONE_HOST" not in os.environ
 
 
-def test_modes_control_actual_emission_and_keep_developer_detail(tmp_path, restore_logging):
+@pytest.mark.parametrize(
+    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+)
+def test_modes_control_actual_emission_and_keep_developer_detail(
+    tmp_path, restore_logging, runtime
+):
     path = tmp_path / "controlled.log"
-    logging.config.dictConfig(
-        log_config(make_config(tmp_path, settings={"diagnostics.mode": "off"}), path)
+    config = make_config(
+        tmp_path,
+        settings={"diagnostics.mode": "off"},
+        agents=AgentsConfig(
+            specs={"worker": AgentSpec(name="worker", dir=str(tmp_path), runtime=runtime)}
+        ),
     )
+    logging.config.dictConfig(log_config(config, path))
     own = logging.getLogger("agent_backbone.example")
     access = logging.getLogger("uvicorn.access")
     access.setLevel(logging.DEBUG)

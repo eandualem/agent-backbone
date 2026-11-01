@@ -922,3 +922,41 @@ async def test_failed_legacy_recovery_cache_does_not_change_known_launch_result(
         assert await _run(config, store, db) == {"ike": "started"}
     assert (await db.transitions.get(row["id"]))["result"]["ready"] == "ready"
     deliver.assert_awaited_once()
+
+
+@pytest.mark.parametrize("outcome", ["failed", "exited", "ready"])
+async def test_incomplete_operational_intent_uses_later_diagnostic_outcome(
+    db, config, store, seams, outcome
+):
+    _, start, deliver = seams
+    row = await db.transitions.create(agent_name="ike", message="continue")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "incomplete-intent")
+    await db.transitions.record_launch("incomplete-intent", "requested")
+    await db.diagnostics.record(
+        category="startup", operation_id="incomplete-intent", code=outcome, agent_name="ike"
+    )
+    start.return_value = StartResult(ok=True, already_running=True)
+    with patch(f"{_JOB}.query_environment_var", AsyncMock(return_value="incomplete-intent")):
+        assert await _run(config, store, db) == {
+            "ike": "started" if outcome == "ready" else "failed"
+        }
+    if outcome == "ready":
+        deliver.assert_awaited_once()
+    else:
+        deliver.assert_not_awaited()
+
+
+async def test_required_intent_survives_unavailable_optional_diagnostics(db, config, store, seams):
+    _, start, deliver = seams
+    row = await db.transitions.create(agent_name="ike", message="continue")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "durable-intent")
+    await db.transitions.record_launch("durable-intent", "requested")
+    start.return_value = StartResult(ok=True, already_running=True)
+    with (
+        patch.object(db.diagnostics, "query", AsyncMock(side_effect=RuntimeError("unavailable"))),
+        patch(f"{_JOB}.query_environment_var", AsyncMock(return_value="durable-intent")),
+    ):
+        assert await _run(config, store, db) == {"ike": "started"}
+    deliver.assert_awaited_once()
