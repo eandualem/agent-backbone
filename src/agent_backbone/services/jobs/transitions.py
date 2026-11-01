@@ -225,11 +225,16 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
 
 
 async def _recovered_launch(db: BackboneDB, operation_id: str) -> str | None:
-    """What the startup diagnostics say a launch this transition began ended as.
+    """The operational launch outcome, with legacy diagnostic recovery fallback.
 
     None when no launch under that identity was recorded (the session is
     someone else's) or it is recorded as failed. ``not_observed`` when the
     launch was requested but its readiness never recorded."""
+    recorded = await db.transitions.launch_recovery(operation_id)
+    if recorded is not None:
+        if recorded in {"failed", "exited", "already_running"}:
+            return None
+        return "not_observed" if recorded == "requested" else recorded
     records = await db.diagnostics.query(operation_id=operation_id, category="startup", limit=20)
     if not records:
         return None
@@ -239,10 +244,14 @@ async def _recovered_launch(db: BackboneDB, operation_id: str) -> str | None:
     codes = [record["code"] for record in records]
     outcomes = [r for r in records if r["code"] not in {"requested", "already_running"}]
     if not outcomes:
-        return None if "already_running" in codes else "not_observed"
+        if "already_running" in codes:
+            return None
+        await db.transitions.record_launch(operation_id, "not_observed")
+        return "not_observed"
     # Repeated observations update their first row in place, so id order is
     # not observation order: the latest sighting decides.
     newest = max(outcomes, key=lambda record: record["last_seen_at"])["code"]
+    await db.transitions.record_launch(operation_id, newest)
     return None if newest in {"failed", "exited"} else newest
 
 

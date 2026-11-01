@@ -32,6 +32,13 @@ class UTCFormatter(DiagnosticFormatter):
     default_msec_format = "%s.%03dZ"
 
 
+def _diagnostic_filter(mode: str = "off", verbose: bool = False) -> logging.Filter:
+    """Restore explicit policy in Uvicorn's fresh reload child."""
+    set_log_mode(mode)
+    log_policy.verbose = verbose
+    return log_policy
+
+
 def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
     """One timestamped format for the backbone and uvicorn (its access lines too),
     written to ``log_file`` with size-based rotation, else to stderr."""
@@ -56,7 +63,13 @@ def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
                 "format": "%(asctime)s %(levelname)s %(name)s: %(message)s",
             }
         },
-        "filters": {"diagnostics": {"()": lambda: log_policy}},
+        "filters": {
+            "diagnostics": {
+                "()": _diagnostic_filter,
+                "mode": log_policy.mode,
+                "verbose": log_policy.verbose,
+            }
+        },
         "handlers": {"default": {**handler, "formatter": "utc", "filters": ["diagnostics"]}},
         # The handler applies the current mode, including after a settings change.
         "root": {"handlers": ["default"], "level": "WARNING"},
@@ -216,7 +229,15 @@ def cmd_up(args: argparse.Namespace) -> int:
         return 2
     if args.detach:
         return asyncio.run(_up_detached(config, log_file))
-    _run_server(config, reload=args.reload, log_file=log_file)
+    try:
+        _run_server(config, reload=args.reload, log_file=log_file)
+    except SystemExit as exc:
+        if exc.code and log_policy.mode == "off":
+            print(
+                f"Backbone failed to start or run (exit {exc.code}); optional logging is off.",
+                file=sys.stderr,
+            )
+        raise
     return 0
 
 

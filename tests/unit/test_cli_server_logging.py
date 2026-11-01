@@ -185,7 +185,7 @@ def test_modes_control_actual_emission_and_keep_developer_detail(tmp_path, resto
     except ValueError:
         own.exception("Operation failed")
     ordinary = path.read_text()
-    assert "Operation failed" in ordinary
+    assert "Operation failed (ValueError)" in ordinary
     assert "developer" not in ordinary and "Traceback" not in ordinary and "GET" not in ordinary
 
     set_log_mode("debug")
@@ -223,3 +223,57 @@ async def test_scoped_cli_reads_logging_policy_through_api(tmp_path):
         assert api.call_args.args[2] == "/api/config/diagnostics.mode"
         api.return_value = None
         assert await _common.read_log_mode() == "off"
+
+
+def test_reload_logging_configuration_survives_spawn_serialization(tmp_path, restore_logging):
+    import pickle
+
+    config = log_config(make_config(tmp_path, settings={"diagnostics.mode": "off"}), None)
+    restored = pickle.loads(pickle.dumps(config))
+    logging.config.dictConfig(restored)
+    handler = logging.getLogger().handlers[0]
+    assert handler.filters == [log_policy]
+    assert not handler.filters[0].filter(logging.makeLogRecord({"levelno": logging.ERROR}))
+    set_log_mode("standard")
+    assert handler.filters[0].filter(
+        logging.makeLogRecord({"levelno": logging.ERROR, "name": "agent_backbone"})
+    )
+
+
+@pytest.mark.parametrize("exit_code", [1, 3])
+def test_off_keeps_explicit_server_failure_result_without_log_capture(
+    tmp_path, restore_logging, capsys, exit_code
+):
+    import argparse
+    from unittest.mock import AsyncMock, patch
+
+    from agent_backbone.cli import server
+
+    path = tmp_path / "optional.log"
+    config = make_config(tmp_path, settings={"diagnostics.mode": "off"})
+    args = argparse.Namespace(detach=False, reload=False, log_file=path)
+    with (
+        patch.object(server._common, "load_config", AsyncMock(return_value=config)),
+        patch("uvicorn.Server.run", side_effect=SystemExit(exit_code)),
+    ):
+        with pytest.raises(SystemExit) as result:
+            server.cmd_up(args)
+    assert result.value.code == exit_code
+    assert f"exit {exit_code}" in capsys.readouterr().err
+    assert not path.exists()
+
+
+def test_reload_child_restores_explicit_verbose_policy(tmp_path, restore_logging):
+    import pickle
+
+    log_policy.verbose = True
+    wire = pickle.dumps(log_config(make_config(tmp_path), None))
+    # A spawned interpreter starts with the module defaults.
+    set_log_mode("off")
+    log_policy.verbose = False
+    logging.config.dictConfig(pickle.loads(wire))
+    record = logging.makeLogRecord({"name": "agent_backbone", "levelno": logging.DEBUG})
+    assert log_policy.mode == "standard" and log_policy.verbose
+    assert log_policy.filter(record)
+    set_log_mode("off")
+    assert not log_policy.filter(record)

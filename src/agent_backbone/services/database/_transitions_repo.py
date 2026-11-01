@@ -145,6 +145,45 @@ class TransitionRepo(Repo):
                 {"id": transition_id, "operation_id": operation_id},
             )
 
+    async def record_launch(self, operation_id: str, code: str) -> None:
+        """Keep the minimal restart-recovery outcome even when diagnostics are off."""
+        async with self._tx() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT id, result FROM agent_transitions "
+                        "WHERE launch_operation_id=:operation AND status='pending'"
+                    ),
+                    {"operation": operation_id},
+                )
+            ).first()
+            if row is None:
+                return
+            result = json.loads(row.result or "{}")
+            previous = result.get("launch_recovery")
+            # Retried preflight is not a newer outcome for an earlier launch.
+            if previous and code in {"requested", "already_running"}:
+                return
+            result["launch_recovery"] = code
+            await conn.execute(
+                text(
+                    "UPDATE agent_transitions SET result=:result "
+                    "WHERE id=:id AND status='pending' AND launch_operation_id=:operation"
+                ),
+                {"id": row.id, "operation": operation_id, "result": json.dumps(result)},
+            )
+
+    async def launch_recovery(self, operation_id: str) -> str | None:
+        async with self._tx() as conn:
+            raw = await conn.scalar(
+                text(
+                    "SELECT result FROM agent_transitions "
+                    "WHERE launch_operation_id=:operation AND status='pending'"
+                ),
+                {"operation": operation_id},
+            )
+            return json.loads(raw or "{}").get("launch_recovery")
+
     async def finish(self, transition_id: int, status: str, result: dict) -> None:
         """Close the transition as ``completed`` or ``failed`` with its result."""
         async with self._tx() as conn:

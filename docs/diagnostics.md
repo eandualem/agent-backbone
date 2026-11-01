@@ -37,7 +37,7 @@ it. There is no log-collection service or universal secret-scrubbing guarantee.
 
 | Surface | `off` | `standard` (default) | `debug` |
 |---|---|---|---|
-| Backbone service/CLI log emission | None, including errors | Warnings and errors, without traceback/stack text | Detailed Backbone logs and tracebacks |
+| Backbone service/CLI log emission | None, including errors | Warnings and errors with exception class, without traceback/stack text | Detailed Backbone logs and tracebacks |
 | Uvicorn access logs | None | None | Enabled; request query values omitted |
 | Dependency wire/SQL debug traces | None | None | Not enabled; may expose headers or payloads |
 | Retained typed diagnostics | No inserts or occurrence updates | Enabled | Enabled |
@@ -46,13 +46,18 @@ it. There is no log-collection service or universal secret-scrubbing guarantee.
 | Existing records | Still readable; ordinary retention applies | Same | Same |
 
 The running service picks up API setting changes without restarting agents.
+In developer `--reload` mode, the separate reload supervisor keeps the policy
+it was launched with, including `-v`; API updates reach the service child, not
+that supervisor. Relaunch the developer command after changing modes to apply
+the new policy to the supervisor and subsequent child startup output.
 Each new CLI invocation reads the installation policy; scoped agent clients use
 an authenticated API read. If that read is unavailable, the CLI suppresses logs
 and still reports command results. `backbone -v COMMAND` is a separate explicit
-opt-in to developer **console** detail for that invocation, including its risk;
-it does not enable retained evidence, and `off` always overrides it. A detached
-service does not inherit that invocation's `-v`. Set the database mode to
-`debug` for persistent developer logging. Adapter discovery and setup can run
+opt-in to developer log detail for that invocation, including its risk;
+it does not enable extra database evidence, and `off` always overrides it. For
+a foreground `up`, that detail follows the selected console or `--log-file`
+destination. A detached service does not inherit that invocation's `-v`. Set
+the database mode to `debug` for developer logging across service starts. Adapter discovery and setup can run
 before an installation exists and do not enable optional console logging.
 
 Turning capture off does not delete existing files or rows. The service does
@@ -67,9 +72,12 @@ while capture is disabled is unknown, never evidence of quiet or healthy agents.
 The switch does not disable the product or remove data needed to use it:
 
 - Queue bodies, delivery receipts, retry/outbox state, acknowledgment and
-  signing/confirmation records remain. They establish what must be delivered,
+  signing/confirmation records and minimal transition launch outcomes remain. They establish what must be delivered,
   who may act, and whether a retry is safe. Delivery/event history also supports
-  those operations and retains its existing previews and summaries.
+  those operations and retains its existing previews and summaries. Startup
+  recovery uses the transition record even when optional startup diagnostics
+  are disabled. Conversations retain a failed recipient-registration outcome
+  independently of optional diagnostics and queue-body retention.
 - Current hook state, launch markers, permission/denial records, publication
   receipts, plan text and context-delivery receipts remain. Hook action files
   are operational records, not a full transcript of tool arguments. Current
@@ -82,7 +90,9 @@ The switch does not disable the product or remove data needed to use it:
 - Explicit commands such as `agent inspect` and `agent output` still return
   requested current detail. CLI results, failures printed by the command,
   `/health`, and service-manager startup/crash output are not optional log
-  entries. An OS service manager or CLI harness may keep its own records;
+  entries. If Uvicorn exits unsuccessfully while logging is off, `up` prints
+  a failure status and exit code; detailed causes require enabled logging.
+  An OS service manager or CLI harness may keep its own records;
   configure those tools separately.
 
 The diagnostic digest may still show required delivery counts or older records

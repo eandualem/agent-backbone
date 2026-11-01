@@ -220,7 +220,7 @@ class OperatorFileUnavailable(ValueError):
 async def read_client_config(
     data_dir: str | Path | None = None, *, strict: bool = False, operator_file: bool = False
 ) -> BackboneConfig:
-    """Read only existing address settings, without creating or repairing a database."""
+    """Read existing address and logging policy without creating or repairing a database."""
     from sqlalchemy import text
     from sqlalchemy.engine import make_url
     from sqlalchemy.ext.asyncio import create_async_engine
@@ -278,7 +278,14 @@ async def read_client_config(
                 rows = await asyncio.wait_for(server_settings(), timeout=3)
             finally:
                 await engine.dispose()
-        settings = {key: validate_setting(key, json.loads(value)) for key, value in rows}
+        settings = {}
+        for key, value in rows:
+            try:
+                settings[key] = validate_setting(key, json.loads(value))
+            except (ValueError, TypeError):
+                if key != "diagnostics.mode":
+                    raise
+                settings[key] = "off"  # Unknown policy cannot invalidate the API address.
     except Exception as exc:
         if strict:
             raise ValueError("Cannot read existing installation settings") from exc
@@ -286,7 +293,7 @@ async def read_client_config(
         # The API call will report whether the bootstrap address is reachable.
         return boot
     # Share server precedence, including BACKBONE_PORT from process env/.env,
-    # while keeping this path read-only and limited to address settings.
+    # while keeping this path read-only and limited to address and logging policy settings.
     configured = build_config(boot.data_dir, settings=settings, agents=boot.agents)
     return (
         replace(configured, api_key=file_key, client_agent="", client_registration="")

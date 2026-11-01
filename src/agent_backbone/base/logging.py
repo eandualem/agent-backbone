@@ -38,6 +38,9 @@ class DiagnosticFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         if log_policy.mode != "debug" and not log_policy.verbose:
             record = copy.copy(record)
+            if record.exc_info and record.exc_info[0] is not None:
+                record.msg = f"{record.getMessage()} ({record.exc_info[0].__name__})"
+                record.args = ()
             record.exc_info = record.exc_text = record.stack_info = None
         return super().format(record)
 

@@ -179,6 +179,7 @@ async def start_agent(
         "model": model if model is not None else spec.model,
     }
     if db is not None:
+        await db.transitions.record_launch(operation_id, "requested")
         await db.diagnostics.record(
             **record, code="requested", severity="info", details=dict(details)
         )
@@ -230,6 +231,7 @@ async def start_agent(
         log.error("Agent startup failed during %s (%s)", details["stage"], type(exc).__name__)
         details["duration_ms"] = round((time.monotonic() - started) * 1000)
         if db is not None:
+            await db.transitions.record_launch(operation_id, "failed")
             await db.diagnostics.record(**record, code="failed", severity="error", details=details)
         raise
     outcome = (
@@ -244,6 +246,7 @@ async def start_agent(
     )
     details["duration_ms"] = round((time.monotonic() - started) * 1000)
     if db is not None:
+        await db.transitions.record_launch(operation_id, outcome)
         await db.diagnostics.record(**record, code=outcome, severity=severity, details=details)
     log.info("Agent '%s' startup ended: %s", spec.name, outcome)
     return result

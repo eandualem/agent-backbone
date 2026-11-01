@@ -358,10 +358,12 @@ async def test_concurrent_redeliveries_queue_one_delivery(
     assert sorted(r.json()["result"] for r in results) == ["already_pending", "queued"]
 
 
+@pytest.mark.parametrize("mode", ["standard", "off"])
 async def test_delivery_stays_bound_to_the_checked_registration(
-    api_app, api_client, auth_headers, deliver
+    api_app, api_client, auth_headers, deliver, mode
 ):
     db = api_app.state.db
+    await db.settings.set("diagnostics.mode", mode)
     doc = await _document(api_client, auth_headers)
     path = f"/api/conversations/document/{doc['document_id']}"
     entry = (
@@ -378,6 +380,14 @@ async def test_delivery_stays_bound_to_the_checked_registration(
     assert row["registration_id"] == entry["recipient"]["agent_id"] == doc["author_id"]
     assert [r["id"] for r in await db.queue.dequeue("ike")] == [row["id"]]
     await db.queue.mark_delivered(row["id"], reason="registration_changed")
+    page = (await api_client.get(path, headers=auth_headers)).json()
+    assert page["entries"][0]["delivery"] == "failed"
+    if mode == "off":
+        assert await db.diagnostics.query(operation_id=row["operation_id"]) == []
+    # Required delivery state survives optional evidence and queue-body retention.
+    async with db.engine.begin() as conn:
+        await conn.execute(text("DELETE FROM diagnostics"))
+    assert await db.queue.prune(0) == 1
     page = (await api_client.get(path, headers=auth_headers)).json()
     assert page["entries"][0]["delivery"] == "failed"
 
@@ -529,3 +539,36 @@ async def test_summary_releases_writer_barrier_before_artifact_lookup(db, monkey
     result = await db.conversations.summaries()
     assert looked_up
     assert result["items"][0]["artifact_id"] == "thread"
+
+
+async def test_redelivery_resets_persisted_failure_with_optional_capture_off(
+    api_app, api_client, auth_headers, deliver
+):
+    db = api_app.state.db
+    await db.settings.set("diagnostics.mode", "off")
+    doc = await _document(api_client, auth_headers)
+    path = f"/api/conversations/document/{doc['document_id']}"
+    entry = (
+        await api_client.post(
+            path + "/messages", headers=auth_headers, json={"request_id": "original", "text": "hi"}
+        )
+    ).json()["entry"]
+    old = await _queued(db, entry["id"])
+    await db.queue.dequeue("ike")
+    await db.queue.mark_delivered(old["id"], reason="registration_changed")
+    # The stable recipient is available again; an explicit retry gets a new operation.
+    retried = await api_client.post(
+        path + f"/messages/{entry['id']}/redeliver",
+        headers=auth_headers,
+        json={"request_id": "retry"},
+    )
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["result"] == "queued"
+    assert retried.json()["entry"]["delivery"] == "pending"
+    new = await _queued(db, entry["id"])
+    assert new["operation_id"] != old["operation_id"]
+    leased = await db.queue.dequeue("ike")
+    queue_id = next(r["id"] for r in leased if r["operation_id"] == new["operation_id"])
+    await db.queue.mark_delivered(queue_id)
+    page = (await api_client.get(path, headers=auth_headers)).json()
+    assert page["entries"][0]["delivery"] == "delivered"

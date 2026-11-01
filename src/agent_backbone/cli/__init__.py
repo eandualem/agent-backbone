@@ -86,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-v",
         "--verbose",
         action="store_true",
-        help="opt in to developer console detail (may contain private data; off overrides)",
+        help="opt in to developer log detail (may contain private data; off overrides)",
     )
     parser.add_argument("--version", action="version", version=f"backbone {__version__}")
     sub = parser.add_subparsers(dest="command", required=True, title="commands", metavar="COMMAND")

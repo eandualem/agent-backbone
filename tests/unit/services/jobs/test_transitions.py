@@ -814,3 +814,55 @@ async def test_unbound_continuation_and_registration_mutation_do_not_deadlock(
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.parametrize("runtime", RUNTIMES)
+@pytest.mark.parametrize("mode", ["standard", "off"])
+@pytest.mark.parametrize("outcome", ["ready", "failed", "requested"])
+async def test_launch_recovery_uses_operational_record_with_capture_off(
+    db, config, store, seams, mode, outcome, runtime
+):
+    from agent_backbone.services.agents.launch import start_agent
+
+    _, start, deliver = seams
+    await db.settings.set("diagnostics.mode", mode)
+    row = await db.transitions.create(agent_name="ike", message="continue")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "launch-recovery-test")
+    effect = (
+        asyncio.CancelledError()
+        if outcome == "requested"
+        else RuntimeError("synthetic launch failure")
+        if outcome == "failed"
+        else StartResult(ok=True, ready="ready")
+    )
+    with patch(
+        "agent_backbone.services.agents.launch._start_agent",
+        side_effect=effect if isinstance(effect, BaseException) else None,
+        return_value=effect,
+    ):
+        try:
+            await start_agent(
+                replace(store.agents.get("ike"), runtime=runtime),
+                config,
+                db=db,
+                operation_id="launch-recovery-test",
+            )
+        except (asyncio.CancelledError, RuntimeError):
+            pass
+    assert await db.transitions.launch_recovery("launch-recovery-test") == outcome
+    # A retry's preflight cannot erase the earlier actual launch outcome.
+    await db.transitions.record_launch("launch-recovery-test", "requested")
+    await db.transitions.record_launch("launch-recovery-test", "already_running")
+    assert await db.transitions.launch_recovery("launch-recovery-test") == outcome
+    if mode == "off":
+        assert await db.diagnostics.query(operation_id="launch-recovery-test") == []
+    start.return_value = StartResult(ok=True, already_running=True)
+    with patch(f"{_JOB}.query_environment_var", AsyncMock(return_value="launch-recovery-test")):
+        assert await _run(config, store, db) == {
+            "ike": "failed" if outcome == "failed" else "started"
+        }
+    if outcome == "failed":
+        deliver.assert_not_awaited()
+    else:
+        deliver.assert_awaited_once()
