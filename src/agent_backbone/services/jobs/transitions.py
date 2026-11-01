@@ -149,8 +149,6 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
     operation_id = resumed_launch or uuid.uuid4().hex
     if resumed_launch is None:
         await db.transitions.mark_launching(row["id"], operation_id)
-        # Required recovery intent is durable before a transition can start a session.
-        await db.transitions.record_launch(operation_id, "requested")
     req = StartRequest(
         name=name,
         runtime=row["runtime"],
@@ -161,6 +159,10 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
     )
     # Read before the retry: its own "already_running" record would be the newest.
     recovered = await _recovered_launch(db, operation_id) if resumed_launch else None
+    if recovered is None:
+        # A prior process may have exited after mark_launching but before intent.
+        # Require durable intent on retries too, before any new session can start.
+        await db.transitions.record_launch(operation_id, "requested")
     try:
         spec = await resolve_agent(store, req)
         result = await start_resolved(store, config, spec, req, db=db)
