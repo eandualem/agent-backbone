@@ -4,7 +4,7 @@ Backbone coordinates agents you run as your OS user. Each agent's CLI harness
 owns its execution permissions and sandbox. Backbone owns the identity, access,
 confirmation and delivery checks for the collaboration capabilities it adds.
 
-To report a vulnerability, see [SECURITY.md](../SECURITY.md).
+To report a vulnerability, see the [reporting policy](https://github.com/eandualem/agent-backbone/blob/main/SECURITY.md).
 
 ## At a glance
 
