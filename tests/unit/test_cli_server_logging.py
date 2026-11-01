@@ -288,3 +288,55 @@ def test_reload_child_restores_explicit_verbose_policy(tmp_path, restore_logging
     assert log_policy.filter(record)
     set_log_mode("off")
     assert not log_policy.filter(record)
+
+
+@pytest.mark.parametrize("mode,verbose", [("debug", False), ("standard", True), ("off", True)])
+@pytest.mark.parametrize("protocol_level", ["info", "debug"])
+async def test_websocket_protocol_does_not_log_credentials_or_wire_frames(
+    tmp_path, restore_logging, mode, verbose, protocol_level
+):
+    import io
+
+    from uvicorn import Config
+    from uvicorn.protocols.websockets.websockets_impl import WebSocketProtocol
+    from uvicorn.server import ServerState
+    from websockets.frames import Frame, Opcode
+
+    async def app(scope, receive, send):
+        pass
+
+    log_policy.verbose = verbose
+    output = io.StringIO()
+    settings = log_config(make_config(tmp_path, settings={"diagnostics.mode": mode}), None)
+    settings["handlers"]["default"]["stream"] = output
+    protocol = WebSocketProtocol(
+        Config(app, log_config=settings, log_level=protocol_level), ServerState(), {}
+    )
+    protocol.reader.feed_data(
+        b"GET /socket.io/?token=QUERY_EXAMPLE HTTP/1.1\r\n"
+        b"Host: localhost\r\nAuthorization: Bearer HEADER_EXAMPLE\r\n\r\n"
+    )
+    await protocol.read_http_request()
+    protocol.reader.feed_data(
+        Frame(Opcode.TEXT, b'40/sessions,{"api_key":"FRAME_EXAMPLE"}').serialize(mask=True)
+    )
+    await protocol.read_frame(1024)
+    protocol.scope = {
+        "client": ("127.0.0.1", 1234),
+        "root_path": "",
+        "path": "/socket.io/",
+        "query_string": b"token=QUERY_EXAMPLE",
+    }
+    await protocol.asgi_send({"type": "websocket.accept"})
+    logging.getLogger("agent_backbone.example").debug("hook stale after 600s")
+    logging.getLogger("uvicorn.error").error("ASGI application failed")
+    captured = output.getvalue()
+    assert all(
+        value not in captured for value in ("QUERY_EXAMPLE", "HEADER_EXAMPLE", "FRAME_EXAMPLE")
+    )
+    if mode == "off":
+        assert not captured
+    else:
+        assert "hook stale after 600s" in captured
+        assert "ASGI application failed" in captured
+        assert "WebSocket /socket.io/" in captured

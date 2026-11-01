@@ -60,6 +60,12 @@ destination. A detached service does not inherit that invocation's `-v`. Set
 the database mode to `debug` for developer logging across service starts. Adapter discovery and setup can run
 before an installation exists and do not enable optional console logging.
 
+Uvicorn lifecycle and error messages remain available at the selected level;
+WebSocket protocol DEBUG/TRACE records are excluded even in developer mode.
+HTTP and WebSocket access lines omit query values. Job and runtime diagnostic
+buffers check the persisted mode before collecting evidence; observations
+made while capture is off are not saved for publication after re-enabling it.
+
 Turning capture off does not delete existing files or rows. The service does
 not create its optional log file until it has an enabled entry to write.
 Already-running operations may have read their policy before a change; an

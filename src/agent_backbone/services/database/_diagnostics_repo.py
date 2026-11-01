@@ -122,6 +122,15 @@ class DiagnosticRepo(Repo):
     _last_warning = float("-inf")
     write_failures = 0
 
+    async def capture_enabled(self) -> bool:
+        """Gate optional in-memory observations using the persisted setting."""
+        try:
+            async with self._tx() as conn:
+                return await diagnostic_mode(conn) != "off"
+        except Exception:
+            # Unknown policy must not buffer evidence for later publication.
+            return False
+
     async def record(
         self,
         *,

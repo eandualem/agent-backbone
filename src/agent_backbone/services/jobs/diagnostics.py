@@ -16,6 +16,14 @@ _slow_runs: WeakKeyDictionary = WeakKeyDictionary()
 _runtime_observations: WeakKeyDictionary = WeakKeyDictionary()
 
 
+async def _capture_enabled(db: BackboneDB) -> bool:
+    if await db.diagnostics.capture_enabled():
+        return True
+    for cache in (_incidents, _slow_runs, _runtime_observations):
+        cache.pop(db, None)
+    return False
+
+
 async def observe_job(
     db: BackboneDB,
     *,
@@ -34,6 +42,8 @@ async def observe_job(
     completed next time; a healthy surrounding scheduler loop cannot recover it.
     A process restart begins a new observation episode, never a guessed recovery.
     """
+    if not await _capture_enabled(db):
+        return
     incidents = _incidents.setdefault(db, {})
     scope = (source, stage, agent_name, runtime, repo, issue_number)
     operation_id = incidents.get(scope)
@@ -47,7 +57,7 @@ async def observe_job(
         details["error_type"] = error_type
     if duration_ms is not None:
         details["duration_ms"] = duration_ms
-    await db.diagnostics.record(
+    recorded = await db.diagnostics.record(
         operation_id=operation_id,
         category="job",
         code=f"{stage}_{'failed' if error_type else 'recovered'}",
@@ -59,7 +69,7 @@ async def observe_job(
         issue_number=issue_number,
         details=details,
     )
-    if error_type is None:
+    if error_type is None or recorded is None:
         # Observed success ends the episode even when its optional record is
         # disabled or could not be saved; a later failure is a new incident.
         incidents.pop(scope, None)
@@ -78,6 +88,8 @@ async def observe_duration(
     Consecutive slow runs of a job are one episode, recorded once with its
     count and its longest run, and ``steps`` (milliseconds per step) of that
     run when the job reports them; the next ordinary run ends it."""
+    if not await _capture_enabled(db):
+        return
     episodes = _slow_runs.setdefault(db, {})
     if threshold_ms <= 0 or duration_ms < threshold_ms:
         episodes.pop(source, None)
@@ -85,11 +97,10 @@ async def observe_duration(
     operation_id, longest, slowest = episodes.get(source, (uuid.uuid4().hex, 0, None))
     if duration_ms >= longest:
         longest, slowest = duration_ms, steps
-    episodes[source] = (operation_id, longest, slowest)
     details = {"stage": "run", "job": source, "duration_ms": longest}
     if slowest:
         details["steps"] = slowest
-    await db.diagnostics.record(
+    recorded = await db.diagnostics.record(
         operation_id=operation_id,
         category="job",
         code="run_slow",
@@ -97,6 +108,10 @@ async def observe_duration(
         source=source,
         details=details,
     )
+    if recorded is not None:
+        episodes[source] = (operation_id, longest, slowest)
+    else:
+        episodes.pop(source, None)
 
 
 async def observe_runtime(
@@ -108,6 +123,8 @@ async def observe_runtime(
     count. Session identity is held only in memory; no transcript or session ID
     is copied to diagnostics. Restarting the monitor starts a new episode.
     """
+    if not await _capture_enabled(db):
+        return
     agents = _runtime_observations.setdefault(db, {})
     for missing in agents.keys() - states.keys():
         agents.pop(missing)
@@ -121,11 +138,13 @@ async def observe_runtime(
         previous = agents.get(name)
         if previous is None or previous["generation"] != generation:
             previous = {"generation": generation, "operation_id": uuid.uuid4().hex, "signals": {}}
-            agents[name] = previous
+        else:
+            previous = dict(previous)
         current = set(snapshot.diagnostics)
         if current and not previous["signals"]:
             previous["operation_id"] = uuid.uuid4().hex
         operation_id = previous["operation_id"]
+        captured = True
         for signal in snapshot.diagnostics:
             details = {
                 "stage": "monitor",
@@ -139,7 +158,7 @@ async def observe_runtime(
                     details[key] = value
             if signal.model is not None:
                 details["observed_model"] = signal.model
-            await db.diagnostics.record(
+            recorded = await db.diagnostics.record(
                 operation_id=operation_id,
                 category="runtime",
                 code=signal.code,
@@ -153,9 +172,10 @@ async def observe_runtime(
                 issue_number=snapshot.current_issue,
                 details=details,
             )
+            captured = captured and recorded is not None
         for old_signal in previous["signals"]:
             if old_signal not in current and old_signal.severity != "info":
-                await db.diagnostics.record(
+                recorded = await db.diagnostics.record(
                     operation_id=operation_id,
                     category="runtime",
                     code=f"{old_signal.code}_no_longer_visible",
@@ -173,4 +193,9 @@ async def observe_runtime(
                         "error_type": old_signal.error_type,
                     },
                 )
-        previous["signals"] = current
+                captured = captured and recorded is not None
+        if captured:
+            previous["signals"] = current
+            agents[name] = previous
+        else:
+            agents.pop(name, None)

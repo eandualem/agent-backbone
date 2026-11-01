@@ -24,9 +24,26 @@ class DiagnosticLogFilter(logging.Filter):
                 args = list(record.args)
                 args[2] = str(args[2]).partition("?")[0]
                 record.args = tuple(args)
-        # Dependency wire/SQL traces can include headers, credentials and bodies.
-        owned = record.name.startswith(("agent_backbone", "uvicorn"))
-        return record.levelno >= (logging.DEBUG if debug and owned else logging.WARNING)
+        # Uvicorn sends WebSocket access lines through its error logger.
+        if (
+            record.name == "uvicorn.error"
+            and isinstance(record.args, tuple)
+            and str(record.msg).startswith('%s - "WebSocket %s"')
+            and len(record.args) >= 2
+        ):
+            args = list(record.args)
+            args[1] = str(args[1]).partition("?")[0]
+            record.args = tuple(args)
+        # Uvicorn shares its error logger with the WebSocket protocol library:
+        # DEBUG contains raw headers and authentication frames. Keep server
+        # lifecycle/access lines and errors, but never enable its wire traces.
+        level = logging.WARNING
+        if debug:
+            if record.name == "agent_backbone" or record.name.startswith("agent_backbone."):
+                level = logging.DEBUG
+            elif record.name == "uvicorn" or record.name.startswith("uvicorn."):
+                level = logging.INFO
+        return record.levelno >= level
 
 
 log_policy = DiagnosticLogFilter()
