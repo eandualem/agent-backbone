@@ -1,6 +1,8 @@
 # Security
 
-The backbone can type into your agents' terminals. Treat it accordingly.
+Backbone coordinates agents you run as your OS user. Each agent's CLI harness
+owns its execution permissions and sandbox. Backbone owns the identity, access,
+confirmation and delivery checks for the collaboration capabilities it adds.
 
 To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 
@@ -24,8 +26,10 @@ To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 
 **What Backbone does not protect**
 
-- **Agents from each other.** Every agent runs as your user. Any of them can
-  read the others' files, Backbone's `.env` and database, and its tmux sessions.
+- **An additional execution sandbox.** Agents run as your user, subject to
+  their CLI harness's permissions and sandbox. An unrestricted same-user
+  process can read other agents' files, Backbone's `.env` and database, and
+  access tmux. Backbone does not replace the harness or add OS isolation.
 - **Agents from the text they receive.** GitHub comments, Telegram messages and
   peer messages arrive labelled with where they came from, but they are still
   untrusted text. See [Prompt injection](#prompt-injection).
@@ -33,8 +37,8 @@ To report a vulnerability, see [SECURITY.md](../SECURITY.md).
   OpenCode and Gemini CLI run without an OS sandbox when you make them
   unattended. See [Unattended agents](#unattended-agents-and-writable-directories).
 - **Sender names.** Apart from signed senders, a name is what the caller says.
-- **The owner signing key.** It is an ordinary private file for now, readable by
-  any process running as your user (#323).
+- **The owner signing key from unrestricted same-user access.** It is an
+  ordinary private file for now (#323).
 
 Open security issues and known limitations are listed under
 [Known limitations](#known-limitations). How this is tested is under
@@ -42,10 +46,10 @@ Open security issues and known limitations are listed under
 
 ## The model, honestly
 
-- **One trusted user, one machine.** The backbone runs as your OS user and
-  drives tmux sessions that run as your OS user. There is no isolation
-  between agents: every agent can read every other agent's files, and any
-  agent can call the API if you give it the key.
+- **One trusted user, one machine.** The backbone and its tmux sessions run
+  as your OS user. Runtime permissions and sandboxes still apply to each
+  agent's execution. Backbone supplies no additional OS isolation, but its
+  API must enforce the authority of the credential on every request.
 - **Separate operator and collaboration credentials.** The `.env`
   `BACKBONE_API_KEY` is the operator credential. New launches receive a derived
   registration-bound agent credential in that variable instead. It allows discovery, messages,
@@ -324,8 +328,8 @@ there is no per-agent GitHub credential store yet.
 
 ## Known limitations
 
-- **The signing key of a signed sender is an ordinary file for now.** Any
-  process running as the owner's user, agents included, can read it, and
+- **The signing key of a signed sender is an ordinary file for now.** An
+  unrestricted process running as the owner's user can read it, and
   could then sign a request or a key rotation. The app's reconciliation of its
   own log against Backbone's receipts finds this only afterwards. Protected
   key storage is tracked in #323.
@@ -347,6 +351,26 @@ there is no per-agent GitHub credential store yet.
   secret store yet; keep credentials in each tool's own store (#430).
 - **A remote approval is not bound to one native request.** See
   [remote approval request binding](#known-limitation-remote-approval-request-binding).
+
+## Local diagnostics
+
+Backbone writes diagnostics on the user's machine. It has no service that
+collects or uploads those logs. Configured integrations still send the messages
+and notifications you use them for; local diagnostic storage is separate.
+
+Error wording, hook timing and state-reconciliation evidence help explain
+failures. Terminal or provider text can also contain private content or a
+credential. A possible capture path is not evidence that a real credential was
+stored or disclosed. Do not remove useful diagnostic detail merely because
+that possibility exists, and do not assume a current-state inspection can
+reconstruct a past event.
+
+Put credentials only in their designated credential settings; avoid copying
+them into messages or diagnostic examples.
+Backbone excludes credential fields where its data format permits it; it does
+not promise universal secret removal from arbitrary text by patterns or AI.
+Review any excerpt before sharing it in a vulnerability report. Existing
+diagnostic controls and retention are described in [Diagnostics](diagnostics.md).
 
 ## What is tested and reviewed
 

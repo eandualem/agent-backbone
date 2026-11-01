@@ -8,11 +8,17 @@ request. Use GitHub's private reporting form:
 
 A useful report includes:
 
-- the Backbone version (`backbone --version`) and operating system;
-- the agent CLIs involved, if any;
-- what an attacker needs first (another OS account, a GitHub comment, a
-  Telegram message, the API key, a process running as your user);
-- the steps to reproduce and what they lead to.
+- the Backbone version (`backbone --version`), operating system and supported
+  agent CLI versions involved;
+- relevant configuration, including the runtime's permission and sandbox mode;
+- the access and actions needed first, such as a scoped agent credential,
+  operator access, a repository comment or a concurrent registration change;
+- a minimal reproduction, expected and observed behavior, and the concrete
+  impact on a Backbone capability.
+
+Use synthetic values for credentials in reproductions. Do not attach your
+`.env`, database or full logs; include only the relevant excerpt after checking
+it for credentials and private content. There is no diagnostic-upload service.
 
 You will get a reply in the same advisory thread. Fixes are released on PyPI
 and described in the advisory once users can upgrade.
@@ -23,16 +29,24 @@ Only the latest release on [PyPI](https://pypi.org/project/agent-backbone/)
 receives security fixes. Upgrade with `backbone upgrade` or
 `uv tool upgrade agent-backbone`.
 
-## What counts as a vulnerability
+## Reporting scope
 
-Backbone runs as one trusted OS user on one machine. Read the
-[security model](docs/security.md) first: it states what Backbone protects and
-what it does not. A way around a protection it claims is a vulnerability, for
-example reaching the API without a valid key, an agent credential doing what
-only the operator key may do, a secret reaching an agent session, or a sender
-forging the owner-confirmed marker. Behaviour the model lists as unprotected,
-such as a process running as the same user reading Backbone's files, is a known
-limitation. Reports that make one of those limits worse are still welcome.
+Backbone coordinates user-owned agents on one machine. Their CLI harnesses
+enforce execution permissions and sandboxing; Backbone is responsible for the
+identity, access and delivery rules of the capabilities it adds. See the
+[security model](docs/security.md) for those boundaries and known limitations.
+
+Examples include accepting an unauthenticated API request, granting an agent
+operator-only access, attributing a conversation to the wrong registration,
+forwarding a service credential into a session, or accepting a forged owner
+confirmation. State the required access and timing without assuming they make
+the defect common or harmless. Rare identity and concurrency defects still
+matter when they violate a product guarantee.
+
+An unrestricted process running as the same OS user can access local files;
+Backbone does not add an OS isolation boundary. Reports are still welcome when
+a supported configuration exposes more access or data than documented, defeats
+a runtime restriction through a Backbone capability, or makes a known limit worse.
 
 ## Verifying a download
 
