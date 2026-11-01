@@ -868,9 +868,15 @@ async def test_launch_recovery_uses_operational_record_with_capture_off(
         deliver.assert_awaited_once()
 
 
-async def test_transition_never_launches_without_durable_recovery_intent(db, config, store, seams):
+@pytest.mark.parametrize("resumed", [False, True])
+async def test_transition_never_launches_without_durable_recovery_intent(
+    db, config, store, seams, resumed
+):
     _, start, deliver = seams
     row = await db.transitions.create(agent_name="ike", message="continue")
+    if resumed:
+        await db.transitions.mark_stopped(row["id"], start_at=PAST)
+        await db.transitions.mark_launching(row["id"], "interrupted-before-intent")
     with patch.object(
         db.transitions, "record_launch", AsyncMock(side_effect=RuntimeError("storage failed"))
     ):
@@ -878,6 +884,22 @@ async def test_transition_never_launches_without_durable_recovery_intent(db, con
     start.assert_not_awaited()
     deliver.assert_not_awaited()
     assert (await db.transitions.get(row["id"]))["status"] == "failed"
+
+
+async def test_resumed_launch_repairs_missing_intent_before_start(db, config, store, seams):
+    _, start, deliver = seams
+    await db.settings.set("diagnostics.mode", "off")
+    row = await db.transitions.create(agent_name="ike", message="continue")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "interrupted-before-intent")
+
+    async def launch_after_intent(*args, **kwargs):
+        assert await db.transitions.launch_recovery("interrupted-before-intent") == "requested"
+        return StartResult(ok=True, ready="ready")
+
+    start.side_effect = launch_after_intent
+    assert await _run(config, store, db) == {"ike": "started"}
+    deliver.assert_awaited_once()
 
 
 async def test_failed_legacy_recovery_cache_does_not_change_known_launch_result(
