@@ -12,7 +12,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from agent_backbone.services.database._repo import Repo
+from agent_backbone.services.database._repo import Repo, diagnostic_mode
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 from agent_backbone.services.database.models import DeliveryORM, DiagnosticORM, MessageQueueORM
 
@@ -204,6 +204,8 @@ class DiagnosticRepo(Repo):
                 set_=updates,
             )
             async with self._tx() as conn:
+                if await diagnostic_mode(conn) == "off":
+                    return None
                 await conn.execute(stmt)
                 result = await conn.execute(
                     select(DiagnosticORM.id).where(

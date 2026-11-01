@@ -199,8 +199,18 @@ def parse_value(raw: str) -> Any:
 
 
 _CLIENT_SETTINGS_SQL = (
-    "SELECT key, value FROM settings WHERE key IN ('backbone.host', 'backbone.port')"
+    "SELECT key, value FROM settings WHERE key IN "
+    "('backbone.host', 'backbone.port', 'diagnostics.mode')"
 )
+
+
+async def read_log_mode() -> str:
+    """Read policy without initializing storage or using an agent's direct DB access."""
+    config = await read_client_config(strict=True)
+    if is_agent_client(config.api_key):
+        result = await api(config, "GET", "/api/config/diagnostics.mode", timeout=3)
+        return result[1].get("value", "off") if result and result[0] == 200 else "off"
+    return config.settings.get("diagnostics.mode", "standard")
 
 
 class OperatorFileUnavailable(ValueError):

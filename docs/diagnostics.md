@@ -19,6 +19,78 @@ The default window is 24 hours and the display limit is 20 problem groups.
 accepts 1–100. The JSON response includes whether additional groups exist;
 narrow the interval or agent filter before increasing the limit.
 
+## Capture modes
+
+Use an operator terminal to choose the installation's optional diagnostic policy:
+
+```bash
+backbone config set diagnostics.mode off
+backbone config set diagnostics.mode standard
+backbone config set diagnostics.mode debug
+```
+
+`standard` is the default. Selecting `debug` explicitly opts into developer
+logging: error tracebacks and detailed messages can include paths, provider
+errors and private content. Use it when that detail is needed, then return to
+`standard` or `off`. This is local diagnostic output, not permission to upload
+it. There is no log-collection service or universal secret-scrubbing guarantee.
+
+| Surface | `off` | `standard` (default) | `debug` |
+|---|---|---|---|
+| Backbone service/CLI log emission | None, including errors | Warnings and errors, without traceback/stack text | Detailed Backbone logs and tracebacks |
+| Uvicorn access logs | None | None | Enabled; request query values omitted |
+| Dependency wire/SQL debug traces | None | None | Not enabled; may expose headers or payloads |
+| Retained typed diagnostics | No inserts or occurrence updates | Enabled | Enabled |
+| Resource sampling | No memory/process sampling | Enabled according to resource settings | Same |
+| Retained state-change history | No new observations | State, reason and observation time | Same; the state-history API does not store free-form evidence |
+| Existing records | Still readable; ordinary retention applies | Same | Same |
+
+The running service picks up API setting changes without restarting agents.
+Each new CLI invocation reads the installation policy; scoped agent clients use
+an authenticated API read. If that read is unavailable, the CLI suppresses logs
+and still reports command results. `backbone -v COMMAND` is a separate explicit
+opt-in to developer **console** detail for that invocation, including its risk;
+it does not enable retained evidence, and `off` always overrides it. A detached
+service does not inherit that invocation's `-v`. Set the database mode to
+`debug` for persistent developer logging. Adapter discovery and setup can run
+before an installation exists and do not enable optional console logging.
+
+Turning capture off does not delete existing files or rows. The service does
+not create its optional log file until it has an enabled entry to write.
+Already-running operations may have read their policy before a change; an
+operator should wait for those operations to finish before treating a capture
+boundary as settled. History is sampled, not a record of every instant: a gap
+while capture is disabled is unknown, never evidence of quiet or healthy agents.
+
+### What remains operational when logging is off
+
+The switch does not disable the product or remove data needed to use it:
+
+- Queue bodies, delivery receipts, retry/outbox state, acknowledgment and
+  signing/confirmation records remain. They establish what must be delivered,
+  who may act, and whether a retry is safe. Delivery/event history also supports
+  those operations and retains its existing previews and summaries.
+- Current hook state, launch markers, permission/denial records, publication
+  receipts, plan text and context-delivery receipts remain. Hook action files
+  are operational records, not a full transcript of tool arguments. Current
+  state is still read to avoid interrupting busy agents.
+- Authored Documents, Responses, Sheets, reports, plans and conversations remain
+  retained product content. Logging mode does not delete or disable them.
+- Numeric usage accounting and its session-identity files remain controlled by
+  `usage.enabled`. To stop ingestion too, set `usage.enabled false`; current
+  hook state and identity files still support later accounting and operation.
+- Explicit commands such as `agent inspect` and `agent output` still return
+  requested current detail. CLI results, failures printed by the command,
+  `/health`, and service-manager startup/crash output are not optional log
+  entries. An OS service manager or CLI harness may keep its own records;
+  configure those tools separately.
+
+The diagnostic digest may still show required delivery counts or older records
+while capture is off. This does not mean optional diagnostics are still being
+recorded. Check `backbone config get diagnostics.mode`; an empty digest is not a
+claim of complete observation. Sensitive credentials should never be entered
+into message/configuration fields merely because logging is off.
+
 ## What is already recorded
 
 The local data directory contains several different kinds of evidence:
@@ -320,4 +392,4 @@ checks as typed metadata alongside its existing error list.
 
 CLI service log entries include the calendar date and numeric timezone offset
 so incidents can be correlated across midnight and service restarts. Uvicorn
-access logs retain their own format.
+access logs are enabled only for developer logging, without query values.
