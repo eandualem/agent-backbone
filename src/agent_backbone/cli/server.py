@@ -11,6 +11,7 @@ import sys
 import time
 from pathlib import Path
 
+from agent_backbone.base import DiagnosticFormatter, log_policy, set_log_mode
 from agent_backbone.cli import _common
 from agent_backbone.cli.presentation import note, print_table
 from agent_backbone.config import (
@@ -23,7 +24,7 @@ from agent_backbone.config import (
 log = logging.getLogger(__name__)
 
 
-class UTCFormatter(logging.Formatter):
+class UTCFormatter(DiagnosticFormatter):
     """``2026-10-13T12:50:01.123Z``: every log line can be placed in time."""
 
     converter = time.gmtime
@@ -34,6 +35,7 @@ class UTCFormatter(logging.Formatter):
 def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
     """One timestamped format for the backbone and uvicorn (its access lines too),
     written to ``log_file`` with size-based rotation, else to stderr."""
+    set_log_mode(config.settings.get("diagnostics.mode", "standard"))
     if log_file is None:
         handler: dict = {"class": "logging.StreamHandler", "stream": "ext://sys.stderr"}
     else:
@@ -43,6 +45,7 @@ def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
             "maxBytes": max(0, config.settings.get("backbone.log_max_mb", 20)) * 1024 * 1024,
             "backupCount": max(1, config.settings.get("backbone.log_backups", 3)),
             "encoding": "utf-8",
+            "delay": True,
         }
     return {
         "version": 1,
@@ -53,13 +56,13 @@ def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
                 "format": "%(asctime)s %(levelname)s %(name)s: %(message)s",
             }
         },
-        "handlers": {"default": {**handler, "formatter": "utc"}},
-        # The root keeps the level `main` chose (--verbose); uvicorn's loggers
-        # get theirs from `log_level` and reach the same handler through it.
-        "root": {"handlers": ["default"], "level": logging.getLogger().level},
+        "filters": {"diagnostics": {"()": lambda: log_policy}},
+        "handlers": {"default": {**handler, "formatter": "utc", "filters": ["diagnostics"]}},
+        # The handler applies the current mode, including after a settings change.
+        "root": {"handlers": ["default"], "level": "WARNING"},
         "loggers": {
-            name: {"handlers": [], "propagate": True}
-            for name in ("uvicorn", "uvicorn.error", "uvicorn.access")
+            name: {"handlers": [], "propagate": True, "level": "DEBUG"}
+            for name in ("agent_backbone", "uvicorn", "uvicorn.error", "uvicorn.access")
         },
     }
 
@@ -101,7 +104,7 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
                 port=config.backbone.port,
                 reload=True,
                 reload_dirs=["src"],
-                log_level="info",
+                log_level="debug",
                 log_config=logging_config,
             )
         finally:
@@ -120,7 +123,7 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
             app,
             host=config.backbone.host,
             port=config.backbone.port,
-            log_level="info",
+            log_level="debug",
             log_config=logging_config,
             workers=1,
             http=LocalPeerProtocol if config.backbone.socket_path else "auto",

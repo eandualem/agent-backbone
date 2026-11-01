@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import text
 
-from agent_backbone.services.database._repo import Repo
+from agent_backbone.services.database._repo import Repo, diagnostic_mode
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 
 
@@ -19,6 +19,8 @@ class StateHistoryRepo(Repo):
             return
         at = now_iso()
         async with self._tx() as conn:
+            if await diagnostic_mode(conn) == "off":
+                return
             for agent, state, reason in states:
                 await conn.execute(
                     text(

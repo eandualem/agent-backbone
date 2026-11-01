@@ -69,6 +69,21 @@ async def test_history_across_runtimes(api_app, api_client, auth_headers, runtim
         ("busy", None),
     ]
     assert body["has_more"] is False and body["next_before_id"] is None
+    # Off stops optional history even if a caller has an older config snapshot.
+    await api_app.state.db.settings.set("diagnostics.mode", "off")
+    await api_app.state.db.state_history.observe([("worker", "busy", None)])
+    assert await api_app.state.db.state_history.query(since=_SINCE) == body["items"]
+    off_config = replace(config, settings={**config.settings, "diagnostics.mode": "off"})
+    with patch(
+        "agent_backbone.api.session_updates.build_session_snapshot",
+        AsyncMock(return_value=feed._cache),
+    ):
+        off_feed = SessionFeed(lambda: off_config, db=api_app.state.db)
+        assert await off_feed.snapshot() == feed._cache
+        assert off_feed._history_task is None  # Live snapshot still works without capture.
+    await api_app.state.db.settings.set("diagnostics.mode", "standard")
+    await api_app.state.db.state_history.observe([("worker", "busy", None)])
+    assert len(await api_app.state.db.state_history.query(since=_SINCE)) == len(body["items"]) + 1
     for row in body["items"]:
         assert set(row) == {"id", "agent", "state", "reason", "at"}
         assert row["agent"] == "worker"
