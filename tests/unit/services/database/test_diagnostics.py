@@ -207,3 +207,20 @@ async def test_invalid_optional_request_metadata_does_not_drop_failure(db):
     assert row["agent_name"] == row["runtime"] == ""
     assert row["model"] is None
     assert row["details"] == {"error_type": "ValueError"}
+
+
+async def test_off_stops_new_and_repeated_diagnostics_without_deleting_history():
+    async with BackboneDB.connect() as db:
+        record = dict(
+            operation_id="operation", category="delivery", code="failed", severity="error"
+        )
+        first = await db.diagnostics.record(**record)
+        before = await db.diagnostics.get(first)
+        await db.settings.set("diagnostics.mode", "off")
+        assert await db.diagnostics.record(**record) is None
+        assert await db.diagnostics.record(**{**record, "operation_id": "new"}) is None
+        assert await db.diagnostics.get(first) == before
+        assert len(await db.diagnostics.query()) == 1
+        await db.settings.set("diagnostics.mode", "debug")
+        assert await db.diagnostics.record(**record) == first
+        assert (await db.diagnostics.get(first))["occurrences"] == 2

@@ -18,9 +18,11 @@ from tests.support import queue_row
 
 
 class TestSendMessage:
+    @pytest.mark.parametrize("mode", ["standard", "off"])
     async def test_failed_send_returns_exact_delivery_and_queue_evidence(
-        self, api_client, auth_headers, api_app
+        self, api_client, auth_headers, api_app, mode
     ):
+        await api_app.state.db.settings.set("diagnostics.mode", mode)
         with (
             patch(
                 "agent_backbone.services.routing._delivery.get_session_intelligence",
@@ -43,6 +45,9 @@ class TestSendMessage:
         queued = await queue_row(db, receipt["queue_id"])
         assert receipt["operation_id"] == delivery["operation_id"] == queued["operation_id"]
         assert receipt["delivery_id"] == delivery["id"]
+        if mode == "off":
+            assert await db.diagnostics.query(operation_id=receipt["operation_id"]) == []
+            return  # Delivery receipt and durable retry above still work.
         diagnostic = next(
             row
             for row in await db.diagnostics.query(operation_id=receipt["operation_id"])

@@ -372,11 +372,12 @@ async def test_session_feed_captures_identity_before_read_and_rejects_stale_regi
         await feed.close()
 
 
-async def test_observations_keep_only_fixed_evidence_descriptions(
+async def test_debug_evidence_preserves_causes_and_masks_known_credential_values(
     api_app, api_client, auth_headers
 ):
     db = api_app.state.db
     agent = await identity(db, "ike")
+    await db.settings.set("diagnostics.mode", "debug")
     quoted = [
         "terminal shows a provider failure (codex): 401 Authorization: Bearer SYNTHETIC_SECRET_1",
         'terminal shows a provider failure (codex): api_key="SYNTHETIC_SECRET_2"',
@@ -384,6 +385,8 @@ async def test_observations_keep_only_fixed_evidence_descriptions(
         'terminal shows a provider failure (codex): {"api_key": "SYNTHETIC_SECRET_4"}',
         "hook state 'busy' written 0s ago (fresh, Bearer SYNTHETIC_SECRET_5)",
         "Authorization Basic SYNTHETIC_SECRET_6",
+        "the failure on screen beats the hook's 'busy'",
+        "no active permission dialog; the hook does not prove a human wait",
     ]
     await sample(db, "ike", agent, 0)
     await db.state_history.observe_registered(
@@ -402,11 +405,10 @@ async def test_observations_keep_only_fixed_evidence_descriptions(
             {"raw": json.dumps(quoted)},
         )
     assert "SYNTHETIC_SECRET" not in stored
-    assert json.loads(stored) == [
-        *["terminal shows a provider failure"] * 4,
-        "hook state",
-        "unrecognized evidence",
-    ]
+    saved = json.loads(stored)
+    assert "(codex): 401 Authorization: Bearer [redacted]" in saved[0]
+    assert "hook state 'busy' written 0s ago (fresh, Bearer [redacted])" == saved[4]
+    assert saved[-2:] == quoted[-2:]
     spans = await api_client.get(
         "/api/interactions/state-spans",
         headers=auth_headers,
@@ -415,3 +417,115 @@ async def test_observations_keep_only_fixed_evidence_descriptions(
     assert spans.status_code == 200, spans.text
     assert "SYNTHETIC_SECRET" not in spans.text
     assert "terminal shows a provider failure" in spans.text
+
+
+async def test_standard_omits_copied_evidence_and_off_stops_observations(api_app):
+    db = api_app.state.db
+    agent = await identity(db, "ike")
+    await sample(db, "ike", agent, 0)
+    async with db.engine.begin() as conn:
+        assert await conn.scalar(text("SELECT evidence FROM registered_state_observations")) == "[]"
+    await db.settings.set("diagnostics.mode", "off")
+    await sample(db, "ike", agent, 1)
+    await checkpoint(db, 1)
+    async with db.engine.begin() as conn:
+        assert await conn.scalar(text("SELECT COUNT(*) FROM registered_state_observations")) == 1
+        assert await conn.scalar(text("SELECT COUNT(*) FROM interaction_capture_checkpoints")) == 0
+
+
+async def test_short_off_interval_breaks_capture_even_without_an_off_poll(api_app):
+    from dataclasses import replace
+    from unittest.mock import AsyncMock
+
+    from agent_backbone.api.session_updates import SessionFeed
+    from agent_backbone.config import agents_from_rows
+    from agent_backbone.services.agents import EnrichedAgent
+
+    db = api_app.state.db
+    agent = await identity(db, "ike")
+    config = replace(api_app.state.config, agents=agents_from_rows(await db.agents.list()))
+    feed = SessionFeed(lambda: config, db=db, ttl_seconds=0)
+    with (
+        patch(
+            "agent_backbone.api.session_updates.build_session_snapshot",
+            AsyncMock(return_value=[EnrichedAgent(name="ike", session="ike", state="busy")]),
+        ),
+        patch("agent_backbone.services.database._state_history_repo.now_iso") as state_time,
+        patch(
+            "agent_backbone.services.database._interaction_observations.now_iso"
+        ) as checkpoint_time,
+    ):
+        state_time.return_value = checkpoint_time.return_value = at(0)
+        await feed.snapshot()
+        # The setting publisher notifies the feed even when no snapshot is requested.
+        await db.settings.set("diagnostics.mode", "off")
+        feed.set_diagnostic_mode("off")
+        await db.settings.set("diagnostics.mode", "standard")
+        feed.set_diagnostic_mode("standard")
+        state_time.return_value = checkpoint_time.return_value = at(1)
+        await feed.snapshot()
+        state_time.return_value = checkpoint_time.return_value = at(2)
+        await feed.snapshot()
+    await feed.close()
+    page = await db.interactions.state_spans(agent_id=agent, since=at(0), until=at(3))
+    assert page["items"][0]["since"] == page["items"][0]["until"] == at(0)
+    assert page["items"][1]["since"] == at(1) and page["items"][1]["until"] == at(2)
+    coverage = (await db.interactions.summary(since=at(0), until=at(3)))["coverage"]
+    assert coverage["message_intervals"] == [
+        {"since": at(1), "until": at(2), "completeness": "complete_within_declared_scope"}
+    ]
+    assert "capture_interval_gaps" in coverage["reasons"]
+
+
+@pytest.mark.parametrize("phase", ["snapshot", "history"])
+async def test_mode_change_preserves_live_read_without_retaining_cross_boundary_sample(
+    api_app, phase
+):
+    import asyncio
+    from dataclasses import replace
+    from unittest.mock import AsyncMock
+
+    from agent_backbone.api.session_updates import SessionFeed
+    from agent_backbone.config import agents_from_rows
+    from agent_backbone.services.agents import EnrichedAgent
+
+    db = api_app.state.db
+    await identity(db, "ike")
+    config = replace(api_app.state.config, agents=agents_from_rows(await db.agents.list()))
+    feed = SessionFeed(lambda: config, db=db, ttl_seconds=0)
+    entered, resume = asyncio.Event(), asyncio.Event()
+    live = [EnrichedAgent(name="ike", session="ike", state="busy")]
+
+    async def held(*args):
+        entered.set()
+        await resume.wait()
+        return live
+
+    target = (
+        "agent_backbone.api.session_updates.build_session_snapshot"
+        if phase == "snapshot"
+        else "agent_backbone.api.session_updates.SessionFeed._record_history"
+    )
+    with (
+        patch(
+            "agent_backbone.api.session_updates.build_session_snapshot",
+            AsyncMock(return_value=live),
+        ),
+        patch(target, side_effect=held),
+    ):
+        read = asyncio.create_task(feed.snapshot())
+        await entered.wait()
+        await db.settings.set("diagnostics.mode", "off")
+        config = replace(config, settings={**config.settings, "diagnostics.mode": "off"})
+        feed.set_diagnostic_mode("off")
+        if phase == "snapshot":
+            # Even a quick off/on interval invalidates the in-progress sample.
+            await db.settings.set("diagnostics.mode", "standard")
+            config = replace(config, settings={**config.settings, "diagnostics.mode": "standard"})
+            feed.set_diagnostic_mode("standard")
+        resume.set()
+        assert await read == live
+    await feed.close()
+    async with db.engine.begin() as conn:
+        assert await conn.scalar(text("SELECT COUNT(*) FROM registered_state_observations")) == 0
+        assert await conn.scalar(text("SELECT COUNT(*) FROM interaction_capture_checkpoints")) == 0

@@ -274,7 +274,13 @@ async def lifespan(app: FastAPI):
     await lifecycle.start_all()
 
     def _publish(new_config: BackboneConfig) -> None:
+        from agent_backbone.base import set_log_mode
+
+        set_log_mode(new_config.settings.get("diagnostics.mode", "standard"))
         app.state.config = new_config
+        feed = getattr(app.state, "feed", None)
+        if feed is not None:
+            feed.set_diagnostic_mode(new_config.settings.get("diagnostics.mode", "standard"))
         reconcile_jobs = getattr(app.state, "reconcile_jobs", None)
         if reconcile_jobs is not None:
             reconcile_jobs()

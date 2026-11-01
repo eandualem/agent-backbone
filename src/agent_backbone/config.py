@@ -125,6 +125,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "timing.delivery_retention_days": 30,
     "conversations.max_messages": 10_000,
     "conversations.owner_messages_per_hour": 60,
+    "diagnostics.mode": "standard",
     "diagnostics.slow_job_seconds": 30,
     "diagnostics.resource_sample_seconds": 300,
     "diagnostics.pressure_swap_percent": 50,
@@ -172,6 +173,11 @@ SETTINGS_HELP: dict[str, str] = {
         "Rotate the service log (`backbone up --log-file`) at this size in MB (0: never)"
     ),
     "backbone.log_backups": "Rotated service logs kept beside the current one (at least 1)",
+    "diagnostics.mode": (
+        "Optional logging/capture: off, standard (typed diagnostics), or debug "
+        "(opt in to detailed local evidence that may contain private content; "
+        "not a secret scrubber)"
+    ),
     "diagnostics.slow_job_seconds": (
         "Record a scheduled job run slower than this in diagnostics (0 disables)"
     ),
@@ -290,6 +296,7 @@ SETTINGS_HELP: dict[str, str] = {
 
 _SETTING_CHOICES: dict[str, tuple[str, ...]] = {
     "github.intake": ("auto", "webhook", "poll", "off"),
+    "diagnostics.mode": ("off", "standard", "debug"),
     "agents.default_runtime": RUNTIMES,
 }
 _INT_LIST_SETTINGS = frozenset({"telegram.allowed_chat_ids", "telegram.allowed_user_ids"})

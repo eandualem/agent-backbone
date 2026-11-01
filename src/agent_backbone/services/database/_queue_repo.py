@@ -103,12 +103,13 @@ class QueueRepo(Repo):
             # A conversation message keeps its final delivery state after its row goes.
             await conn.execute(
                 text(
-                    "UPDATE conversation_entries SET delivery = (SELECT MAX(CASE"
+                    "UPDATE conversation_entries SET delivery = CASE WHEN delivery = 'failed'"
+                    " THEN 'failed' ELSE (SELECT MAX(CASE"
                     " WHEN q.status = 'delivered' AND NOT EXISTS (SELECT 1 FROM diagnostics d"
                     " WHERE d.operation_id = q.operation_id"
                     " AND d.code = 'retired_registration_changed')"
                     " THEN 'delivered' ELSE 'failed' END) FROM message_queue q"
-                    " WHERE q.operation_id = conversation_entries.operation_id)"
+                    " WHERE q.operation_id = conversation_entries.operation_id) END"
                     " WHERE operation_id IN (SELECT operation_id FROM message_queue"
                     " WHERE status IN ('delivered', 'expired') AND delivered_at < :cutoff)"
                 ),
@@ -604,6 +605,15 @@ class QueueRepo(Repo):
             if row is not None:
                 row = dict(row)
                 await self._ensure_operation_id(conn, row)
+                if reason == "registration_changed":
+                    # This is product delivery state, not optional diagnostic evidence.
+                    await conn.execute(
+                        text(
+                            "UPDATE conversation_entries SET delivery='failed' "
+                            "WHERE operation_id=:operation"
+                        ),
+                        {"operation": row["operation_id"]},
+                    )
                 await event(
                     conn,
                     row["operation_id"],

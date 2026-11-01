@@ -89,6 +89,8 @@ async def machine_memory() -> dict[str, int] | None:
 
 async def sample_resources(config: BackboneConfig, db: BackboneDB) -> dict:
     """Record one sample if memory is under pressure; say why not otherwise."""
+    if config.settings.get("diagnostics.mode", "standard") == "off":
+        return {"sampled": False, "reason": "disabled"}
     machine = await machine_memory()
     if machine is None:
         return {"sampled": False, "reason": "unsupported"}

@@ -169,3 +169,12 @@ async def test_a_failed_process_read_keeps_the_machine_figures(db, config):
     memory = (await db.diagnostics.digest())["memory"]
     assert memory["swap_used_mb"] == _SWAPPING["swap_used_mb"]
     assert "backbone_rss_mb" not in memory and "agents_rss_mb" not in memory
+
+
+async def test_off_skips_optional_machine_capture(config, db):
+    from dataclasses import replace
+
+    config = replace(config, settings={**config.settings, "diagnostics.mode": "off"})
+    with patch(f"{_RES}.machine_memory", AsyncMock()) as read:
+        assert await sample_resources(config, db) == {"sampled": False, "reason": "disabled"}
+    read.assert_not_called()

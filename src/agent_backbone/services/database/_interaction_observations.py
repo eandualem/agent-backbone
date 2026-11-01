@@ -6,6 +6,7 @@ from itertools import pairwise
 
 from sqlalchemy import select, text
 
+from agent_backbone.services.database._repo import diagnostic_mode
 from agent_backbone.services.database._state_history_repo import stored_evidence
 from agent_backbone.services.database._time import format_iso, now_iso, parse_iso
 from agent_backbone.services.database.models import InteractionCaptureCheckpointORM
@@ -15,6 +16,8 @@ MAX_GAP_SECONDS = 120
 
 
 async def checkpoint(conn, recorder_id):
+    if await diagnostic_mode(conn) == "off":
+        return
     at = now_iso()
     previous = (
         (

@@ -141,3 +141,20 @@ conversation API but are not backfilled into missing interaction history.
 Unknown/unverified actor lifecycles are also excluded from quiet-safe intervals:
 the provider cannot silently assume an unbound sender is unrelated to the selected
 registration. Known intervals before/after that uncertainty remain available.
+
+
+## Optional diagnostic capture
+
+`diagnostics.mode=off` stops automatic state observations and periodic capture
+checkpoints; current status and original messages/conversations still operate.
+Changing the mode breaks the recorder sequence, even if off and on occur between
+polls. Spans and message coverage never bridge that disabled interval. Retained
+originals are collaboration data, not optional diagnostic logs.
+
+`standard` retains state/reason/timing without copied evidence text. `debug`
+explicitly opts into bounded explanatory evidence (up to ten strings of 2,000
+characters), preserving hook age/event and error/reconciliation detail. Known
+credential-value forms are masked; this is not a promise to scrub arbitrary
+text. Existing records remain readable under normal retention, including after
+capture is disabled; reads apply the same limited credential-value masking.
+Nothing here deletes old rows or enables log collection/sharing.

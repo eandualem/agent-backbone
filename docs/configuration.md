@@ -157,6 +157,7 @@ See [Token usage](token-usage.md) for sources, coverage and cost semantics.
 
 | Key | Default | Meaning |
 |---|---|---|
+| `diagnostics.mode` | `"standard"` | `off` stops optional diagnostic logs and capture; `standard` keeps typed diagnostics and state history; `debug` opts into detailed local logs that may contain private content. See [capture modes](diagnostics.md#capture-modes). |
 | `diagnostics.slow_job_seconds` | `30` | Record a scheduled job run that takes this long or longer (`run_slow`); `0` disables |
 | `diagnostics.resource_sample_seconds` | `300` | How often memory pressure is checked; `0` disables. Applies at the next start |
 | `diagnostics.pressure_swap_percent` | `50` | Record a memory sample while swap use is at or above this percent of swap |

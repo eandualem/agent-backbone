@@ -282,7 +282,7 @@ def _where(kind: str, artifact_id: str):
 
 RETIRED = "retired_registration_changed"
 """The queue completes a row whose recipient registration changed without
-delivering it; the reason is kept with the operation's diagnostics."""
+delivering it; older records keep that reason only in optional diagnostics."""
 
 
 def _entries():
@@ -314,7 +314,9 @@ def _entry(row) -> dict:
     if owner:
         return entry | {
             "recipient": {"agent_id": row.recipient_id, "name": row.recipient_name},
-            "delivery": "failed" if row.retired else _DELIVERY.get(row.queue_status, row.delivery),
+            "delivery": "failed"
+            if row.retired or row.delivery == "failed"
+            else _DELIVERY.get(row.queue_status, row.delivery),
         }
     return entry | {
         "in_reply_to": row.in_reply_to,

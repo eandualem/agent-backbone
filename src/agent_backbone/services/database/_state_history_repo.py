@@ -3,53 +3,36 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import timedelta
 
 from sqlalchemy import text
 
-from agent_backbone.services.database._repo import Repo
+from agent_backbone.services.database._repo import Repo, diagnostic_mode
 from agent_backbone.services.database._time import cutoff_iso, format_iso, now_iso, parse_iso
 
-# Evidence lines quote terminal, hook and provider text, which can hold a
-# credential. A stored observation keeps only which known kind of evidence it
-# was: one of these constants, never characters copied from the line.
-_EVIDENCE = sorted(
-    (
-        "empty pane",
-        "hook state",
-        "hook state file",
-        "inbox-only agent",
-        "launch marker",
-        "no terminal output; using stale hook state",
-        "reason",
-        "task bound by swarm registration",
-        "terminal inconclusive",
-        "terminal inconclusive; falling back to stale hook state",
-        "terminal shows",
-        "terminal shows a busy marker",
-        "terminal shows a provider failure",
-        "terminal shows an empty prompt",
-        "terminal shows no plan dialog",
-        "terminal shows the plan dialog",
-        "terminal shows thinking/tool output",
-        "the choice dialog on screen beats the hook's permission",
-        "the dialog on screen beats the hook's idle",
-        "the plan dialog may still be open",
-        "unregistered session",
-        "waiting for runtime input acknowledgement",
+# Deliberately limited treatment of known credential forms. Debug evidence is
+# opt-in local detail, not a guarantee that arbitrary text is free of secrets.
+_CREDENTIALS = (
+    re.compile(r"(?i)(\b(?:bearer|basic)\s+)[^\s\"',;)]+"),
+    re.compile(
+        r"(?i)((?:[\"']?(?:api[-_ ]?key|(?:access[_-]|refresh[_-])?token|secret|password|passwd)"
+        r"[\"']?\s*[:=]\s*))(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s,;}&]+)"
     ),
-    key=len,
-    reverse=True,
+    re.compile(r"(://[^/\s:@]+:)[^@\s]+(?=@)"),
 )
 
 
 def stored_evidence(evidence: list[str]) -> list[str]:
-    """Each line's known evidence kind, or "unrecognized evidence"."""
-    return [
-        next((known for known in _EVIDENCE if line.startswith(known)), "unrecognized evidence")
-        for line in evidence[:10]
-        if isinstance(line, str)
-    ]
+    """Bounded explanatory text with known credential values masked, not a scrubber."""
+    result = []
+    for line in evidence[:10]:
+        if not isinstance(line, str):
+            continue
+        for pattern in _CREDENTIALS:
+            line = pattern.sub(lambda match: match[1] + "[redacted]", line)
+        result.append(line[:2000])
+    return result
 
 
 class StateHistoryRepo(Repo):
@@ -63,6 +46,8 @@ class StateHistoryRepo(Repo):
             return
         at = now_iso()
         async with self._tx() as conn:
+            if await diagnostic_mode(conn) == "off":
+                return
             for agent, state, reason in states:
                 await conn.execute(
                     text(
@@ -136,6 +121,9 @@ class StateHistoryRepo(Repo):
         """
         at = now_iso()
         async with self._tx() as conn:
+            mode = await diagnostic_mode(conn)
+            if mode == "off":
+                return
             for name, state, reason in states:
                 identity = registrations.get(name)
                 if not identity:
@@ -163,7 +151,9 @@ class StateHistoryRepo(Repo):
                         "reason": reason,
                         "at": at,
                         "recorder": recorder_id,
-                        "evidence": json.dumps(stored_evidence(evidence.get(name, []))),
+                        "evidence": json.dumps(
+                            stored_evidence(evidence.get(name, [])) if mode == "debug" else []
+                        ),
                         "cutoff": format_iso(parse_iso(at) - timedelta(seconds=60)),
                     },
                 )

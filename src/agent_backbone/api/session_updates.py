@@ -47,6 +47,7 @@ class SessionFeed:
         self._ttl = ttl_seconds
         self._db = db
         self._recorder_id = uuid.uuid4().hex
+        self._diagnostic_mode = config().settings.get("diagnostics.mode", "standard")
         self._history_task: asyncio.Task[None] | None = None
         self._closed = False
         self._cache: list[EnrichedAgent] = []
@@ -66,18 +67,30 @@ class SessionFeed:
     def sio(self, server: socketio.AsyncServer | None) -> None:
         self._sio = server
 
+    def set_diagnostic_mode(self, mode: str) -> None:
+        """A disabled interval breaks capture continuity, even between two polls."""
+        if mode != self._diagnostic_mode:
+            self._diagnostic_mode = mode
+            self._recorder_id = uuid.uuid4().hex
+            if self._history_task is not None and not self._history_task.done():
+                self._history_task.cancel()
+
     async def snapshot(self, *, force_refresh: bool = False) -> list[EnrichedAgent]:
         """The snapshot, rebuilt when older than the TTL (or when forced)."""
+        self.set_diagnostic_mode(self._config().settings.get("diagnostics.mode", "standard"))
         if not force_refresh and self._fresh():
             return self._cache
         async with self._lock:
             if not force_refresh and self._fresh():
                 return self._cache
             config = self._config()
+            recorder_id = self._recorder_id
             registrations = {spec.name: spec.registration_id for spec in config.agents}
             self._cache = await build_session_snapshot(config)
             if (
                 not self._closed
+                and self._diagnostic_mode != "off"
+                and recorder_id == self._recorder_id
                 and self._db is not None
                 and (self._history_task is None or self._history_task.done())
             ):
@@ -86,6 +99,7 @@ class SessionFeed:
                         [(a.name, a.state, a.reason) for a in self._cache if a.configured],
                         registrations,
                         {a.name: a.evidence for a in self._cache if a.configured},
+                        recorder_id,
                     )
                 )
                 try:
@@ -99,7 +113,9 @@ class SessionFeed:
                     log.warning("State history write timed out; observation may be missing")
                 except asyncio.CancelledError:
                     self._history_task.cancel()
-                    raise
+                    # Policy changes cancel optional capture, not the live read.
+                    if asyncio.current_task().cancelling():
+                        raise
             self._cached_at = time.monotonic()
             return self._cache
 
@@ -115,7 +131,7 @@ class SessionFeed:
                 await asyncio.gather(self._history_task, return_exceptions=True)
 
     async def _record_history(
-        self, states: list[tuple[str, str, str | None]], registrations, evidence
+        self, states: list[tuple[str, str, str | None]], registrations, evidence, recorder_id
     ) -> None:
         try:
             await self._db.state_history.observe(states)
@@ -123,9 +139,9 @@ class SessionFeed:
                 states,
                 registrations=registrations,
                 evidence=evidence,
-                recorder_id=self._recorder_id,
+                recorder_id=recorder_id,
             )
-            await self._db.interactions.checkpoint(self._recorder_id)
+            await self._db.interactions.checkpoint(recorder_id)
         except Exception:
             log.exception("Failed to record state history (non-fatal)")
 
