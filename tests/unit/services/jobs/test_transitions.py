@@ -814,3 +814,153 @@ async def test_unbound_continuation_and_registration_mutation_do_not_deadlock(
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.parametrize("runtime", RUNTIMES)
+@pytest.mark.parametrize("mode", ["standard", "off"])
+@pytest.mark.parametrize("outcome", ["ready", "failed", "requested"])
+async def test_launch_recovery_uses_operational_record_with_capture_off(
+    db, config, store, seams, mode, outcome, runtime
+):
+    from agent_backbone.services.agents.launch import start_agent
+
+    _, start, deliver = seams
+    await db.settings.set("diagnostics.mode", mode)
+    row = await db.transitions.create(agent_name="ike", message="continue")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "launch-recovery-test")
+    effect = (
+        asyncio.CancelledError()
+        if outcome == "requested"
+        else RuntimeError("synthetic launch failure")
+        if outcome == "failed"
+        else StartResult(ok=True, ready="ready")
+    )
+    with patch(
+        "agent_backbone.services.agents.launch._start_agent",
+        side_effect=effect if isinstance(effect, BaseException) else None,
+        return_value=effect,
+    ):
+        try:
+            await start_agent(
+                replace(store.agents.get("ike"), runtime=runtime),
+                config,
+                db=db,
+                operation_id="launch-recovery-test",
+            )
+        except (asyncio.CancelledError, RuntimeError):
+            pass
+    assert await db.transitions.launch_recovery("launch-recovery-test") == outcome
+    # A retry's preflight cannot erase the earlier actual launch outcome.
+    await db.transitions.record_launch("launch-recovery-test", "requested")
+    await db.transitions.record_launch("launch-recovery-test", "already_running")
+    assert await db.transitions.launch_recovery("launch-recovery-test") == outcome
+    if mode == "off":
+        assert await db.diagnostics.query(operation_id="launch-recovery-test") == []
+    start.return_value = StartResult(ok=True, already_running=True)
+    with patch(f"{_JOB}.query_environment_var", AsyncMock(return_value="launch-recovery-test")):
+        assert await _run(config, store, db) == {
+            "ike": "failed" if outcome == "failed" else "started"
+        }
+    if outcome == "failed":
+        deliver.assert_not_awaited()
+    else:
+        deliver.assert_awaited_once()
+
+
+@pytest.mark.parametrize("resumed", [False, True])
+async def test_transition_never_launches_without_durable_recovery_intent(
+    db, config, store, seams, resumed
+):
+    _, start, deliver = seams
+    row = await db.transitions.create(agent_name="ike", message="continue")
+    if resumed:
+        await db.transitions.mark_stopped(row["id"], start_at=PAST)
+        await db.transitions.mark_launching(row["id"], "interrupted-before-intent")
+    with patch.object(
+        db.transitions, "record_launch", AsyncMock(side_effect=RuntimeError("storage failed"))
+    ):
+        assert await _run(config, store, db) == {"ike": "failed"}
+    start.assert_not_awaited()
+    deliver.assert_not_awaited()
+    assert (await db.transitions.get(row["id"]))["status"] == "failed"
+
+
+async def test_resumed_launch_repairs_missing_intent_before_start(db, config, store, seams):
+    _, start, deliver = seams
+    await db.settings.set("diagnostics.mode", "off")
+    row = await db.transitions.create(agent_name="ike", message="continue")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "interrupted-before-intent")
+
+    async def launch_after_intent(*args, **kwargs):
+        assert await db.transitions.launch_recovery("interrupted-before-intent") == "requested"
+        return StartResult(ok=True, ready="ready")
+
+    start.side_effect = launch_after_intent
+    assert await _run(config, store, db) == {"ike": "started"}
+    deliver.assert_awaited_once()
+
+
+async def test_failed_legacy_recovery_cache_does_not_change_known_launch_result(
+    db, config, store, seams
+):
+    _, start, deliver = seams
+    row = await db.transitions.create(agent_name="ike", message="continue")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "legacy-launch")
+    await db.diagnostics.record(
+        category="startup", operation_id="legacy-launch", code="ready", agent_name="ike"
+    )
+    start.return_value = StartResult(ok=True, already_running=True)
+    with (
+        patch.object(
+            db.transitions, "record_launch", AsyncMock(side_effect=RuntimeError("storage failed"))
+        ),
+        patch(f"{_JOB}.query_environment_var", AsyncMock(return_value="legacy-launch")),
+    ):
+        assert await _run(config, store, db) == {"ike": "started"}
+    assert (await db.transitions.get(row["id"]))["result"]["ready"] == "ready"
+    deliver.assert_awaited_once()
+
+
+@pytest.mark.parametrize("outcome", ["failed", "exited", "ready"])
+@pytest.mark.parametrize("intent", ["requested", "not_observed"])
+async def test_incomplete_operational_intent_uses_later_diagnostic_outcome(
+    db, config, store, seams, outcome, intent
+):
+    _, start, deliver = seams
+    row = await db.transitions.create(agent_name="ike", message="continue")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "incomplete-intent")
+    await db.transitions.record_launch("incomplete-intent", intent)
+    await db.diagnostics.record(
+        category="startup", operation_id="incomplete-intent", code=outcome, agent_name="ike"
+    )
+    start.return_value = StartResult(ok=True, already_running=True)
+    with patch(f"{_JOB}.query_environment_var", AsyncMock(return_value="incomplete-intent")):
+        assert await _run(config, store, db) == {
+            "ike": "started" if outcome == "ready" else "failed"
+        }
+    if outcome == "ready":
+        deliver.assert_awaited_once()
+    else:
+        deliver.assert_not_awaited()
+
+
+@pytest.mark.parametrize("intent", ["requested", "not_observed"])
+async def test_required_intent_survives_unavailable_optional_diagnostics(
+    db, config, store, seams, intent
+):
+    _, start, deliver = seams
+    row = await db.transitions.create(agent_name="ike", message="continue")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "durable-intent")
+    await db.transitions.record_launch("durable-intent", intent)
+    start.return_value = StartResult(ok=True, already_running=True)
+    with (
+        patch.object(db.diagnostics, "query", AsyncMock(side_effect=RuntimeError("unavailable"))),
+        patch(f"{_JOB}.query_environment_var", AsyncMock(return_value="durable-intent")),
+    ):
+        assert await _run(config, store, db) == {"ike": "started"}
+    deliver.assert_awaited_once()

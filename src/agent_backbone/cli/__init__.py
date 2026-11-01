@@ -31,6 +31,7 @@ database directly when it is not.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 import sys
@@ -81,7 +82,12 @@ def build_parser() -> argparse.ArgumentParser:
         "Capability playbooks: backbone help\n"
         "Enable Tab completion: backbone completion zsh --install (also bash/fish)",
     )
-    parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="opt in to developer log detail (may contain private data; off overrides)",
+    )
     parser.add_argument("--version", action="version", version=f"backbone {__version__}")
     sub = parser.add_subparsers(dest="command", required=True, title="commands", metavar="COMMAND")
 
@@ -601,11 +607,26 @@ def main(argv: list[str] | None = None) -> None:
         words = argv[2:] if argv[1:2] == ["--"] else argv[1:]
         sys.exit(complete(parser, words))
     args = parser.parse_args(expand_shorthand(argv))
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.WARNING,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S%z",
+    from agent_backbone.base import DiagnosticFormatter, log_policy, set_log_mode
+    from agent_backbone.cli._common import read_log_mode
+
+    set_log_mode("off")
+    log_policy.verbose = args.verbose
+    handler = logging.StreamHandler()
+    handler.addFilter(log_policy)
+    handler.setFormatter(
+        DiagnosticFormatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S%z",
+        )
     )
+    logging.basicConfig(level=logging.WARNING, handlers=[handler])
+    logging.getLogger("agent_backbone").setLevel(logging.DEBUG)
+    if args.command not in {"runtimes", "setup"}:
+        try:
+            set_log_mode(asyncio.run(read_log_mode()))
+        except (ValueError, OSError):
+            set_log_mode("off")  # Command output still reports failures.
     # Adapter discovery is usable before an installation or account exists.
     # It reads no installation secrets and offers no administrative operation.
     if args.command in {"runtimes", "setup"}:

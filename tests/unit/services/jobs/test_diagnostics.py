@@ -1,5 +1,9 @@
 """Job liveness cannot stand in for a failed sub-operation's recovery."""
 
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from agent_backbone.services.agents import AgentState, StateSnapshot
 from agent_backbone.services.database import BackboneDB
 from agent_backbone.services.jobs.diagnostics import observe_job, observe_runtime
@@ -125,3 +129,24 @@ async def test_usage_failure_recovery_is_scoped_to_runtime_and_stage(db):
     recovered, failure = await db.diagnostics.query()
     assert recovered["code"] == "usage_registration_recovered"
     assert recovered["operation_id"] == failure["operation_id"]
+
+
+@pytest.mark.parametrize("capture", ["off", "write_failure"])
+async def test_observed_success_ends_episode_without_a_recovery_record(db, capture):
+    scope = {"source": "agent-monitor", "stage": "state_persistence", "agent_name": "worker"}
+    await observe_job(db, **scope, error_type="OSError")
+    if capture == "off":
+        await db.settings.set("diagnostics.mode", "off")
+        await observe_job(db, **scope)
+        await db.settings.set("diagnostics.mode", "standard")
+    else:
+        with patch.object(db.diagnostics, "record", AsyncMock(return_value=None)):
+            await observe_job(db, **scope)
+    (first,) = await db.diagnostics.query()
+    assert first["occurrences"] == 1
+    await observe_job(db, **scope, error_type="OSError")
+    newest, unchanged = await db.diagnostics.query()
+    assert unchanged == first
+    assert newest["operation_id"] != first["operation_id"]
+    assert newest["occurrences"] == 1
+    assert {newest["code"], first["code"]} == {"state_persistence_failed"}
