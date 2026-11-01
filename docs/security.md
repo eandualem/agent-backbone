@@ -1,13 +1,55 @@
 # Security
 
-The backbone can type into your agents' terminals. Treat it accordingly.
+Backbone coordinates agents you run as your OS user. Each agent's CLI harness
+owns its execution permissions and sandbox. Backbone owns the identity, access,
+confirmation and delivery checks for the collaboration capabilities it adds.
+
+To report a vulnerability, see the [reporting policy](https://github.com/eandualem/agent-backbone/blob/main/SECURITY.md).
+
+## At a glance
+
+**What Backbone protects**
+
+- **Other OS accounts on the machine.** The API listens on `127.0.0.1` and
+  needs a key. Backbone's data and state directories are private (0700, files
+  0600). The optional [private Unix socket](api.md#private-local-transport)
+  refuses any connection from another user ID before reading the request.
+- **The network.** Nothing listens beyond localhost unless you change
+  `backbone.host`. GitHub webhooks need a matching signature, and Telegram
+  control needs an allowlisted user ID.
+- **Backbone's own secrets.** Agent sessions start without the operator key and
+  without anything in Backbone's `.env`. Each agent gets its own narrower key,
+  which cannot change settings or register agents.
+- **The message envelope.** A sender name cannot fake a second envelope or the
+  owner-confirmed marker. A sender with an enrolled signing key must sign every
+  request made under its name.
+
+**What Backbone does not protect**
+
+- **An additional execution sandbox.** Agents run as your user, subject to
+  their CLI harness's permissions and sandbox. An unrestricted same-user
+  process can read other agents' files, Backbone's `.env` and database, and
+  access tmux. Backbone does not replace the harness or add OS isolation.
+- **Agents from the text they receive.** GitHub comments, Telegram messages and
+  peer messages arrive labelled with where they came from, but they are still
+  untrusted text. See [Prompt injection](#prompt-injection).
+- **Your machine from an unattended agent without a sandbox.** Claude Code,
+  OpenCode and Gemini CLI run without an OS sandbox when you make them
+  unattended. See [Unattended agents](#unattended-agents-and-writable-directories).
+- **Sender names.** Apart from signed senders, a name is what the caller says.
+- **The owner signing key from unrestricted same-user access.** It is an
+  ordinary private file for now (#323).
+
+Open security issues and known limitations are listed under
+[Known limitations](#known-limitations). How this is tested is under
+[What is tested and reviewed](#what-is-tested-and-reviewed).
 
 ## The model, honestly
 
-- **One trusted user, one machine.** The backbone runs as your OS user and
-  drives tmux sessions that run as your OS user. There is no isolation
-  between agents: every agent can read every other agent's files, and any
-  agent can call the API if you give it the key.
+- **One trusted user, one machine.** The backbone and its tmux sessions run
+  as your OS user. Runtime permissions and sandboxes still apply to each
+  agent's execution. Backbone supplies no additional OS isolation, but its
+  API must enforce the authority of the credential on every request.
 - **Separate operator and collaboration credentials.** The `.env`
   `BACKBONE_API_KEY` is the operator credential. New launches receive a derived
   registration-bound agent credential in that variable instead. It allows discovery, messages,
@@ -286,8 +328,8 @@ there is no per-agent GitHub credential store yet.
 
 ## Known limitations
 
-- **The signing key of a signed sender is an ordinary file for now.** Any
-  process running as the owner's user, agents included, can read it, and
+- **The signing key of a signed sender is an ordinary file for now.** An
+  unrestricted process running as the owner's user can read it, and
   could then sign a request or a key rotation. The app's reconciliation of its
   own log against Backbone's receipts finds this only afterwards. Protected
   key storage is tracked in #323.
@@ -305,6 +347,87 @@ there is no per-agent GitHub credential store yet.
   refused as `rate_limited` until 10 minutes pass without another failure.
   Validation fails closed, the owner is notified, and only the step that
   depends on the confirmation waits.
+- **Per-agent `env` values are stored in plain text.** There is no per-agent
+  secret store yet; keep credentials in each tool's own store (#430).
+- **A remote approval is not bound to one native request.** See
+  [remote approval request binding](#known-limitation-remote-approval-request-binding).
+
+## Local diagnostics
+
+Backbone writes diagnostics on the user's machine. It has no service that
+collects or uploads those logs. Configured integrations still send the messages
+and notifications you use them for; local diagnostic storage is separate.
+
+Error wording, hook timing and state-reconciliation evidence help explain
+failures. Terminal or provider text can also contain private content or a
+credential. A possible capture path is not evidence that a real credential was
+stored or disclosed. Do not remove useful diagnostic detail merely because
+that possibility exists, and do not assume a current-state inspection can
+reconstruct a past event.
+
+Put credentials only in their designated credential settings; avoid copying
+them into messages or diagnostic examples.
+Backbone excludes credential fields where its data format permits it; it does
+not promise universal secret removal from arbitrary text by patterns or AI.
+Review any excerpt before sharing it in a vulnerability report. Existing
+diagnostic controls and retention are described in [Diagnostics](diagnostics.md).
+
+## What is tested and reviewed
+
+- **Every pull request** and every push to `develop` and `main` runs lint,
+  format checks and the full test suite on Python 3.11, 3.12 and 3.13. The
+  tests need no services. tmux is mocked in them; `make smoke` checks the
+  terminal layer against a real tmux server on its own private socket.
+- **Tests aimed at the boundaries above**, in `tests/unit/`:
+  - `api/test_auth.py`: requests without a valid key are refused.
+  - `api/test_authority.py`: an agent's key cannot do what needs the
+    operator key.
+  - `api/test_local_transport.py`: the Unix socket refuses other user IDs and
+    unsafe socket paths.
+  - `test_signing.py` and `api/routes/test_api_signing.py`: signed senders,
+    checked against fixed test vectors in `tests/fixtures/signing_vectors.json`.
+  - `services/agents/test_launch.py`: Backbone's secrets are removed from agent
+    sessions and no value appears on a command line.
+- **Review.** Before a pull request opens, an AI reviewer running separately
+  from the agent that wrote the change reviews it, and the pull request
+  records which reviewer ran and what it found. Hosted automated reviewers
+  then review the pull request.
+- **The repository** has GitHub secret scanning and push protection on.
+- **Releases** are built by a manual workflow from `main` only, with action
+  versions pinned to commits. See [Verify a download](#verify-a-download).
+
+**Not done yet:** no third-party security audit, no fuzzing, and no static
+code scanning or dependency alerts in CI. Reviews are by AI models and
+automated tools, not by a dedicated human security reviewer.
+
+## Verify a download
+
+The release workflow records a signed build provenance attestation for each
+file it publishes to PyPI. The attestation ties the file's SHA-256 digest to
+this repository, the release workflow and the commit it was built from. It
+shows where the file came from; it does not show the code is safe.
+
+Download the file you are about to install, check it against the commit its
+release tag points to, then install that same file. Set `version` to the
+release you want; each step runs only if the one before it succeeded:
+
+```bash
+version=VERSION
+python3 -m pip download "agent-backbone==$version" --no-deps -d backbone-download &&
+commit=$(gh api "repos/eandualem/agent-backbone/commits/v$version" --jq .sha) &&
+gh attestation verify "backbone-download/agent_backbone-$version-py3-none-any.whl" \
+  --repo eandualem/agent-backbone \
+  --signer-workflow eandualem/agent-backbone/.github/workflows/release.yml \
+  --source-digest "${commit:?release commit not found}" &&
+uv tool install "./backbone-download/agent_backbone-$version-py3-none-any.whl"
+```
+
+Checking the commit matters: it rejects a file the same workflow built for any
+other release or commit.
+
+The source archive (`agent_backbone-VERSION.tar.gz`) verifies the same way.
+Version 0.4.4 and earlier were published before attestations were added and
+have none, so `gh attestation verify` reports no attestation for them.
 
 ## What to check before exposing anything
 
@@ -349,8 +472,9 @@ process running as the same account. Keep backups equally private.
 
 
 The manual release workflow pins action commits and the uv version. Build/test
-runs with read-only repository access; a separate job creates the source tag
-before a publication job receives the PyPI token. Existing tags stop publication
+runs with read-only repository access. A separate job attests the built files'
+provenance, and another creates the source tag before a publication job
+receives the PyPI token. Existing tags stop publication
 for operator inspection. A failed publication can leave the source tag present;
 resolve that state explicitly before retrying. No release runs on pushes or merges.
 

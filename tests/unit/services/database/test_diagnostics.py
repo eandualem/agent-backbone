@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from sqlalchemy import text
 
 from agent_backbone.services.database import BackboneDB, diagnostic_details
@@ -153,7 +154,10 @@ async def test_recency_filter_is_explicitly_lifetime_counts_and_prune_uses_last_
         assert await db.diagnostics.get(active) is not None
 
 
-async def test_recorder_failure_is_nonfatal_and_logs_no_exception_payload(monkeypatch, caplog):
+@pytest.mark.parametrize("operation", ["record", "capture_enabled"])
+async def test_recorder_failure_is_nonfatal_and_logs_no_exception_payload(
+    monkeypatch, caplog, operation
+):
     async with BackboneDB.connect() as db:
 
         def fail():
@@ -162,7 +166,12 @@ async def test_recorder_failure_is_nonfatal_and_logs_no_exception_payload(monkey
         monkeypatch.setattr(db.diagnostics, "_tx", fail)
         monkeypatch.setattr(type(db.diagnostics), "_last_warning", float("-inf"))
         before = type(db.diagnostics).write_failures
-        assert await db.diagnostics.record(operation_id="x", category="job", code="failed") is None
+        if operation == "record":
+            assert (
+                await db.diagnostics.record(operation_id="x", category="job", code="failed") is None
+            )
+        else:
+            assert await db.diagnostics.capture_enabled() is False
         assert type(db.diagnostics).write_failures == before + 1
         assert "evidence is incomplete" in caplog.text
         assert "secret" not in caplog.text
@@ -207,3 +216,20 @@ async def test_invalid_optional_request_metadata_does_not_drop_failure(db):
     assert row["agent_name"] == row["runtime"] == ""
     assert row["model"] is None
     assert row["details"] == {"error_type": "ValueError"}
+
+
+async def test_off_stops_new_and_repeated_diagnostics_without_deleting_history():
+    async with BackboneDB.connect() as db:
+        record = dict(
+            operation_id="operation", category="delivery", code="failed", severity="error"
+        )
+        first = await db.diagnostics.record(**record)
+        before = await db.diagnostics.get(first)
+        await db.settings.set("diagnostics.mode", "off")
+        assert await db.diagnostics.record(**record) is None
+        assert await db.diagnostics.record(**{**record, "operation_id": "new"}) is None
+        assert await db.diagnostics.get(first) == before
+        assert len(await db.diagnostics.query()) == 1
+        await db.settings.set("diagnostics.mode", "debug")
+        assert await db.diagnostics.record(**record) == first
+        assert (await db.diagnostics.get(first))["occurrences"] == 2

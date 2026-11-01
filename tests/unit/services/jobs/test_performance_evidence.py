@@ -169,3 +169,51 @@ async def test_a_failed_process_read_keeps_the_machine_figures(db, config):
     memory = (await db.diagnostics.digest())["memory"]
     assert memory["swap_used_mb"] == _SWAPPING["swap_used_mb"]
     assert "backbone_rss_mb" not in memory and "agents_rss_mb" not in memory
+
+
+async def test_off_skips_optional_machine_capture(config, db):
+    from dataclasses import replace
+
+    config = replace(config, settings={**config.settings, "diagnostics.mode": "off"})
+    with patch(f"{_RES}.machine_memory", AsyncMock()) as read:
+        assert await sample_resources(config, db) == {"sampled": False, "reason": "disabled"}
+    read.assert_not_called()
+
+
+async def test_off_period_slow_runs_are_not_buffered_for_later_capture(db):
+    await observe_duration(db, source="prune", duration_ms=40_000, threshold_ms=30_000)
+    (first,) = await db.diagnostics.query()
+    await db.settings.set("diagnostics.mode", "off")
+    await observe_duration(
+        db, source="prune", duration_ms=90_000, threshold_ms=30_000, steps={"disabled_step": 89_000}
+    )
+    assert await db.diagnostics.query() == [first]
+    await db.settings.set("diagnostics.mode", "standard")
+    await observe_duration(
+        db, source="prune", duration_ms=31_000, threshold_ms=30_000, steps={"enabled_step": 30_000}
+    )
+    newest, unchanged = await db.diagnostics.query()
+    assert unchanged == first and newest["operation_id"] != first["operation_id"]
+    assert newest["details"]["duration_ms"] == 31_000
+    assert newest["details"]["steps"] == {"enabled_step": 30_000}
+
+
+async def test_mode_change_during_a_slow_record_does_not_leave_a_buffer(db):
+    record = db.diagnostics.record
+
+    async def disable_then_record(**values):
+        await db.settings.set("diagnostics.mode", "off")
+        return await record(**values)
+
+    with patch.object(db.diagnostics, "record", side_effect=disable_then_record):
+        await observe_duration(
+            db,
+            source="prune",
+            duration_ms=90_000,
+            threshold_ms=30_000,
+            steps={"disabled_step": 89_000},
+        )
+    await db.settings.set("diagnostics.mode", "standard")
+    await observe_duration(db, source="prune", duration_ms=31_000, threshold_ms=30_000)
+    (row,) = await db.diagnostics.query()
+    assert row["details"]["duration_ms"] == 31_000 and "steps" not in row["details"]

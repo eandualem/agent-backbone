@@ -125,6 +125,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "timing.delivery_retention_days": 30,
     "conversations.max_messages": 10_000,
     "conversations.owner_messages_per_hour": 60,
+    "diagnostics.mode": "standard",
     "diagnostics.slow_job_seconds": 30,
     "diagnostics.resource_sample_seconds": 300,
     "diagnostics.pressure_swap_percent": 50,
@@ -172,6 +173,11 @@ SETTINGS_HELP: dict[str, str] = {
         "Rotate the service log (`backbone up --log-file`) at this size in MB (0: never)"
     ),
     "backbone.log_backups": "Rotated service logs kept beside the current one (at least 1)",
+    "diagnostics.mode": (
+        "Optional logging/capture: off, standard (typed diagnostics), or debug "
+        "(opt in to detailed local evidence that may contain private content; "
+        "not a secret scrubber)"
+    ),
     "diagnostics.slow_job_seconds": (
         "Record a scheduled job run slower than this in diagnostics (0 disables)"
     ),
@@ -290,6 +296,7 @@ SETTINGS_HELP: dict[str, str] = {
 
 _SETTING_CHOICES: dict[str, tuple[str, ...]] = {
     "github.intake": ("auto", "webhook", "poll", "off"),
+    "diagnostics.mode": ("off", "standard", "debug"),
     "agents.default_runtime": RUNTIMES,
 }
 _INT_LIST_SETTINGS = frozenset({"telegram.allowed_chat_ids", "telegram.allowed_user_ids"})
@@ -1104,15 +1111,19 @@ def invalid_settings(stored: dict[str, Any]) -> dict[str, str]:
 def effective_settings(stored: dict[str, Any]) -> dict[str, Any]:
     """Defaults overlaid with stored values (unknown keys are ignored).
 
-    A stored value that is no longer valid falls back to the default, with
-    a warning; ``doctor`` reports it too, so it never goes quietly."""
+    Invalid diagnostic policy disables capture; other invalid values use defaults,
+    with a warning; ``doctor`` reports it too, so it never goes quietly."""
     merged = dict(SETTINGS_DEFAULTS)
     problems = invalid_settings(stored)
     for key, value in stored.items():
         if key in SETTINGS_DEFAULTS and key not in problems:
             merged[key] = validate_setting(key, value)
     for key, reason in problems.items():
-        logging.getLogger(__name__).warning("Setting %s is ignored (default used): %s", key, reason)
+        fallback = "off" if key == "diagnostics.mode" else SETTINGS_DEFAULTS[key]
+        merged[key] = fallback
+        logging.getLogger(__name__).warning(
+            "Setting %s is ignored (fallback %r used): %s", key, fallback, reason
+        )
     return merged
 
 

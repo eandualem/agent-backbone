@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
+from agent_backbone.base import log_policy, set_log_mode
 from agent_backbone.cli.server import log_config
+from agent_backbone.config import AgentsConfig, AgentSpec
 from tests.conftest import make_config
 
 _LINE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z (INFO|WARNING) [\w.]+: ")
@@ -19,16 +21,21 @@ _LINE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z (INFO|WARNING) [\w.]
 def restore_logging():
     root = logging.getLogger()
     handlers, level = root.handlers[:], root.level
+    mode, verbose = log_policy.mode, log_policy.verbose
+    log_policy.verbose = False
     yield
     for handler in root.handlers:
         handler.close()
     root.handlers[:] = handlers
     root.setLevel(level)
+    log_policy.mode, log_policy.verbose = mode, verbose
 
 
 def test_uvicorn_and_backbone_lines_carry_utc_timestamps(tmp_path, restore_logging):
     log = tmp_path / "backbone.log"
-    logging.config.dictConfig(log_config(make_config(tmp_path), log))
+    logging.config.dictConfig(
+        log_config(make_config(tmp_path, settings={"diagnostics.mode": "debug"}), log)
+    )
     access = logging.getLogger("uvicorn.access")
     access.setLevel(logging.INFO)  # uvicorn sets it from log_level
     access.info('%s - "%s %s HTTP/%s" %d', "127.0.0.1:5", "GET", "/api/agents", "1.1", 200)
@@ -155,3 +162,228 @@ def test_reload_factory_uses_the_actual_listener_endpoint(tmp_path, monkeypatch)
         _run_server(config, reload=True)
     assert os.environ["BACKBONE_PORT"] == "7120"
     assert "BACKBONE_HOST" not in os.environ
+
+
+@pytest.mark.parametrize(
+    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+)
+def test_modes_control_actual_emission_and_keep_developer_detail(
+    tmp_path, restore_logging, runtime
+):
+    path = tmp_path / "controlled.log"
+    config = make_config(
+        tmp_path,
+        settings={"diagnostics.mode": "off"},
+        agents=AgentsConfig(
+            specs={"worker": AgentSpec(name="worker", dir=str(tmp_path), runtime=runtime)}
+        ),
+    )
+    logging.config.dictConfig(log_config(config, path))
+    own = logging.getLogger("agent_backbone.example")
+    access = logging.getLogger("uvicorn.access")
+    access.setLevel(logging.DEBUG)
+    log_policy.verbose = True
+    own.error("off error")
+    access.info('%s - "%s %s HTTP/%s" %d', "local", "GET", "/health", "1.1", 200)
+    assert not path.exists()  # Off does not even create the optional log.
+
+    log_policy.verbose = False
+    set_log_mode("standard")
+    own.debug("developer-only detail")
+    access.info('%s - "%s %s HTTP/%s" %d', "local", "GET", "/health", "1.1", 200)
+    try:
+        raise ValueError("causal developer detail")
+    except ValueError:
+        own.exception("Operation failed")
+    ordinary = path.read_text()
+    assert "Operation failed (ValueError)" in ordinary
+    assert "developer" not in ordinary and "Traceback" not in ordinary and "GET" not in ordinary
+
+    set_log_mode("debug")
+    own.debug("hook stale after 600s; terminal failure overrides busy")
+    try:
+        raise ValueError("retry after 30s")
+    except ValueError:
+        own.exception("Provider failed")
+    access.info(
+        '%s - "%s %s HTTP/%s" %d', "local", "GET", "/health?token=EXAMPLE_VALUE", "1.1", 200
+    )
+    logging.getLogger("httpx").debug("Authorization: EXAMPLE_VALUE")
+    detailed = path.read_text()
+    assert "hook stale after 600s; terminal failure overrides busy" in detailed
+    assert "ValueError: retry after 30s" in detailed and "Traceback" in detailed
+    assert "GET /health HTTP/1.1" in detailed and "EXAMPLE_VALUE" not in detailed
+    set_log_mode("off")
+    own.error("off again")
+    assert path.read_text() == detailed
+
+
+async def test_scoped_cli_reads_logging_policy_through_api(tmp_path):
+    from dataclasses import replace
+    from unittest.mock import AsyncMock, patch
+
+    from agent_backbone.cli import _common
+    from agent_backbone.config import agent_api_key
+
+    config = replace(make_config(tmp_path), api_key=agent_api_key("example-key", "a" * 32))
+    with (
+        patch.object(_common, "read_client_config", AsyncMock(return_value=config)),
+        patch.object(_common, "api", AsyncMock(return_value=(200, {"value": "off"}))) as api,
+    ):
+        assert await _common.read_log_mode() == "off"
+        assert api.call_args.args[2] == "/api/config/diagnostics.mode"
+        api.return_value = None
+        assert await _common.read_log_mode() == "off"
+
+
+def test_reload_logging_configuration_survives_spawn_serialization(tmp_path, restore_logging):
+    import pickle
+
+    config = log_config(make_config(tmp_path, settings={"diagnostics.mode": "off"}), None)
+    restored = pickle.loads(pickle.dumps(config))
+    logging.config.dictConfig(restored)
+    handler = logging.getLogger().handlers[0]
+    assert handler.filters == [log_policy]
+    assert not handler.filters[0].filter(logging.makeLogRecord({"levelno": logging.ERROR}))
+    set_log_mode("standard")
+    assert handler.filters[0].filter(
+        logging.makeLogRecord({"levelno": logging.ERROR, "name": "agent_backbone"})
+    )
+
+
+@pytest.mark.parametrize("exit_code", [1, 3])
+def test_off_keeps_explicit_server_failure_result_without_log_capture(
+    tmp_path, restore_logging, capsys, exit_code
+):
+    import argparse
+    from unittest.mock import AsyncMock, patch
+
+    from agent_backbone.cli import server
+
+    path = tmp_path / "optional.log"
+    config = make_config(tmp_path, settings={"diagnostics.mode": "off"})
+    args = argparse.Namespace(detach=False, reload=False, log_file=path)
+    with (
+        patch.object(server._common, "load_config", AsyncMock(return_value=config)),
+        patch("uvicorn.Server.run", side_effect=SystemExit(exit_code)),
+    ):
+        with pytest.raises(SystemExit) as result:
+            server.cmd_up(args)
+    assert result.value.code == exit_code
+    assert f"exit {exit_code}" in capsys.readouterr().err
+    assert not path.exists()
+
+
+def test_reload_child_restores_explicit_verbose_policy(tmp_path, restore_logging):
+    import pickle
+
+    log_policy.verbose = True
+    wire = pickle.dumps(log_config(make_config(tmp_path), None))
+    # A spawned interpreter starts with the module defaults.
+    set_log_mode("off")
+    log_policy.verbose = False
+    logging.config.dictConfig(pickle.loads(wire))
+    record = logging.makeLogRecord({"name": "agent_backbone", "levelno": logging.DEBUG})
+    assert log_policy.mode == "standard" and log_policy.verbose
+    assert log_policy.filter(record)
+    set_log_mode("off")
+    assert not log_policy.filter(record)
+
+
+@pytest.mark.parametrize("mode,verbose", [("debug", False), ("standard", True), ("off", True)])
+@pytest.mark.parametrize("protocol_level", ["info", "debug"])
+async def test_websocket_protocol_does_not_log_credentials_or_wire_frames(
+    tmp_path, restore_logging, mode, verbose, protocol_level
+):
+    import io
+
+    from uvicorn import Config
+    from uvicorn.protocols.websockets.websockets_impl import WebSocketProtocol
+    from uvicorn.server import ServerState
+    from websockets.frames import Frame, Opcode
+
+    async def app(scope, receive, send):
+        pass
+
+    log_policy.verbose = verbose
+    output = io.StringIO()
+    settings = log_config(make_config(tmp_path, settings={"diagnostics.mode": mode}), None)
+    settings["handlers"]["default"]["stream"] = output
+    protocol = WebSocketProtocol(
+        Config(app, log_config=settings, log_level=protocol_level), ServerState(), {}
+    )
+    protocol.reader.feed_data(
+        b"GET /socket.io/?token=QUERY_EXAMPLE HTTP/1.1\r\n"
+        b"Host: localhost\r\nAuthorization: Bearer HEADER_EXAMPLE\r\n\r\n"
+    )
+    await protocol.read_http_request()
+    protocol.reader.feed_data(
+        Frame(Opcode.TEXT, b'40/sessions,{"api_key":"FRAME_EXAMPLE"}').serialize(mask=True)
+    )
+    await protocol.read_frame(1024)
+    protocol.scope = {
+        "client": ("127.0.0.1", 1234),
+        "root_path": "",
+        "path": "/socket.io/",
+        "query_string": b"token=QUERY_EXAMPLE",
+    }
+    await protocol.asgi_send({"type": "websocket.accept"})
+    logging.getLogger("agent_backbone.example").debug("hook stale after 600s")
+    logging.getLogger("uvicorn.error").error("ASGI application failed")
+    captured = output.getvalue()
+    assert all(
+        value not in captured for value in ("QUERY_EXAMPLE", "HEADER_EXAMPLE", "FRAME_EXAMPLE")
+    )
+    if mode == "off":
+        assert not captured
+    else:
+        assert "hook stale after 600s" in captured
+        assert "ASGI application failed" in captured
+        assert "WebSocket /socket.io/" in captured
+
+
+@pytest.mark.parametrize("app_first", [True, False])
+async def test_socketio_dependency_handlers_follow_capture_policy(
+    tmp_path, restore_logging, monkeypatch, app_first
+):
+    import contextlib
+    import io
+
+    import httpx
+
+    from agent_backbone.api.app import create_app
+
+    for name in ("socketio.server", "engineio.server"):
+        logger = logging.getLogger(name)
+        monkeypatch.setattr(logger, "handlers", [])
+        monkeypatch.setattr(logger, "level", logging.NOTSET)
+        monkeypatch.setattr(logger, "propagate", True)
+    direct, controlled = io.StringIO(), io.StringIO()
+    config = make_config(tmp_path, settings={"diagnostics.mode": "off"})
+    settings = log_config(config, None)
+    settings["handlers"]["default"]["stream"] = controlled
+    with contextlib.redirect_stderr(direct):
+        if app_first:
+            app = create_app(config)
+        logging.config.dictConfig(settings)
+        if not app_first:
+            app = create_app(config)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://localhost"
+        ) as client:
+            response = await client.get("/socket.io/?EIO=4&transport=polling&sid=SYNTHETIC_SESSION")
+        assert response.status_code == 400
+        assert not direct.getvalue() and not controlled.getvalue()
+
+        sio = app.other_asgi_app.state.sio
+        set_log_mode("standard")
+        await sio.eio._trigger_event("message", "synthetic-sid", "INVALID", run_async=False)
+        ordinary = controlled.getvalue()
+        assert "message async handler error (ValueError)" in ordinary
+        assert "Traceback" not in ordinary and "invalid literal" not in ordinary
+        assert not direct.getvalue()
+
+        set_log_mode("debug")
+        await sio.eio._trigger_event("message", "synthetic-sid", "INVALID", run_async=False)
+        assert "Traceback" in controlled.getvalue() and "invalid literal" in controlled.getvalue()
+        assert not direct.getvalue()

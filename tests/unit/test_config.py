@@ -299,3 +299,10 @@ def test_telegram_user_allowlist_rejects_non_integer_values(value):
     with pytest.raises(ValueError, match="list of integers"):
         validate_setting("telegram.allowed_user_ids", value)
     assert validate_setting("telegram.allowed_user_ids", [4242]) == [4242]
+
+
+@pytest.mark.parametrize("mode", ["future-mode", None, {}, 1])
+def test_invalid_diagnostic_mode_disables_service_policy(mode):
+    settings = effective_settings({"diagnostics.mode": mode, "backbone.port": 8345})
+    assert settings["diagnostics.mode"] == "off"
+    assert settings["backbone.port"] == 8345

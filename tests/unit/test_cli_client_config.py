@@ -238,3 +238,28 @@ def _connect_error_from(cause: BaseException):
             raise httpx.ConnectError(str(wrapper)) from wrapper
     except httpx.ConnectError as exc:
         return exc
+
+
+@pytest.mark.parametrize("stored_mode", ['"future-mode"', "invalid-json", "null"])
+async def test_invalid_diagnostic_policy_does_not_discard_stored_address(
+    tmp_path, monkeypatch, stored_mode
+):
+    monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("BACKBONE_PORT", raising=False)
+    db_path = tmp_path / "existing.db"
+    monkeypatch.setenv("BACKBONE_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
+        conn.executemany(
+            "INSERT INTO settings VALUES (?, ?)",
+            [
+                ("backbone.port", "8345"),
+                ("backbone.host", '"127.0.0.2"'),
+                ("diagnostics.mode", stored_mode),
+            ],
+        )
+    before = db_path.read_bytes()
+    client = await read_client_config(strict=True)
+    assert client.backbone.port == 8345 and client.backbone.host == "127.0.0.2"
+    assert client.settings["diagnostics.mode"] == "off"
+    assert db_path.read_bytes() == before

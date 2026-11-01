@@ -11,6 +11,7 @@ import sys
 import time
 from pathlib import Path
 
+from agent_backbone.base import DiagnosticFormatter, log_policy, set_log_mode
 from agent_backbone.cli import _common
 from agent_backbone.cli.presentation import note, print_table
 from agent_backbone.config import (
@@ -23,7 +24,7 @@ from agent_backbone.config import (
 log = logging.getLogger(__name__)
 
 
-class UTCFormatter(logging.Formatter):
+class UTCFormatter(DiagnosticFormatter):
     """``2026-10-13T12:50:01.123Z``: every log line can be placed in time."""
 
     converter = time.gmtime
@@ -31,9 +32,17 @@ class UTCFormatter(logging.Formatter):
     default_msec_format = "%s.%03dZ"
 
 
+def _diagnostic_filter(mode: str = "off", verbose: bool = False) -> logging.Filter:
+    """Restore explicit policy in Uvicorn's fresh reload child."""
+    set_log_mode(mode)
+    log_policy.verbose = verbose
+    return log_policy
+
+
 def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
     """One timestamped format for the backbone and uvicorn (its access lines too),
     written to ``log_file`` with size-based rotation, else to stderr."""
+    set_log_mode(config.settings.get("diagnostics.mode", "standard"))
     if log_file is None:
         handler: dict = {"class": "logging.StreamHandler", "stream": "ext://sys.stderr"}
     else:
@@ -43,6 +52,7 @@ def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
             "maxBytes": max(0, config.settings.get("backbone.log_max_mb", 20)) * 1024 * 1024,
             "backupCount": max(1, config.settings.get("backbone.log_backups", 3)),
             "encoding": "utf-8",
+            "delay": True,
         }
     return {
         "version": 1,
@@ -53,13 +63,38 @@ def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
                 "format": "%(asctime)s %(levelname)s %(name)s: %(message)s",
             }
         },
-        "handlers": {"default": {**handler, "formatter": "utc"}},
-        # The root keeps the level `main` chose (--verbose); uvicorn's loggers
-        # get theirs from `log_level` and reach the same handler through it.
-        "root": {"handlers": ["default"], "level": logging.getLogger().level},
+        "filters": {
+            "diagnostics": {
+                "()": _diagnostic_filter,
+                "mode": log_policy.mode,
+                "verbose": log_policy.verbose,
+            }
+        },
+        "handlers": {"default": {**handler, "formatter": "utc", "filters": ["diagnostics"]}},
+        # The handler applies the current mode, including after a settings change.
+        "root": {"handlers": ["default"], "level": "WARNING"},
         "loggers": {
-            name: {"handlers": [], "propagate": True}
-            for name in ("uvicorn", "uvicorn.error", "uvicorn.access")
+            name: {
+                "handlers": [],
+                "propagate": True,
+                "level": (
+                    "DEBUG"
+                    if name == "agent_backbone"
+                    else "INFO"
+                    if name.startswith("uvicorn")
+                    else "WARNING"
+                ),
+            }
+            for name in (
+                "agent_backbone",
+                "uvicorn",
+                "uvicorn.error",
+                "uvicorn.access",
+                "socketio",
+                "socketio.server",
+                "engineio",
+                "engineio.server",
+            )
         },
     }
 
@@ -213,7 +248,15 @@ def cmd_up(args: argparse.Namespace) -> int:
         return 2
     if args.detach:
         return asyncio.run(_up_detached(config, log_file))
-    _run_server(config, reload=args.reload, log_file=log_file)
+    try:
+        _run_server(config, reload=args.reload, log_file=log_file)
+    except SystemExit as exc:
+        if exc.code and log_policy.mode == "off":
+            print(
+                f"Backbone failed to start or run (exit {exc.code}); optional logging is off.",
+                file=sys.stderr,
+            )
+        raise
     return 0
 
 

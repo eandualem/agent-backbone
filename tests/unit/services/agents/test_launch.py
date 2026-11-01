@@ -1909,3 +1909,29 @@ async def test_launch_exports_current_registration_for_publication_receipts(db, 
     ):
         assert (await start_agent(spec, store.config, db=db, wait=False)).ok
     assert start.call_args.kwargs["environment"]["BACKBONE_REGISTRATION_ID"] == identity
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_recovery_bookkeeping_cannot_mask_launch_result_or_error(config, db, fails):
+    from agent_backbone.services.agents.launch import StartResult
+
+    original = ValueError("synthetic launch cause")
+    with (
+        patch.object(
+            db.transitions, "record_launch", AsyncMock(side_effect=RuntimeError("storage failed"))
+        ),
+        patch(
+            f"{_MOD}._start_agent",
+            AsyncMock(
+                side_effect=original if fails else None,
+                return_value=StartResult(ok=True, ready="ready"),
+            ),
+        ),
+    ):
+        if fails:
+            with pytest.raises(ValueError) as exc:
+                await start_agent(next(iter(config.agents)), config, db=db)
+            assert exc.value is original
+        else:
+            result = await start_agent(next(iter(config.agents)), config, db=db)
+            assert result.ok and result.ready == "ready"

@@ -133,6 +133,14 @@ def _age(timestamp: float, now: float) -> str:
     return f"{seconds // 86400}d"
 
 
+async def _record_launch(db: BackboneDB, operation_id: str, code: str) -> None:
+    """A recovery update must not hide a launch result or its original exception."""
+    try:
+        await db.transitions.record_launch(operation_id, code)
+    except Exception as exc:
+        log.warning("Could not retain launch recovery outcome (%s)", type(exc).__name__)
+
+
 async def start_agent(
     spec: AgentSpec,
     config: BackboneConfig,
@@ -179,6 +187,7 @@ async def start_agent(
         "model": model if model is not None else spec.model,
     }
     if db is not None:
+        await _record_launch(db, operation_id, "requested")
         await db.diagnostics.record(
             **record, code="requested", severity="info", details=dict(details)
         )
@@ -230,6 +239,7 @@ async def start_agent(
         log.error("Agent startup failed during %s (%s)", details["stage"], type(exc).__name__)
         details["duration_ms"] = round((time.monotonic() - started) * 1000)
         if db is not None:
+            await _record_launch(db, operation_id, "failed")
             await db.diagnostics.record(**record, code="failed", severity="error", details=details)
         raise
     outcome = (
@@ -244,6 +254,7 @@ async def start_agent(
     )
     details["duration_ms"] = round((time.monotonic() - started) * 1000)
     if db is not None:
+        await _record_launch(db, operation_id, outcome)
         await db.diagnostics.record(**record, code=outcome, severity=severity, details=details)
     log.info("Agent '%s' startup ended: %s", spec.name, outcome)
     return result

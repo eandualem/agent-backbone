@@ -159,6 +159,10 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
     )
     # Read before the retry: its own "already_running" record would be the newest.
     recovered = await _recovered_launch(db, operation_id) if resumed_launch else None
+    if recovered is None:
+        # A prior process may have exited after mark_launching but before intent.
+        # Require durable intent on retries too, before any new session can start.
+        await db.transitions.record_launch(operation_id, "requested")
     try:
         spec = await resolve_agent(store, req)
         result = await start_resolved(store, config, spec, req, db=db)
@@ -224,25 +228,50 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
     return "started"
 
 
+async def _cache_recovery(db: BackboneDB, operation_id: str, code: str) -> None:
+    try:
+        await db.transitions.record_launch(operation_id, code)
+    except Exception as exc:
+        log.warning("Could not migrate legacy launch recovery outcome (%s)", type(exc).__name__)
+
+
 async def _recovered_launch(db: BackboneDB, operation_id: str) -> str | None:
-    """What the startup diagnostics say a launch this transition began ended as.
+    """The operational launch outcome, with legacy diagnostic recovery fallback.
 
     None when no launch under that identity was recorded (the session is
     someone else's) or it is recorded as failed. ``not_observed`` when the
     launch was requested but its readiness never recorded."""
-    records = await db.diagnostics.query(operation_id=operation_id, category="startup", limit=20)
+    recorded = await db.transitions.launch_recovery(operation_id)
+    incomplete = recorded in {"requested", "not_observed"}
+    if recorded is not None and not incomplete:
+        return None if recorded in {"failed", "exited", "already_running"} else recorded
+    # A later outcome write can fail independently of the optional diagnostic.
+    # Consult that evidence before treating an incomplete intent as unobserved.
+    try:
+        records = await db.diagnostics.query(
+            operation_id=operation_id, category="startup", limit=20
+        )
+    except Exception:
+        if not incomplete:
+            raise
+        log.warning("Optional startup evidence could not be read during recovery", exc_info=True)
+        return "not_observed"
     if not records:
-        return None
+        return "not_observed" if incomplete else None
     # A retry that found the session running records "already_running" under
     # the same operation: that is not a launch outcome. With nothing else,
     # the session was running before this launch.
     codes = [record["code"] for record in records]
     outcomes = [r for r in records if r["code"] not in {"requested", "already_running"}]
     if not outcomes:
-        return None if "already_running" in codes else "not_observed"
+        if "already_running" in codes and not incomplete:
+            return None
+        await _cache_recovery(db, operation_id, "not_observed")
+        return "not_observed"
     # Repeated observations update their first row in place, so id order is
     # not observation order: the latest sighting decides.
     newest = max(outcomes, key=lambda record: record["last_seen_at"])["code"]
+    await _cache_recovery(db, operation_id, newest)
     return None if newest in {"failed", "exited"} else newest
 
 

@@ -74,6 +74,7 @@ class SessionFeed:
             self._cache = await build_session_snapshot(self._config())
             if (
                 not self._closed
+                and self._config().settings.get("diagnostics.mode", "standard") != "off"
                 and self._db is not None
                 and (self._history_task is None or self._history_task.done())
             ):
