@@ -158,3 +158,13 @@ credential-value forms are masked; this is not a promise to scrub arbitrary
 text. Existing records remain readable under normal retention, including after
 capture is disabled; reads apply the same limited credential-value masking.
 Nothing here deletes old rows or enables log collection/sharing.
+
+Policy changes and unsets retain a small boundary marker in the same database
+transaction. Observation/checkpoint recorder identities include that generation,
+so concurrent off/on changes cannot be lost by delayed configuration publishing.
+These required boundary markers remain when optional sampling is off; they contain
+no sampled state or copied evidence. Limited masking covers Authorization schemes,
+known credential labels, URL user information and common provider-token prefixes;
+it intentionally does not claim to recognize arbitrary secrets.
+The latest policy boundary is retained across history pruning so its generation
+does not reset when older samples expire.

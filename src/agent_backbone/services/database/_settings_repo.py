@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 from sqlalchemy import text
 
@@ -23,6 +24,17 @@ class SettingRepo(Repo):
                     out[row._mapping["key"]] = row._mapping["value"]
             return out
 
+    async def _capture_boundary(self, conn, key: str) -> None:
+        if key == "diagnostics.mode":
+            # Required policy metadata, not an observation while capture is disabled.
+            await conn.execute(
+                text(
+                    "INSERT INTO interaction_capture_checkpoints (recorder_id,at,reason) "
+                    "VALUES (:recorder,:at,'diagnostics_mode_changed')"
+                ),
+                {"recorder": uuid.uuid4().hex, "at": now_iso()},
+            )
+
     async def set(self, key: str, value: object) -> None:
         async with self._tx() as conn:
             await conn.execute(
@@ -34,8 +46,11 @@ class SettingRepo(Repo):
                 ),
                 {"key": key, "value": json.dumps(value), "now": now_iso()},
             )
+            await self._capture_boundary(conn, key)
 
     async def delete(self, key: str) -> bool:
         async with self._tx() as conn:
             result = await conn.execute(text("DELETE FROM settings WHERE key = :key"), {"key": key})
+            if result.rowcount:
+                await self._capture_boundary(conn, key)
             return (result.rowcount or 0) > 0

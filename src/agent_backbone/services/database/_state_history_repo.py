@@ -8,18 +8,29 @@ from datetime import timedelta
 
 from sqlalchemy import text
 
-from agent_backbone.services.database._repo import Repo, diagnostic_mode
+from agent_backbone.services.database._repo import (
+    CAPTURE_GENERATION_SQL,
+    Repo,
+    diagnostic_capture_policy,
+    diagnostic_mode,
+)
 from agent_backbone.services.database._time import cutoff_iso, format_iso, now_iso, parse_iso
 
 # Deliberately limited treatment of known credential forms. Debug evidence is
 # opt-in local detail, not a guarantee that arbitrary text is free of secrets.
 _CREDENTIALS = (
-    re.compile(r"(?i)(\b(?:bearer|basic)\s+)[^\s\"',;)]+"),
+    re.compile(r"(?i)(\bauthorization\s*[:=]?\s*(?:bearer|basic|token)\s+)[^\s\"',;)]+"),
+    re.compile(r"(?i)(\bbearer\s+)[^\s\"',;)]+"),
     re.compile(
         r"(?i)((?:[\"']?(?:api[-_ ]?key|(?:access[_-]|refresh[_-])?token|secret|password|passwd)"
         r"[\"']?\s*[:=]\s*))(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s,;}&]+)"
     ),
-    re.compile(r"(://[^/\s:@]+:)[^@\s]+(?=@)"),
+    re.compile(r"(://)[^/\s@]+(?=@)"),
+)
+
+_TOKEN_VALUES = re.compile(
+    r"\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|"
+    r"github_pat_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{12,})\b"
 )
 
 
@@ -31,7 +42,7 @@ def stored_evidence(evidence: list[str]) -> list[str]:
             continue
         for pattern in _CREDENTIALS:
             line = pattern.sub(lambda match: match[1] + "[redacted]", line)
-        result.append(line[:2000])
+        result.append(_TOKEN_VALUES.sub("[redacted]", line)[:2000])
     return result
 
 
@@ -108,7 +119,11 @@ class StateHistoryRepo(Repo):
                 {"cutoff": cutoff},
             )
             await conn.execute(
-                text("DELETE FROM interaction_capture_checkpoints WHERE at < :cutoff"),
+                text(
+                    "DELETE FROM interaction_capture_checkpoints WHERE at < :cutoff "
+                    "AND id != COALESCE((SELECT MAX(id) FROM interaction_capture_checkpoints "
+                    "WHERE reason='diagnostics_mode_changed'),-1)"
+                ),
                 {"cutoff": cutoff},
             )
             return count
@@ -121,15 +136,17 @@ class StateHistoryRepo(Repo):
         """
         at = now_iso()
         async with self._tx() as conn:
-            mode = await diagnostic_mode(conn)
+            mode, generation = await diagnostic_capture_policy(conn)
             if mode == "off":
                 return
+            recorder_id = f"{recorder_id}:{generation}"
             for name, state, reason in states:
                 identity = registrations.get(name)
                 if not identity:
                     continue
                 await conn.execute(
-                    text("""
+                    text(
+                        """
                     INSERT INTO registered_state_observations
                     (agent_id,name,state,reason,at,recorder_id,evidence)
                     SELECT :identity,:name,:state,:reason,:at,:recorder,:evidence
@@ -143,7 +160,11 @@ class StateHistoryRepo(Repo):
                         AND (reason=:reason OR (reason IS NULL AND :reason IS NULL))
                         AND at > :cutoff
                     )
-                """),
+                """
+                        + " AND "
+                        + CAPTURE_GENERATION_SQL
+                        + "=:generation"
+                    ),
                     {
                         "identity": identity,
                         "name": name,
@@ -151,6 +172,7 @@ class StateHistoryRepo(Repo):
                         "reason": reason,
                         "at": at,
                         "recorder": recorder_id,
+                        "generation": generation,
                         "evidence": json.dumps(
                             stored_evidence(evidence.get(name, [])) if mode == "debug" else []
                         ),

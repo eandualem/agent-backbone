@@ -866,3 +866,37 @@ async def test_launch_recovery_uses_operational_record_with_capture_off(
         deliver.assert_not_awaited()
     else:
         deliver.assert_awaited_once()
+
+
+async def test_transition_never_launches_without_durable_recovery_intent(db, config, store, seams):
+    _, start, deliver = seams
+    row = await db.transitions.create(agent_name="ike", message="continue")
+    with patch.object(
+        db.transitions, "record_launch", AsyncMock(side_effect=RuntimeError("storage failed"))
+    ):
+        assert await _run(config, store, db) == {"ike": "failed"}
+    start.assert_not_awaited()
+    deliver.assert_not_awaited()
+    assert (await db.transitions.get(row["id"]))["status"] == "failed"
+
+
+async def test_failed_legacy_recovery_cache_does_not_change_known_launch_result(
+    db, config, store, seams
+):
+    _, start, deliver = seams
+    row = await db.transitions.create(agent_name="ike", message="continue")
+    await db.transitions.mark_stopped(row["id"], start_at=PAST)
+    await db.transitions.mark_launching(row["id"], "legacy-launch")
+    await db.diagnostics.record(
+        category="startup", operation_id="legacy-launch", code="ready", agent_name="ike"
+    )
+    start.return_value = StartResult(ok=True, already_running=True)
+    with (
+        patch.object(
+            db.transitions, "record_launch", AsyncMock(side_effect=RuntimeError("storage failed"))
+        ),
+        patch(f"{_JOB}.query_environment_var", AsyncMock(return_value="legacy-launch")),
+    ):
+        assert await _run(config, store, db) == {"ike": "started"}
+    assert (await db.transitions.get(row["id"]))["result"]["ready"] == "ready"
+    deliver.assert_awaited_once()

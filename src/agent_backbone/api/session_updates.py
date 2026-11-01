@@ -72,7 +72,11 @@ class SessionFeed:
         if mode != self._diagnostic_mode:
             self._diagnostic_mode = mode
             self._recorder_id = uuid.uuid4().hex
-            if self._history_task is not None and not self._history_task.done():
+            if (
+                self._history_task is not None
+                and not self._history_task.done()
+                and not self._history_task.cancelling()
+            ):
                 self._history_task.cancel()
 
     async def snapshot(self, *, force_refresh: bool = False) -> list[EnrichedAgent]:
@@ -109,10 +113,12 @@ class SessionFeed:
                     # Database cancellation can itself wait for a locked connection.
                     # Keep its task until cleanup ends, without delaying live reads
                     # or accumulating more writes behind the stalled one.
-                    self._history_task.cancel()
+                    if not self._history_task.cancelling():
+                        self._history_task.cancel()
                     log.warning("State history write timed out; observation may be missing")
                 except asyncio.CancelledError:
-                    self._history_task.cancel()
+                    if not self._history_task.cancelling():
+                        self._history_task.cancel()
                     # Policy changes cancel optional capture, not the live read.
                     if asyncio.current_task().cancelling():
                         raise

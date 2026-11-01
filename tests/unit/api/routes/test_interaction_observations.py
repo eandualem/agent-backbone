@@ -430,7 +430,15 @@ async def test_standard_omits_copied_evidence_and_off_stops_observations(api_app
     await checkpoint(db, 1)
     async with db.engine.begin() as conn:
         assert await conn.scalar(text("SELECT COUNT(*) FROM registered_state_observations")) == 1
-        assert await conn.scalar(text("SELECT COUNT(*) FROM interaction_capture_checkpoints")) == 0
+        assert (
+            await conn.scalar(
+                text(
+                    "SELECT COUNT(*) FROM interaction_capture_checkpoints "
+                    "WHERE COALESCE(reason,'') != 'diagnostics_mode_changed'"
+                )
+            )
+            == 0
+        )
 
 
 async def test_short_off_interval_breaks_capture_even_without_an_off_poll(api_app):
@@ -528,4 +536,269 @@ async def test_mode_change_preserves_live_read_without_retaining_cross_boundary_
     await feed.close()
     async with db.engine.begin() as conn:
         assert await conn.scalar(text("SELECT COUNT(*) FROM registered_state_observations")) == 0
-        assert await conn.scalar(text("SELECT COUNT(*) FROM interaction_capture_checkpoints")) == 0
+        assert (
+            await conn.scalar(
+                text(
+                    "SELECT COUNT(*) FROM interaction_capture_checkpoints "
+                    "WHERE COALESCE(reason,'') != 'diagnostics_mode_changed'"
+                )
+            )
+            == 0
+        )
+
+
+@pytest.mark.parametrize("unset", [False, True])
+async def test_missed_mode_publications_still_split_persisted_capture(api_app, unset):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    db, store = api_app.state.db, api_app.state.agent_store
+    agent = await identity(db, "ike")
+    await sample(db, "ike", agent, 0)
+    await checkpoint(db, 0)
+    first_refresh = asyncio.Event()
+    release = asyncio.Event()
+    modes = []
+
+    async def coalesced_refresh():
+        first_refresh.set()
+        await release.wait()
+        modes.append((await db.settings.all()).get("diagnostics.mode", "standard"))
+        return api_app.state.config
+
+    with (
+        patch.object(store, "refresh", AsyncMock(side_effect=coalesced_refresh)),
+        patch("agent_backbone.services.database._settings_repo.now_iso", return_value=at(0, 20)),
+    ):
+        off = asyncio.create_task(store.set_setting("diagnostics.mode", "off"))
+        await first_refresh.wait()
+        # Both refreshes see only the last mode; no feed notification is made.
+        on = asyncio.create_task(
+            store.unset_setting("diagnostics.mode")
+            if unset
+            else store.set_setting("diagnostics.mode", "standard")
+        )
+        while (await db.settings.all()).get("diagnostics.mode", "standard") != "standard":
+            await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(off, on)
+    assert modes == ["standard", "standard"]
+    await sample(db, "ike", agent, 1)
+    await checkpoint(db, 1)
+    await sample(db, "ike", agent, 2)
+    await checkpoint(db, 2)
+    spans = await db.interactions.state_spans(agent_id=agent, since=at(0), until=at(3))
+    assert spans["items"][0]["since"] == spans["items"][0]["until"] == at(0)
+    assert spans["items"][1]["since"] == at(1)
+    coverage = (await db.interactions.summary(since=at(0), until=at(3)))["coverage"]
+    assert coverage["message_intervals"] == [
+        {"since": at(1), "until": at(2), "completeness": "complete_within_declared_scope"}
+    ]
+
+
+@pytest.mark.parametrize("surface", ["state", "checkpoint"])
+async def test_policy_change_during_write_rejects_old_capture_generation(api_app, surface):
+    from agent_backbone.services.database import _repo
+
+    db = api_app.state.db
+    agent = await identity(db, "ike")
+    module = "_state_history_repo" if surface == "state" else "_interaction_observations"
+    original = _repo.diagnostic_capture_policy
+
+    async def change_after_read(conn):
+        policy = await original(conn)
+        # Same transaction simulates the persisted generation changing between
+        # its initial read and conditional INSERT; it must not accept that sample.
+        await conn.execute(
+            text(
+                "INSERT INTO interaction_capture_checkpoints "
+                "(recorder_id,at,reason) VALUES "
+                "('changed',:at,'diagnostics_mode_changed')"
+            ),
+            {"at": at(0)},
+        )
+        return policy
+
+    with patch(
+        f"agent_backbone.services.database.{module}.diagnostic_capture_policy", change_after_read
+    ):
+        if surface == "state":
+            await sample(db, "ike", agent, 1)
+        else:
+            await checkpoint(db, 1)
+    async with db.engine.begin() as conn:
+        assert await conn.scalar(text("SELECT COUNT(*) FROM registered_state_observations")) == 0
+        assert (
+            await conn.scalar(
+                text(
+                    "SELECT COUNT(*) FROM interaction_capture_checkpoints "
+                    "WHERE COALESCE(reason,'') != 'diagnostics_mode_changed'"
+                )
+            )
+            == 0
+        )
+
+
+async def test_mode_change_does_not_interrupt_history_rollback(api_app):
+    import asyncio
+
+    from agent_backbone.api.session_updates import SessionFeed
+
+    feed = SessionFeed(lambda: api_app.state.config, db=api_app.state.db)
+    entered, rolling_back, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    cleaned = []
+
+    async def write():
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            rolling_back.set()
+            await release.wait()
+            cleaned.append(True)
+
+    task = asyncio.create_task(write())
+    feed._history_task = task
+    await entered.wait()
+    task.cancel()
+    await rolling_back.wait()
+    feed.set_diagnostic_mode("off")
+    assert task.cancelling() == 1
+    release.set()
+    await feed.close()
+    assert cleaned == [True]
+
+
+def test_limited_credential_forms_preserve_ordinary_basic_explanations():
+    from agent_backbone.services.database._state_history_repo import stored_evidence
+
+    lines = [
+        "Running basic tests for module",
+        "Authorization: token ghp_SYNTHETICSECRET8",
+        "https://ghp_SYNTHETICSECRET9@github.com/org/repo",
+        "Invalid API key sk-ant-SYNTHETIC_SECRET_7",
+    ]
+    saved = stored_evidence(lines)
+    assert saved[0] == lines[0]
+    assert "SYNTHETIC" not in "\n".join(saved)
+    assert saved[2] == "https://[redacted]@github.com/org/repo"
+    assert saved[3] == "Invalid API key [redacted]"
+
+
+@pytest.mark.parametrize("surface", ["state", "checkpoint"])
+async def test_separate_committed_policy_change_rejects_inflight_capture(tmp_path, surface):
+    import asyncio
+
+    from agent_backbone.services.database import BackboneDB, _repo
+
+    db = BackboneDB(f"sqlite+aiosqlite:///{tmp_path / 'capture.db'}")
+    await db.start()
+    try:
+        await db.agents.upsert(
+            "worker",
+            dir=str(tmp_path),
+            runtime="shell",
+            model=None,
+            repo="",
+            tags=[],
+            env={},
+            description="",
+            unattended=False,
+        )
+        row = (await db.agents.list())[0]
+        agent = row["report_identity"]
+        assert agent
+        ready, release = asyncio.Event(), asyncio.Event()
+        original = _repo.diagnostic_capture_policy
+
+        async def pause_after_read(conn):
+            policy = await original(conn)
+            ready.set()
+            await release.wait()
+            return policy
+
+        module = "_state_history_repo" if surface == "state" else "_interaction_observations"
+        with patch(
+            f"agent_backbone.services.database.{module}.diagnostic_capture_policy", pause_after_read
+        ):
+            writing = asyncio.create_task(
+                db.state_history.observe_registered(
+                    [("worker", "busy", None)],
+                    registrations={"worker": agent},
+                    evidence={"worker": ["sample"]},
+                    recorder_id="recorder",
+                )
+                if surface == "state"
+                else db.interactions.checkpoint("recorder")
+            )
+            await asyncio.wait_for(ready.wait(), 3)
+            await asyncio.wait_for(db.settings.set("diagnostics.mode", "off"), 3)
+            release.set()
+            await asyncio.wait_for(writing, 3)
+        async with db.engine.begin() as conn:
+            assert (
+                await conn.scalar(text("SELECT COUNT(*) FROM registered_state_observations")) == 0
+            )
+            assert (
+                await conn.scalar(
+                    text(
+                        "SELECT COUNT(*) FROM interaction_capture_checkpoints "
+                        "WHERE COALESCE(reason,'') != 'diagnostics_mode_changed'"
+                    )
+                )
+                == 0
+            )
+    finally:
+        await db.stop()
+
+
+async def test_latest_policy_boundary_survives_history_pruning(api_app):
+    from agent_backbone.services.database._repo import diagnostic_capture_policy
+
+    db = api_app.state.db
+    with patch("agent_backbone.services.database._settings_repo.now_iso", return_value=at(0)):
+        await db.settings.set("diagnostics.mode", "off")
+        await db.settings.set("diagnostics.mode", "standard")
+    async with db.engine.begin() as conn:
+        before = await diagnostic_capture_policy(conn)
+    await db.state_history.prune()
+    async with db.engine.begin() as conn:
+        assert await diagnostic_capture_policy(conn) == before
+        assert await conn.scalar(text("SELECT COUNT(*) FROM interaction_capture_checkpoints")) == 1
+
+
+async def test_snapshot_timeout_does_not_cancel_policy_rollback_twice(api_app):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from agent_backbone.api.session_updates import SessionFeed
+
+    feed = SessionFeed(lambda: api_app.state.config, db=api_app.state.db)
+    entered, rollback, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    cleaned = []
+
+    async def held(*args):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            rollback.set()
+            await release.wait()
+            cleaned.append(True)
+
+    with (
+        patch(
+            "agent_backbone.api.session_updates.build_session_snapshot", AsyncMock(return_value=[])
+        ),
+        patch.object(feed, "_record_history", side_effect=held),
+        patch("agent_backbone.api.session_updates.HISTORY_WRITE_TIMEOUT_SECONDS", 0.05),
+    ):
+        reading = asyncio.create_task(feed.snapshot())
+        await entered.wait()
+        feed.set_diagnostic_mode("off")
+        await rollback.wait()
+        assert await reading == []
+        assert feed._history_task.cancelling() == 1
+        release.set()
+        await feed.close()
+    assert cleaned == [True]

@@ -29,3 +29,30 @@ async def diagnostic_mode(conn) -> str:
     except (ValueError, TypeError):
         return "off"
     return mode if mode in ("off", "standard", "debug") else "off"
+
+
+CAPTURE_GENERATION_SQL = (
+    "COALESCE((SELECT recorder_id FROM interaction_capture_checkpoints "
+    "WHERE reason='diagnostics_mode_changed' ORDER BY id DESC LIMIT 1),'initial')"
+)
+
+
+async def diagnostic_capture_policy(conn) -> tuple[str, str]:
+    """Read policy and its durable boundary together, independent of notifications."""
+    row = (
+        await conn.execute(
+            text(
+                "SELECT (SELECT value FROM settings WHERE key='diagnostics.mode') AS value, "
+                + CAPTURE_GENERATION_SQL
+                + " AS generation"
+            )
+        )
+    ).one()
+    if row.value is None:
+        mode = "standard"
+    else:
+        try:
+            mode = json.loads(row.value)
+        except (ValueError, TypeError):
+            mode = "off"
+    return (mode if mode in ("off", "standard", "debug") else "off", row.generation)

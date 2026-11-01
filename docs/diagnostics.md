@@ -42,7 +42,9 @@ it. There is no log-collection service or universal secret-scrubbing guarantee.
 | Dependency wire/SQL debug traces | None | None | Not enabled; may expose headers or payloads |
 | Retained typed diagnostics | No inserts or occurrence updates | Enabled | Enabled |
 | Resource sampling | No memory/process sampling | Enabled according to resource settings | Same |
-| Retained state-change history | No new observations | State, reason and observation time | Same; the state-history API does not store free-form evidence |
+| Retained state-change history | No new observations | State, reason and observation time | Same |
+| Interactions sampled evidence | No new observations | Typed state/reason, without copied evidence | Up to 10 explanatory lines of 2,000 characters each, with limited known credential handling; retained under ordinary history retention and still readable after changing mode |
+| Capture policy boundaries | Setting changes retain boundary metadata | Same | Same |
 | Existing records | Still readable; ordinary retention applies | Same | Same |
 
 The running service picks up API setting changes without restarting agents.
@@ -69,7 +71,11 @@ while capture is disabled is unknown, never evidence of quiet or healthy agents.
 
 ### What remains operational when logging is off
 
-The switch does not disable the product or remove data needed to use it:
+The switch does not disable the product or remove data needed to use it.
+Changing or unsetting the policy records a small boundary marker atomically
+with the setting; this is required metadata for truthful capture coverage,
+not a terminal/state observation. Writers use its generation even when
+concurrent setting changes are coalesced before the feed sees them.
 
 - Queue bodies, delivery receipts, retry/outbox state, acknowledgment and
   signing/confirmation records and minimal transition launch outcomes remain. They establish what must be delivered,

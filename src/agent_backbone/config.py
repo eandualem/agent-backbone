@@ -1111,15 +1111,19 @@ def invalid_settings(stored: dict[str, Any]) -> dict[str, str]:
 def effective_settings(stored: dict[str, Any]) -> dict[str, Any]:
     """Defaults overlaid with stored values (unknown keys are ignored).
 
-    A stored value that is no longer valid falls back to the default, with
-    a warning; ``doctor`` reports it too, so it never goes quietly."""
+    Invalid diagnostic policy disables capture; other invalid values use defaults,
+    with a warning; ``doctor`` reports it too, so it never goes quietly."""
     merged = dict(SETTINGS_DEFAULTS)
     problems = invalid_settings(stored)
     for key, value in stored.items():
         if key in SETTINGS_DEFAULTS and key not in problems:
             merged[key] = validate_setting(key, value)
     for key, reason in problems.items():
-        logging.getLogger(__name__).warning("Setting %s is ignored (default used): %s", key, reason)
+        fallback = "off" if key == "diagnostics.mode" else SETTINGS_DEFAULTS[key]
+        merged[key] = fallback
+        logging.getLogger(__name__).warning(
+            "Setting %s is ignored (fallback %r used): %s", key, fallback, reason
+        )
     return merged
 
 

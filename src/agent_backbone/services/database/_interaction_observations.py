@@ -4,9 +4,9 @@ import json
 from datetime import timedelta
 from itertools import pairwise
 
-from sqlalchemy import select, text
+from sqlalchemy import literal, select, text
 
-from agent_backbone.services.database._repo import diagnostic_mode
+from agent_backbone.services.database._repo import CAPTURE_GENERATION_SQL, diagnostic_capture_policy
 from agent_backbone.services.database._state_history_repo import stored_evidence
 from agent_backbone.services.database._time import format_iso, now_iso, parse_iso
 from agent_backbone.services.database.models import InteractionCaptureCheckpointORM
@@ -16,8 +16,10 @@ MAX_GAP_SECONDS = 120
 
 
 async def checkpoint(conn, recorder_id):
-    if await diagnostic_mode(conn) == "off":
+    mode, generation = await diagnostic_capture_policy(conn)
+    if mode == "off":
         return
+    recorder_id = f"{recorder_id}:{generation}"
     at = now_iso()
     previous = (
         (
@@ -58,12 +60,21 @@ async def checkpoint(conn, recorder_id):
         and 0 <= (parse_iso(at) - parse_iso(previous["at"])).total_seconds() < 60
     ):
         return
-    await conn.execute(
-        text("""INSERT INTO interaction_coverage (id,capture_started_at,retained_from)
-        VALUES (1,:at,:at) ON CONFLICT (id) DO NOTHING"""),
-        {"at": at},
+    captured = await conn.execute(
+        _CHECK.insert().from_select(
+            ["recorder_id", "at", "reason"],
+            select(literal(recorder_id), literal(at), literal(reason)).where(
+                text(CAPTURE_GENERATION_SQL + "=:generation")
+            ),
+        ),
+        {"generation": generation},
     )
-    await conn.execute(_CHECK.insert().values(recorder_id=recorder_id, at=at, reason=reason))
+    if captured.rowcount:
+        await conn.execute(
+            text("""INSERT INTO interaction_coverage (id,capture_started_at,retained_from)
+            VALUES (1,:at,:at) ON CONFLICT (id) DO NOTHING"""),
+            {"at": at},
+        )
 
 
 async def message_intervals(conn, since, until, snapshot):
