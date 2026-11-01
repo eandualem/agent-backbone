@@ -47,7 +47,7 @@ async def observe_job(
         details["error_type"] = error_type
     if duration_ms is not None:
         details["duration_ms"] = duration_ms
-    recorded = await db.diagnostics.record(
+    await db.diagnostics.record(
         operation_id=operation_id,
         category="job",
         code=f"{stage}_{'failed' if error_type else 'recovered'}",
@@ -59,7 +59,9 @@ async def observe_job(
         issue_number=issue_number,
         details=details,
     )
-    if error_type is None and recorded is not None:
+    if error_type is None:
+        # Observed success ends the episode even when its optional record is
+        # disabled or could not be saved; a later failure is a new incident.
         incidents.pop(scope, None)
 
 
