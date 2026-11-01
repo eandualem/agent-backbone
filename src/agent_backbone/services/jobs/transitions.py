@@ -149,6 +149,8 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
     operation_id = resumed_launch or uuid.uuid4().hex
     if resumed_launch is None:
         await db.transitions.mark_launching(row["id"], operation_id)
+        # Required recovery intent is durable before a transition can start a session.
+        await db.transitions.record_launch(operation_id, "requested")
     req = StartRequest(
         name=name,
         runtime=row["runtime"],
@@ -224,6 +226,13 @@ async def _start(config: BackboneConfig, store: AgentStore, db: BackboneDB, row:
     return "started"
 
 
+async def _cache_recovery(db: BackboneDB, operation_id: str, code: str) -> None:
+    try:
+        await db.transitions.record_launch(operation_id, code)
+    except Exception as exc:
+        log.warning("Could not migrate legacy launch recovery outcome (%s)", type(exc).__name__)
+
+
 async def _recovered_launch(db: BackboneDB, operation_id: str) -> str | None:
     """The operational launch outcome, with legacy diagnostic recovery fallback.
 
@@ -246,12 +255,12 @@ async def _recovered_launch(db: BackboneDB, operation_id: str) -> str | None:
     if not outcomes:
         if "already_running" in codes:
             return None
-        await db.transitions.record_launch(operation_id, "not_observed")
+        await _cache_recovery(db, operation_id, "not_observed")
         return "not_observed"
     # Repeated observations update their first row in place, so id order is
     # not observation order: the latest sighting decides.
     newest = max(outcomes, key=lambda record: record["last_seen_at"])["code"]
-    await db.transitions.record_launch(operation_id, newest)
+    await _cache_recovery(db, operation_id, newest)
     return None if newest in {"failed", "exited"} else newest
 
 
