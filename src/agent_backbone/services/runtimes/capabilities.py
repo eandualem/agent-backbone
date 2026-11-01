@@ -357,8 +357,24 @@ CAPABILITIES: tuple[Capability, ...] = (
         shell=_ok("tests/unit/api/routes/test_api_responses.py", _RESPONSE_DELIVERY),
     ),
     _row(
+        "diagnostic-logging",
+        "Optional local log emission: off, standard or debug",
+        "src/agent_backbone/base/logging.py",
+        fallback=(
+            "Command results remain visible; enable logging deliberately for diagnostic detail."
+        ),
+        implemented=lambda rt: True,
+        claude=_ok("tests/unit/test_cli_server_logging.py", "shared service/CLI log policy"),
+        codex=_ok("tests/unit/test_cli_server_logging.py", "shared service/CLI log policy"),
+        gemini=_ok("tests/unit/test_cli_server_logging.py", "shared service/CLI log policy"),
+        opencode=_ok("tests/unit/test_cli_server_logging.py", "shared service/CLI log policy"),
+        deepcode=_ok("tests/unit/test_cli_server_logging.py", "shared service/CLI log policy"),
+        aider=_ok("tests/unit/test_cli_server_logging.py", "shared service/CLI log policy"),
+        shell=_ok("tests/unit/test_cli_server_logging.py", "shared service/CLI log policy"),
+    ),
+    _row(
         "diagnostic-controls",
-        "Optional diagnostic logging and history: off, standard or debug",
+        "Optional diagnostic capture and history: off, standard or debug",
         "src/agent_backbone/services/database/_diagnostics_repo.py",
         fallback="Read live state and delivery receipts; disabled capture leaves history gaps.",
         implemented=lambda rt: True,
