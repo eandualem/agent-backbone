@@ -1,7 +1,8 @@
 name: Release
 
 # Manual, main-only publication. Build/test has no write token or PyPI secret.
-# A separate job creates the immutable source tag before publication starts.
+# A separate job attests the built files' provenance, then another creates the
+# immutable source tag before publication starts.
 on:
   workflow_dispatch:
     inputs:
@@ -46,8 +47,24 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  tag:
+  attest:
     needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: dist
+      - name: Record build provenance for the files PyPI will receive
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*
+
+  tag:
+    needs: [build, attest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -62,7 +79,7 @@ jobs:
           git push origin "refs/tags/${tag}:refs/tags/${tag}"
 
   publish:
-    needs: [build, tag]
+    needs: [build, attest, tag]
     runs-on: ubuntu-latest
     permissions: {}
     steps:

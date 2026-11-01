@@ -229,12 +229,15 @@ and the remaining references. Installed copies are available through
 
 ## Security model
 
-Backbone runs as one trusted OS user on one machine. Agents are not isolated
-from each other. The API binds to localhost by default and uses one full-admin
-key; local sessions can read that key through the CLI. Backbone keeps its
-control-plane secrets out of launched environments, but this is not a filesystem
-security boundary. Read [Security](docs/security.md) before granting access or
-exposing the API.
+Backbone coordinates user-owned agents on one machine. Their CLI harnesses
+enforce execution permissions and sandboxing; Backbone enforces the identity,
+access and delivery rules of its own capabilities. The API binds to localhost
+by default and requires a key. Agents receive scoped credentials, and launchers
+exclude Backbone's service secrets. An unrestricted same-user process can still
+read local files; Backbone adds no OS isolation boundary.
+Read [Security](docs/security.md) for what is protected, what is not and how it
+is tested. Report vulnerabilities privately as described in
+[SECURITY.md](SECURITY.md).
 
 ## Development
 
