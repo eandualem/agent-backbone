@@ -165,6 +165,8 @@ async def start_session(
     removals = [key for key in dict.fromkeys(scrub or ()) if key not in environment]
 
     args = ["new-session", "-d", "-s", session_name]
+    if not inherit_environment:
+        args.append("-E")  # Never import client update-environment values at creation.
     if working_dir:
         # tmux expands -c as a format after parsing command quoting.
         args.extend(["-c", working_dir.replace("#", "#{l:##}")])

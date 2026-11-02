@@ -753,6 +753,7 @@ async def test_complete_environment_drops_server_only_values_and_attach_import(t
         )
     assert "host-secret" not in launch
     assert "second=value" not in launch
+    assert '"-E"' in launch
     assert "os.environ.clear()" in launch
     calls = [call.args for call in tmux.await_args_list]
     assert ("set-environment", "-t", "=isolated:", "-r", "HOST_TOKEN") in calls

@@ -255,7 +255,7 @@ class ClaudeCode(Runtime):
         env = self.environment(env)
         config_dir = environment_value(env, "CLAUDE_CONFIG_DIR")
         config = (Path(config_dir).expanduser() if config_dir else agent_home(env)) / ".claude.json"
-        pre_trust_directory(directory, claude_config=config)
+        pre_trust_directory(directory, claude_config=self.check_native_path(config))
 
     @staticmethod
     def _unnumbered_dialog(pane_content: str) -> bool:

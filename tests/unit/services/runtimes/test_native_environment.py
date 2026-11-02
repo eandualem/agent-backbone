@@ -114,3 +114,25 @@ def test_legacy_environment_and_account_refusal_are_explicit(monkeypatch):
     assert Path("/legacy/codex/skills") in rt.user_skill_dirs({})
     with pytest.raises(ValueError, match="requires a captured"):
         rt.account_invocation("logout")
+
+
+@pytest.mark.parametrize(
+    "runtime,relative",
+    [
+        ("claude", "claude/.claude.json"),
+        ("codex", "codex/config.toml"),
+    ],
+)
+def test_trust_preparation_refuses_a_config_file_symlink(tmp_path, runtime, relative):
+    rt = RUNTIMES[runtime]
+    captured = rt.capture_environment(tmp_path / "a")
+    target = captured.root / relative
+    target.parent.mkdir(parents=True)
+    outside = tmp_path / "outside-config"
+    outside.write_text('{"outside": "account-state"}')
+    target.symlink_to(outside)
+    install_native_environments({runtime: captured})
+    with pytest.raises(ValueError, match="escapes"):
+        rt.pre_trust(tmp_path)
+    assert target.is_symlink()
+    assert outside.read_text() == '{"outside": "account-state"}'
