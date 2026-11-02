@@ -22,7 +22,7 @@ class ProfileIdentity:
             if (
                 not isinstance(value, str)
                 or not value
-                or any(c.isspace() or ord(c) < 32 for c in value)
+                or any(not 0x21 <= ord(c) <= 0x7E for c in value)
             ):
                 raise ValueError("Invalid profile identity")
 

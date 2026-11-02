@@ -105,7 +105,7 @@ async def test_old_installation_schema_repair_does_not_adopt(tmp_path):
         assert await db.signing.audience() == audience
 
 
-@pytest.mark.parametrize("invalid", ["", "two words", "line\nbreak", "\x00", None])
+@pytest.mark.parametrize("invalid", ["", "two words", "line\nbreak", "\x00", "\x7f", "é", None])
 def test_invalid_identity_is_rejected_before_reservation(invalid):
     with pytest.raises(ValueError, match="Invalid profile identity"):
         ProfileIdentity(invalid, "installation-a", "lifecycle-a1")
