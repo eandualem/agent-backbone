@@ -16,6 +16,7 @@ from agent_backbone.services.terminal import (
     capture_pane,
     foreground_commands,
     paste_message,
+    pin_tmux_server,
     query_format_vars,
     send_keys,
     start_session,
@@ -30,7 +31,7 @@ async def wait_for_output(session: str, expected: str) -> None:
             await asyncio.sleep(0.05)
 
 
-async def main() -> None:
+async def main(*, pinned: bool = False) -> None:
     session = f"backbone-smoke-{uuid.uuid4().hex}"
     marker = uuid.uuid4().hex
     # Characters tmux's command syntax treats specially, handed over on stdin.
@@ -56,7 +57,29 @@ async def main() -> None:
         os.environ["TMUX_TMPDIR"] = directory
         tempfile.tempdir = directory  # where start_session writes the environment file
         socket = Path(directory) / f"tmux-{os.getuid()}" / "default"
+        decoy = Path(directory) / "other.sock"
+        if pinned:
+            socket = Path(directory) / "selected socket.sock"
+            pin_tmux_server(socket)
         try:
+            if pinned:
+                subprocess.run(
+                    [
+                        "tmux",
+                        "-S",
+                        str(decoy),
+                        "new-session",
+                        "-d",
+                        "-s",
+                        session,
+                        "printf decoy-ready; exec cat",
+                    ],
+                    check=True,
+                )
+                # Even a valid inherited server with an identically named session
+                # must not redirect commands away from the pinned provider.
+                os.environ["TMUX"] = f"{decoy},0,0"
+                os.environ["TMUX_TMPDIR"] = str(Path(directory) / "wrong")
             if not await start_session(
                 session,
                 working_dir=str(working),
@@ -83,6 +106,8 @@ async def main() -> None:
             server = Path(fields.get("socket_path", "")).resolve()
             if not server.is_relative_to(Path(directory).resolve()):
                 raise RuntimeError(f"refusing to run on a server outside {directory}: {fields!r}")
+            if pinned and server != socket.resolve():
+                raise RuntimeError("the pinned socket was not used")
             foreground = await foreground_commands(session)
             if not any(
                 command and "python" in Path(command[0]).name.lower() for command in foreground
@@ -101,14 +126,31 @@ async def main() -> None:
             if not await send_keys(session, "Enter"):
                 raise RuntimeError("send_keys failed")
             await wait_for_output(session, f"received:{marker}")
+            if pinned:
+                output = subprocess.check_output(
+                    ["tmux", "-S", str(decoy), "capture-pane", "-p", "-t", f"={session}:"]
+                ).decode()
+                if "decoy-ready" not in output or marker in output:
+                    raise RuntimeError("the other server was changed")
         finally:
             removed = await stop_session(session)
             # A user configuration with ``exit-empty off`` keeps an empty server alive.
             subprocess.run(["tmux", "-S", str(socket), "kill-server"], capture_output=True)
+            if pinned:
+                other_alive = (
+                    subprocess.run(
+                        ["tmux", "-S", str(decoy), "has-session", "-t", f"={session}:"],
+                        capture_output=True,
+                    ).returncode
+                    == 0
+                )
+                subprocess.run(["tmux", "-S", str(decoy), "kill-server"], capture_output=True)
+                if not other_alive:
+                    raise RuntimeError("stopping the selected session affected the other server")
             if not removed:
                 raise RuntimeError(f"could not remove smoke session {session}")
     print("tmux smoke passed: environment, paste, keys, capture, display and cleanup")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main(pinned="--pinned" in sys.argv))

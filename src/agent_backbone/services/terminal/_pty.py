@@ -21,6 +21,7 @@ import shlex
 import signal
 import struct
 import subprocess
+import sys
 import termios
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -29,6 +30,7 @@ from pathlib import Path
 from weakref import WeakValueDictionary
 
 from agent_backbone.services.terminal._core import exact_target
+from agent_backbone.services.terminal._server import tmux_command, tmux_server_socket
 
 log = logging.getLogger(__name__)
 
@@ -78,7 +80,7 @@ class PtySession:
             env = {**os.environ, "TERM": "xterm-256color", "COLORTERM": "truecolor"}
             env.pop("TMUX", None)  # the backbone itself may run inside tmux
             self._process = subprocess.Popen(
-                ["tmux", "attach-session", "-t", exact_target(self.session_name)],
+                tmux_command("attach-session", "-t", exact_target(self.session_name)),
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
@@ -265,9 +267,16 @@ class PtyManager:
             if not content:
                 return
             killed = 0
+            retained = []
             for line in content.splitlines():
                 saved = _parse_pid_record(line)
                 if saved is None:
+                    continue
+                if (
+                    saved["command"][1:]
+                    != tmux_command("attach-session", "-t", saved["command"][-1])[1:]
+                ):
+                    retained.append(line)
                     continue
                 pid = saved["pid"]
                 if _process_identity(pid) != saved:
@@ -280,7 +289,7 @@ class PtyManager:
                     pass  # Already dead
             if killed:
                 log.info("Cleaned up %d orphaned PTY process(es)", killed)
-            pid_file.write_text("")
+            pid_file.write_text("\n".join(retained) + "\n" if retained else "")
         except Exception:
             log.warning("Failed to clean up orphaned PTY processes", exc_info=True)
 
@@ -348,11 +357,13 @@ def _parse_pid_record(line: str) -> dict | None:
         return None
     if (
         not isinstance(command, list)
-        or len(command) != 4
+        or len(command) not in {4, 6}
         or not all(isinstance(arg, str) and arg for arg in command)
         or Path(command[0]).name != "tmux"
-        or command[1:3] != ["attach-session", "-t"]
+        or command[-3:-1] != ["attach-session", "-t"]
     ):
+        return None
+    if len(command) == 6 and (command[1] != "-S" or not Path(command[2]).is_absolute()):
         return None
     try:
         datetime.strptime(birth, "%a %b %d %H:%M:%S %Y")
@@ -369,23 +380,39 @@ def _process_identity(pid: int) -> dict | None:
     check, not an atomic process handle spanning the later signal.
     """
     try:
+        # Keep English birth timestamps while ps preserves UTF-8 socket paths.
+        # The C locale renders non-ASCII argv bytes as escapes/replacements.
+        process_locale = "C"
+        if tmux_server_socket() is not None:
+            process_locale = "en_US.UTF-8" if sys.platform == "darwin" else "C.UTF-8"
         result = subprocess.run(
             ["ps", "-ww", "-p", str(pid), "-o", "lstart=", "-o", "args="],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=2,
             check=False,
-            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
+            env={**os.environ, "LC_ALL": process_locale, "TZ": "UTC"},
         )
         if result.returncode != 0:
             return None
         fields = result.stdout.strip().split(maxsplit=5)
         if len(fields) != 6:
             return None
+        # ps flattens argv without shell quoting. The pinned form has fixed
+        # delimiters, so keep the socket's spaces, quotes and backslashes intact.
+        executable, pinned, remainder = fields[5].partition(" -S ")
+        if pinned and Path(executable).name == "tmux":
+            socket, separator, target = remainder.rpartition(" attach-session -t ")
+            if not separator:
+                return None
+            command = [executable, "-S", socket, "attach-session", "-t", target]
+        else:
+            command = shlex.split(fields[5])
         record = {
             "pid": pid,
             "birth": " ".join(fields[:5]),
-            "command": shlex.split(fields[5]),
+            "command": command,
         }
         return _parse_pid_record(json.dumps(record))
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -396,7 +423,11 @@ def _record_pid(pid_file: Path | None, pid: int, session_name: str) -> None:
     if pid_file is None:
         return
     record = _process_identity(pid)
-    if record is None or record["command"][3] != exact_target(session_name):
+    if (
+        record is None
+        or record["command"][1:]
+        != tmux_command("attach-session", "-t", exact_target(session_name))[1:]
+    ):
         return
     try:
         pid_file.parent.mkdir(parents=True, exist_ok=True)
