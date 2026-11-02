@@ -759,3 +759,40 @@ async def test_complete_environment_drops_server_only_values_and_attach_import(t
     assert ("set-environment", "-t", "=isolated:", "-r", "HOST_TOKEN") in calls
     assert ("set-option", "-t", "=isolated:", "update-environment", "") in calls
     assert len(list(tmp_path.glob("backbone-env-*.json"))) == 1
+
+
+def test_complete_environment_loader_preserves_only_pane_metadata(tmp_path):
+    from agent_backbone.services.terminal._sessions import _ISOLATED_LOAD_AND_EXEC
+
+    env_file = tmp_path / "env.json"
+    payload = json.dumps({"HOME": "/captured", "TERM": "daemon-term"}).encode()
+    env_file.write_bytes(payload)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            _ISOLATED_LOAD_AND_EXEC,
+            str(env_file),
+            hashlib.sha256(payload).hexdigest(),
+            str(len(payload)),
+            "/usr/bin/env",
+        ],
+        env={
+            "HOME": "/host",
+            "SSH_AUTH_SOCK": "/host/socket",
+            "TMUX": "/private/server,1,0",
+            "TMUX_PANE": "%2",
+            "TERM": "screen",
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert set(result.stdout.splitlines()) == {
+        "HOME=/captured",
+        "TMUX=/private/server,1,0",
+        "TMUX_PANE=%2",
+        "TERM=screen",
+    }
+    assert not env_file.exists()

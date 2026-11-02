@@ -63,6 +63,7 @@ test-file: ## Run a single test file (FILE=tests/unit/test_foo.py)
 smoke: ## Check real tmux paste, keys, capture and display in a disposable session
 	uv run python tests/smoke_tmux.py
 	uv run python tests/smoke_tmux.py --pinned
+	uv run python tests/smoke_tmux.py --isolated
 
 cov: ## Run tests with coverage
 	uv run pytest --cov=src --cov-report=term-missing

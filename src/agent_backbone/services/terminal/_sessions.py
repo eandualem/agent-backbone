@@ -69,6 +69,17 @@ Python rather than a shell: a shell refuses read-only names (``UID``), and a
 configured ``PATH`` would decide which ``rm`` removes the file."""
 
 
+# These values describe the pane tmux just created, not an inherited account.
+_PANE_ENV = ("TMUX", "TMUX_PANE", "TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "COLORTERM")
+_ISOLATED_LOAD_AND_EXEC = _LOAD_AND_EXEC.replace(
+    "os.environ.update(json.loads(payload))",
+    f"pane = {{key: os.environ[key] for key in {_PANE_ENV!r} if key in os.environ}}\n"
+    "os.environ.clear()\n"
+    "os.environ.update(json.loads(payload))\n"
+    "os.environ.update(pane)",
+)
+
+
 SESSION_FORMAT_STR = "pane_in_mode=#{pane_in_mode}"
 """Format variables ``agent inspect`` shows for a session."""
 
@@ -119,7 +130,8 @@ async def start_session(
 
     ``inherit_environment=False`` requires a complete environment and command.
     It clears inherited process values, removes server-only session values, and
-    disables environment import on attach. Its private launch file uses the
+    disables environment import on attach. Only tmux-generated pane identity and
+    terminal metadata survive the clear. Its private launch file uses the
     captured temporary directory. Profile activation owns the isolated server.
 
     Returns True when the session exists afterwards.
@@ -194,14 +206,7 @@ async def start_session(
             "-I",
             "-B",
             "-c",
-            (
-                _LOAD_AND_EXEC.replace(
-                    "os.environ.update(json.loads(payload))",
-                    "os.environ.clear()\nos.environ.update(json.loads(payload))",
-                )
-                if not inherit_environment
-                else _LOAD_AND_EXEC
-            ),
+            _LOAD_AND_EXEC if inherit_environment else _ISOLATED_LOAD_AND_EXEC,
             env_file,
             hashlib.sha256(payload).hexdigest(),
             str(len(payload)),
@@ -209,7 +214,7 @@ async def start_session(
         ]
     if environment or removals:
         args.append("env")
-        args.extend(f"-u{key}" for key in removals)
+        args.extend(f"-u{key}" for key in removals if inherit_environment or key not in _PANE_ENV)
     args.extend(launch)
 
     # ``source-file`` starts no server of its own, hence ``start-server``.
