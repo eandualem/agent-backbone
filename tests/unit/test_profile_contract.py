@@ -27,10 +27,19 @@ def test_adoption_replay_and_repeat_preserve_the_original_tuple():
         assert all(adoption[key][field] is None for field in IDENTITY)
     cases = {case["name"]: case for case in adoption["cases"]}
     assert cases["identical_body_replay"]["outcome"] == "succeeded"
+    replay = cases["identical_body_replay_changed_token"]
+    assert replay["request"] == "request" and replay["prior"] == "succeeded"
+    assert replay["current_token"] != original["adoption_token"]
+    assert replay["outcome"] == "succeeded" and replay["expected_receipt"] == "succeeded"
     assert cases["new_request_existing_instance"]["outcome"] == "succeeded"
     assert cases["changed_body_same_id"]["outcome"] == "request_conflict"
     assert cases["stale_token_new_request"]["outcome"] == "adoption_changed"
-    assert all(not case["allocates_identity"] for case in cases.values())
+    first = cases["first_adoption"]
+    assert first["prior"] is None and first["current_token"] == original["adoption_token"]
+    assert first["outcome"] == "succeeded" and first["allocates_identity"] is True
+    assert all(
+        not case["allocates_identity"] for name, case in cases.items() if name != "first_adoption"
+    )
     for case in cases.values():
         assert case["outcome"] in {"succeeded", "request_conflict", "adoption_changed"}
         if receipt_name := case.get("expected_receipt"):
@@ -88,6 +97,18 @@ def test_bound_setup_preserves_legacy_fields_and_cancellation_body():
 
 def test_bound_catalog_reuses_discovery_fields_without_equating_availability_with_login():
     catalog = FIXTURES["runtime_catalog"]
+    assert catalog["command"] == [
+        "backbone",
+        "runtimes",
+        "--json",
+        "--check-setup",
+        "--profile",
+        catalog["catalog"]["profile_id"],
+        "--expected-installation-id",
+        catalog["catalog"]["installation_id"],
+        "--expected-lifecycle-id",
+        catalog["catalog"]["lifecycle_id"],
+    ]
     for field in IDENTITY:
         assert catalog["catalog"][field] == FIXTURES["identity"][field]
     item = catalog["catalog"]["items"][0]
@@ -137,10 +158,21 @@ def test_permission_examples_keep_registration_and_unavailable_sources_explicit(
         },
     }
     for case in context["registration_cases"]:
+        if (
+            case["endpoint"] == "runtime-context"
+            and "expected_registration_id" not in case["query"]
+        ):
+            assert case["outcome"] == "invalid_request"
         if case["outcome"] == "registration_changed":
             expected = case["query"]["expected_registration_id"]
             assert re.fullmatch(context["registration_pattern"], expected)
             assert expected != case["registered_id"]
         if case["registered_id"] is None and "expected_registration_id" in case["query"]:
             assert case["outcome"] == "registration_changed"
-    assert context["redaction_case"]["returned_allow"] == []
+    redaction = context["redaction_case"]
+    returned = redaction["returned_fields"]
+    assert set(returned) == {"allow", "deny", "ask", "modes", "files"}
+    assert returned["allow"] == []
+    sensitive_value = redaction["input_permission"].split("EXAMPLE_TOKEN=", 1)[1].split()[0]
+    for field in returned.values():
+        assert sensitive_value not in json.dumps(field)

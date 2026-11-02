@@ -437,10 +437,28 @@
     },
     "cases": [
       {
+        "name": "first_adoption",
+        "request": "request",
+        "prior": null,
+        "current_token": "preflight-default-v1",
+        "outcome": "succeeded",
+        "allocates_identity": true,
+        "expected_receipt": "succeeded"
+      },
+      {
         "name": "identical_body_replay",
         "request": "request",
         "prior": "succeeded",
         "current_token": "preflight-default-v1",
+        "outcome": "succeeded",
+        "allocates_identity": false,
+        "expected_receipt": "succeeded"
+      },
+      {
+        "name": "identical_body_replay_changed_token",
+        "request": "request",
+        "prior": "succeeded",
+        "current_token": "preflight-default-v2",
         "outcome": "succeeded",
         "allocates_identity": false,
         "expected_receipt": "succeeded"
@@ -985,8 +1003,14 @@
     },
     "redaction_case": {
       "input_permission": "shell: EXAMPLE_TOKEN=synthetic-sensitive-value command",
-      "returned_allow": [],
-      "outcome": "omit_credential_bearing_value"
+      "outcome": "omit_credential_bearing_value",
+      "returned_fields": {
+        "allow": [],
+        "deny": [],
+        "ask": [],
+        "modes": [],
+        "files": []
+      }
     }
   }
 }
