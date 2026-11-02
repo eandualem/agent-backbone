@@ -13,6 +13,7 @@ import json
 import os
 import stat
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 SETUP_RECEIPTS = 1024
@@ -63,28 +64,7 @@ class SetupReceipt:
                 if stat.S_ISREG(temporary.lstat().st_mode):
                     temporary.unlink()
             if self.path.exists() or self.path.is_symlink():
-                fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-                with os.fdopen(fd, "rb") as stream:
-                    if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-                        raise ValueError("not a regular receipt")
-                    raw = stream.read(SETUP_RECEIPT_BYTES + 1)
-                if len(raw) > SETUP_RECEIPT_BYTES:
-                    raise ValueError("receipt too large")
-                self.record = json.loads(raw)
-                if (
-                    not isinstance(self.record, dict)
-                    or not isinstance(self.record.get("completed_steps"), list)
-                    or not all(isinstance(step, str) for step in self.record["completed_steps"])
-                    or not isinstance(self.record.get("files", {}), dict)
-                    or not isinstance(self.record.get("result", {}), dict)
-                    or self.record.get("schema_version") != 1
-                    or self.record.get("request_id") != self.request_id
-                ):
-                    raise ValueError("invalid receipt")
-                if self.record.get("fingerprint") != self.fingerprint and not self.cancelled:
-                    raise SetupReceiptError(
-                        "request_conflict", "This request ID already belongs to different input."
-                    )
+                self._read_existing()
             else:
                 if sum(1 for _ in self.directory.glob("*.json")) >= SETUP_RECEIPTS:
                     raise SetupReceiptError(
@@ -112,6 +92,64 @@ class SetupReceipt:
             raise SetupReceiptError(
                 "installation_conflict", "Cannot read the setup receipt safely."
             ) from exc
+
+    def _read_existing(self) -> None:
+        fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError("not a regular receipt")
+            raw = stream.read(SETUP_RECEIPT_BYTES + 1)
+        if len(raw) > SETUP_RECEIPT_BYTES:
+            raise ValueError("receipt too large")
+        self.record = json.loads(raw)
+        if (
+            not isinstance(self.record, dict)
+            or not isinstance(self.record.get("completed_steps"), list)
+            or not all(isinstance(step, str) for step in self.record["completed_steps"])
+            or not isinstance(self.record.get("files", {}), dict)
+            or not isinstance(self.record.get("result", {}), dict)
+            or self.record.get("schema_version") != 1
+            or self.record.get("request_id") != self.request_id
+        ):
+            raise ValueError("invalid receipt")
+        if self.record.get("fingerprint") != self.fingerprint and not self.cancelled:
+            raise SetupReceiptError(
+                "request_conflict", "This request ID already belongs to different input."
+            )
+
+    @contextmanager
+    def inspect_existing(self):
+        """Validate a recorded request under its existing lock without writing.
+
+        A recovery preflight must not initialize receipts or clean temporary
+        files before it knows whether the provider may be opened.
+        """
+        try:
+            try:
+                info = self.directory.lstat()
+                if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077:
+                    raise ValueError("not a private receipt directory")
+                self._lock = os.open(
+                    self.directory / "lock", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                )
+                info = os.fstat(self._lock)
+                if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
+                    raise ValueError("not a private regular lock")
+                fcntl.flock(self._lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._read_existing()
+            except BlockingIOError as exc:
+                raise SetupReceiptError(
+                    "outcome_unknown", "Another setup operation is still running."
+                ) from exc
+            except SetupReceiptError:
+                raise
+            except (OSError, ValueError, TypeError, AttributeError) as exc:
+                raise SetupReceiptError(
+                    "installation_conflict", "Cannot read the setup receipt safely."
+                ) from exc
+            yield self.record
+        finally:
+            self.__exit__()
 
     def save(self, **updates) -> None:
         self.record.update(updates)

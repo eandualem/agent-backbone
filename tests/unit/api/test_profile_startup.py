@@ -169,7 +169,7 @@ async def test_copied_identity_is_refused_without_migration(config, uri):
 
     path = config.data_dir / "old backup #1.db"
     with sqlite3.connect(path) as conn:
-        conn.execute("CREATE TABLE profile_identity (id INTEGER)")
+        conn.execute("CREATE TABLE IF NOT EXISTS profile_identity (id INTEGER)")
         conn.execute("INSERT INTO profile_identity VALUES (1)")
     before = path.read_bytes(), path.stat().st_mtime_ns
     url = (
@@ -209,7 +209,7 @@ def _interrupted_database(path, *, identity=False):
     with sqlite3.connect(path) as conn:
         conn.execute("CREATE TABLE spill (data BLOB)")
         conn.execute("INSERT INTO spill VALUES (zeroblob(262144))")
-        conn.execute("CREATE TABLE profile_identity (id INTEGER)")
+        conn.execute("CREATE TABLE IF NOT EXISTS profile_identity (id INTEGER)")
         if identity:
             conn.execute("INSERT INTO profile_identity VALUES (1)")
     subprocess.run(
@@ -283,10 +283,11 @@ async def test_readonly_database_or_preflight_is_not_recovered(config, explicit_
     assert (path.read_bytes(), journal.read_bytes()) == before
 
 
-def test_onboarding_hot_journal_is_inspection_conflict_without_writes(config, tmp_path, capsys):
+def test_recorded_existing_setup_hot_journal_is_refused_without_writes(config, tmp_path, capsys):
     import json
 
-    from agent_backbone.cli import build_parser
+    from agent_backbone.cli import build_parser, onboarding
+    from agent_backbone.services.database import SetupReceipt
 
     path = config.data_dir / "backbone.db"
     journal = _interrupted_database(path)
@@ -305,9 +306,71 @@ def test_onboarding_hot_journal_is_inspection_conflict_without_writes(config, tm
             }
         )
     )
+    body = onboarding.SetupInitialize.model_validate_json(request.read_text()).model_dump()
+    with SetupReceipt(config.data_dir, body) as receipt:
+        receipt.save(fresh=False)
+    receipt_before = receipt.path.read_bytes()
     args = build_parser().parse_args(["setup", "--file", str(request), "--jsonl"])
     assert args.func(args) == 3
     result = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert result["code"] == "installation_conflict"
     assert (path.read_bytes(), journal.read_bytes(), config.env_path.read_bytes()) == before
-    assert not (config.data_dir / "setup-receipts").exists()
+    assert receipt.path.read_bytes() == receipt_before
+
+
+@pytest.mark.parametrize("changed", [None, "request", "credentials"])
+def test_own_fresh_setup_retry_recovers_only_identical_request(
+    config, tmp_path, capsys, monkeypatch, changed
+):
+    import asyncio
+    import hashlib
+    import json
+
+    from agent_backbone.cli import build_parser, onboarding
+    from agent_backbone.services.database import SetupReceipt
+
+    async def initialize_database():
+        async with BackboneDB.connect(config.database_url):
+            pass
+
+    asyncio.run(initialize_database())
+    path = config.data_dir / "backbone.db"
+    journal = _interrupted_database(path)
+    config.env_path.write_text("BACKBONE_API_KEY=preserved-test-key\n")
+    body = {
+        "schema_version": 1,
+        "request_id": "initialize-1",
+        "action": "initialize",
+        "data_dir": str(config.data_dir),
+        "service": "none",
+        "starter_profile": "core-v1",
+    }
+    canonical = onboarding.SetupInitialize.model_validate(body).model_dump()
+    with SetupReceipt(config.data_dir, canonical) as receipt:
+        receipt.save(
+            fresh=True,
+            database_started=True,
+            credential_digest=hashlib.sha256(config.env_path.read_bytes()).hexdigest(),
+        )
+    before = path.read_bytes(), journal.read_bytes(), receipt.path.read_bytes()
+    if changed == "request":
+        body["service"] = "user"
+    elif changed == "credentials":
+        config.env_path.write_text("BACKBONE_API_KEY=replaced-test-key\n")
+    source = tmp_path / "request.json"
+    source.write_text(json.dumps(body))
+    monkeypatch.setattr(onboarding, "_endpoint_occupied", AsyncMock(return_value=False))
+    monkeypatch.setattr(onboarding._common, "api", AsyncMock(return_value=None))
+    args = build_parser().parse_args(["setup", "--file", str(source), "--jsonl"])
+    code = args.func(args)
+    result = json.loads(capsys.readouterr().out.splitlines()[-1])
+    if changed:
+        assert code == 3
+        assert result["code"] == (
+            "request_conflict" if changed == "request" else "installation_conflict"
+        )
+        assert (path.read_bytes(), journal.read_bytes(), receipt.path.read_bytes()) == before
+    else:
+        assert code == 0 and result["code"] == "initialized"
+        assert not journal.exists()
+        assert config.env_path.read_text() == "BACKBONE_API_KEY=preserved-test-key\n"

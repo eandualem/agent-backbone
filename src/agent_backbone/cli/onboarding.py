@@ -427,12 +427,34 @@ async def _initialize(request: SetupInitialize, output):
         )
     receipt = SetupReceipt(data_dir, request.model_dump())
     recorded_request = receipt.path.is_file() and not receipt.path.is_symlink()
-    if existing and (not recorded_request or boot.database_url != sqlite_url(data_dir)):
+    if existing and not recorded_request:
         await _inspect_existing(boot)
-    # Existing-installation setup promises inspection without database changes.
-    # Refuse before creating receipts, directories or credentials as well.
+    # A recorded, unfinished fresh install may recover its own database. Other
+    # setup inspections stay read-only. Validate request and credential ownership
+    # under the existing receipt lock, without creating or changing receipts.
     try:
-        await check_profile_startup(boot.database_url, data_dir, recover=False)
+        if recorded_request:
+            with receipt.inspect_existing() as record:
+                if record.get("fresh") and boot.database_url != sqlite_url(data_dir):
+                    raise SetupReceiptError(
+                        "installation_conflict",
+                        "Fresh setup retries require their own local database.",
+                    )
+                if boot.database_url != sqlite_url(data_dir):
+                    await _inspect_existing(boot)
+                recover = (
+                    record.get("fresh") is True
+                    and record.get("database_started") is True
+                    and record.get("result", {}).get("status") != "completed"
+                    and not receipt.cancelled
+                    and boot.database_url == sqlite_url(data_dir)
+                    and boot.env_path.is_file()
+                    and hashlib.sha256(boot.env_path.read_bytes()).hexdigest()
+                    == record.get("credential_digest")
+                )
+                await check_profile_startup(boot.database_url, data_dir, recover=recover)
+        else:
+            await check_profile_startup(boot.database_url, data_dir, recover=False)
     except SQLAlchemyError as exc:
         raise ValueError("Provider identity metadata is unavailable") from exc
     if (

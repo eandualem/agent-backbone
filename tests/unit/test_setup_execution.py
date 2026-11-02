@@ -1030,7 +1030,7 @@ def test_cancel_cli_accepts_largest_original_request(tmp_path, capsys):
 
 
 @pytest.mark.parametrize("existing", [False, True])
-def test_init_and_onboarding_refuse_reservations_before_writes(tmp_path, capsys, existing):
+def test_init_and_onboarding_refuse_reservations_before_writes(tmp_path, capsys, existing, offline):
     from agent_backbone.config import PROFILE_REGISTRY_PATH
     from agent_backbone.services.database import (
         ProfileIdentity,
@@ -1052,6 +1052,9 @@ def test_init_and_onboarding_refuse_reservations_before_writes(tmp_path, capsys,
     if existing:
         directory.mkdir()
         (directory / ".env").write_text("BACKBONE_API_KEY=preserved-test-key\n")
+        with sqlite3.connect(directory / "backbone.db") as conn:
+            conn.execute("CREATE TABLE settings (key TEXT, value TEXT)")
+            conn.execute("CREATE TABLE agents (name TEXT)")
     before = {p.name: p.read_bytes() for p in directory.iterdir()} if existing else None
     args = build_parser().parse_args(["init", "--data-dir", str(directory), "--force"])
     with pytest.raises(ValueError, match="reserved profile"):

@@ -151,8 +151,10 @@ Ordinary legacy startup retains SQLite crash recovery: after confirming that
 neither location overlaps a reservation, a hot rollback journal may be recovered
 by reopening the existing database read-write and inspecting identity again.
 This does not create a database or migrate its schema. Other read errors never
-trigger writable fallback. Explicit read-only database URLs and setup
-initialization keep inspection read-only; a recovery requirement is an error.
+trigger writable fallback. Explicit read-only database URLs and existing-installation
+setup inspection stay read-only; a recovery requirement is an error. An unfinished
+fresh setup may recover its own local database only after validating the exact
+recorded request and unchanged credentials under the existing receipt lock.
 Registry discovery and reservation checks never recover journals implicitly.
 
 List returns `schema_version` and `items`. Each item has `profile_id`,
