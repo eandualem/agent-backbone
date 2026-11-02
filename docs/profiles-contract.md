@@ -20,7 +20,8 @@ reservation. It stores the profile and lifecycle IDs against the existing signin
 audience, accepts an identical replay and refuses conflicting assignments. Reading
 an unreserved database creates no identity. Startup checks for this identity before
 creating directories, initializing or migrating the database, or starting agents,
-hooks, integrations or jobs. Direct CLI database fallback applies the same guard.
+hooks, integrations or jobs. Direct CLI database fallback, `init` and setup
+initialization apply the same guard before writing credentials or receipts.
 Any identity record is refused because activation is not implemented. Directory
 ownership is checked separately against the external registry. This does not adopt
 Default, enable bound clients or grant legacy compatibility. Ready activation and
@@ -145,6 +146,14 @@ registries block it because directory ownership cannot be checked. Startup never
 creates or repairs the registry. A reserved database cannot start as legacy from
 another directory. This check does not fence an already running provider or
 establish account isolation.
+
+Ordinary legacy startup retains SQLite crash recovery: after confirming that
+neither location overlaps a reservation, a hot rollback journal may be recovered
+by reopening the existing database read-write and inspecting identity again.
+This does not create a database or migrate its schema. Other read errors never
+trigger writable fallback. Explicit read-only database URLs and setup
+initialization keep inspection read-only; a recovery requirement is an error.
+Registry discovery and reservation checks never recover journals implicitly.
 
 List returns `schema_version` and `items`. Each item has `profile_id`,
 `display_name`, `kind` and `state`. `kind` is `legacy_default` or `isolated`.

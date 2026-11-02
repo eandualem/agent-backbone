@@ -42,10 +42,12 @@ BACKBONE_API_KEY={api_key}
 
 
 def cmd_init(args: argparse.Namespace) -> int:
+    from agent_backbone.services.database import check_profile_startup
     from agent_backbone.services.database.engine import redact_url
 
     config = bootstrap_config(args.data_dir)
     data_dir = config.data_dir
+    asyncio.run(check_profile_startup(config.database_url, data_dir))
     data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     data_dir.chmod(0o700)
     (data_dir / "state").mkdir(exist_ok=True)

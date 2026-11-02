@@ -414,6 +414,10 @@ async def _inspect_existing(boot):
 
 
 async def _initialize(request: SetupInitialize, output):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from agent_backbone.services.database import check_profile_startup
+
     data_dir = Path(request.data_dir)
     boot = bootstrap_config(data_dir)
     existing = boot.env_path.is_file() or (data_dir / "backbone.db").exists()
@@ -423,8 +427,14 @@ async def _initialize(request: SetupInitialize, output):
         )
     receipt = SetupReceipt(data_dir, request.model_dump())
     recorded_request = receipt.path.is_file() and not receipt.path.is_symlink()
-    if existing and not recorded_request:
+    if existing and (not recorded_request or boot.database_url != sqlite_url(data_dir)):
         await _inspect_existing(boot)
+    # Existing-installation setup promises inspection without database changes.
+    # Refuse before creating receipts, directories or credentials as well.
+    try:
+        await check_profile_startup(boot.database_url, data_dir, recover=False)
+    except SQLAlchemyError as exc:
+        raise ValueError("Provider identity metadata is unavailable") from exc
     if (
         not existing
         and data_dir.exists()

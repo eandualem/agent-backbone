@@ -200,3 +200,114 @@ async def test_agent_start_direct_fallback_refuses_reserved_identity(config, db)
         with pytest.raises(ValueError, match="not ready"):
             await _agent_start(args)
     start.assert_not_awaited()
+
+
+def _interrupted_database(path, *, identity=False):
+    import subprocess
+    import sys
+
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE spill (data BLOB)")
+        conn.execute("INSERT INTO spill VALUES (zeroblob(262144))")
+        conn.execute("CREATE TABLE profile_identity (id INTEGER)")
+        if identity:
+            conn.execute("INSERT INTO profile_identity VALUES (1)")
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os, sqlite3, sys; c=sqlite3.connect(sys.argv[1]); "
+            "c.execute('PRAGMA cache_size=1'); c.execute('BEGIN IMMEDIATE'); "
+            "c.execute('DELETE FROM profile_identity'); "
+            "c.execute('UPDATE spill SET data=randomblob(262144)'); os._exit(0)",
+            str(path),
+        ],
+        check=True,
+        timeout=10,
+    )
+    journal = Path(str(path) + "-journal")
+    assert journal.exists()
+    return journal
+
+
+@pytest.mark.parametrize("identity", [False, True])
+async def test_legacy_journal_recovery_preserves_identity_refusal(config, identity):
+    path = config.data_dir / "backbone.db"
+    journal = _interrupted_database(path, identity=identity)
+    if identity:
+        with pytest.raises(ValueError, match="not ready"):
+            await check_profile_startup(config.database_url, config.data_dir)
+    else:
+        await check_profile_startup(config.database_url, config.data_dir)
+    assert not journal.exists()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT count(*) FROM profile_identity").fetchone()[0] == int(identity)
+        assert conn.execute("SELECT data=zeroblob(262144) FROM spill").fetchone()[0] == 1
+        assert not conn.execute("SELECT name FROM sqlite_master WHERE name='agents'").fetchall()
+
+
+async def test_reserved_journal_is_not_recovered(config):
+    path = config.data_dir / "backbone.db"
+    journal = _interrupted_database(path)
+    registry = ProfileRegistry.create(Path(PROFILE_REGISTRY_PATH).expanduser())
+    registry.reserve(
+        ProfileReservation(
+            ProfileIdentity("profile-a", "installation-a", "lifecycle-a1"),
+            config.data_dir,
+            "Work",
+            "baseline-v1",
+        )
+    )
+    before = path.read_bytes(), journal.read_bytes()
+    with pytest.raises(ValueError, match="reserved profile"):
+        await check_profile_startup(config.database_url, config.data_dir)
+    assert (path.read_bytes(), journal.read_bytes()) == before
+
+
+@pytest.mark.parametrize("explicit_url", [False, True])
+async def test_readonly_database_or_preflight_is_not_recovered(config, explicit_url):
+    from sqlalchemy.exc import OperationalError
+
+    path = config.data_dir / "backbone.db"
+    journal = _interrupted_database(path)
+    before = path.read_bytes(), journal.read_bytes()
+    with pytest.raises(OperationalError) as error:
+        await check_profile_startup(
+            f"sqlite+aiosqlite:///{path.as_uri()}?mode=ro&uri=true"
+            if explicit_url
+            else config.database_url,
+            config.data_dir,
+            recover=explicit_url,
+        )
+    assert error.value.orig.sqlite_errorcode == sqlite3.SQLITE_READONLY_ROLLBACK
+    assert (path.read_bytes(), journal.read_bytes()) == before
+
+
+def test_onboarding_hot_journal_is_inspection_conflict_without_writes(config, tmp_path, capsys):
+    import json
+
+    from agent_backbone.cli import build_parser
+
+    path = config.data_dir / "backbone.db"
+    journal = _interrupted_database(path)
+    config.env_path.write_text("BACKBONE_API_KEY=preserved-test-key\n")
+    before = path.read_bytes(), journal.read_bytes(), config.env_path.read_bytes()
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "request_id": "initialize-1",
+                "action": "initialize",
+                "data_dir": str(config.data_dir),
+                "service": "none",
+                "starter_profile": "core-v1",
+            }
+        )
+    )
+    args = build_parser().parse_args(["setup", "--file", str(request), "--jsonl"])
+    assert args.func(args) == 3
+    result = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert result["code"] == "installation_conflict"
+    assert (path.read_bytes(), journal.read_bytes(), config.env_path.read_bytes()) == before
+    assert not (config.data_dir / "setup-receipts").exists()
