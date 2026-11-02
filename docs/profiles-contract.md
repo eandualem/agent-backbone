@@ -15,7 +15,10 @@ Provider implementation is
 tracked in [#548](https://github.com/eandualem/agent-backbone/issues/548), with the
 consumer in [agent-interface#182](https://github.com/eandualem/agent-interface/issues/182).
 The agreed design revision is **2**; JSON `schema_version: 1` is the first wire
-version. There is no earlier released profile protocol.
+version. Extension revision **1** adds Default adoption, setup schema 2 and
+registration-aware permission inspection without changing revision 2 identity or
+lifecycle rules. These extension operations are agreed but not implemented.
+There is no earlier released profile protocol.
 
 Provider-local identity persistence is implemented as an internal database
 reservation. It stores the profile and lifecycle IDs against the existing signing
@@ -102,7 +105,7 @@ isolation.
 
 [Shared fixtures](contracts/profiles-v1.json) contain discovery records, identity,
 HTTP headers, Socket.IO identity/error fields, lifecycle requests/receipts,
-unknown-operation lookup and binding cases. All identifiers and paths are synthetic.
+unknown-operation lookup, binding cases and extension examples described below. All identifiers and paths are synthetic.
 `baseline-example-v1` is a fixture value, not an available baseline. The file's top-level groups and binding cases
 are a test container, not a new API response. Consumers can pin this file to a
 commit and run its cases against their own implementation.
@@ -278,9 +281,140 @@ named Default and a replacement instance do not inherit it.
 Before adoption, explicit legacy single-provider startup keeps its current
 behavior. It remains separate from standalone use without Backbone. A stored
 bound workspace never downgrades after a failed handshake. Existing setup schema 1
-stays legacy-only. The detailed Default-adoption action/receipt and profile-bound
-setup schema are not defined by these fixtures; they must be specified before
-those operations are implemented, including cancel, recovery and runtime probes.
+stays legacy-only. The following extension defines adoption and bound setup; it
+does not silently convert saved schema-1 requests.
+
+## Adopt Default explicitly
+
+`backbone profiles adoption-preview --json` is the agreed read-only operator
+preflight. It resolves the configured existing installation independently of the
+selected content profile. It never starts, stops, migrates, repairs or writes.
+Unsafe or ambiguous ownership refuses preview rather than choosing an instance.
+The `adoption.preview` fixture contains the existing installation ID, canonical
+data directory, tmux mapping, baseline and an opaque adoption token.
+
+The token fingerprints canonical data/database locators, installation identity,
+credential locator and change evidence, effective service/tmux mapping and recorded
+runtime-environment semantics. It contains no credential bytes and grants no
+additional authority. The provider owns its computation; clients retain it unchanged.
+Submit `adoption.request` through `profiles apply`. The request accepts no arbitrary
+data directory, environment, credential source or account-copy input.
+
+Serialize adoption with lifecycle work on that installation. Validate the current
+token before adoption, including a new request for an already adopted instance.
+Changed metadata returns `adoption_changed`. An identical original request/body
+replays its durable receipt; a changed body under that ID conflicts. A new request
+for the same original instance returns the existing tuple, never a sibling identity.
+An identity-incompatible restore is not repeated adoption. The `adoption.cases`
+records describe these separate scenarios. `outcome` is `succeeded` or a refusal
+code; optional `expected_receipt` names the corresponding receipt fixture. These
+are case metadata, not wire fields. Changed-body reuse is a rejection, not a new
+operation or permission to overwrite the original receipt. Completed exact replay returns its recorded result;
+it performs no new adoption effects.
+
+Reserve the request before effects and allocate profile/lifecycle IDs once,
+preserving the installation ID. Back up touched metadata first and retain that
+receipt locally. Preserve credential bytes, native account roots, baseline edits,
+data and service/tmux mapping in place. Adoption does not restart a service,
+relocate storage or log in/out. Receipt identities may be null before reservation.
+Success means metadata reconciliation, not a verified accepting service. Fence old
+processes, jobs and streams before any replacement accepts bound traffic, then use
+explicit lifecycle operations and an authenticated handshake to establish access.
+Only the exact adopted tuple receives revision 2 legacy eligibility.
+
+## Set up an agent within a captured profile
+
+`backbone setup --file request.json --jsonl` accepts the agreed schema-2
+`setup.first_agent` shape. It replaces schema-1 `data_dir` authority with
+`profile_id`, `expected_installation_id` and `expected_lifecycle_id`. The remaining
+agent, hooks, untagged brief and greeting fields retain their existing meanings.
+Optional terminal presentation fields, where supported, retain their own contract;
+this extension adds none. The project directory is a work location, never native
+HOME or account authority. No client environment, CLI config root or credential
+input is accepted. The provider resolves native context from its own registry.
+
+Validate the full tuple before each effect, including project-directory creation,
+and after deferred probes. A replacement refuses the captured work; it cannot
+rewrite its identity. Retain executable, exact request ID/body and binding across
+selection changes, interruption and retry. Persist pending setup under the full
+tuple and request ID. Do not convert saved schema-1 requests or fall back to them.
+
+Every schema-2 event echoes the requested profile, installation and lifecycle IDs,
+including failures before an instance can be resolved. Events retain increasing
+`seq`, the original request ID and `step`/`result` types. Schema-2 step events also
+identify the original action. Step events carry step/status; results retain the
+existing status/code/message/retry/completed_steps/data shape. `setup.progress`
+and `setup.result` illustrate one invocation; other results are independent cases
+with their own sequence. Ready means measured launch readiness, not proven login.
+
+Cancellation changes only the original action to `cancel_first_agent`, preserving
+ID, body and binding. Compare the saved body after normalizing that action back to
+`first_agent`. Action-specific reply replay is scoped by action and request ID, but both
+actions share the original normalized operation and its cancellation marker. A
+separate cancellation reply must never leave the original action executable.
+Even cancellation before receipt creation blocks a delayed original submission;
+`setup.cancelled_original_result` shows its refusal. Linearize cancellation with
+execution and refuse another lifecycle. Safe cancellation returns
+`request_cancelled`, `retry: new_request`, no completed steps and the original
+cancelled ID; unsafe cancellation preserves work with `cancellation_unsafe`.
+After a lost cancellation response, retry that cancellation, not first-agent setup.
+
+The `runtime_catalog.command` fixture gives the bound `runtimes --json --check-setup`
+flags. Schema 2 echoes the full tuple and retains the existing item fields. Its
+nonempty catalog is an illustrative item, not a complete installed-runtime inventory.
+All probes use provider-owned native environments; host PATH may locate a binary
+but cannot supply account/config roots. Reject stale bindings before subprocess
+spawn. Discovery never logs in or calls a model. In the existing `authentication`
+field, `not_authenticated` means an observed signed-out state; `unavailable` means
+no usable probe result and `unsupported` means no supported probe. Unknown discovery
+remains `unknown`; binary/version availability proves none of these authentication
+outcomes. `authentication_cases` shows field values, not full responses. Unsupported
+schema/flags leave discovery unavailable; never retry unbound.
+
+## Inspect permissions for one agent registration
+
+Authenticated bound `/api/agents` items and `/api/agents/{name}/inspect` expose
+`registration_id` from the durable registration (`AgentSpec.registration_id`, stored
+as `AgentORM.report_identity`). It is unchanged lowercase UUID hex matching
+`^[a-f0-9]{32}$`. Capture it from the current agent registration, never from a
+process/session ID or a retained content record's author ID. Unregistered
+live-session rows expose null; reads never allocate registrations. The
+`bound_list_member_fields` and `bound_inspect_fields` fixtures are additive field
+fragments, not replacements for existing list or inspect response shapes.
+
+Capture tuple, name, registration and selection generation when selecting a target.
+A fresh name navigation may acquire its initial ID through one bound inspect without
+`expected_registration_id`. Once captured, every inspect refresh supplies that ID.
+`GET /api/agents/{name}/runtime-context?expected_registration_id=ID` always requires
+it and the existing three binding headers. Omitted required input and present
+empty/malformed input are invalid, never permission to perform a name-only read.
+A well-formed changed ID returns the exact `registration_changed` HTTP 409 fixture
+without replacement inspection data, including when the retained registration
+has become null on an unregistered row. Capture and recheck registration immediately
+before returning list, inspect or context results. A change during inspection must
+also refuse the response. Binding/authentication refusals keep their existing order.
+
+The context response echoes tuple, name, runtime and registration. Consumers validate
+all of them and the retained selection generation before applying deferred results.
+Replacement requires fresh explicit selection, never an automatic target refresh.
+An unregistered row cannot form a permission target. An unknown runtime reports
+unsupported; no attestable profile leaves inspection unavailable/404 with no host
+reads. No error falls back to Default, ambient HOME or client filesystem parsing.
+
+The provider parses effective launch configuration and project rules with their
+precedence and bounded reads/results. `permissions` has status
+available/unavailable/unsupported, string arrays allow/deny/ask, `{name,value}`
+string modes and null or fixed `{code,message}` error. File scopes are
+runtime/project/project_local; states are read/missing/invalid/unreadable.
+`display_path` is relative and display-only, never filesystem-read authority.
+A missing optional file can accompany available metadata. Missing required context
+or an invalid/unreadable required source is unavailable, never apparently
+unrestricted empty permissions. Fixtures include both distinctions.
+
+Omit or redact credential-bearing permission values. Never return complete config,
+auth data, process environment or raw parser errors. The synthetic redaction case
+requires omission from allow; the same rule applies to deny, ask, modes and paths.
+These are inspection observations, not proof of every runtime authorization.
 
 ## Validate isolation
 
