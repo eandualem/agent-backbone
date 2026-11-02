@@ -295,3 +295,22 @@ def test_concurrent_initialization_publishes_only_complete_registries(tmp_path):
     with ThreadPoolExecutor(max_workers=2) as pool:
         registries = list(pool.map(ProfileRegistry.create, [path, path]))
     assert all(registry.list() == {"schema_version": 1, "items": []} for registry in registries)
+
+
+def test_symlink_loops_refuse_reconciliation_without_blocking_invalidation(registry, reservation):
+    registry.reserve(reservation)
+    reservation.data_dir.parent.mkdir()
+    reservation.data_dir.symlink_to(reservation.data_dir)
+    with pytest.raises(ValueError, match="Profile path"):
+        registry.check_reservation(reservation.identity, reservation.data_dir)
+    with pytest.raises(ValueError, match="Profile path"):
+        registry.reserve(reservation)
+    with pytest.raises(ValueError, match="Profile path"):
+        ProfileRegistry(reservation.data_dir)
+    with pytest.raises(ValueError, match="Profile path"):
+        ProfileRegistry(reservation.data_dir / "registry.db")
+    assert registry.show("profile-a")["state"] == "creating"
+    registry.invalidate(reservation.identity, reservation.data_dir)
+    reservation.data_dir.unlink()
+    with pytest.raises(ValueError, match="invalidated"):
+        registry.check_reservation(reservation.identity, reservation.data_dir)

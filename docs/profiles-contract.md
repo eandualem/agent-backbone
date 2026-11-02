@@ -39,6 +39,11 @@ an existing registry. Discovery reads stored directory metadata; it does not
 inspect provider directories. Reservation and reconciliation check the selected
 directory against the filesystem. A changed provider path cannot prevent reading
 other records or invalidating the exact stored reservation.
+If SQLite needs writable journal recovery after an interrupted mutation,
+discovery reports the registry as unavailable. Replaying the original reservation
+or invalidation can recover the journal; reads never perform that write or
+substitute an empty registry. Reconciliation and mutation callers must preserve
+the original identity and directory through recovery.
 
 The unadopted provider currently rejects profile-bound clients: any profile
 identity header or Socket.IO identity field returns `binding_mismatch`, including

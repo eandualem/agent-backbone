@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import stat
 import tempfile
 import unicodedata
 from contextlib import contextmanager, suppress
@@ -15,6 +16,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
+
+
+def _resolve(path: Path) -> Path:
+    try:
+        resolved = path.resolve()
+        try:
+            mode = resolved.lstat().st_mode
+        except FileNotFoundError:
+            return resolved
+        # Python 3.13's non-strict resolve can leave a symlink loop unresolved.
+        if stat.S_ISLNK(mode):
+            raise ValueError("Profile path contains an unresolved symbolic link")
+        return resolved
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("Profile path is unavailable") from exc
 
 
 @dataclass(frozen=True)
@@ -58,7 +74,7 @@ class ProfileRegistry:
     """
 
     def __init__(self, path: Path):
-        self.path = path.resolve()
+        self.path = _resolve(path)
 
     @classmethod
     def create(cls, path: Path) -> ProfileRegistry:
@@ -144,7 +160,7 @@ class ProfileRegistry:
         return records
 
     def _external(self, data_dir: Path) -> None:
-        if not data_dir.is_absolute() or data_dir.resolve() != data_dir:
+        if not data_dir.is_absolute() or _resolve(data_dir) != data_dir:
             raise ValueError("Profile directory must be canonical and absolute")
         self._outside(data_dir)
 
