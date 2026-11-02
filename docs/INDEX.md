@@ -47,6 +47,7 @@ branch or tag you are viewing. Relative links keep you on that same revision.
   how an app signs its requests and enrolls its key.
 - [Runtime capabilities](runtime-capabilities.md) — which capabilities work on which agent CLI.
 - [Status and roadmap](status-and-roadmap.md) — verified capabilities and remaining work.
+- [Profile connection contract](profiles-contract.md) — planned profile identity, discovery and lifecycle wire fixtures.
 - [Contributing](../CONTRIBUTING.md) — development and checks.
 
 ## Help, templates and media

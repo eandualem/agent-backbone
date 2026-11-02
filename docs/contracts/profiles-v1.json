@@ -1,0 +1,302 @@
+{
+  "contract_revision": 2,
+  "wire_schema_version": 1,
+  "discovery": {
+    "list": {
+      "schema_version": 1,
+      "items": [
+        {
+          "profile_id": "profile-a",
+          "display_name": "Work",
+          "kind": "isolated",
+          "state": "ready"
+        }
+      ]
+    },
+    "show_ready": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "display_name": "Work",
+      "kind": "isolated",
+      "state": "ready",
+      "binding": {
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1",
+        "endpoint": {
+          "kind": "unix",
+          "path": "/example/profiles/a/run/api.sock"
+        },
+        "credential_reference": {
+          "kind": "dotenv",
+          "path": "/example/profiles/a/.env",
+          "key": "BACKBONE_API_KEY"
+        },
+        "tmux": {
+          "socket_path": "/example/profiles/a/tmux/server.sock"
+        }
+      }
+    },
+    "show_creating": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "display_name": "Work",
+      "kind": "isolated",
+      "state": "creating",
+      "binding": null
+    }
+  },
+  "identity": {
+    "schema_version": 1,
+    "profile_id": "profile-a",
+    "installation_id": "installation-a",
+    "lifecycle_id": "lifecycle-a1",
+    "baseline_version": "baseline-example-v1",
+    "tmux": {
+      "socket_path": "/example/profiles/a/tmux/server.sock"
+    }
+  },
+  "request_headers": {
+    "X-Backbone-Profile-ID": "profile-a",
+    "X-Backbone-Installation-ID": "installation-a",
+    "X-Backbone-Lifecycle-ID": "lifecycle-a1"
+  },
+  "socket_auth": {
+    "profile_id": "profile-a",
+    "installation_id": "installation-a",
+    "lifecycle_id": "lifecycle-a1"
+  },
+  "lifecycle": {
+    "create": {
+      "schema_version": 1,
+      "request_id": "operation-create-a",
+      "action": "create",
+      "display_name": "Work",
+      "baseline_version": "baseline-example-v1"
+    },
+    "start": {
+      "schema_version": 1,
+      "request_id": "operation-start-a",
+      "action": "start",
+      "profile_id": "profile-a",
+      "expected_installation_id": "installation-a",
+      "expected_lifecycle_id": "lifecycle-a1"
+    },
+    "stop": {
+      "schema_version": 1,
+      "request_id": "operation-stop-a",
+      "action": "stop",
+      "profile_id": "profile-a",
+      "expected_installation_id": "installation-a",
+      "expected_lifecycle_id": "lifecycle-a1"
+    },
+    "pending": {
+      "schema_version": 1,
+      "request_id": "operation-start-a",
+      "action": "start",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "status": "pending",
+      "error": null
+    },
+    "succeeded": {
+      "schema_version": 1,
+      "request_id": "operation-start-a",
+      "action": "start",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "status": "succeeded",
+      "error": null
+    },
+    "failed": {
+      "schema_version": 1,
+      "request_id": "operation-start-a",
+      "action": "start",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "status": "failed",
+      "error": {
+        "code": "binding_mismatch",
+        "message": "Profile binding does not match."
+      }
+    }
+  },
+  "http_errors": {
+    "binding_required": {
+      "status": 409,
+      "body": {
+        "detail": {
+          "code": "binding_required",
+          "message": "Profile binding is required."
+        }
+      }
+    },
+    "binding_mismatch": {
+      "status": 409,
+      "body": {
+        "detail": {
+          "code": "binding_mismatch",
+          "message": "Profile binding does not match."
+        }
+      }
+    }
+  },
+  "binding_cases": [
+    {
+      "name": "matching",
+      "serving_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "expected_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "legacy_eligible_identity": null,
+      "outcome": "allow",
+      "display_name": "Work"
+    },
+    {
+      "name": "ordinary_restart",
+      "serving_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "expected_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "legacy_eligible_identity": null,
+      "outcome": "allow",
+      "display_name": "Work"
+    },
+    {
+      "name": "other_profile",
+      "serving_identity": {
+        "profile_id": "profile-b",
+        "installation_id": "installation-b",
+        "lifecycle_id": "lifecycle-b1"
+      },
+      "expected_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "legacy_eligible_identity": null,
+      "outcome": "binding_mismatch",
+      "display_name": "Work"
+    },
+    {
+      "name": "replacement",
+      "serving_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a2"
+      },
+      "expected_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "legacy_eligible_identity": null,
+      "outcome": "binding_mismatch",
+      "display_name": "Work"
+    },
+    {
+      "name": "isolated_missing",
+      "serving_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "expected_identity": {},
+      "legacy_eligible_identity": null,
+      "outcome": "binding_required",
+      "display_name": "Work"
+    },
+    {
+      "name": "partial",
+      "serving_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "expected_identity": {
+        "profile_id": "profile-a"
+      },
+      "legacy_eligible_identity": null,
+      "outcome": "binding_mismatch",
+      "display_name": "Work"
+    },
+    {
+      "name": "legacy_adopted",
+      "serving_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "expected_identity": {},
+      "legacy_eligible_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "outcome": "allow",
+      "display_name": "Default"
+    },
+    {
+      "name": "legacy_renamed",
+      "serving_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "expected_identity": {},
+      "legacy_eligible_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "outcome": "allow",
+      "display_name": "Archive"
+    },
+    {
+      "name": "another_named_default",
+      "serving_identity": {
+        "profile_id": "profile-b",
+        "installation_id": "installation-b",
+        "lifecycle_id": "lifecycle-b1"
+      },
+      "expected_identity": {},
+      "legacy_eligible_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "outcome": "binding_required",
+      "display_name": "Default"
+    },
+    {
+      "name": "replaced_legacy",
+      "serving_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a2"
+      },
+      "expected_identity": {},
+      "legacy_eligible_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "outcome": "binding_required",
+      "display_name": "Default"
+    }
+  ]
+}
