@@ -1,6 +1,7 @@
 """Explicit server selection stays fixed across every terminal access path."""
 
 import json
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -145,17 +146,24 @@ def test_orphan_cleanup_stays_on_selected_server(tmp_path, other_server):
     assert pid_file.read_text() == (json.dumps(record) + "\n" if other_server else "")
 
 
-@pytest.mark.parametrize("name", ["socket with spaces", "socket'quoted", 'socket"quoted', r"a\b"])
+@pytest.mark.parametrize(
+    "name", ["socket with spaces", "socket'quoted", 'socket"quoted', r"a\b", "café"]
+)
 def test_ps_pinned_path_is_not_shell_syntax(tmp_path, name):
     socket = tmp_path / name
+    pin_tmux_server(socket)
     command = ["tmux", "-S", str(socket), "attach-session", "-t", "=worker:"]
     raw = "Sat Sep 05 10:20:30 2026 " + " ".join(command)
     with patch(
         "agent_backbone.services.terminal._pty.subprocess.run",
         return_value=MagicMock(returncode=0, stdout=raw),
-    ):
+    ) as run:
         assert _process_identity(12345) == {
             "pid": 12345,
             "birth": "Sat Sep 05 10:20:30 2026",
             "command": command,
         }
+    assert run.call_args.kwargs["encoding"] == "utf-8"
+    assert run.call_args.kwargs["env"]["LC_ALL"] == (
+        "en_US.UTF-8" if sys.platform == "darwin" else "C.UTF-8"
+    )

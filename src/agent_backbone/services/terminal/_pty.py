@@ -21,6 +21,7 @@ import shlex
 import signal
 import struct
 import subprocess
+import sys
 import termios
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -29,7 +30,7 @@ from pathlib import Path
 from weakref import WeakValueDictionary
 
 from agent_backbone.services.terminal._core import exact_target
-from agent_backbone.services.terminal._server import tmux_command
+from agent_backbone.services.terminal._server import tmux_command, tmux_server_socket
 
 log = logging.getLogger(__name__)
 
@@ -379,13 +380,19 @@ def _process_identity(pid: int) -> dict | None:
     check, not an atomic process handle spanning the later signal.
     """
     try:
+        # Keep English birth timestamps while ps preserves UTF-8 socket paths.
+        # The C locale renders non-ASCII argv bytes as escapes/replacements.
+        process_locale = "C"
+        if tmux_server_socket() is not None:
+            process_locale = "en_US.UTF-8" if sys.platform == "darwin" else "C.UTF-8"
         result = subprocess.run(
             ["ps", "-ww", "-p", str(pid), "-o", "lstart=", "-o", "args="],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=2,
             check=False,
-            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
+            env={**os.environ, "LC_ALL": process_locale, "TZ": "UTC"},
         )
         if result.returncode != 0:
             return None
