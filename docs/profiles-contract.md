@@ -310,7 +310,11 @@ and launch/resume commands use that capture. Native account invocations carry th
 same environment; no public account operation executes them yet. Per-agent overrides
 cannot redirect native stores or select an inherited account/server. Complete tmux
 launch environments clear server-only variables and disable environment import on
-attach. Default retains its existing environment and launch behavior.
+attach. Activation must own the pinned server and its global environment; these
+launch helpers do not fence arbitrary external tmux writes. Default retains its
+existing environment and launch behavior. Native path checks reject observed
+redirects outside captured roots; they are not a sandbox against a same-user
+process concurrently replacing files or path components.
 
 Claude Code, Codex and OpenCode have internal preparation tests; other model adapters
 refuse this preparation. Codex requests file credential storage, subject to native

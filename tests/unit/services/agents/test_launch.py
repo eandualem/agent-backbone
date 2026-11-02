@@ -1938,18 +1938,24 @@ async def test_recovery_bookkeeping_cannot_mask_launch_result_or_error(config, d
 
 
 @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
-async def test_preparation_and_launch_share_the_selected_native_environment(tmp_path, runtime):
+@pytest.mark.parametrize("relative_native_home", [False, True])
+async def test_preparation_and_launch_share_the_selected_native_environment(
+    tmp_path, monkeypatch, runtime, relative_native_home
+):
     project = tmp_path / "project"
     project.mkdir()
     rt = RUNTIMES[runtime]
+    daemon = tmp_path / "daemon"
+    daemon.mkdir()
+    monkeypatch.chdir(daemon)
     first_files = {}
     for profile in ("a", "b"):
-        root = tmp_path / profile
+        root = (project if relative_native_home else tmp_path) / profile
         root.mkdir()
         env = {
             "HOME": str(root / "home"),
-            "CLAUDE_CONFIG_DIR": str(root / "claude"),
-            "CODEX_HOME": str(root / "codex"),
+            "CLAUDE_CONFIG_DIR": str((Path(profile) if relative_native_home else root) / "claude"),
+            "CODEX_HOME": str((Path(profile) if relative_native_home else root) / "codex"),
             "XDG_CONFIG_HOME": str(root / "config"),
             "XDG_DATA_HOME": str(root / "data"),
         }
@@ -1963,6 +1969,7 @@ async def test_preparation_and_launch_share_the_selected_native_environment(tmp_
             patch.object(rt, "build_command", wraps=rt.build_command) as command,
         ):
             assert (await start_agent(spec, config, wait=False)).ok
+        assert not (daemon / profile).exists()
         prepared = prepare.call_args.kwargs["env"]
         assert command.call_args.kwargs["env"] == prepared
         assert all(

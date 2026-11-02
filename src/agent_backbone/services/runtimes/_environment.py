@@ -42,6 +42,8 @@ class NativeEnvironment(Mapping[str, str]):
         if self.executable is not None and not Path(self.executable).is_absolute():
             raise ValueError("Native executable must be absolute")
         for key, value in self.variables.items():
+            if not isinstance(key, str) or not key or "=" in key or "\0" in key:
+                raise ValueError("Invalid native environment variable name")
             if not isinstance(value, str) or "\0" in value:
                 raise ValueError("Invalid native environment value")
             if key in _PATH_KEYS | self.path_keys:

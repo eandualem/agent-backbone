@@ -139,3 +139,34 @@ def test_trust_preparation_refuses_a_config_file_symlink(tmp_path, runtime, rela
         rt.pre_trust(tmp_path)
     assert target.is_symlink()
     assert outside.read_text() == '{"outside": "account-state"}'
+
+
+@pytest.mark.parametrize("name", ["", "BAD=NAME", "BAD\0NAME", 1])
+def test_captured_environment_rejects_invalid_variable_names(tmp_path, name):
+    from dataclasses import replace
+
+    captured = RUNTIMES["codex"].capture_environment(tmp_path / "a")
+    with pytest.raises(ValueError, match="variable name"):
+        replace(captured, variables={**captured, name: "value"})
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+def test_missing_captured_binary_never_falls_back_to_host(tmp_path, monkeypatch, runtime):
+    from dataclasses import replace
+
+    rt = RUNTIMES[runtime]
+    captured = replace(rt.capture_environment(tmp_path / "native"), executable=None)
+    host = tmp_path / "host"
+    binary = host / ".opencode/bin/opencode"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    monkeypatch.setenv("HOME", str(host))
+    install_native_environments({runtime: captured})
+    with patch("agent_backbone.services.runtimes.base.subprocess.run") as run:
+        assert rt.resolve_binary() is None
+        assert not rt.available()
+        assert rt.installed_version() is None
+        with pytest.raises(RuntimeError, match="binary not found"):
+            rt.build_command()
+        run.assert_not_called()

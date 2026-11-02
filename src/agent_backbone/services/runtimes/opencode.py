@@ -18,6 +18,7 @@ from agent_backbone.fs import atomic_write_text
 from agent_backbone.hooks import install as hooks
 from agent_backbone.services.runtimes._environment import (
     environment_value,
+    native_environment,
 )
 from agent_backbone.services.runtimes._opencode_v2_launch import failure_path
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
@@ -193,6 +194,8 @@ class OpenCode(Runtime):
         return tuple(map(int, match.groups())) if match else ()
 
     def resolve_binary(self) -> str | None:
+        if native_environment(self.id) is not None:
+            return super().resolve_binary()
         if path := super().resolve_binary():
             return path
         # The standalone installer can run after the daemon has started. Probe

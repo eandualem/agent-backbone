@@ -411,7 +411,7 @@ class Runtime:
         """Capture native locators and binary before installing a process context.
 
         This does not create directories, configure accounts, or authorize startup.
-        Only terminal/locale values and executable search paths are inherited.
+        Only locale values and executable search paths are inherited.
         """
         root = Path(root)
         values = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL") if key in os.environ}

@@ -386,6 +386,8 @@ class Codex(Runtime):
             return
         env = self.environment(env)
         home = Path(environment_value(env, "CODEX_HOME") or agent_home(env) / ".codex").expanduser()
+        if not home.is_absolute():
+            home = Path(directory) / home
         pre_trust_codex_directory(
             directory, codex_config=self.check_native_path(home / "config.toml")
         )

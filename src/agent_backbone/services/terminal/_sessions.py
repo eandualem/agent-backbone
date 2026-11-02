@@ -132,8 +132,10 @@ async def start_session(
     ``inherit_environment=False`` requires a complete environment and command.
     It clears inherited process values, removes server-only session values, and
     disables environment import on attach. Only tmux-generated pane identity and
-    terminal metadata survive the clear. Its private launch file uses the
-    captured temporary directory. Profile activation owns the isolated server.
+    terminal metadata survive the clear; explicit presentation settings win.
+    Its private launch file uses the captured temporary directory. Profile
+    activation owns the isolated server and its global environment; arbitrary
+    external writes to that server are outside this launch boundary.
 
     Returns True when the session exists afterwards.
     ``mouse`` enables mouse handling only for this session; False preserves
