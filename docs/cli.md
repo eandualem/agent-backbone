@@ -909,3 +909,23 @@ in it. See [Conversations](conversations.md).
 Create, edit, read, import/export and ask about retained workbooks. Each saved edit
 appends a revision; a stale base is refused. Use `create --schema`, and see
 [Sheets](sheets.md) for examples, typed values and all commands.
+
+
+## `backbone profiles list|show`
+
+From a local operator terminal, inspect profile reservations without starting a
+provider:
+
+```bash
+backbone profiles list --json
+backbone profiles show PROFILE_ID --json
+```
+
+Omit `--json` for a labeled table or record. Discovery reads the private local
+registry at `~/.local/share/agent-backbone-profiles/registry.db`, independently of
+`BACKBONE_DATA_DIR` and provider credentials. Managed agent contexts cannot use
+these commands. An unavailable registry or unknown profile exits nonzero with an
+error on stderr; listing never initializes or repairs it. Current reservations
+are non-ready (`creating` or `failed`) and have no usable binding. Provisioning
+state does not report whether a daemon is running. Profile activation and
+create/start/stop commands are not implemented. See the [profile contract](profiles-contract.md).

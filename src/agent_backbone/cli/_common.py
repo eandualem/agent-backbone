@@ -169,8 +169,9 @@ class Direct:
                 "Agent credentials require the running API; direct database fallback is disabled"
             )
         from agent_backbone.services.agents import AgentStore
-        from agent_backbone.services.database import BackboneDB
+        from agent_backbone.services.database import BackboneDB, check_profile_startup
 
+        await check_profile_startup(self._boot.database_url, self._boot.data_dir)
         self.db = BackboneDB(self._boot.database_url)
         await self.db.start()
         self.store = AgentStore(self.db, self._boot.data_dir)

@@ -256,6 +256,23 @@ class ProfileRegistry:
                 raise ValueError("Profile lifecycle has been invalidated")
             return record
 
+    def check_unadopted(self, data_dir: Path) -> None:
+        """Refuse legacy startup in any reserved tree, even without local identity.
+
+        An older restored database can predate identity reservation. Absence of
+        local metadata must not allow it to serve a reserved directory as legacy.
+        A missing registry is allowed only for this unadopted-provider check;
+        discovery still treats a missing registry as an error.
+        """
+        try:
+            self.path.lstat()
+        except FileNotFoundError:
+            return
+        self._external(data_dir)
+        with self._connection() as conn:
+            if any(self._overlap(r.data_dir, data_dir) for r in self._records(conn)):
+                raise ValueError("Provider directory belongs to a reserved profile")
+
     def _matching(self, conn, identity, data_dir):
         for record in self._records(conn):
             if record.identity == identity and record.data_dir == data_dir:

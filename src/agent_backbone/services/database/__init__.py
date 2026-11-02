@@ -20,6 +20,7 @@ from agent_backbone.services.database._documents_repo import (
 )
 from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
 from agent_backbone.services.database._profile_registry import ProfileRegistry, ProfileReservation
+from agent_backbone.services.database._profile_startup import check_profile_startup
 from agent_backbone.services.database._reports_repo import (
     ReportConflict,
     ReportForbidden,
@@ -54,6 +55,7 @@ __all__ = [
     "SetupReceiptError",
     "UnknownArtifact",
     "build_engine",
+    "check_profile_startup",
     "diagnostic_details",
     "format_iso",
     "now_iso",
