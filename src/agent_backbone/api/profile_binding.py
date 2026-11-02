@@ -15,6 +15,7 @@ PROFILE_HEADERS = (
     "x-backbone-lifecycle-id",
 )
 PROFILE_FIELDS = ("profile_id", "installation_id", "lifecycle_id")
+UNBOUND_ROUTES = frozenset({("GET", "/health"), ("POST", "/webhooks/github")})
 BINDING_MISMATCH = {"code": "binding_mismatch", "message": "Profile binding does not match."}
 BINDING_REQUIRED = {"code": "binding_required", "message": "Profile binding is required."}
 
@@ -86,6 +87,18 @@ class ProfileBindingMiddleware:
         }
         if provider is None and not values:
             return await self.app(scope, receive, send)
+        path = scope["path"]
+        prefix = scope.get("root_path", "").rstrip("/")
+        if prefix and path.startswith(prefix + "/"):
+            path = path[len(prefix) :]
+        if not values and (scope["method"], path) in UNBOUND_ROUTES:
+            # Preserve route authentication without letting an invalidated provider
+            # receive integration events. Any profile header still takes the gate below.
+            if await provider_current(provider, scope["app"]):
+                return await self.app(scope, receive, send)
+            return await JSONResponse({"detail": BINDING_MISMATCH}, status_code=409)(
+                scope, receive, send
+            )
         try:
             await require_api_key(Request(scope))
         except HTTPException as exc:
