@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: be2088e5c4ac
+Revision ID: 13c735b3064d
 Revises:
-Create Date: 2026-10-28 12:37:49.881946
+Create Date: 2026-11-02 16:35:10.045099
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "be2088e5c4ac"
+revision: str = "13c735b3064d"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -481,6 +481,18 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("repo", name=op.f("pk_poll_cursors")),
     )
     op.create_table(
+        "profile_identity",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("schema_version", sa.Integer(), nullable=False),
+        sa.Column("profile_id", sa.Text(), nullable=False),
+        sa.Column("installation_id", sa.Text(), nullable=False),
+        sa.Column("lifecycle_id", sa.Text(), nullable=False),
+        sa.CheckConstraint(
+            "id = 1", name=op.f("ck_profile_identity_ck_profile_identity_singleton")
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_profile_identity")),
+    )
+    op.create_table(
         "reports",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("kind", sa.Text(), server_default="report", nullable=False),
@@ -883,6 +895,7 @@ def downgrade() -> None:
         batch_op.drop_index("idx_reports_audio")
 
     op.drop_table("reports")
+    op.drop_table("profile_identity")
     op.drop_table("poll_cursors")
     with op.batch_alter_table("observed_versions", schema=None) as batch_op:
         batch_op.drop_index("idx_observed_versions")

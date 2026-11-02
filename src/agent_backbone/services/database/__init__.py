@@ -18,6 +18,7 @@ from agent_backbone.services.database._documents_repo import (
     DocumentConflict,
     DocumentRateLimit,
 )
+from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
 from agent_backbone.services.database._reports_repo import (
     ReportConflict,
     ReportForbidden,
@@ -42,6 +43,7 @@ __all__ = [
     "DocumentConflict",
     "DocumentRateLimit",
     "Limits",
+    "ProfileIdentity",
     "ReportConflict",
     "ReportForbidden",
     "ReportRateLimit",

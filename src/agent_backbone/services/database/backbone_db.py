@@ -23,6 +23,7 @@ from agent_backbone.services.database._documents_repo import DocumentRepo
 from agent_backbone.services.database._events_repo import EventRepo
 from agent_backbone.services.database._fleet_repo import FleetSnapshotRepo
 from agent_backbone.services.database._outbox_repo import OutboxRepo
+from agent_backbone.services.database._profile_identity_repo import ProfileIdentityRepo
 from agent_backbone.services.database._queue_repo import QueueRepo
 from agent_backbone.services.database._reports_repo import ReportRepo
 from agent_backbone.services.database._settings_repo import SettingRepo
@@ -245,6 +246,7 @@ class BackboneDB:
         self.fleet = FleetSnapshotRepo(engine)
         self.usage = UsageRepo(engine)
         self.signing = SigningRepo(engine)
+        self.profile_identity = ProfileIdentityRepo(engine)
 
     @property
     def url(self) -> str:
