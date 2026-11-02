@@ -272,8 +272,8 @@ CAPABILITIES: tuple[Capability, ...] = (
     _row(
         "profile-reservation-boundary",
         "Operator-only non-ready profile discovery and reserved-provider startup refusal",
-        "cli/profiles.py; api/profile_binding.py check_profile_startup; api/app.py lifespan",
-        fallback="Reservations cannot serve content; profile activation is not implemented.",
+        "cli/profiles.py; services/database/_profile_startup.py; api/app.py; cli/_common.py",
+        fallback="Reserved providers cannot start; profile activation is not implemented.",
         implemented=lambda rt: True,
         claude=_ok(
             "tests/unit/test_cli_profiles.py",

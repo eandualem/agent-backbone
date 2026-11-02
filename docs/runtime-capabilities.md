@@ -108,7 +108,7 @@ version differs.
 | Explicit first-agent setup with durable retry and preflight cancellation receipts | Use the documented agent-start flow; do not retry an uncertain launch or greeting as a new request. |
 | Read-only runtime discovery for setup | Binary presence is not login; use the runtime's visible sign-in flow. |
 | Reject profile-bound traffic on unadopted providers | Keep bound work pinned; do not retry without its profile identity. |
-| Operator-only non-ready profile discovery and reserved-provider startup refusal | Reservations cannot serve content; profile activation is not implemented. |
+| Operator-only non-ready profile discovery and reserved-provider startup refusal | Reserved providers cannot start; profile activation is not implemented. |
 | Current agent-authored checklists with conditional updates and contextual feedback | Keep the current checklist locally until the provider is available. |
 | GitHub acknowledgements bound to registration and successful publication | Unbound receipts cannot acknowledge work; restart older sessions normally. |
 | Retained spreadsheet workbooks, calculated revisions and contextual feedback | Keep the workbook locally until a Backbone with Sheets is available. |

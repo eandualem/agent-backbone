@@ -1,15 +1,10 @@
 """Fail closed for profile-bound clients until provider adoption is implemented."""
 
-import asyncio
-from pathlib import Path
-
 from fastapi import HTTPException, Request
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 
 from agent_backbone.api.auth import require_api_key
-from agent_backbone.config import PROFILE_REGISTRY_PATH
-from agent_backbone.services.database import BackboneDB, ProfileRegistry
 
 PROFILE_HEADERS = (
     "x-backbone-profile-id",
@@ -18,19 +13,6 @@ PROFILE_HEADERS = (
 )
 PROFILE_FIELDS = ("profile_id", "installation_id", "lifecycle_id")
 BINDING_MISMATCH = {"code": "binding_mismatch", "message": "Profile binding does not match."}
-
-
-async def check_profile_startup(db: BackboneDB, data_dir: Path) -> None:
-    """Do not start services for a reservation or silently treat it as legacy."""
-    identity = await db.profile_identity.read()
-    registry = ProfileRegistry(Path(PROFILE_REGISTRY_PATH).expanduser())
-    if identity is None:
-        await asyncio.to_thread(registry.check_unadopted, data_dir.resolve())
-        return
-    await asyncio.to_thread(registry.check_reservation, identity, data_dir.resolve())
-    # Matching reservations are still non-ready. Activation must establish the
-    # complete provider boundary before any agents, integrations or jobs start.
-    raise ValueError("Profile reservation is not ready; activation is not implemented")
 
 
 class LegacyProfileBindingMiddleware:

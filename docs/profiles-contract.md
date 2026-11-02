@@ -18,12 +18,14 @@ version. There is no earlier released profile protocol.
 Provider-local identity persistence is implemented as an internal database
 reservation. It stores the profile and lifecycle IDs against the existing signing
 audience, accepts an identical replay and refuses conflicting assignments. Reading
-an unreserved database creates no identity. Startup reads this identity before
-starting agents, hooks, integrations or jobs.
-It refuses reserved identities, including missing, conflicting or invalidated
-registry records. Matching reservations are also refused because activation is
-not implemented. This does not adopt Default, enable bound clients or grant legacy
-compatibility. Ready activation and replacement fencing remain unimplemented; a copied database is not evidence of a valid active lifecycle.
+an unreserved database creates no identity. Startup checks for this identity before
+creating directories, initializing or migrating the database, or starting agents,
+hooks, integrations or jobs. Direct CLI database fallback applies the same guard.
+Any identity record is refused because activation is not implemented. Directory
+ownership is checked separately against the external registry. This does not adopt
+Default, enable bound clients or grant legacy compatibility. Ready activation and
+replacement fencing remain unimplemented; a copied database is not evidence of a
+valid active lifecycle.
 
 An internal, separately initialized SQLite registry now reserves isolated-profile
 identity and canonical data-directory ownership outside the provider data tree.
@@ -134,8 +136,9 @@ configuration, API or database is loaded. Human output labels provisioning state
 `creating` and `failed` records, with null bindings. There is no creation command
 yet; a missing registry returns a nonzero exit and an error on stderr.
 
-Before services start, an unadopted provider checks that its canonical directory
-does not overlap any reservation, including failed reservations. This prevents a
+Before opening mutable storage, both daemon startup and direct CLI fallback check
+that the canonical provider directory and configured SQLite database path
+do not overlap any reservation, including failed reservations. This prevents a
 pre-identity database restore from starting as legacy in a reserved tree. Missing
 registries preserve ordinary unadopted startup; existing but unreadable or invalid
 registries block it because directory ownership cannot be checked. Startup never

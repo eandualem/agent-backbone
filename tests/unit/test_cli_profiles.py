@@ -60,7 +60,15 @@ def test_every_runtime_agent_is_denied_before_registry_access(runtime, monkeypat
     registry.assert_not_called()
 
 
-@pytest.mark.parametrize("key", ["BACKBONE_API_KEY", "BACKBONE_AGENT_CREDENTIAL"])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "BACKBONE_API_KEY",
+        "BACKBONE_AGENT_CREDENTIAL",
+        "BACKBONE_CLIENT_AGENT",
+        "BACKBONE_CLIENT_REGISTRATION",
+    ],
+)
 def test_agent_credential_alone_cannot_discover_profiles(key, monkeypatch):
     monkeypatch.setenv(key, agent_api_key("operator"))
     with patch("agent_backbone.cli.profiles.ProfileRegistry") as registry:

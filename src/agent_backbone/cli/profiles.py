@@ -26,7 +26,12 @@ def cmd_profiles(args) -> int:
     # No provider bootstrap: it can read a selected provider's operator secrets.
     # Local OS-user access is the operator boundary, as with other local admin
     # commands; managed agent contexts must not enumerate sibling profiles.
-    if os.environ.get("BACKBONE_AGENT") or is_agent_client(os.environ.get("BACKBONE_API_KEY", "")):
+    if (
+        os.environ.get("BACKBONE_AGENT")
+        or os.environ.get("BACKBONE_CLIENT_AGENT")
+        or os.environ.get("BACKBONE_CLIENT_REGISTRATION")
+        or is_agent_client(os.environ.get("BACKBONE_API_KEY", ""))
+    ):
         print("Profile discovery requires a local operator context.", file=sys.stderr)
         return 1
     try:
