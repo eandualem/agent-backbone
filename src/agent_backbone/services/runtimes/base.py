@@ -414,11 +414,7 @@ class Runtime:
         Only terminal/locale values and executable search paths are inherited.
         """
         root = Path(root)
-        values = {
-            key: os.environ[key]
-            for key in ("PATH", "LANG", "LC_ALL", "TERM", "COLORTERM")
-            if key in os.environ
-        }
+        values = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL") if key in os.environ}
         values.update(
             {
                 "HOME": str(root / "home"),

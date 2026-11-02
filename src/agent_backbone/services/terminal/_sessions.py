@@ -75,8 +75,9 @@ _ISOLATED_LOAD_AND_EXEC = _LOAD_AND_EXEC.replace(
     "os.environ.update(json.loads(payload))",
     f"pane = {{key: os.environ[key] for key in {_PANE_ENV!r} if key in os.environ}}\n"
     "os.environ.clear()\n"
+    "os.environ.update(pane)\n"
     "os.environ.update(json.loads(payload))\n"
-    "os.environ.update(pane)",
+    "os.environ.update({key: pane[key] for key in ('TMUX', 'TMUX_PANE') if key in pane})",
 )
 
 

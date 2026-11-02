@@ -761,11 +761,14 @@ async def test_complete_environment_drops_server_only_values_and_attach_import(t
     assert len(list(tmp_path.glob("backbone-env-*.json"))) == 1
 
 
-def test_complete_environment_loader_preserves_only_pane_metadata(tmp_path):
+@pytest.mark.parametrize("term", [None, "explicit-term"])
+def test_complete_environment_loader_preserves_only_pane_metadata(tmp_path, term):
     from agent_backbone.services.terminal._sessions import _ISOLATED_LOAD_AND_EXEC
 
     env_file = tmp_path / "env.json"
-    payload = json.dumps({"HOME": "/captured", "TERM": "daemon-term"}).encode()
+    payload = json.dumps(
+        {"HOME": "/captured", "TMUX": "wrong-server", **({"TERM": term} if term else {})}
+    ).encode()
     env_file.write_bytes(payload)
     result = subprocess.run(
         [
@@ -793,6 +796,6 @@ def test_complete_environment_loader_preserves_only_pane_metadata(tmp_path):
         "HOME=/captured",
         "TMUX=/private/server,1,0",
         "TMUX_PANE=%2",
-        "TERM=screen",
+        f"TERM={term or 'screen'}",
     }
     assert not env_file.exists()

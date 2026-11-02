@@ -21,8 +21,11 @@ def test_captured_environment_is_used_for_preparation_readers_and_accounts(
     tmp_path, monkeypatch, runtime
 ):
     rt = RUNTIMES[runtime]
+    monkeypatch.setenv("TERM", "daemon-term")
+    monkeypatch.setenv("COLORTERM", "daemon-color")
     a, b = (rt.capture_environment(tmp_path / name) for name in ("a", "b"))
     for env in (a, b):
+        assert "TERM" not in env and "COLORTERM" not in env
         for key in ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "TMPDIR"):
             Path(env[key]).mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("HOME", b["HOME"])
