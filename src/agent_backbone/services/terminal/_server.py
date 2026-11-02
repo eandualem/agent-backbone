@@ -22,6 +22,8 @@ def pin_tmux_server(socket_path: Path) -> None:
     ):
         raise ValueError("The tmux socket must be an absolute normalized path")
     resolved = str(socket_path.resolve())
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in resolved):
+        raise ValueError("The tmux socket must be an absolute normalized path")
     if _socket == resolved:
         return
     if _socket is not None or _used:

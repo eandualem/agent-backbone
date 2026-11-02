@@ -43,6 +43,16 @@ def test_invalid_selection_does_not_pin(path):
     assert tmux_server_socket() is None
 
 
+@pytest.mark.parametrize("control", ["\n", "\x7f"])
+def test_resolved_selection_rejects_control_characters(tmp_path, control):
+    alias = tmp_path / "server.sock"
+    alias.symlink_to(tmp_path / f"bad{control}socket")
+    with pytest.raises(ValueError, match="absolute normalized"):
+        pin_tmux_server(alias)
+    assert tmux_server_socket() is None
+    pin_tmux_server(tmp_path / "valid.sock")
+
+
 async def test_legacy_operation_prevents_later_pin(tmp_path):
     process = AsyncMock(returncode=0)
     process.communicate.return_value = (b"", b"")

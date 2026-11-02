@@ -72,7 +72,7 @@ async def main(*, pinned: bool = False) -> None:
                         "-d",
                         "-s",
                         session,
-                        "printf decoy-ready; exec sleep 60",
+                        "printf decoy-ready; exec cat",
                     ],
                     check=True,
                 )
