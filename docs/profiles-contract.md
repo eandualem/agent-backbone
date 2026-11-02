@@ -21,6 +21,33 @@ or discovery and does not adopt Default, enable bound clients or grant legacy
 compatibility. Registry reconciliation, activation and replacement fencing remain
 unimplemented; a copied database is not evidence of a valid active lifecycle.
 
+An internal, separately initialized SQLite registry now reserves isolated-profile
+identity and canonical data-directory ownership outside the provider data tree.
+Its read-only discovery snapshots match the non-ready list/show shapes below;
+they do not initialize or repair a missing registry. Conflicting identities,
+overlapping directories and changed replay input are refused. Directory ownership
+also refuses case and Unicode-normalization aliases, including on case-sensitive
+filesystems. Invalidated
+reservations remain as failed records across provider database restoration and
+cannot be revived by replay. This is a reconciliation guard, not service/job
+fencing: no command, startup or request path uses it yet. It cannot publish
+`ready`, adopt Default or activate a replacement. The full lifecycle, discovery
+commands and runtime account boundary remain unfinished.
+
+Registry initialization publishes a complete private database without replacing
+an existing registry. Its containing directory must belong to the current user
+and cannot be group- or other-writable, even with the sticky bit: SQLite's sibling
+journal files also need protection. Discovery reads stored
+directory metadata; it does not
+inspect provider directories. Reservation and reconciliation check the selected
+directory against the filesystem. A changed provider path cannot prevent reading
+other records or invalidating the exact stored reservation.
+If SQLite needs writable journal recovery after an interrupted mutation,
+discovery reports the registry as unavailable. Replaying the original reservation
+or invalidation can recover the journal; reads never perform that write or
+substitute an empty registry. Reconciliation and mutation callers must preserve
+the original identity and directory through recovery.
+
 The unadopted provider currently rejects profile-bound clients: any profile
 identity header or Socket.IO identity field returns `binding_mismatch`, including
 partial or empty bindings. Existing ingress limits and credential/registration
