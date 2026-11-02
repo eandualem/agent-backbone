@@ -275,3 +275,46 @@ async def test_context_cannot_attest_another_serving_database(
         response = await api_client.get("/api/profile", headers={**auth_headers, **headers})
         assert response.status_code == 409
         assert response.json() == FIXTURES["http_errors"]["binding_mismatch"]["body"]
+
+
+async def test_pending_binding_cannot_receive_broadcast(api_app, bound_provider, monkeypatch):
+    import asyncio
+
+    from agent_backbone.api import socketio_server
+
+    provider, registry, _ = bound_provider
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    entered, release = asyncio.Event(), asyncio.Event()
+    check = socketio_server.binding_error
+
+    async def delayed_check(*args):
+        entered.set()
+        await release.wait()
+        return await check(*args)
+
+    monkeypatch.setattr(socketio_server, "binding_error", delayed_check)
+    sio = api_app.state.sio
+    sio._send_packet = AsyncMock()
+    sio._send_eio_packet = AsyncMock()
+    sid = await sio.manager.connect("engine", "/sessions")
+    ns = sio.namespace_handlers["/sessions"]
+    connecting = asyncio.create_task(
+        ns.on_connect(
+            sid,
+            {},
+            {
+                "api_key": api_app.state.config.api_key,
+                **vars(provider.reservation.identity),
+            },
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        await sio.emit("sessions:update", {"text": "must not be sent"}, namespace="/sessions")
+        sio._send_packet.assert_not_awaited()
+        sio._send_eio_packet.assert_not_awaited()
+    finally:
+        release.set()
+        with pytest.raises(socketio.exceptions.ConnectionRefusedError):
+            await connecting
+        await sio.manager.disconnect(sid, "/sessions")

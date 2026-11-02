@@ -93,11 +93,11 @@ class RegistrationAwareServer(socketio.AsyncServer):
         if isinstance(ns, _AuthenticatedNamespace):
             recipients = tuple(self.manager.get_participants(ns.namespace, to or room))
             for sid, _ in recipients:
-                if (
-                    sid not in excluded
-                    and (sid in ns._registrations or sid in ns._profiles)
-                    and not await ns.registration_current(sid)
+                if sid not in excluded and (
+                    sid not in ns._profiles or not await ns.registration_current(sid)
                 ):
+                    # Socket.IO joins the broadcast room before on_connect
+                    # finishes authentication and binding validation.
                     # Also exclude a connection whose disconnect is already in progress.
                     excluded.append(sid)
         return await super().emit(
