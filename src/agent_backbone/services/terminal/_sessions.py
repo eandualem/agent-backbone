@@ -8,12 +8,14 @@ import hashlib
 import json
 import logging
 import os
+import shlex
 import signal
 import sys
 import tempfile
 from collections.abc import Sequence
 
 from agent_backbone.services.terminal._core import _run_tmux, exact_target, session_exists
+from agent_backbone.services.terminal._server import tmux_server_socket
 
 log = logging.getLogger(__name__)
 
@@ -92,6 +94,7 @@ async def start_session(
     environment: dict[str, str] | None = None,
     scrub: Sequence[str] | None = None,
     mouse: bool = False,
+    inherit_environment: bool = True,
 ) -> bool:
     """Start a detached tmux session running ``command`` (or a shell).
 
@@ -114,6 +117,11 @@ async def start_session(
     name that ``environment`` sets explicitly is left alone: an agent's own
     configured ``env`` wins over the scrub.
 
+    ``inherit_environment=False`` requires a complete environment and command.
+    It clears inherited process values, removes server-only session values, and
+    disables environment import on attach. Its private launch file uses the
+    captured temporary directory. Profile activation owns the isolated server.
+
     Returns True when the session exists afterwards.
     ``mouse`` enables mouse handling only for this session; False preserves
     the user's setting. Inline programs then scroll through tmux history.
@@ -123,6 +131,37 @@ async def start_session(
         return True
 
     environment = environment or {}
+    if not inherit_environment:
+        if not environment or not command or tmux_server_socket() is None:
+            raise ValueError(
+                "A complete environment, command and pinned terminal server are required"
+            )
+        # A pinned provider must also clear server-only variables that were never
+        # present in the daemon. Later panes receive these removals as well.
+        rc, raw, _ = await _run_tmux(
+            "start-server", ";", "show-environment", "-g", "-s", capture_stdout=True
+        )
+        if rc != 0:
+            return False
+        # Shell formatting keeps multiline values in a single quoted token.
+        # Splitting raw lines could mistake a secret's continuation for a name.
+        lexer = shlex.shlex(raw.decode(), posix=True, punctuation_chars=";")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        statement = []
+        inherited = []
+        for token in lexer:
+            if token != ";":
+                statement.append(token)
+                continue
+            if len(statement) == 2 and statement[0] in {"export", "unset"}:
+                inherited.append(statement[1])
+            elif len(statement) != 1 or "=" not in statement[0]:
+                raise ValueError("Unsupported terminal environment representation")
+            statement = []
+        if statement:
+            raise ValueError("Incomplete terminal environment representation")
+        scrub = [*(scrub or ()), *inherited]
     removals = [key for key in dict.fromkeys(scrub or ()) if key not in environment]
 
     args = ["new-session", "-d", "-s", session_name]
@@ -137,7 +176,11 @@ async def start_session(
     env_file = None
     if environment:
         payload = json.dumps(environment).encode()
-        fd, env_file = tempfile.mkstemp(prefix="backbone-env-", suffix=".json")
+        fd, env_file = tempfile.mkstemp(
+            prefix="backbone-env-",
+            suffix=".json",
+            **({"dir": environment["TMPDIR"]} if not inherit_environment else {}),
+        )
         try:
             with os.fdopen(fd, "wb") as fh:
                 fh.write(payload)
@@ -149,7 +192,14 @@ async def start_session(
             "-I",
             "-B",
             "-c",
-            _LOAD_AND_EXEC,
+            (
+                _LOAD_AND_EXEC.replace(
+                    "os.environ.update(json.loads(payload))",
+                    "os.environ.clear()\nos.environ.update(json.loads(payload))",
+                )
+                if not inherit_environment
+                else _LOAD_AND_EXEC
+            ),
             env_file,
             hashlib.sha256(payload).hexdigest(),
             str(len(payload)),
@@ -193,6 +243,14 @@ async def start_session(
                 session_name,
                 stderr.decode().strip(),
             )
+            await _run_tmux("kill-session", "-t", exact_target(session_name))
+            _remove(env_file)
+            return False
+    if not inherit_environment:
+        rc, _, _ = await _run_tmux(
+            "set-option", "-t", exact_target(session_name), "update-environment", ""
+        )
+        if rc != 0:
             await _run_tmux("kill-session", "-t", exact_target(session_name))
             _remove(env_file)
             return False

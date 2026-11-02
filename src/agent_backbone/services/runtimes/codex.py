@@ -13,6 +13,10 @@ import tomllib
 from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
+from agent_backbone.services.runtimes._environment import (
+    environment_value,
+    native_environment,
+)
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes._usage import count
 from agent_backbone.services.runtimes.base import (
@@ -122,6 +126,20 @@ _MODEL_CHANGED = re.compile(
 
 
 class Codex(Runtime):
+    def account_args(self, action):
+        commands = {"status": ["login", "status"], "login": ["login"], "logout": ["logout"]}
+        if action not in commands:
+            return super().account_args(action)
+        return commands[action] + ["-c", 'cli_auth_credentials_store="file"']
+
+    def env_args(self, env):
+        if native_environment(self.id) is not None:
+            return ["-c", 'cli_auth_credentials_store="file"']
+        return []
+
+    def native_environment_values(self, root):
+        return {"CODEX_HOME": str(root / "codex")}
+
     setup_hooks = True
 
     supports_exact_resume = True
@@ -363,13 +381,14 @@ class Codex(Runtime):
         return tuple(observations.values())
 
     def pre_trust(self, directory: Path | str, *, env: dict[str, str] | None = None) -> None:
-        if env is None:
+        if env is None and not self.environment():
             pre_trust_codex_directory(directory)
             return
-        home = Path(
-            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
-        ).expanduser()
-        pre_trust_codex_directory(directory, codex_config=home / "config.toml")
+        env = self.environment(env)
+        home = Path(environment_value(env, "CODEX_HOME") or agent_home(env) / ".codex").expanduser()
+        pre_trust_codex_directory(
+            directory, codex_config=self.check_native_path(home / "config.toml")
+        )
 
     def writable_dir_args(self, dirs: tuple[str, ...]) -> list[str]:
         """``--add-dir <path>`` per writable root, including Git bookkeeping
@@ -401,6 +420,8 @@ class Codex(Runtime):
         # `.codex/`; entries there still need a one-time `/hooks` trust.
         if project_dir is not None:
             return Path(project_dir).expanduser() / ".codex" / "hooks.json"
+        if env := self.environment():
+            return self.check_native_path(Path(env["CODEX_HOME"]) / "hooks.json")
         return Path.home() / ".codex" / "hooks.json"
 
     def hook_launch_args(
@@ -461,27 +482,24 @@ class Codex(Runtime):
         return args
 
     def user_instructions(self, env, project=None):
-        home = Path(
-            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
-        ).expanduser()
+        env = self.environment(env)
+        home = Path(environment_value(env, "CODEX_HOME") or agent_home(env) / ".codex").expanduser()
         # The override wins over AGENTS.md; only the first file with content is read.
         for path in (home / "AGENTS.override.md", home / "AGENTS.md"):
-            if has_text(path):
+            if has_text(self.check_native_path(path)):
                 return [path]
         return []
 
     def user_skill_dirs(self, env):
-        home = Path(
-            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
-        ).expanduser()
+        env = self.environment(env)
+        home = Path(environment_value(env, "CODEX_HOME") or agent_home(env) / ".codex").expanduser()
         # 0.160.0 reads both recursively, $CODEX_HOME/skills/.system included.
         return [agent_home(env) / ".agents" / "skills", home / "skills"]
 
     def native_memory(self, env, project=None):
-        home = Path(
-            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
-        ).expanduser()
-        user = _toml_object(home / "config.toml")
+        env = self.environment(env)
+        home = Path(environment_value(env, "CODEX_HOME") or agent_home(env) / ".codex").expanduser()
+        user = _toml_object(self.check_native_path(home / "config.toml"))
         layers = [user]
         if project is not None:
             # 0.157.1: `.codex/config.toml` from the project root (the nearest
@@ -552,33 +570,38 @@ class Codex(Runtime):
         return entries
 
     def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
+        env = self.environment(env)
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session_id):
             return []
-        home = Path(
-            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
-        ).expanduser()
-        return sorted(
-            [
-                *home.glob(f"sessions/**/rollout-*{session_id}.jsonl"),
-                *home.glob(f"archived_sessions/rollout-*{session_id}.jsonl"),
-            ]
-        )
+        home = Path(environment_value(env, "CODEX_HOME") or agent_home(env) / ".codex").expanduser()
+        return [
+            self.check_native_path(p)
+            for p in sorted(
+                [
+                    *home.glob(f"sessions/**/rollout-*{session_id}.jsonl"),
+                    *home.glob(f"archived_sessions/rollout-*{session_id}.jsonl"),
+                ]
+            )
+        ]
 
     def usage_children(
         self, path: Path, session_id: str, env: dict[str, str]
     ) -> list[tuple[str, Path]]:
-        home = Path(
-            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
-        ).expanduser()
+        env = self.environment(env)
+        home = Path(environment_value(env, "CODEX_HOME") or agent_home(env) / ".codex").expanduser()
         cached = _usage_lineage.get(str(home))
         if cached and time.monotonic() - cached[0] < 30:
-            return cached[1].get(session_id, [])
+            return [
+                (child, self.check_native_path(path))
+                for child, path in cached[1].get(session_id, [])
+            ]
         children: dict[str, list[tuple[str, Path]]] = {}
         for candidate in [
             *home.glob("sessions/**/*.jsonl"),
             *home.glob("archived_sessions/*.jsonl"),
         ]:
             try:
+                self.check_native_path(candidate)
                 with candidate.open("rb") as stream:
                     record = json.loads(stream.readline(256 * 1024))
                 meta = record.get("payload") or {}

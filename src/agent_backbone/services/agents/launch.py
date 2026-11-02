@@ -34,6 +34,7 @@ from agent_backbone.services.runtimes import (
     RUNTIME_ENV_KEY,
     RUNTIMES,
     STATE_DIR_ENV_KEY,
+    NativeEnvironment,
     Runtime,
     get_runtime,
     project_skill_dirs,
@@ -307,7 +308,9 @@ async def _start_agent(
         details["reason"] = "exact_resume_unsupported"
         return StartResult(ok=False, evidence=(f"{rt.id} cannot open a session by id",))
     effective_model = model if model is not None else spec.model
-    extra_env = {**rt.default_env, **spec.env, **rt.launch_env(*rt.split_model(effective_model))}
+    extra_env = rt.environment(
+        {**rt.default_env, **spec.env, **rt.launch_env(*rt.split_model(effective_model))}
+    )
     section = config.launch
     details["stage"] = "preparation"
     if section.pre_trust:
@@ -522,6 +525,7 @@ async def _start_agent(
             environment=environment,
             scrub=session_secret_keys(config.data_dir),
             mouse=rt.mouse_scroll,
+            **({"inherit_environment": False} if isinstance(extra_env, NativeEnvironment) else {}),
         )
         if not ok:
             details["reason"] = "session_failed"

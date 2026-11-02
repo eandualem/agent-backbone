@@ -1986,3 +1986,29 @@ async def test_preparation_and_launch_share_the_selected_native_environment(tmp_
         for path, content in first_files.items():
             assert path.read_bytes() == content
         first_files[trust] = trust.read_bytes()
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_captured_context_reaches_hooks_and_complete_terminal_launch(
+    tmp_path, monkeypatch, runtime
+):
+    from agent_backbone.services.runtimes import _environment, install_native_environments
+
+    monkeypatch.setattr(_environment, "_CONTEXT", None)
+    monkeypatch.setattr(f"{_BASE}.resolve_command", lambda _: "/bin/echo")
+    rt = RUNTIMES[runtime]
+    captured = rt.capture_environment(tmp_path / "native")
+    install_native_environments({runtime: captured})
+    spec = AgentSpec(name="worker", dir=str(tmp_path), runtime=runtime)
+    config = bootstrap_config(tmp_path / "backbone")
+    with (
+        patch(f"{_MOD}.session_exists", return_value=False),
+        patch(f"{_MOD}.start_session", return_value=True) as start,
+        patch.object(rt, "hook_launch_env", wraps=rt.hook_launch_env) as hook,
+    ):
+        assert (await start_agent(spec, config, wait=False)).ok
+    assert hook.call_args.kwargs["env"] == captured
+    launched = start.call_args.kwargs
+    assert launched["inherit_environment"] is False
+    assert all(launched["environment"][key] == value for key, value in captured.items())
+    assert launched["environment"]["BACKBONE_STATE_DIR"] == str(config.state_dir)

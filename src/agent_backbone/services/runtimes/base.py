@@ -27,6 +27,10 @@ from types import MappingProxyType
 from typing import Literal
 
 from agent_backbone.hooks import install as hooks
+from agent_backbone.services.runtimes._environment import (
+    NativeEnvironment,
+    native_environment,
+)
 from agent_backbone.services.runtimes._pane import (
     DIALOG_CURSOR_RE,
     DIALOG_OPTION_RE,
@@ -372,8 +376,77 @@ class Runtime:
 
     # --- launch --------------------------------------------------------------
 
+    def environment(self, overrides: Mapping[str, str] | None = None) -> Mapping[str, str]:
+        """Use the process-pinned context, or preserve legacy environment semantics."""
+        captured = native_environment(self.id)
+        if captured is None:
+            return dict(overrides or {})
+        return captured.overlay(overrides or {})
+
+    def check_native_path(self, path: Path) -> Path:
+        """Refuse stale ledger paths or symlinks outside the captured native tree."""
+        if captured := native_environment(self.id):
+            captured.check_path(path)
+        return path
+
+    def account_args(self, action: str) -> list[str]:
+        raise ValueError("Native account action is unavailable for this runtime")
+
+    def account_invocation(self, action: str) -> tuple[list[str], NativeEnvironment]:
+        """An internal native invocation, never an ambient account fallback.
+
+        The lifecycle owner must check its identity fence before executing this.
+        No caller executes login/logout or exposes these commands yet.
+        """
+        captured = native_environment(self.id)
+        if captured is None or captured.executable is None:
+            raise ValueError("Native account action requires a captured environment")
+        return [captured.executable, *self.account_args(action)], captured
+
+    def native_environment_values(self, root: Path) -> dict[str, str]:
+        """Adapter-owned store locations; unsupported adapters fail closed."""
+        raise ValueError("Isolated native environment is unavailable for this runtime")
+
+    def capture_environment(self, root: Path) -> NativeEnvironment:
+        """Capture native locators and binary before installing a process context.
+
+        This does not create directories, configure accounts, or authorize startup.
+        Only terminal/locale values and executable search paths are inherited.
+        """
+        root = Path(root)
+        values = {
+            key: os.environ[key]
+            for key in ("PATH", "LANG", "LC_ALL", "TERM", "COLORTERM")
+            if key in os.environ
+        }
+        values.update(
+            {
+                "HOME": str(root / "home"),
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_DATA_HOME": str(root / "data"),
+                "XDG_STATE_HOME": str(root / "state"),
+                "XDG_CACHE_HOME": str(root / "cache"),
+                "XDG_RUNTIME_DIR": str(root / "run"),
+                "TMPDIR": str(root / "tmp"),
+                "TMP": str(root / "tmp"),
+                "TEMP": str(root / "tmp"),
+            }
+        )
+        native = self.native_environment_values(root)
+        for value in native.values():
+            if not Path(value).is_absolute() or not Path(value).resolve().is_relative_to(root):
+                raise ValueError("Native store escapes the runtime root")
+        values.update(self.default_env)
+        values.update(native)
+        executable = self.resolve_binary()
+        if self.binary is not None and executable is None:
+            raise ValueError("Native runtime executable is unavailable")
+        return NativeEnvironment(root, executable, values, frozenset(native))
+
     def resolve_binary(self) -> str | None:
         """Find this runtime now, including any adapter-specific install location."""
+        if captured := native_environment(self.id):
+            return captured.executable
         return resolve_command(self.binary) if self.binary else None
 
     def available(self) -> bool:
@@ -399,6 +472,11 @@ class Runtime:
                 errors="replace",
                 timeout=10,
                 check=False,
+                **(
+                    {"env": dict(captured), "cwd": captured.root}
+                    if (captured := native_environment(self.id)) is not None
+                    else {}
+                ),
             )
         except subprocess.TimeoutExpired:
             return None, "timeout"
@@ -683,6 +761,7 @@ class Runtime:
         when the binary is missing, or when ``unattended`` is asked of a
         runtime without such a switch.
         """
+        env = self.environment(env)
         self.check_unattended(unattended)  # a shell has no switch either
         if self.binary is None:
             return None
@@ -1098,7 +1177,7 @@ class Runtime:
         """Read a bounded chunk from this runtime's usage source."""
         from agent_backbone.services.runtimes._usage import read_jsonl
 
-        return read_jsonl(path, offset, state, self.parse_usage)
+        return read_jsonl(self.check_native_path(path), offset, state, self.parse_usage)
 
     def parse_usage(self, record: dict, state: dict):
         """Project one source record into numeric usage, updating an opaque cursor."""

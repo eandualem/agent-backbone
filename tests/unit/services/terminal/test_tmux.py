@@ -720,3 +720,41 @@ def test_modified_launch_environment_is_refused_before_exec(tmp_path, tamper):
         assert not path.exists()
     else:
         assert path.is_symlink() and target.read_bytes() == original
+
+
+async def test_complete_environment_drops_server_only_values_and_attach_import(tmp_path):
+    from agent_backbone.services.terminal import _sessions
+
+    launch = None
+
+    async def run(*args, **kwargs):
+        nonlocal launch
+        if "show-environment" in args:
+            return (
+                0,
+                b'HOST_TOKEN="host-secret\nsecond=value"; export HOST_TOKEN;\n'
+                b'HOME="/host"; export HOME;\n',
+                b"",
+            )
+        if "source-file" in args:
+            launch = kwargs["stdin_data"].decode()
+        return 0, b"", b""
+
+    with (
+        patch.object(_sessions, "session_exists", return_value=False),
+        patch.object(_sessions, "tmux_server_socket", return_value=str(tmp_path / "tmux.sock")),
+        patch.object(_sessions, "_run_tmux", side_effect=run) as tmux,
+    ):
+        assert await start_session(
+            "isolated",
+            command=["/usr/bin/env"],
+            environment={"HOME": str(tmp_path), "TMPDIR": str(tmp_path)},
+            inherit_environment=False,
+        )
+    assert "host-secret" not in launch
+    assert "second=value" not in launch
+    assert "os.environ.clear()" in launch
+    calls = [call.args for call in tmux.await_args_list]
+    assert ("set-environment", "-t", "=isolated:", "-r", "HOST_TOKEN") in calls
+    assert ("set-option", "-t", "=isolated:", "update-environment", "") in calls
+    assert len(list(tmp_path.glob("backbone-env-*.json"))) == 1

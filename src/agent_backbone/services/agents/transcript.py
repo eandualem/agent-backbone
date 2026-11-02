@@ -97,9 +97,10 @@ def locate_transcript(
     stamped = []
     for p in candidates:
         try:
+            rt.check_native_path(p)
             if p.is_file():
                 stamped.append((p.stat().st_mtime, p))
-        except OSError:  # archived or removed while we looked
+        except (OSError, ValueError):  # archived or removed while we looked
             continue
     if not stamped:
         return None, rt, "", [f"no transcript file found for session {session_id}"]
@@ -144,6 +145,7 @@ def read_messages(
     ending at or before that offset. Forwards (``since``): the first ``limit``
     messages starting at or after it, up to ``end``. Returns
     ``(messages, more_before, more_after, evidence)``."""
+    rt.check_native_path(path)
     page = rt.transcript_page(path, session_id, limit=limit, since=since, before=before, end=end)
     if page is not None:
         return (*page, [])

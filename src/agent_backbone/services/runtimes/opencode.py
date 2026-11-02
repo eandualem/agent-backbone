@@ -16,6 +16,9 @@ from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.hooks import install as hooks
+from agent_backbone.services.runtimes._environment import (
+    environment_value,
+)
 from agent_backbone.services.runtimes._opencode_v2_launch import failure_path
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes._usage import UsageBatch, count
@@ -35,7 +38,7 @@ _TRUE = ("true", "yes", "on", "1", "y")
 
 def _setting(env: dict[str, str], key: str) -> str:
     """An environment value for the agent: its own ``env``, then the backbone's."""
-    return env.get(key) or os.environ.get(key) or ""
+    return environment_value(env, key)
 
 
 def _has_session_projection(conn: sqlite3.Connection) -> bool:
@@ -48,6 +51,19 @@ def _has_session_projection(conn: sqlite3.Connection) -> bool:
 
 
 class OpenCode(Runtime):
+    def account_args(self, action):
+        commands = {
+            "status": ["auth", "list", "--format", "json", "--standalone"],
+            "login": ["auth", "login", "--standalone"],
+            "logout": ["auth", "logout", "--standalone"],
+        }
+        if action not in commands:
+            return super().account_args(action)
+        return commands[action]
+
+    def native_environment_values(self, root):
+        return {}
+
     setup_hooks = True
 
     supports_exact_resume = True
@@ -278,6 +294,7 @@ class OpenCode(Runtime):
             return None
 
     def user_skill_dirs(self, env):
+        env = self.environment(env)
         home = agent_home(env)
         config = Path(_setting(env, "XDG_CONFIG_HOME") or home / ".config").expanduser()
         # 1.18.32 reads the first two recursively; its own directory measured 1.18.29.
@@ -295,6 +312,7 @@ class OpenCode(Runtime):
         return "OpenCode reloads its skills at its next pause between turns"
 
     def user_instructions(self, env, project=None):
+        env = self.environment(env)
         home = agent_home(env)
         config = Path(_setting(env, "XDG_CONFIG_HOME") or home / ".config").expanduser()
         candidates = [config / "opencode" / "AGENTS.md"]
@@ -304,7 +322,7 @@ class OpenCode(Runtime):
         if not any(_setting(env, f) in _TRUE for f in flags):
             candidates.append(home / ".claude" / "CLAUDE.md")
         # The first file that exists is the one read, even an empty one.
-        first = next((path for path in candidates if path.exists()), None)
+        first = next((path for path in candidates if self.check_native_path(path).exists()), None)
         return [first] if first is not None and has_text(first) else []
 
     def plan_approval_needs(self, env):
@@ -324,12 +342,9 @@ class OpenCode(Runtime):
     usage_supported = True
 
     def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
-        root = Path(
-            env.get("XDG_DATA_HOME")
-            or os.environ.get("XDG_DATA_HOME")
-            or agent_home(env) / ".local/share"
-        )
-        path = root / "opencode/opencode.db"
+        env = self.environment(env)
+        root = Path(environment_value(env, "XDG_DATA_HOME") or agent_home(env) / ".local/share")
+        path = self.check_native_path(root / "opencode/opencode.db")
         if not path.is_file():
             return []
         with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
@@ -342,6 +357,8 @@ class OpenCode(Runtime):
     def usage_children(
         self, path: Path, session_id: str, env: dict[str, str]
     ) -> list[tuple[str, Path]]:
+        env = self.environment(env)
+        self.check_native_path(path)
         if not path.is_file():
             return []  # Parent and child usage share the same database.
         with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
@@ -355,6 +372,7 @@ class OpenCode(Runtime):
             ]
 
     def read_usage(self, path: Path, offset: int, state: dict):
+        self.check_native_path(path)
         state = dict(state)
         batch = UsageBatch(offset, state)
         try:

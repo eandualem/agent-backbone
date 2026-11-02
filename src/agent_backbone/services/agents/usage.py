@@ -174,6 +174,8 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
             try:
                 source_path = session.get("_discovered_path", session["source_path"])
                 path = Path(source_path) if source_path else None
+                if path is not None:
+                    rt.check_native_path(path)
                 if not path or not path.is_file():
                     if (
                         path
