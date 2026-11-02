@@ -29,6 +29,7 @@ def test_adoption_replay_and_repeat_preserve_the_original_tuple():
     assert cases["identical_body_replay"]["outcome"] == "succeeded"
     replay = cases["identical_body_replay_changed_token"]
     assert replay["request"] == "request" and replay["prior"] == "succeeded"
+    assert "request_changes" not in replay
     assert replay["current_token"] != original["adoption_token"]
     assert replay["outcome"] == "succeeded" and replay["expected_receipt"] == "succeeded"
     assert cases["new_request_existing_instance"]["outcome"] == "succeeded"
@@ -157,6 +158,11 @@ def test_permission_examples_keep_registration_and_unavailable_sources_explicit(
             }
         },
     }
+    required = next(
+        case for case in context["registration_cases"] if case["name"] == "required_context"
+    )
+    assert required["endpoint"] == "runtime-context" and required["query"] == {}
+    assert required["outcome"] == "invalid_request"
     for case in context["registration_cases"]:
         if (
             case["endpoint"] == "runtime-context"
@@ -171,7 +177,7 @@ def test_permission_examples_keep_registration_and_unavailable_sources_explicit(
             assert case["outcome"] == "registration_changed"
     redaction = context["redaction_case"]
     returned = redaction["returned_fields"]
-    assert set(returned) == {"allow", "deny", "ask", "modes", "files"}
+    assert set(returned) == {"status", "error", "allow", "deny", "ask", "modes", "files"}
     assert returned["allow"] == []
     sensitive_value = redaction["input_permission"].split("EXAMPLE_TOKEN=", 1)[1].split()[0]
     for field in returned.values():

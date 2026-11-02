@@ -1009,7 +1009,12 @@
         "deny": [],
         "ask": [],
         "modes": [],
-        "files": []
+        "files": [],
+        "status": "unavailable",
+        "error": {
+          "code": "unavailable",
+          "message": "Runtime permission metadata is unavailable."
+        }
       }
     }
   }
