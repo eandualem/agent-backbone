@@ -29,6 +29,7 @@ from pathlib import Path
 from weakref import WeakValueDictionary
 
 from agent_backbone.services.terminal._core import exact_target
+from agent_backbone.services.terminal._server import tmux_command
 
 log = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class PtySession:
             env = {**os.environ, "TERM": "xterm-256color", "COLORTERM": "truecolor"}
             env.pop("TMUX", None)  # the backbone itself may run inside tmux
             self._process = subprocess.Popen(
-                ["tmux", "attach-session", "-t", exact_target(self.session_name)],
+                tmux_command("attach-session", "-t", exact_target(self.session_name)),
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
@@ -269,6 +270,11 @@ class PtyManager:
                 saved = _parse_pid_record(line)
                 if saved is None:
                     continue
+                if (
+                    saved["command"][1:]
+                    != tmux_command("attach-session", "-t", saved["command"][-1])[1:]
+                ):
+                    continue
                 pid = saved["pid"]
                 if _process_identity(pid) != saved:
                     continue
@@ -348,11 +354,13 @@ def _parse_pid_record(line: str) -> dict | None:
         return None
     if (
         not isinstance(command, list)
-        or len(command) != 4
+        or len(command) not in {4, 6}
         or not all(isinstance(arg, str) and arg for arg in command)
         or Path(command[0]).name != "tmux"
-        or command[1:3] != ["attach-session", "-t"]
+        or command[-3:-1] != ["attach-session", "-t"]
     ):
+        return None
+    if len(command) == 6 and (command[1] != "-S" or not Path(command[2]).is_absolute()):
         return None
     try:
         datetime.strptime(birth, "%a %b %d %H:%M:%S %Y")
@@ -396,7 +404,11 @@ def _record_pid(pid_file: Path | None, pid: int, session_name: str) -> None:
     if pid_file is None:
         return
     record = _process_identity(pid)
-    if record is None or record["command"][3] != exact_target(session_name):
+    if (
+        record is None
+        or record["command"][1:]
+        != tmux_command("attach-session", "-t", exact_target(session_name))[1:]
+    ):
         return
     try:
         pid_file.parent.mkdir(parents=True, exist_ok=True)

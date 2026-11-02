@@ -40,6 +40,14 @@ cannot be revived by replay. This is a startup reconciliation guard, not
 running-service/job fencing. It cannot publish `ready`, adopt Default or activate
 a replacement. The full lifecycle and runtime account boundary remain unfinished.
 
+The terminal service has an internal process-level socket pin for the future
+profile startup path. It must be selected before terminal use; subsequent changes
+are refused. Commands, interactive attachment and browser PTY attachment use that
+explicit socket, regardless of inherited tmux selection. Attaching from a client
+on another server requires a separate terminal. Legacy processes retain their
+existing environment behavior. No profile startup or selection command enables
+this pin yet; it does not establish runtime account isolation or provider readiness.
+
 Registry initialization publishes a complete private database without replacing
 an existing registry. Its containing directory must belong to the current user
 and cannot be group- or other-writable, even with the sticky bit: SQLite's sibling

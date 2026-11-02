@@ -7,6 +7,8 @@ import contextlib
 import logging
 import uuid
 
+from agent_backbone.services.terminal._server import tmux_command
+
 log = logging.getLogger(__name__)
 
 # Subprocess concurrency limiter — prevents storms from any caller
@@ -39,6 +41,7 @@ async def _run_tmux(
     when capture_stdout=True; otherwise it's empty bytes.
     When stdin_data is provided, it is piped to the process's stdin.
     """
+    command = tmux_command(*args)
     async with _get_semaphore():
         kwargs: dict = {
             "stdout": asyncio.subprocess.PIPE if capture_stdout else asyncio.subprocess.DEVNULL,
@@ -46,7 +49,7 @@ async def _run_tmux(
         }
         if stdin_data is not None:
             kwargs["stdin"] = asyncio.subprocess.PIPE
-        proc = await asyncio.create_subprocess_exec("tmux", *args, **kwargs)
+        proc = await asyncio.create_subprocess_exec(*command, **kwargs)
         try:
             async with asyncio.timeout(10.0):
                 stdout, stderr = await proc.communicate(input=stdin_data)
