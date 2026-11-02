@@ -341,11 +341,89 @@ async def test_broadcast_cannot_expand_recipients_during_validation(
     sio._send_eio_packet.reset_mock()
     check = ns.registration_current
 
-    async def admit_during_check(current):
+    async def admit_during_check(current, **kwargs):
         # Socket.IO joins the room before invoking the pending handshake.
         await sio.manager.connect("engine-pending", "/sessions")
-        return await check(current)
+        return await check(current, **kwargs)
 
     monkeypatch.setattr(ns, "registration_current", admit_during_check)
     await sio.emit("sessions:update", {"text": "admitted only"}, namespace="/sessions")
     assert [call.args[0] for call in sio._send_eio_packet.await_args_list] == ["engine-admitted"]
+
+
+async def test_unbound_probes_and_webhooks_keep_route_authentication(
+    api_client, api_app, auth_headers, bound_provider
+):
+    import hashlib
+    import hmac
+
+    provider, registry, headers = bound_provider
+    body = b"{}"
+    signature = (
+        "sha256="
+        + hmac.new(api_app.state.config.webhook_secret.encode(), body, hashlib.sha256).hexdigest()
+    )
+    webhook = {"X-GitHub-Event": "ping", "X-Hub-Signature-256": signature}
+    assert (await api_client.get("/health")).status_code == 200
+    response = await api_client.post("/webhooks/github", content=body, headers=webhook)
+    assert response.status_code == 200
+    assert response.text == "pong"
+    response = await api_client.post("/webhooks/github", content=body)
+    assert response.status_code == 403
+    assert response.text == "Invalid signature"
+    for method, path in (("GET", "/health"), ("POST", "/webhooks/github")):
+        for binding in (headers, {next(iter(headers)): ""}):
+            response = await api_client.request(method, path, headers=binding)
+            assert response.status_code == 401
+        response = await api_client.request(
+            method, path, headers={**auth_headers, next(iter(headers)): ""}
+        )
+        assert response.status_code == 409
+    # Only the exact method/path pair is exempt from the provider gate.
+    assert (await api_client.post("/health")).status_code == 401
+    assert (await api_client.get("/webhooks/github")).status_code == 401
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    for method, path in (("GET", "/health"), ("POST", "/webhooks/github")):
+        response = await api_client.request(method, path, content=body, headers=webhook)
+        assert response.status_code == 409
+        assert response.json() == FIXTURES["http_errors"]["binding_mismatch"]["body"]
+
+
+@pytest.mark.parametrize("namespace", ["/sessions", "/terminal"])
+async def test_broadcast_reconciles_once_and_keeps_recipient_checks(
+    api_app, bound_provider, monkeypatch, namespace
+):
+    from dataclasses import replace
+
+    from agent_backbone.api import socketio_server
+
+    provider, registry, _ = bound_provider
+    sio = api_app.state.sio
+    sio._send_packet = AsyncMock()
+    sio._send_eio_packet = AsyncMock()
+    api_app.state.feed.snapshot = AsyncMock(return_value=[])
+    ns = sio.namespace_handlers[namespace]
+    agent = await api_app.state.agent_store.update("ike", runtime="claude")
+    sids = {}
+    for name in ("operator", "retired", "other-context"):
+        sid = sids[name] = await sio.manager.connect(name, namespace)
+        key = api_app.state.config.api_key
+        if name == "retired":
+            key = agent_api_key(key, agent.registration_id)
+        assert await ns.on_connect(sid, {}, {"api_key": key, **vars(provider.reservation.identity)})
+    await api_app.state.db.agents.delete("ike")
+    ns._profiles[sids["other-context"]] = replace(provider)
+    check = AsyncMock(wraps=socketio_server.provider_current)
+    monkeypatch.setattr(socketio_server, "provider_current", check)
+    sio._send_eio_packet.reset_mock()
+    await sio.emit("sentinel", {}, namespace=namespace)
+    check.assert_awaited_once_with(provider, api_app)
+    assert [call.args[0] for call in sio._send_eio_packet.await_args_list] == ["operator"]
+    assert not sio.manager.is_connected(sids["retired"], namespace)
+    assert not sio.manager.is_connected(sids["other-context"], namespace)
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    sio._send_eio_packet.reset_mock()
+    await sio.emit("sentinel", {}, namespace=namespace)
+    assert check.await_count == 2
+    assert not sio.manager.is_connected(sids["operator"], namespace)
+    sio._send_eio_packet.assert_not_awaited()

@@ -63,7 +63,14 @@ compare the complete tuple, the actual serving database and data directory,
 persisted metadata and process terminal pin before route handling. This internal
 path accepts a canonical file-backed SQLite URL without query overrides.
 Socket connections capture the context and recheck it before
-events and emissions, including operator connections. Invalidation or changed
+events and emissions, including operator connections. Each emission reconciles
+provider metadata once, then checks each recipient's captured context and
+registration and targets only those validated recipients. The result is not
+reused by later emissions. Unbound `GET /health` retains its keyless probe and
+unbound `POST /webhooks/github` retains webhook signature authentication; both
+still reject an invalidated provider context. Any profile header, including an
+empty or partial tuple, keeps the API-key and binding checks on those routes.
+Invalidation or changed
 metadata refuses subsequent operations; this does not drain in-flight requests
 or fence background jobs. Complete replacement/restore fencing, ready publication
 and runtime/integration isolation remain required before activation is exposed.

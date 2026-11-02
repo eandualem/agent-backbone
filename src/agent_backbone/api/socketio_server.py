@@ -22,6 +22,7 @@ import socketio
 from agent_backbone.api.auth import credential_registration, credential_role
 from agent_backbone.api.profile_binding import PROFILE_FIELDS, binding_error, provider_current
 from agent_backbone.api.session_updates import SESSIONS_NAMESPACE
+from agent_backbone.services.database import ProfileProvider
 from agent_backbone.services.terminal import (
     PtyManager,
     active_pane_size,
@@ -92,12 +93,17 @@ class RegistrationAwareServer(socketio.AsyncServer):
         excluded = [skip_sid] if isinstance(skip_sid, str) else list(skip_sid or [])
         if isinstance(ns, _AuthenticatedNamespace):
             recipients = tuple(self.manager.get_participants(ns.namespace, to or room))
+            app = getattr(self, "fastapi_app", None)
+            provider = getattr(getattr(app, "state", None), "profile_provider", None)
+            # Reuse only within this emission; each SID still checks its captured
+            # context and registration, and the next emission reconciles again.
+            provider_check = (provider, provider is None or await provider_current(provider, app))
             admitted = []
             for sid, _ in recipients:
                 if (
                     sid not in excluded
                     and sid in ns._profiles
-                    and await ns.registration_current(sid)
+                    and await ns.registration_current(sid, provider_check=provider_check)
                 ):
                     admitted.append(sid)
             # Socket.IO joins the room before on_connect finishes. Revalidation
@@ -126,13 +132,16 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
         self._registrations: dict[str, str] = {}
         self._profiles: dict = {}
 
-    async def registration_current(self, sid: str) -> bool:
+    async def registration_current(
+        self, sid: str, *, provider_check: tuple[ProfileProvider | None, bool] | None = None
+    ) -> bool:
+        """Recheck this connection, optionally sharing this emission's provider result."""
         app = getattr(self.server, "fastapi_app", None)
         provider = getattr(getattr(app, "state", None), "profile_provider", None)
         captured = self._profiles.get(sid)
-        if captured is not provider or (
-            captured is not None and not await provider_current(captured, app)
-        ):
+        if provider_check is None:
+            provider_check = (provider, provider is None or await provider_current(provider, app))
+        if captured is not provider or provider_check[0] is not provider or not provider_check[1]:
             await self.disconnect(sid)
             return False
         registration = self._registrations.get(sid)
