@@ -59,7 +59,7 @@ async def main(*, pinned: bool = False) -> None:
         socket = Path(directory) / f"tmux-{os.getuid()}" / "default"
         decoy = Path(directory) / "other.sock"
         if pinned:
-            socket = Path(directory) / "selected.sock"
+            socket = Path(directory) / "selected socket.sock"
             pin_tmux_server(socket)
         try:
             if pinned:

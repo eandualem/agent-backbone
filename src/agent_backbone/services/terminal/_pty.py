@@ -266,6 +266,7 @@ class PtyManager:
             if not content:
                 return
             killed = 0
+            retained = []
             for line in content.splitlines():
                 saved = _parse_pid_record(line)
                 if saved is None:
@@ -274,6 +275,7 @@ class PtyManager:
                     saved["command"][1:]
                     != tmux_command("attach-session", "-t", saved["command"][-1])[1:]
                 ):
+                    retained.append(line)
                     continue
                 pid = saved["pid"]
                 if _process_identity(pid) != saved:
@@ -286,7 +288,7 @@ class PtyManager:
                     pass  # Already dead
             if killed:
                 log.info("Cleaned up %d orphaned PTY process(es)", killed)
-            pid_file.write_text("")
+            pid_file.write_text("\n".join(retained) + "\n" if retained else "")
         except Exception:
             log.warning("Failed to clean up orphaned PTY processes", exc_info=True)
 
@@ -390,10 +392,20 @@ def _process_identity(pid: int) -> dict | None:
         fields = result.stdout.strip().split(maxsplit=5)
         if len(fields) != 6:
             return None
+        # ps flattens argv without shell quoting. The pinned form has fixed
+        # delimiters, so keep the socket's spaces, quotes and backslashes intact.
+        executable, pinned, remainder = fields[5].partition(" -S ")
+        if pinned and Path(executable).name == "tmux":
+            socket, separator, target = remainder.rpartition(" attach-session -t ")
+            if not separator:
+                return None
+            command = [executable, "-S", socket, "attach-session", "-t", target]
+        else:
+            command = shlex.split(fields[5])
         record = {
             "pid": pid,
             "birth": " ".join(fields[:5]),
-            "command": shlex.split(fields[5]),
+            "command": command,
         }
         return _parse_pid_record(json.dumps(record))
     except (OSError, ValueError, subprocess.SubprocessError):

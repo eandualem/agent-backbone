@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -15,7 +15,7 @@ from agent_backbone.services.terminal import (
     tmux_server_socket,
 )
 from agent_backbone.services.terminal._core import _run_tmux
-from agent_backbone.services.terminal._pty import _parse_pid_record, _record_pid
+from agent_backbone.services.terminal._pty import _parse_pid_record, _process_identity, _record_pid
 
 
 @pytest.fixture(autouse=True)
@@ -142,3 +142,20 @@ def test_orphan_cleanup_stays_on_selected_server(tmp_path, other_server):
     ):
         PtyManager(pid_file)
     assert kill.call_count == (0 if other_server else 1)
+    assert pid_file.read_text() == (json.dumps(record) + "\n" if other_server else "")
+
+
+@pytest.mark.parametrize("name", ["socket with spaces", "socket'quoted", 'socket"quoted', r"a\b"])
+def test_ps_pinned_path_is_not_shell_syntax(tmp_path, name):
+    socket = tmp_path / name
+    command = ["tmux", "-S", str(socket), "attach-session", "-t", "=worker:"]
+    raw = "Sat Sep 05 10:20:30 2026 " + " ".join(command)
+    with patch(
+        "agent_backbone.services.terminal._pty.subprocess.run",
+        return_value=MagicMock(returncode=0, stdout=raw),
+    ):
+        assert _process_identity(12345) == {
+            "pid": 12345,
+            "birth": "Sat Sep 05 10:20:30 2026",
+            "command": command,
+        }
