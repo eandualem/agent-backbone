@@ -270,6 +270,41 @@ CAPABILITIES: tuple[Capability, ...] = (
         shell=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
     ),
     _row(
+        "profile-reservation-boundary",
+        "Operator-only non-ready profile discovery and reserved-provider startup refusal",
+        "cli/profiles.py; api/profile_binding.py check_profile_startup; api/app.py lifespan",
+        fallback="Reservations cannot serve content; profile activation is not implemented.",
+        implemented=lambda rt: True,
+        claude=_ok(
+            "tests/unit/test_cli_profiles.py",
+            "Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls",
+        ),
+        codex=_ok(
+            "tests/unit/test_cli_profiles.py",
+            "Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls",
+        ),
+        opencode=_ok(
+            "tests/unit/test_cli_profiles.py",
+            "Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls",
+        ),
+        gemini=_ok(
+            "tests/unit/test_cli_profiles.py",
+            "Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls",
+        ),
+        deepcode=_ok(
+            "tests/unit/test_cli_profiles.py",
+            "Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls",
+        ),
+        aider=_ok(
+            "tests/unit/test_cli_profiles.py",
+            "Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls",
+        ),
+        shell=_ok(
+            "tests/unit/test_cli_profiles.py",
+            "Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls",
+        ),
+    ),
+    _row(
         "current-plan",
         "Current agent-authored checklists with conditional updates and contextual feedback",
         "src/agent_backbone/api/routes/current_plans.py",

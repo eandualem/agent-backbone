@@ -41,6 +41,7 @@ from agent_backbone.templates import TemplateDirs
 from agent_backbone.usage import DEFAULT_PRICES, Price
 
 DEFAULT_DATA_DIR = "~/.local/share/agent-backbone"
+PROFILE_REGISTRY_PATH = "~/.local/share/agent-backbone-profiles/registry.db"
 DEFAULT_PORT = 7120
 SQLITE_FILENAME = "backbone.db"
 

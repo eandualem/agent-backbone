@@ -6,8 +6,10 @@ integration configuration. Multiple workspaces can share that profile. Selecting
 another profile affects new work; it cannot retarget an existing request.
 
 **Implementation status:** this page and its fixtures define the agreed contract.
-The profile commands and endpoint below are not implemented yet. They are not
-instructions for configuring the current release. Provider implementation is
+Operator list/show discovery and refusal of unreconciled startup are implemented.
+Ready profile activation, the identity endpoint and lifecycle commands remain
+unimplemented; the contract below is not a procedure for activating profiles.
+Provider implementation is
 tracked in [#548](https://github.com/eandualem/agent-backbone/issues/548), with the
 consumer in [agent-interface#182](https://github.com/eandualem/agent-interface/issues/182).
 The agreed design revision is **2**; JSON `schema_version: 1` is the first wire
@@ -16,10 +18,12 @@ version. There is no earlier released profile protocol.
 Provider-local identity persistence is implemented as an internal database
 reservation. It stores the profile and lifecycle IDs against the existing signing
 audience, accepts an identical replay and refuses conflicting assignments. Reading
-an unreserved database creates no identity. This storage is not wired into startup
-or discovery and does not adopt Default, enable bound clients or grant legacy
-compatibility. Registry reconciliation, activation and replacement fencing remain
-unimplemented; a copied database is not evidence of a valid active lifecycle.
+an unreserved database creates no identity. Startup reads this identity before
+starting agents, hooks, integrations or jobs.
+It refuses reserved identities, including missing, conflicting or invalidated
+registry records. Matching reservations are also refused because activation is
+not implemented. This does not adopt Default, enable bound clients or grant legacy
+compatibility. Ready activation and replacement fencing remain unimplemented; a copied database is not evidence of a valid active lifecycle.
 
 An internal, separately initialized SQLite registry now reserves isolated-profile
 identity and canonical data-directory ownership outside the provider data tree.
@@ -29,10 +33,9 @@ overlapping directories and changed replay input are refused. Directory ownershi
 also refuses case and Unicode-normalization aliases, including on case-sensitive
 filesystems. Invalidated
 reservations remain as failed records across provider database restoration and
-cannot be revived by replay. This is a reconciliation guard, not service/job
-fencing: no command, startup or request path uses it yet. It cannot publish
-`ready`, adopt Default or activate a replacement. The full lifecycle, discovery
-commands and runtime account boundary remain unfinished.
+cannot be revived by replay. This is a startup reconciliation guard, not
+running-service/job fencing. It cannot publish `ready`, adopt Default or activate
+a replacement. The full lifecycle and runtime account boundary remain unfinished.
 
 Registry initialization publishes a complete private database without replacing
 an existing registry. Its containing directory must belong to the current user
@@ -121,6 +124,24 @@ local operator control-plane operations, separate from any provider's content AP
 Agent-facing tools cannot use them as a gateway to discover sibling fleets.
 Listing is read-only: it does not adopt, start, migrate or repair providers. An
 unavailable registry is an error, not an empty successful list.
+
+Run these commands from a local operator terminal. Managed agent contexts and
+agent credentials are refused before accessing the registry. They read
+`~/.local/share/agent-backbone-profiles/registry.db`, outside provider data trees;
+`BACKBONE_DATA_DIR` does not select the control-plane registry. No provider secret,
+configuration, API or database is loaded. Human output labels provisioning state;
+`--json` returns the exact list/show shape. The current registry supports only
+`creating` and `failed` records, with null bindings. There is no creation command
+yet; a missing registry returns a nonzero exit and an error on stderr.
+
+Before services start, an unadopted provider checks that its canonical directory
+does not overlap any reservation, including failed reservations. This prevents a
+pre-identity database restore from starting as legacy in a reserved tree. Missing
+registries preserve ordinary unadopted startup; existing but unreadable or invalid
+registries block it because directory ownership cannot be checked. Startup never
+creates or repairs the registry. A reserved database cannot start as legacy from
+another directory. This check does not fence an already running provider or
+establish account isolation.
 
 List returns `schema_version` and `items`. Each item has `profile_id`,
 `display_name`, `kind` and `state`. `kind` is `legacy_default` or `isolated`.

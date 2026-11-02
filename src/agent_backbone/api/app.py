@@ -262,7 +262,6 @@ async def lifespan(app: FastAPI):
     data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     data_dir.chmod(0o700)
     app.state.config = boot
-    configure_pty_manager(data_dir)
 
     lifecycle = LifecycleManager()
     app.state.lifecycle = lifecycle
@@ -271,6 +270,15 @@ async def lifespan(app: FastAPI):
     app.state.db = BackboneDB(boot.database_url)
     lifecycle.register("database", app.state.db)
     await lifecycle.start_all()
+
+    from agent_backbone.api.profile_binding import check_profile_startup
+
+    try:
+        await check_profile_startup(app.state.db, data_dir)
+    except BaseException:
+        await lifecycle.stop_all()
+        raise
+    configure_pty_manager(data_dir)
 
     def _publish(new_config: BackboneConfig) -> None:
         from agent_backbone.base import set_log_mode
