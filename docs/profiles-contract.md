@@ -299,3 +299,27 @@ Runtime login/refresh/logout, integration account and destination isolation, ret
 content, queues, exports and diagnostics require their own behavioral evidence.
 Claude Code, Codex and OpenCode require equivalent outcomes; other adapters must
 record support or a gap. No runtime coverage is changed by retaining this contract.
+
+
+## Internal native environment preparation
+
+Reserved profiles still cannot start. Internal preparation captures a separate,
+immutable native environment and executable for each runtime before use. Trust
+preparation, hooks, user-file readers, transcript and usage readers, version probes,
+and launch/resume commands use that capture. Native account invocations carry the
+same environment; no public account operation executes them yet. Per-agent overrides
+cannot redirect native stores or select an inherited account/server. Complete tmux
+launch environments clear server-only variables and disable environment import on
+attach. Activation must own the pinned server and its global environment; these
+launch helpers do not fence arbitrary external tmux writes. Default retains its
+existing environment and launch behavior. Native path checks reject observed
+redirects outside captured roots; they are not a sandbox against a same-user
+process concurrently replacing files or path components.
+
+Claude Code, Codex and OpenCode have internal preparation tests; other model adapters
+refuse this preparation. Codex requests file credential storage, subject to native
+managed policy. OpenCode uses a private native server. These mechanisms are not
+account-isolation acceptance: real-account login/logout/refresh, native configuration
+and credential-helper constraints, project materialization conflicts, and lifecycle
+fencing remain prerequisites before activation. No shipped capability coverage or
+profile readiness is promoted by these internal tests.

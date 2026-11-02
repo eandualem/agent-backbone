@@ -34,6 +34,7 @@ from agent_backbone.services.runtimes import (
     RUNTIME_ENV_KEY,
     RUNTIMES,
     STATE_DIR_ENV_KEY,
+    NativeEnvironment,
     Runtime,
     get_runtime,
     project_skill_dirs,
@@ -307,10 +308,13 @@ async def _start_agent(
         details["reason"] = "exact_resume_unsupported"
         return StartResult(ok=False, evidence=(f"{rt.id} cannot open a session by id",))
     effective_model = model if model is not None else spec.model
+    extra_env = rt.environment(
+        {**rt.default_env, **spec.env, **rt.launch_env(*rt.split_model(effective_model))}
+    )
     section = config.launch
     details["stage"] = "preparation"
     if section.pre_trust:
-        rt.pre_trust(spec.path)
+        rt.pre_trust(spec.path, env=extra_env)
 
     # The owner's explicit choice, or the swarm rule decided at this launch:
     # a member whose runtime confines it to the worktree never asks. Decided
@@ -394,7 +398,7 @@ async def _start_agent(
             unattended=unattended,
             writable_dirs=_writable_dirs(spec.path, section.writable_dirs),
             auto_review=section.auto_review,
-            env={**rt.default_env, **spec.env},
+            env=extra_env,
         )
     except RuntimeError as exc:
         details.update(reason="command_failed", error_type=type(exc).__name__)
@@ -402,7 +406,6 @@ async def _start_agent(
         return StartResult(ok=False, evidence=(str(exc),))
 
     details["stage"] = "preparation"
-    extra_env = {**rt.default_env, **spec.env, **rt.launch_env(*rt.split_model(effective_model))}
     resume_evidence.extend(
         f"user-level instructions: {path}" for path in rt.user_instructions(extra_env, spec.path)
     )
@@ -522,6 +525,7 @@ async def _start_agent(
             environment=environment,
             scrub=session_secret_keys(config.data_dir),
             mouse=rt.mouse_scroll,
+            **({"inherit_environment": False} if isinstance(extra_env, NativeEnvironment) else {}),
         )
         if not ok:
             details["reason"] = "session_failed"

@@ -10,6 +10,13 @@ from agent_backbone.services.runtimes.base import Runtime
 
 
 class Shell(Runtime):
+    def build_command(self, **kwargs):
+        command = super().build_command(**kwargs)
+        return ["/bin/sh"] if self.environment() else command
+
+    def native_environment_values(self, root):
+        return {}
+
     id = "shell"
     display_name = "Plain shell"
     binary = None

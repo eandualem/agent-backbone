@@ -31,7 +31,8 @@ async def wait_for_output(session: str, expected: str) -> None:
             await asyncio.sleep(0.05)
 
 
-async def main(*, pinned: bool = False) -> None:
+async def main(*, pinned: bool = False, isolated: bool = False) -> None:
+    pinned = pinned or isolated
     session = f"backbone-smoke-{uuid.uuid4().hex}"
     marker = uuid.uuid4().hex
     # Characters tmux's command syntax treats specially, handed over on stdin.
@@ -61,6 +62,16 @@ async def main(*, pinned: bool = False) -> None:
         if pinned:
             socket = Path(directory) / "selected socket.sock"
             pin_tmux_server(socket)
+        if isolated:
+            pane_program = (
+                f"assert os.environ['TMUX'].rsplit(',', 2)[0] == {str(socket.resolve())!r}\n"
+                "assert os.environ['TMUX_PANE'].startswith('%')\n"
+                "assert os.environ.get('TERM')\n"
+                "assert 'BACKBONE_HOST_SENTINEL' not in os.environ\n"
+                "print('smoke-pane:verified', flush=True)\n"
+            )
+            program = "import os\n" + pane_program + program
+            os.environ["BACKBONE_HOST_SENTINEL"] = "host-only"
         try:
             if pinned:
                 subprocess.run(
@@ -85,10 +96,17 @@ async def main(*, pinned: bool = False) -> None:
                 working_dir=str(working),
                 command=[sys.executable, "-u", "-c", program],
                 # tmux sets SHELL in the pane; the agent's own value must win.
-                environment={"BACKBONE_SMOKE": value, "SHELL": "/smoke/sh"},
+                environment={
+                    "BACKBONE_SMOKE": value,
+                    "SHELL": "/smoke/sh",
+                    **({"HOME": str(home), "TMPDIR": directory} if isolated else {}),
+                },
+                inherit_environment=not isolated,
             ):
                 raise RuntimeError("could not start the smoke session")
             await wait_for_output(session, f"smoke-ready:{value}/smoke/sh")
+            if isolated:
+                await wait_for_output(session, "smoke-pane:verified")
             await wait_for_output(
                 session, "smoke-cwd:" + hashlib.sha256(os.fsencode(working.resolve())).hexdigest()
             )
@@ -153,4 +171,4 @@ async def main(*, pinned: bool = False) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main(pinned="--pinned" in sys.argv))
+    asyncio.run(main(pinned="--pinned" in sys.argv, isolated="--isolated" in sys.argv))
