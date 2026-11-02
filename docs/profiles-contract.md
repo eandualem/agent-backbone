@@ -21,6 +21,19 @@ or discovery and does not adopt Default, enable bound clients or grant legacy
 compatibility. Registry reconciliation, activation and replacement fencing remain
 unimplemented; a copied database is not evidence of a valid active lifecycle.
 
+An internal, separately initialized SQLite registry now reserves isolated-profile
+identity and canonical data-directory ownership outside the provider data tree.
+Its read-only discovery snapshots match the non-ready list/show shapes below;
+they do not initialize or repair a missing registry. Conflicting identities,
+overlapping directories and changed replay input are refused. Directory ownership
+also refuses case and Unicode-normalization aliases, including on case-sensitive
+filesystems. Invalidated
+reservations remain as failed records across provider database restoration and
+cannot be revived by replay. This is a reconciliation guard, not service/job
+fencing: no command, startup or request path uses it yet. It cannot publish
+`ready`, adopt Default or activate a replacement. The full lifecycle, discovery
+commands and runtime account boundary remain unfinished.
+
 The unadopted provider currently rejects profile-bound clients: any profile
 identity header or Socket.IO identity field returns `binding_mismatch`, including
 partial or empty bindings. Existing ingress limits and credential/registration
