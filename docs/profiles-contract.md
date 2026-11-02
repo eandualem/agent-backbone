@@ -34,6 +34,12 @@ fencing: no command, startup or request path uses it yet. It cannot publish
 `ready`, adopt Default or activate a replacement. The full lifecycle, discovery
 commands and runtime account boundary remain unfinished.
 
+Registry initialization publishes a complete private database without replacing
+an existing registry. Discovery reads stored directory metadata; it does not
+inspect provider directories. Reservation and reconciliation check the selected
+directory against the filesystem. A changed provider path cannot prevent reading
+other records or invalidating the exact stored reservation.
+
 The unadopted provider currently rejects profile-bound clients: any profile
 identity header or Socket.IO identity field returns `binding_mismatch`, including
 partial or empty bindings. Existing ingress limits and credential/registration

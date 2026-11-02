@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import tempfile
 import unicodedata
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,8 +28,8 @@ class ProfileReservation:
     def __post_init__(self) -> None:
         if not isinstance(self.identity, ProfileIdentity):
             raise ValueError("Invalid profile identity")
-        if not self.data_dir.is_absolute() or self.data_dir.resolve() != self.data_dir:
-            raise ValueError("Profile directory must be canonical and absolute")
+        if not self.data_dir.is_absolute() or ".." in self.data_dir.parts:
+            raise ValueError("Profile directory must be normalized and absolute")
         for value in (self.display_name, self.baseline_version):
             if (
                 not isinstance(value, str)
@@ -64,24 +65,34 @@ class ProfileRegistry:
         """Explicitly initialize a new registry, never replace an existing one."""
         registry = cls(path)
         registry.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        try:
-            fd = os.open(registry.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
+        if registry.path.exists():
             registry.list()
             return registry
+        fd, temporary = tempfile.mkstemp(prefix=".registry-", dir=registry.path.parent)
         os.close(fd)
-        # An interrupted initialization remains invalid, not an empty registry
-        # that a later read or retry silently repairs.
-        with registry._connection(write=True, initializing=True) as conn:
-            conn.execute(
-                "CREATE TABLE profiles ("
-                "profile_id TEXT PRIMARY KEY NOT NULL, "
-                "installation_id TEXT UNIQUE NOT NULL, lifecycle_id TEXT NOT NULL, "
-                "data_dir TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, "
-                "baseline_version TEXT NOT NULL, state TEXT NOT NULL "
-                "CHECK (state IN ('creating', 'failed')))"
-            )
-            conn.execute("PRAGMA user_version = 1")
+        try:
+            with cls(Path(temporary))._connection(write=True, initializing=True) as conn:
+                conn.execute(
+                    "CREATE TABLE profiles ("
+                    "profile_id TEXT PRIMARY KEY NOT NULL, "
+                    "installation_id TEXT UNIQUE NOT NULL, lifecycle_id TEXT NOT NULL, "
+                    "data_dir TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, "
+                    "baseline_version TEXT NOT NULL, state TEXT NOT NULL "
+                    "CHECK (state IN ('creating', 'failed')))"
+                )
+                conn.execute("PRAGMA user_version = 1")
+            # Publish only a complete database, without replacing a concurrent
+            # creator's file. A crash before publication leaves no partial target.
+            with suppress(FileExistsError):
+                os.link(temporary, registry.path)
+            parent = os.open(registry.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(parent)
+            finally:
+                os.close(parent)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+        registry.list()
         return registry
 
     @contextmanager
@@ -93,6 +104,9 @@ class ProfileRegistry:
             mode = "rw" if write else "ro"
             conn = sqlite3.connect(f"{self.path.as_uri()}?mode={mode}", uri=True)
             conn.row_factory = sqlite3.Row
+            if write:
+                conn.execute("PRAGMA synchronous = EXTRA")
+                conn.execute("PRAGMA fullfsync = ON")
             conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
             if not initializing and conn.execute("PRAGMA user_version").fetchone()[0] != 1:
                 raise ValueError("Unsupported profile registry schema")
@@ -108,14 +122,17 @@ class ProfileRegistry:
     def _records(self, conn) -> list[ProfileReservation]:
         records = []
         for row in conn.execute("SELECT * FROM profiles ORDER BY profile_id"):
-            record = ProfileReservation(
-                ProfileIdentity(row["profile_id"], row["installation_id"], row["lifecycle_id"]),
-                Path(row["data_dir"]),
-                row["display_name"],
-                row["baseline_version"],
-                row["state"],
-            )
-            self._external(record.data_dir)
+            try:
+                record = ProfileReservation(
+                    ProfileIdentity(row["profile_id"], row["installation_id"], row["lifecycle_id"]),
+                    Path(row["data_dir"]),
+                    row["display_name"],
+                    row["baseline_version"],
+                    row["state"],
+                )
+            except (IndexError, TypeError) as exc:
+                raise ValueError("Invalid profile registry metadata") from exc
+            self._outside(record.data_dir)
             for previous in records:
                 if (
                     previous.identity.profile_id == record.identity.profile_id
@@ -129,7 +146,10 @@ class ProfileRegistry:
     def _external(self, data_dir: Path) -> None:
         if not data_dir.is_absolute() or data_dir.resolve() != data_dir:
             raise ValueError("Profile directory must be canonical and absolute")
-        if self._contains(data_dir, self.path.resolve()):
+        self._outside(data_dir)
+
+    def _outside(self, data_dir: Path) -> None:
+        if self._contains(data_dir, self.path):
             raise ValueError("Profile registry must be outside the provider data directory")
 
     @staticmethod
@@ -160,6 +180,8 @@ class ProfileRegistry:
                         or stored.baseline_version != reservation.baseline_version
                     ):
                         raise ValueError("Profile reservation does not match")
+                    if stored.state == "failed":
+                        raise ValueError("Profile lifecycle has been invalidated")
                     return stored
                 if (
                     stored.identity.installation_id == reservation.identity.installation_id
@@ -181,7 +203,7 @@ class ProfileRegistry:
         return reservation
 
     def list(self) -> dict:
-        """Read one atomic discovery snapshot, without credential or path access."""
+        """Read an atomic snapshot without accessing provider paths or credentials."""
         with self._connection() as conn:
             return {"schema_version": 1, "items": [r.summary() for r in self._records(conn)]}
 
@@ -198,6 +220,7 @@ class ProfileRegistry:
         Call again for each reconciliation attempt. Do not cache this result as
         serving authority: activation and live service/job fencing are separate.
         """
+        self._external(data_dir)
         with self._connection() as conn:
             record = self._matching(conn, identity, data_dir)
             if record.state != "creating":
@@ -206,7 +229,7 @@ class ProfileRegistry:
 
     def _matching(self, conn, identity, data_dir):
         for record in self._records(conn):
-            if record.identity == identity and record.data_dir == data_dir.resolve():
+            if record.identity == identity and record.data_dir == data_dir:
                 return record
         raise ValueError("Profile reservation does not match")
 

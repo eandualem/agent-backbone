@@ -4,6 +4,7 @@ import json
 import shutil
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -135,7 +136,7 @@ def test_symlink_alias_cannot_reserve_another_profiles_directory(registry, reser
     alias = tmp_path / "alias"
     alias.symlink_to(reservation.data_dir, target_is_directory=True)
     with pytest.raises(ValueError, match="canonical"):
-        replace(reservation, data_dir=alias)
+        registry.reserve(replace(reservation, data_dir=alias))
     with pytest.raises(ValueError, match="conflicts"):
         registry.reserve(
             replace(
@@ -205,7 +206,8 @@ async def test_provider_database_restore_cannot_resurrect_invalidated_reservatio
         assert await db.profile_identity.read() == identity
         with pytest.raises(ValueError, match="invalidated"):
             registry.check_reservation(await db.profile_identity.read(), directory)
-    assert ProfileRegistry(registry.path).reserve(reservation).state == "failed"
+    with pytest.raises(ValueError, match="invalidated"):
+        ProfileRegistry(registry.path).reserve(reservation)
     assert registry.show(identity.profile_id)["binding"] is None
     assert registry.list()["items"][0]["state"] == "failed"
     with pytest.raises(ValueError, match="does not match"):
@@ -220,6 +222,8 @@ async def test_provider_database_restore_cannot_resurrect_invalidated_reservatio
         "UPDATE profiles SET data_dir = 'relative'",
         "UPDATE profiles SET baseline_version = ''",
         "DROP TABLE profiles",
+        "UPDATE profiles SET data_dir = X'2F61'",
+        "ALTER TABLE profiles RENAME COLUMN display_name TO name",
     ],
 )
 def test_invalid_metadata_fails_closed_without_repair(registry, reservation, statement):
@@ -242,3 +246,52 @@ def test_invalid_metadata_fails_closed_without_repair(registry, reservation, sta
 def test_ready_is_not_a_reservation_state(reservation):
     with pytest.raises(ValueError, match="state"):
         replace(reservation, state="ready")
+
+
+def test_changed_provider_path_cannot_block_discovery_or_invalidation(registry, reservation):
+    registry.reserve(reservation)
+    other = replace(
+        reservation,
+        identity=ProfileIdentity("profile-b", "installation-b", "lifecycle-b1"),
+        data_dir=reservation.data_dir.with_name("b"),
+    )
+    registry.reserve(other)
+    reservation.data_dir.parent.mkdir()
+    reservation.data_dir.symlink_to(other.data_dir, target_is_directory=True)
+    with pytest.raises(ValueError, match="canonical"):
+        registry.check_reservation(reservation.identity, reservation.data_dir)
+    assert registry.check_reservation(other.identity, other.data_dir) == other
+    assert len(registry.list()["items"]) == 2
+    registry.invalidate(reservation.identity, reservation.data_dir)
+    registry.invalidate(other.identity, other.data_dir)
+    assert registry.show("profile-a")["state"] == "failed"
+    reservation.data_dir.unlink()
+    with pytest.raises(ValueError, match="invalidated"):
+        registry.check_reservation(reservation.identity, reservation.data_dir)
+    with pytest.raises(ValueError, match="invalidated"):
+        registry.check_reservation(other.identity, other.data_dir)
+
+
+def test_interrupted_initialization_never_publishes_an_empty_registry(tmp_path, monkeypatch):
+    path = tmp_path / "registry.db"
+    original = ProfileRegistry._connection
+
+    @contextmanager
+    def interrupt(self, **kwargs):
+        with original(self, **kwargs) as conn:
+            yield conn
+            raise RuntimeError("interrupted before commit")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ProfileRegistry, "_connection", interrupt)
+        with pytest.raises(RuntimeError, match="interrupted"):
+            ProfileRegistry.create(path)
+    assert not path.exists()
+    assert ProfileRegistry.create(path).list()["items"] == []
+
+
+def test_concurrent_initialization_publishes_only_complete_registries(tmp_path):
+    path = tmp_path / "registry.db"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        registries = list(pool.map(ProfileRegistry.create, [path, path]))
+    assert all(registry.list() == {"schema_version": 1, "items": []} for registry in registries)
