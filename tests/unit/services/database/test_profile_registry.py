@@ -42,7 +42,7 @@ def test_read_never_creates_or_repairs_registry(tmp_path):
     with pytest.raises(ValueError):
         registry.list()
     assert not path.parent.exists()
-    path.parent.mkdir()
+    path.parent.mkdir(mode=0o700)
     path.write_bytes(b"")
     path.chmod(0o600)
     with pytest.raises(ValueError, match="schema"):
@@ -322,23 +322,35 @@ def test_symlink_loops_refuse_reconciliation_without_blocking_invalidation(regis
         registry.check_reservation(reservation.identity, reservation.data_dir)
 
 
-def test_registry_refuses_a_replaceable_parent_directory(tmp_path):
+@pytest.mark.parametrize("mode", [0o777, 0o1777])
+def test_registry_refuses_a_replaceable_parent_directory(tmp_path, mode):
     parent = tmp_path / "shared"
     parent.mkdir()
-    parent.chmod(0o777)
+    parent.chmod(mode)
     path = parent / "registry.db"
     with pytest.raises(ValueError, match="directory"):
         ProfileRegistry.create(path)
     assert not path.exists()
     parent.chmod(0o700)
     registry = ProfileRegistry.create(path)
-    parent.chmod(0o777)
+    parent.chmod(mode)
     with pytest.raises(ValueError, match="directory"):
         registry.list()
     with pytest.raises(ValueError, match="directory"):
         ProfileRegistry.create(path)
     parent.chmod(0o700)
     assert registry.list()["items"] == []
+
+
+def test_registry_requires_its_parent_to_belong_to_the_current_user(registry, monkeypatch):
+    owner = registry.path.parent.stat().st_uid
+    monkeypatch.setattr(
+        "agent_backbone.services.database._profile_registry.os.geteuid", lambda: owner + 1
+    )
+    with pytest.raises(ValueError, match="directory"):
+        registry.list()
+    with pytest.raises(ValueError, match="directory"):
+        ProfileRegistry.create(registry.path)
 
 
 def test_interrupted_invalidation_requires_explicit_replay_for_journal_recovery(

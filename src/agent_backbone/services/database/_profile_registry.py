@@ -117,8 +117,8 @@ class ProfileRegistry:
         return registry
 
     def _check_parent(self) -> None:
-        mode = self.path.parent.stat().st_mode
-        if mode & 0o022 and not mode & stat.S_ISVTX:
+        info = self.path.parent.stat()
+        if info.st_uid != os.geteuid() or info.st_mode & 0o022:
             raise ValueError("Profile registry directory allows untrusted file replacement")
 
     @contextmanager

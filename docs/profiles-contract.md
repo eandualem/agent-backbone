@@ -35,8 +35,9 @@ fencing: no command, startup or request path uses it yet. It cannot publish
 commands and runtime account boundary remain unfinished.
 
 Registry initialization publishes a complete private database without replacing
-an existing registry. Its containing directory cannot be group- or other-writable
-unless the sticky bit prevents untrusted file replacement. Discovery reads stored
+an existing registry. Its containing directory must belong to the current user
+and cannot be group- or other-writable, even with the sticky bit: SQLite's sibling
+journal files also need protection. Discovery reads stored
 directory metadata; it does not
 inspect provider directories. Reservation and reconciliation check the selected
 directory against the filesystem. A changed provider path cannot prevent reading
