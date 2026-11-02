@@ -131,7 +131,9 @@ tuple before effects. A timeout leaves the result unknown until the original
 operation receipt is read; do not create a new request to guess at its outcome.
 An unknown-operation lookup exits nonzero with the `operation_lookup_unknown`
 fixture body. It is a lookup error, not a fabricated failed-operation receipt,
-and does not prove the timed-out action had no effect. Retain the original ID,
+and does not prove the timed-out action had no effect. Distinguish lookup errors
+from operation receipts by their JSON body shape, not by exit status alone.
+Retain the original ID,
 body and binding; only an identical resubmission can use the idempotency guarantee.
 Reserve the durable operation record before any side effect.
 
