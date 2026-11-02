@@ -7,8 +7,10 @@ another profile affects new work; it cannot retarget an existing request.
 
 **Implementation status:** this page and its fixtures define the agreed contract.
 Operator list/show discovery and refusal of unreconciled startup are implemented.
-Ready profile activation, the identity endpoint and lifecycle commands remain
-unimplemented; the contract below is not a procedure for activating profiles.
+Ready profile activation and lifecycle commands remain unimplemented. The identity
+endpoint and bound-request checks have an internal reconciliation context, but no
+production startup installs it yet; the contract below is not a procedure for
+activating profiles.
 Provider implementation is
 tracked in [#548](https://github.com/eandualem/agent-backbone/issues/548), with the
 consumer in [agent-interface#182](https://github.com/eandualem/agent-interface/issues/182).
@@ -47,6 +49,25 @@ explicit socket, regardless of inherited tmux selection. Attaching from a client
 on another server requires a separate terminal. Legacy processes retain their
 existing environment behavior. No profile startup or selection command enables
 this pin yet; it does not establish runtime account isolation or provider readiness.
+
+Internal read-only reconciliation captures the external reservation, local
+SQLite identity, baseline and explicit terminal socket. It refuses changed
+ownership, identity, signing audience, baseline or noncanonical paths without
+creating or repairing storage. It leaves discovery non-ready and does not lift
+the startup refusal. External databases and Default adoption are not supported
+by this isolated-provider prerequisite.
+
+With that context installed by a future activation path, authenticated
+`GET /api/profile` returns the agreed identity response. HTTP content operations
+compare the complete tuple, the actual serving database and data directory,
+persisted metadata and process terminal pin before route handling. This internal
+path accepts a canonical file-backed SQLite URL without query overrides.
+Socket connections capture the context and recheck it before
+events and emissions, including operator connections. Invalidation or changed
+metadata refuses subsequent operations; this does not drain in-flight requests
+or fence background jobs. Complete replacement/restore fencing, ready publication
+and runtime/integration isolation remain required before activation is exposed.
+The legacy identity endpoint authenticates and then returns 404.
 
 Registry initialization publishes a complete private database without replacing
 an existing registry. Its containing directory must belong to the current user

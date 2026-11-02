@@ -20,7 +20,7 @@ from pathlib import Path
 import socketio
 
 from agent_backbone.api.auth import credential_registration, credential_role
-from agent_backbone.api.profile_binding import BINDING_MISMATCH, PROFILE_FIELDS
+from agent_backbone.api.profile_binding import PROFILE_FIELDS, binding_error, provider_current
 from agent_backbone.api.session_updates import SESSIONS_NAMESPACE
 from agent_backbone.services.terminal import (
     PtyManager,
@@ -92,14 +92,20 @@ class RegistrationAwareServer(socketio.AsyncServer):
         excluded = [skip_sid] if isinstance(skip_sid, str) else list(skip_sid or [])
         if isinstance(ns, _AuthenticatedNamespace):
             recipients = tuple(self.manager.get_participants(ns.namespace, to or room))
+            admitted = []
             for sid, _ in recipients:
                 if (
                     sid not in excluded
-                    and sid in ns._registrations
-                    and not await ns.registration_current(sid)
+                    and sid in ns._profiles
+                    and await ns.registration_current(sid)
                 ):
-                    # Also exclude a connection whose disconnect is already in progress.
-                    excluded.append(sid)
+                    admitted.append(sid)
+            # Socket.IO joins the room before on_connect finishes. Revalidation
+            # yields too: clients joining during it were never checked. Target
+            # only admitted SIDs, never re-enumerate the original broadcast room.
+            if not admitted:
+                return
+            to, room = admitted, None
         return await super().emit(
             event,
             data,
@@ -118,8 +124,17 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
     def __init__(self, namespace: str) -> None:
         super().__init__(namespace)
         self._registrations: dict[str, str] = {}
+        self._profiles: dict = {}
 
     async def registration_current(self, sid: str) -> bool:
+        app = getattr(self.server, "fastapi_app", None)
+        provider = getattr(getattr(app, "state", None), "profile_provider", None)
+        captured = self._profiles.get(sid)
+        if captured is not provider or (
+            captured is not None and not await provider_current(captured, app)
+        ):
+            await self.disconnect(sid)
+            return False
         registration = self._registrations.get(sid)
         if registration is None:  # operator and legacy shared credentials retain their authority
             return True
@@ -146,6 +161,7 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
 
     async def on_disconnect(self, sid: str) -> None:
         self._registrations.pop(sid, None)
+        self._profiles.pop(sid, None)
 
     def _config(self):
         app = getattr(self.server, "fastapi_app", None)
@@ -173,10 +189,18 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
                 "Socket.IO %s connection rejected — invalid auth (sid=%s)", self.namespace, sid
             )
             return False
-        if isinstance(auth, dict) and any(field in auth for field in PROFILE_FIELDS):
+        app = getattr(self.server, "fastapi_app", None)
+        provider = getattr(getattr(app, "state", None), "profile_provider", None)
+        values = {
+            field: auth[field]
+            for field in PROFILE_FIELDS
+            if isinstance(auth, dict) and field in auth
+        }
+        if error := await binding_error(provider, values, app):
             raise socketio.exceptions.ConnectionRefusedError(
-                BINDING_MISMATCH["message"], {"code": BINDING_MISMATCH["code"]}
+                error["message"], {"code": error["code"]}
             )
+        self._profiles[sid] = provider
         config = self._config()
         raw = auth.get("api_key") if isinstance(auth, dict) else None
         if registration := credential_registration(raw, config.api_key):
