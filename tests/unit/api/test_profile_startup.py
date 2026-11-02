@@ -283,7 +283,8 @@ async def test_readonly_database_or_preflight_is_not_recovered(config, explicit_
     assert (path.read_bytes(), journal.read_bytes()) == before
 
 
-def test_recorded_existing_setup_hot_journal_is_refused_without_writes(config, tmp_path, capsys):
+@pytest.mark.parametrize("recorded", [False, True])
+def test_existing_setup_hot_journal_is_refused_without_writes(config, tmp_path, capsys, recorded):
     import json
 
     from agent_backbone.cli import build_parser, onboarding
@@ -307,15 +308,19 @@ def test_recorded_existing_setup_hot_journal_is_refused_without_writes(config, t
         )
     )
     body = onboarding.SetupInitialize.model_validate_json(request.read_text()).model_dump()
-    with SetupReceipt(config.data_dir, body) as receipt:
-        receipt.save(fresh=False)
-    receipt_before = receipt.path.read_bytes()
+    if recorded:
+        with SetupReceipt(config.data_dir, body) as receipt:
+            receipt.save(fresh=False)
+        receipt_before = receipt.path.read_bytes()
     args = build_parser().parse_args(["setup", "--file", str(request), "--jsonl"])
     assert args.func(args) == 3
     result = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert result["code"] == "installation_conflict"
     assert (path.read_bytes(), journal.read_bytes(), config.env_path.read_bytes()) == before
-    assert receipt.path.read_bytes() == receipt_before
+    if recorded:
+        assert receipt.path.read_bytes() == receipt_before
+    else:
+        assert not (config.data_dir / "setup-receipts").exists()
 
 
 @pytest.mark.parametrize("changed", [None, "request", "credentials"])
