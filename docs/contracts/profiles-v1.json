@@ -121,6 +121,36 @@
         "code": "binding_mismatch",
         "message": "Profile binding does not match."
       }
+    },
+    "create_pending": {
+      "schema_version": 1,
+      "request_id": "operation-create-a",
+      "action": "create",
+      "profile_id": null,
+      "installation_id": null,
+      "lifecycle_id": null,
+      "status": "pending",
+      "error": null
+    },
+    "create_reserved_pending": {
+      "schema_version": 1,
+      "request_id": "operation-create-a",
+      "action": "create",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "status": "pending",
+      "error": null
+    },
+    "stop_succeeded": {
+      "schema_version": 1,
+      "request_id": "operation-stop-a",
+      "action": "stop",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "status": "succeeded",
+      "error": null
     }
   },
   "http_errors": {
@@ -237,15 +267,15 @@
     {
       "name": "legacy_adopted",
       "serving_identity": {
-        "profile_id": "profile-a",
-        "installation_id": "installation-a",
-        "lifecycle_id": "lifecycle-a1"
+        "profile_id": "profile-legacy",
+        "installation_id": "installation-legacy",
+        "lifecycle_id": "lifecycle-legacy1"
       },
       "expected_identity": {},
       "legacy_eligible_identity": {
-        "profile_id": "profile-a",
-        "installation_id": "installation-a",
-        "lifecycle_id": "lifecycle-a1"
+        "profile_id": "profile-legacy",
+        "installation_id": "installation-legacy",
+        "lifecycle_id": "lifecycle-legacy1"
       },
       "outcome": "allow",
       "display_name": "Default"
@@ -253,15 +283,15 @@
     {
       "name": "legacy_renamed",
       "serving_identity": {
-        "profile_id": "profile-a",
-        "installation_id": "installation-a",
-        "lifecycle_id": "lifecycle-a1"
+        "profile_id": "profile-legacy",
+        "installation_id": "installation-legacy",
+        "lifecycle_id": "lifecycle-legacy1"
       },
       "expected_identity": {},
       "legacy_eligible_identity": {
-        "profile_id": "profile-a",
-        "installation_id": "installation-a",
-        "lifecycle_id": "lifecycle-a1"
+        "profile_id": "profile-legacy",
+        "installation_id": "installation-legacy",
+        "lifecycle_id": "lifecycle-legacy1"
       },
       "outcome": "allow",
       "display_name": "Archive"
@@ -275,9 +305,9 @@
       },
       "expected_identity": {},
       "legacy_eligible_identity": {
-        "profile_id": "profile-a",
-        "installation_id": "installation-a",
-        "lifecycle_id": "lifecycle-a1"
+        "profile_id": "profile-legacy",
+        "installation_id": "installation-legacy",
+        "lifecycle_id": "lifecycle-legacy1"
       },
       "outcome": "binding_required",
       "display_name": "Default"
@@ -285,18 +315,49 @@
     {
       "name": "replaced_legacy",
       "serving_identity": {
-        "profile_id": "profile-a",
-        "installation_id": "installation-a",
-        "lifecycle_id": "lifecycle-a2"
+        "profile_id": "profile-legacy",
+        "installation_id": "installation-legacy",
+        "lifecycle_id": "lifecycle-legacy2"
       },
       "expected_identity": {},
       "legacy_eligible_identity": {
-        "profile_id": "profile-a",
-        "installation_id": "installation-a",
-        "lifecycle_id": "lifecycle-a1"
+        "profile_id": "profile-legacy",
+        "installation_id": "installation-legacy",
+        "lifecycle_id": "lifecycle-legacy1"
       },
       "outcome": "binding_required",
       "display_name": "Default"
     }
-  ]
+  ],
+  "socket_errors": {
+    "binding_required": {
+      "event": "connect_error",
+      "payload": {
+        "message": "Profile binding is required.",
+        "data": {
+          "code": "binding_required"
+        }
+      }
+    },
+    "binding_mismatch": {
+      "event": "connect_error",
+      "payload": {
+        "message": "Profile binding does not match.",
+        "data": {
+          "code": "binding_mismatch"
+        }
+      }
+    }
+  },
+  "operation_lookup_unknown": {
+    "exit_code": 1,
+    "body": {
+      "schema_version": 1,
+      "request_id": "operation-unknown",
+      "error": {
+        "code": "operation_not_found",
+        "message": "Profile operation was not found."
+      }
+    }
+  }
 }

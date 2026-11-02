@@ -10,12 +10,13 @@ The profile commands and endpoint below are not implemented yet. They are not
 instructions for configuring the current release. Provider implementation is
 tracked in [#548](https://github.com/eandualem/agent-backbone/issues/548), with the
 consumer in [agent-interface#182](https://github.com/eandualem/agent-interface/issues/182).
-The contract revision is **2**; its JSON `schema_version` remains **1**.
+The agreed design revision is **2**; JSON `schema_version: 1` is the first wire
+version. There is no earlier released profile protocol.
 
 [Shared fixtures](contracts/profiles-v1.json) contain discovery records, identity,
-HTTP headers, Socket.IO identity fields, lifecycle requests/receipts and binding
-cases. All identifiers and paths are synthetic. `baseline-example-v1` is a fixture
-value, not an available baseline. The file's top-level groups and binding cases
+HTTP headers, Socket.IO identity/error fields, lifecycle requests/receipts,
+unknown-operation lookup and binding cases. All identifiers and paths are synthetic.
+`baseline-example-v1` is a fixture value, not an available baseline. The file's top-level groups and binding cases
 are a test container, not a new API response. Consumers can pin this file to a
 commit and run its cases against their own implementation.
 
@@ -58,7 +59,14 @@ HTTP 409 `binding_required`; a partial or mismatching tuple returns 409
 `binding_mismatch`. Errors contain no actual mismatching identity or sibling data.
 Existing 401/403 authentication and permission failures remain. The fixture's
 `http_errors` records specify the response bodies; the outer `status`/`body` pair
-is fixture metadata. Never retry a rejected bound request without its identity.
+is fixture metadata. Socket.IO namespace rejection uses `connect_error` with
+`{"message":"Profile binding does not match.","data":{"code":"binding_mismatch"}}`
+(or the corresponding `binding_required` message/code). The `socket_errors`
+fixtures specify these payloads, without inventing an HTTP status for sockets.
+Existing socket authentication/permission failures remain unchanged. A binding
+rejection must not trigger automatic retry under a new tuple or without a tuple;
+a new connection requires explicit identity verification. Never retry a rejected
+bound request without its identity.
 An unsupported schema or older provider's 404 is an explicit compatibility failure.
 
 ## Discover a connection
@@ -121,6 +129,11 @@ returns the same operation; different input under that ID is a conflict. Seriali
 opposing lifecycle actions per profile or refuse as busy. Compare the expected
 tuple before effects. A timeout leaves the result unknown until the original
 operation receipt is read; do not create a new request to guess at its outcome.
+An unknown-operation lookup exits nonzero with the `operation_lookup_unknown`
+fixture body. It is a lookup error, not a fabricated failed-operation receipt,
+and does not prove the timed-out action had no effect. Retain the original ID,
+body and binding; only an identical resubmission can use the idempotency guarantee.
+Reserve the durable operation record before any side effect.
 
 Receipts carry `schema_version`, `request_id`, `action`, all three identity fields,
 `status` and `error`. Status is `pending`, `succeeded` or `failed`. Errors have bounded
@@ -155,8 +168,11 @@ those operations are implemented, including cancel, recovery and runtime probes.
 
 The binding cases assume valid credentials and permission for the requested action;
 they do not authorize an unauthenticated caller. Run them against server enforcement,
-not only a client-side comparison. Pair them with A/B tests using identical resource
-and pane names, switching during in-flight work and replacing the endpoint between
+not only a client-side comparison. Each case supplies independent identity and
+legacy-eligibility inputs; the discovery examples are not shared registry state
+for the cases. `ordinary_restart` specifies the expected post-restart binding,
+not evidence that a restart has been executed. Pair them with A/B tests using
+identical resource and pane names, switching during in-flight work and replacing the endpoint between
 handshake and mutation. Check restart stability, restore invalidation, partial
 bindings, renamed eligible Default and an unrelated profile named Default.
 
