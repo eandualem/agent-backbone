@@ -318,3 +318,34 @@ async def test_pending_binding_cannot_receive_broadcast(api_app, bound_provider,
         with pytest.raises(socketio.exceptions.ConnectionRefusedError):
             await connecting
         await sio.manager.disconnect(sid, "/sessions")
+
+
+async def test_broadcast_cannot_expand_recipients_during_validation(
+    api_app, bound_provider, monkeypatch
+):
+    provider, _, _ = bound_provider
+    sio = api_app.state.sio
+    sio._send_packet = AsyncMock()
+    sio._send_eio_packet = AsyncMock()
+    api_app.state.feed.snapshot = AsyncMock(return_value=[])
+    sid = await sio.manager.connect("engine-admitted", "/sessions")
+    ns = sio.namespace_handlers["/sessions"]
+    assert await ns.on_connect(
+        sid,
+        {},
+        {
+            "api_key": api_app.state.config.api_key,
+            **vars(provider.reservation.identity),
+        },
+    )
+    sio._send_eio_packet.reset_mock()
+    check = ns.registration_current
+
+    async def admit_during_check(current):
+        # Socket.IO joins the room before invoking the pending handshake.
+        await sio.manager.connect("engine-pending", "/sessions")
+        return await check(current)
+
+    monkeypatch.setattr(ns, "registration_current", admit_during_check)
+    await sio.emit("sessions:update", {"text": "admitted only"}, namespace="/sessions")
+    assert [call.args[0] for call in sio._send_eio_packet.await_args_list] == ["engine-admitted"]
