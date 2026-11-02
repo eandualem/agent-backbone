@@ -3,6 +3,8 @@
 import json
 import shutil
 import sqlite3
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import replace
@@ -119,14 +121,17 @@ def test_registry_cannot_be_restored_as_part_of_provider_directory(registry, res
     assert registry.list()["items"] == []
 
 
-def test_unicode_directory_aliases_cannot_acquire_separate_reservations(registry, reservation):
-    registry.reserve(replace(reservation, data_dir=reservation.data_dir.with_name("caf\u00e9")))
+@pytest.mark.parametrize("names", [("caf\u00e9", "cafe\u0301"), ("\u0390", "\u03aa\u0301")])
+def test_unicode_directory_aliases_cannot_acquire_separate_reservations(
+    registry, reservation, names
+):
+    registry.reserve(replace(reservation, data_dir=reservation.data_dir.with_name(names[0])))
     with pytest.raises(ValueError, match="conflicts"):
         registry.reserve(
             replace(
                 reservation,
                 identity=ProfileIdentity("profile-b", "installation-b", "lifecycle-b1"),
-                data_dir=reservation.data_dir.with_name("cafe\u0301"),
+                data_dir=reservation.data_dir.with_name(names[1]),
             )
         )
 
@@ -224,6 +229,7 @@ async def test_provider_database_restore_cannot_resurrect_invalidated_reservatio
         "DROP TABLE profiles",
         "UPDATE profiles SET data_dir = X'2F61'",
         "ALTER TABLE profiles RENAME COLUMN display_name TO name",
+        "UPDATE profiles SET data_dir = '/nul' || char(0) || 'x'",
     ],
 )
 def test_invalid_metadata_fails_closed_without_repair(registry, reservation, statement):
@@ -314,3 +320,60 @@ def test_symlink_loops_refuse_reconciliation_without_blocking_invalidation(regis
     reservation.data_dir.unlink()
     with pytest.raises(ValueError, match="invalidated"):
         registry.check_reservation(reservation.identity, reservation.data_dir)
+
+
+def test_registry_refuses_a_replaceable_parent_directory(tmp_path):
+    parent = tmp_path / "shared"
+    parent.mkdir()
+    parent.chmod(0o777)
+    path = parent / "registry.db"
+    with pytest.raises(ValueError, match="directory"):
+        ProfileRegistry.create(path)
+    assert not path.exists()
+    parent.chmod(0o700)
+    registry = ProfileRegistry.create(path)
+    parent.chmod(0o777)
+    with pytest.raises(ValueError, match="directory"):
+        registry.list()
+    with pytest.raises(ValueError, match="directory"):
+        ProfileRegistry.create(path)
+    parent.chmod(0o700)
+    assert registry.list()["items"] == []
+
+
+def test_interrupted_invalidation_requires_explicit_replay_for_journal_recovery(
+    registry, reservation
+):
+    registry.reserve(reservation)
+    # Spill enough pages to leave a hot journal when the child exits without
+    # committing. No service, signals to other processes or model call is used.
+    with sqlite3.connect(registry.path) as conn:
+        conn.execute("CREATE TABLE spill (data BLOB)")
+        conn.execute("INSERT INTO spill VALUES (zeroblob(262144))")
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os, sqlite3, sys; "
+            "c = sqlite3.connect(sys.argv[1]); "
+            "c.execute('PRAGMA cache_size=1'); "
+            "c.execute('BEGIN IMMEDIATE'); "
+            "c.execute(\"UPDATE profiles SET state = 'failed'\"); "
+            "c.execute('UPDATE spill SET data=randomblob(262144)'); "
+            "os._exit(0)",
+            str(registry.path),
+        ],
+        check=True,
+        timeout=10,
+    )
+    journal = Path(str(registry.path) + "-journal")
+    assert journal.exists()
+    before = registry.path.read_bytes(), journal.read_bytes()
+    for read in (registry.list, lambda: registry.show(reservation.identity.profile_id)):
+        with pytest.raises(ValueError, match="unavailable") as error:
+            read()
+        assert error.value.__cause__.sqlite_errorname == "SQLITE_READONLY_ROLLBACK"
+        assert (registry.path.read_bytes(), journal.read_bytes()) == before
+    registry.invalidate(reservation.identity, reservation.data_dir)
+    assert registry.show(reservation.identity.profile_id)["state"] == "failed"
+    assert not journal.exists()

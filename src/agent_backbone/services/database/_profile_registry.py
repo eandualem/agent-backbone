@@ -44,7 +44,11 @@ class ProfileReservation:
     def __post_init__(self) -> None:
         if not isinstance(self.identity, ProfileIdentity):
             raise ValueError("Invalid profile identity")
-        if not self.data_dir.is_absolute() or ".." in self.data_dir.parts:
+        if (
+            not self.data_dir.is_absolute()
+            or ".." in self.data_dir.parts
+            or "\x00" in str(self.data_dir)
+        ):
             raise ValueError("Profile directory must be normalized and absolute")
         for value in (self.display_name, self.baseline_version):
             if (
@@ -81,6 +85,7 @@ class ProfileRegistry:
         """Explicitly initialize a new registry, never replace an existing one."""
         registry = cls(path)
         registry.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        registry._check_parent()
         if registry.path.exists():
             registry.list()
             return registry
@@ -111,10 +116,16 @@ class ProfileRegistry:
         registry.list()
         return registry
 
+    def _check_parent(self) -> None:
+        mode = self.path.parent.stat().st_mode
+        if mode & 0o022 and not mode & stat.S_ISVTX:
+            raise ValueError("Profile registry directory allows untrusted file replacement")
+
     @contextmanager
     def _connection(self, *, write=False, initializing=False):
         conn = None
         try:
+            self._check_parent()
             if not self.path.is_file() or self.path.stat().st_mode & 0o077:
                 raise ValueError("Profile registry must be an existing private file")
             mode = "rw" if write else "ro"
@@ -173,9 +184,11 @@ class ProfileRegistry:
         # Conservatively refuse aliases even before directories exist. Case and
         # Unicode normalization can alias on macOS but not on every filesystem;
         # profile roots must remain distinct on either kind of filesystem.
-        parent = Path(unicodedata.normalize("NFC", str(parent)).casefold())
-        child = Path(unicodedata.normalize("NFC", str(child)).casefold())
-        return child.is_relative_to(parent)
+        def key(path):
+            folded = unicodedata.normalize("NFD", str(path)).casefold()
+            return Path(unicodedata.normalize("NFD", folded))
+
+        return key(child).is_relative_to(key(parent))
 
     @classmethod
     def _overlap(cls, first: Path, second: Path) -> bool:
