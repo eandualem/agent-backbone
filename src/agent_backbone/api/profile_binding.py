@@ -1,10 +1,13 @@
-"""Fail closed for profile-bound clients until provider adoption is implemented."""
+"""Authenticate and compare a captured provider identity before content access."""
 
 from fastapi import HTTPException, Request
+from sqlalchemy.engine import make_url
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 
 from agent_backbone.api.auth import require_api_key
+from agent_backbone.services.database import ProfileProvider
+from agent_backbone.services.terminal import tmux_server_socket
 
 PROFILE_HEADERS = (
     "x-backbone-profile-id",
@@ -13,9 +16,54 @@ PROFILE_HEADERS = (
 )
 PROFILE_FIELDS = ("profile_id", "installation_id", "lifecycle_id")
 BINDING_MISMATCH = {"code": "binding_mismatch", "message": "Profile binding does not match."}
+BINDING_REQUIRED = {"code": "binding_required", "message": "Profile binding is required."}
 
 
-class LegacyProfileBindingMiddleware:
+async def provider_current(provider: ProfileProvider, app) -> bool:
+    """Never expose metadata or storage failures in a binding refusal."""
+    if tmux_server_socket() != str(provider.socket_path):
+        return False
+    try:
+        db = app.state.db
+        url = make_url(db.url)
+        if (
+            app.state.config.data_dir != provider.reservation.data_dir
+            or url.get_backend_name() != "sqlite"
+            or url.database != str(provider.database_path)
+            or url.query
+            or await db.profile_identity.read() != provider.reservation.identity
+        ):
+            return False
+        await provider.check()
+    except Exception:
+        return False
+    return True
+
+
+async def binding_error(provider: ProfileProvider | None, values: dict, app) -> dict | None:
+    if provider is None:
+        return BINDING_MISMATCH if values else None
+    if not values:
+        return BINDING_REQUIRED
+    identity = provider.reservation.identity
+    if values != {field: getattr(identity, field) for field in PROFILE_FIELDS}:
+        return BINDING_MISMATCH
+    if not await provider_current(provider, app):
+        return BINDING_MISMATCH
+    return None
+
+
+async def profile_identity(request: Request) -> dict:
+    """Authenticated handshake; unadopted providers have no attestable identity."""
+    await require_api_key(request)
+    provider = getattr(request.state, "profile_provider", None)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    # Middleware has already authenticated and checked the complete binding.
+    return provider.identity_response()
+
+
+class ProfileBindingMiddleware:
     """An unadopted provider cannot attest any requested profile identity.
 
     Run outside signed-sender processing so a rejected request cannot consume a
@@ -27,9 +75,16 @@ class LegacyProfileBindingMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or not any(
-            field in Headers(scope=scope) for field in PROFILE_HEADERS
-        ):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        provider = getattr(scope["app"].state, "profile_provider", None)
+        headers = Headers(scope=scope)
+        values = {
+            field: headers[header]
+            for header, field in zip(PROFILE_HEADERS, PROFILE_FIELDS, strict=True)
+            if header in headers
+        }
+        if provider is None and not values:
             return await self.app(scope, receive, send)
         try:
             await require_api_key(Request(scope))
@@ -38,5 +93,11 @@ class LegacyProfileBindingMiddleware:
                 {"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers
             )
         else:
-            response = JSONResponse({"detail": BINDING_MISMATCH}, status_code=409)
+            error = await binding_error(provider, values, scope["app"])
+            if any(len(headers.getlist(header)) > 1 for header in PROFILE_HEADERS):
+                error = BINDING_MISMATCH
+            if error is None:
+                scope.setdefault("state", {})["profile_provider"] = provider
+                return await self.app(scope, receive, send)
+            response = JSONResponse({"detail": error}, status_code=409)
         return await response(scope, receive, send)
