@@ -376,12 +376,14 @@ def create_app(config: BackboneConfig | None = None):
     )
     app.state.config = config
 
+    from agent_backbone.api.profile_binding import LegacyProfileBindingMiddleware
     from agent_backbone.api.signed import SignedSenderMiddleware
     from agent_backbone.api.validation import Validations
 
     app.state.validations = Validations()
 
     app.add_middleware(SignedSenderMiddleware)
+    app.add_middleware(LegacyProfileBindingMiddleware)
 
     cors_origins = list(config.backbone.cors_origins)
     if cors_origins:

@@ -13,6 +13,16 @@ consumer in [agent-interface#182](https://github.com/eandualem/agent-interface/i
 The agreed design revision is **2**; JSON `schema_version: 1` is the first wire
 version. There is no earlier released profile protocol.
 
+The unadopted provider currently rejects profile-bound clients: any profile
+identity header or Socket.IO identity field returns `binding_mismatch`, including
+partial or empty bindings. Existing ingress limits and credential/registration
+failures run first. This preliminary guard then refuses HTTP requests before
+route-specific permission or signature checks, and sockets before subscriptions.
+Unbound clients retain all existing checks and behavior. The guard prevents a bound
+operation from silently reaching a legacy provider; it cannot attest an identity
+and does not implement the bound-provider contract below, adoption, discovery or
+isolation.
+
 [Shared fixtures](contracts/profiles-v1.json) contain discovery records, identity,
 HTTP headers, Socket.IO identity/error fields, lifecycle requests/receipts,
 unknown-operation lookup and binding cases. All identifiers and paths are synthetic.
