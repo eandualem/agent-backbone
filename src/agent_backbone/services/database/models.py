@@ -9,7 +9,7 @@ numbers.
 
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Index, Integer, LargeBinary, Text, text
+from sqlalchemy import BigInteger, CheckConstraint, Index, Integer, LargeBinary, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agent_backbone.services.database.base import Base
@@ -704,6 +704,18 @@ class UsageEventORM(Base):
 
 
 # --- Signed senders (docs/owner-confirmed-messages.md) ---
+
+
+class ProfileIdentityORM(Base):
+    """One provider-local identity, reserved explicitly before registry reconciliation."""
+
+    __tablename__ = "profile_identity"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    profile_id: Mapped[str] = mapped_column(Text, nullable=False)
+    installation_id: Mapped[str] = mapped_column(Text, nullable=False)
+    lifecycle_id: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (CheckConstraint("id = 1", name="ck_profile_identity_singleton"),)
 
 
 class SigningInstallORM(Base):

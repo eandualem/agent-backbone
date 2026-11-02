@@ -13,6 +13,14 @@ consumer in [agent-interface#182](https://github.com/eandualem/agent-interface/i
 The agreed design revision is **2**; JSON `schema_version: 1` is the first wire
 version. There is no earlier released profile protocol.
 
+Provider-local identity persistence is implemented as an internal database
+reservation. It stores the profile and lifecycle IDs against the existing signing
+audience, accepts an identical replay and refuses conflicting assignments. Reading
+an unreserved database creates no identity. This storage is not wired into startup
+or discovery and does not adopt Default, enable bound clients or grant legacy
+compatibility. Registry reconciliation, activation and replacement fencing remain
+unimplemented; a copied database is not evidence of a valid active lifecycle.
+
 The unadopted provider currently rejects profile-bound clients: any profile
 identity header or Socket.IO identity field returns `binding_mismatch`, including
 partial or empty bindings. Existing ingress limits and credential/registration
