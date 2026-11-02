@@ -351,13 +351,16 @@ async def test_broadcast_cannot_expand_recipients_during_validation(
     assert [call.args[0] for call in sio._send_eio_packet.await_args_list] == ["engine-admitted"]
 
 
+@pytest.mark.parametrize("prefix", ["", "/bb"])
 async def test_unbound_probes_and_webhooks_keep_route_authentication(
-    api_client, api_app, auth_headers, bound_provider
+    api_client, api_app, auth_headers, bound_provider, prefix
 ):
     import hashlib
     import hmac
 
     provider, registry, headers = bound_provider
+    api_app.root_path = prefix
+    api_client.base_url = f"http://testserver{prefix}/"
     body = b"{}"
     signature = (
         "sha256="
@@ -416,6 +419,10 @@ async def test_broadcast_reconciles_once_and_keeps_recipient_checks(
     check = AsyncMock(wraps=socketio_server.provider_current)
     monkeypatch.setattr(socketio_server, "provider_current", check)
     sio._send_eio_packet.reset_mock()
+    await sio.emit("sentinel", {}, namespace=namespace, skip_sid=list(sids.values()))
+    check.assert_not_awaited()
+    await sio.emit("sentinel", {}, namespace=namespace, room="empty-room")
+    check.assert_not_awaited()
     await sio.emit("sentinel", {}, namespace=namespace)
     check.assert_awaited_once_with(provider, api_app)
     assert [call.args[0] for call in sio._send_eio_packet.await_args_list] == ["operator"]

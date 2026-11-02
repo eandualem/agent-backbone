@@ -87,7 +87,11 @@ class ProfileBindingMiddleware:
         }
         if provider is None and not values:
             return await self.app(scope, receive, send)
-        if not values and (scope["method"], scope["path"]) in UNBOUND_ROUTES:
+        path = scope["path"]
+        prefix = scope.get("root_path", "").rstrip("/")
+        if prefix and path.startswith(prefix + "/"):
+            path = path[len(prefix) :]
+        if not values and (scope["method"], path) in UNBOUND_ROUTES:
             # Preserve route authentication without letting an invalidated provider
             # receive integration events. Any profile header still takes the gate below.
             if await provider_current(provider, scope["app"]):

@@ -92,18 +92,22 @@ class RegistrationAwareServer(socketio.AsyncServer):
         ns = self.namespace_handlers.get(namespace or "/")
         excluded = [skip_sid] if isinstance(skip_sid, str) else list(skip_sid or [])
         if isinstance(ns, _AuthenticatedNamespace):
-            recipients = tuple(self.manager.get_participants(ns.namespace, to or room))
+            recipients = tuple(
+                sid
+                for sid, _ in self.manager.get_participants(ns.namespace, to or room)
+                if sid not in excluded and sid in ns._profiles
+            )
+            if not recipients:
+                return
             app = getattr(self, "fastapi_app", None)
             provider = getattr(getattr(app, "state", None), "profile_provider", None)
             # Reuse only within this emission; each SID still checks its captured
             # context and registration, and the next emission reconciles again.
             provider_check = (provider, provider is None or await provider_current(provider, app))
             admitted = []
-            for sid, _ in recipients:
-                if (
-                    sid not in excluded
-                    and sid in ns._profiles
-                    and await ns.registration_current(sid, provider_check=provider_check)
+            for sid in recipients:
+                if sid in ns._profiles and await ns.registration_current(
+                    sid, provider_check=provider_check
                 ):
                     admitted.append(sid)
             # Socket.IO joins the room before on_connect finishes. Revalidation
