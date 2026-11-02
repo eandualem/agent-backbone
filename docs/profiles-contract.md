@@ -306,8 +306,10 @@ Changed metadata returns `adoption_changed`. An identical original request/body
 replays its durable receipt; a changed body under that ID conflicts. A new request
 for the same original instance returns the existing tuple, never a sibling identity.
 An identity-incompatible restore is not repeated adoption. The `adoption.cases`
-records describe these separate scenarios; fixture references and outcomes are
-case metadata, not wire fields. Completed exact replay returns its recorded result;
+records describe these separate scenarios. `outcome` is `succeeded` or a refusal
+code; optional `expected_receipt` names the corresponding receipt fixture. These
+are case metadata, not wire fields. Changed-body reuse is a rejection, not a new
+operation or permission to overwrite the original receipt. Completed exact replay returns its recorded result;
 it performs no new adoption effects.
 
 Reserve the request before effects and allocate profile/lifecycle IDs once,
@@ -347,8 +349,12 @@ with their own sequence. Ready means measured launch readiness, not proven login
 
 Cancellation changes only the original action to `cancel_first_agent`, preserving
 ID, body and binding. Compare the saved body after normalizing that action back to
-`first_agent`. Idempotency is scoped by action and request ID. Linearize cancellation
-with execution and refuse another lifecycle. Safe cancellation returns
+`first_agent`. Action-specific reply replay is scoped by action and request ID, but both
+actions share the original normalized operation and its cancellation marker. A
+separate cancellation reply must never leave the original action executable.
+Even cancellation before receipt creation blocks a delayed original submission;
+`setup.cancelled_original_result` shows its refusal. Linearize cancellation with
+execution and refuse another lifecycle. Safe cancellation returns
 `request_cancelled`, `retry: new_request`, no completed steps and the original
 cancelled ID; unsafe cancellation preserves work with `cancellation_unsafe`.
 After a lost cancellation response, retry that cancellation, not first-agent setup.
@@ -370,7 +376,8 @@ schema/flags leave discovery unavailable; never retry unbound.
 Authenticated bound `/api/agents` items and `/api/agents/{name}/inspect` expose
 `registration_id` from the durable registration (`AgentSpec.registration_id`, stored
 as `AgentORM.report_identity`). It is unchanged lowercase UUID hex matching
-`^[a-f0-9]{32}$`, not a process/session ID or a content author ID. Unregistered
+`^[a-f0-9]{32}$`. Capture it from the current agent registration, never from a
+process/session ID or a retained content record's author ID. Unregistered
 live-session rows expose null; reads never allocate registrations. The
 `bound_list_member_fields` and `bound_inspect_fields` fixtures are additive field
 fragments, not replacements for existing list or inspect response shapes.
@@ -382,7 +389,8 @@ A fresh name navigation may acquire its initial ID through one bound inspect wit
 it and the existing three binding headers. Omitted required input and present
 empty/malformed input are invalid, never permission to perform a name-only read.
 A well-formed changed ID returns the exact `registration_changed` HTTP 409 fixture
-without replacement inspection data. Capture and recheck registration immediately
+without replacement inspection data, including when the retained registration
+has become null on an unregistered row. Capture and recheck registration immediately
 before returning list, inspect or context results. A change during inspection must
 also refuse the response. Binding/authentication refusals keep their existing order.
 

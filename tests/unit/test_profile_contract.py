@@ -27,10 +27,18 @@ def test_adoption_replay_and_repeat_preserve_the_original_tuple():
         assert all(adoption[key][field] is None for field in IDENTITY)
     cases = {case["name"]: case for case in adoption["cases"]}
     assert cases["identical_body_replay"]["outcome"] == "succeeded"
-    assert cases["new_request_existing_instance"]["outcome"] == "repeat_succeeded"
+    assert cases["new_request_existing_instance"]["outcome"] == "succeeded"
     assert cases["changed_body_same_id"]["outcome"] == "request_conflict"
     assert cases["stale_token_new_request"]["outcome"] == "adoption_changed"
     assert all(not case["allocates_identity"] for case in cases.values())
+    for case in cases.values():
+        assert case["outcome"] in {"succeeded", "request_conflict", "adoption_changed"}
+        if receipt_name := case.get("expected_receipt"):
+            receipt = adoption[receipt_name]
+            assert receipt["request_id"] == adoption[case["request"]]["request_id"]
+            assert case["outcome"] == (
+                receipt["error"]["code"] if receipt["error"] else receipt["status"]
+            )
 
 
 def test_bound_setup_preserves_legacy_fields_and_cancellation_body():
@@ -55,6 +63,7 @@ def test_bound_setup_preserves_legacy_fields_and_cancellation_body():
         "failed_before_resolution",
         "cancellation_result",
         "cancellation_unsafe",
+        "cancelled_original_result",
     ):
         event = setup[name]
         assert {key: event[key] for key in IDENTITY} == binding
@@ -63,6 +72,9 @@ def test_bound_setup_preserves_legacy_fields_and_cancellation_body():
         assert event["action"] == (
             "cancel_first_agent" if name.startswith("cancellation") else "first_agent"
         )
+    assert setup["cancelled_original_result"]["code"] == "request_cancelled"
+    assert setup["cancelled_original_result"]["status"] == "failed"
+    assert setup["cancelled_original_result"]["retry"] == "new_request"
     assert setup["progress"]["seq"] < setup["result"]["seq"]
     assert setup["progress"]["type"] == "step"
     assert setup["failed_before_resolution"]["data"] == {}
@@ -129,4 +141,6 @@ def test_permission_examples_keep_registration_and_unavailable_sources_explicit(
             expected = case["query"]["expected_registration_id"]
             assert re.fullmatch(context["registration_pattern"], expected)
             assert expected != case["registered_id"]
+        if case["registered_id"] is None and "expected_registration_id" in case["query"]:
+            assert case["outcome"] == "registration_changed"
     assert context["redaction_case"]["returned_allow"] == []

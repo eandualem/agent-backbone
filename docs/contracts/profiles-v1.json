@@ -442,15 +442,17 @@
         "prior": "succeeded",
         "current_token": "preflight-default-v1",
         "outcome": "succeeded",
-        "allocates_identity": false
+        "allocates_identity": false,
+        "expected_receipt": "succeeded"
       },
       {
         "name": "new_request_existing_instance",
         "request": "repeat_request",
         "prior": "succeeded",
         "current_token": "preflight-default-v1",
-        "outcome": "repeat_succeeded",
-        "allocates_identity": false
+        "outcome": "succeeded",
+        "allocates_identity": false,
+        "expected_receipt": "repeat_succeeded"
       },
       {
         "name": "changed_body_same_id",
@@ -469,17 +471,32 @@
         "prior": "succeeded",
         "current_token": "preflight-default-v2",
         "outcome": "adoption_changed",
-        "allocates_identity": false
+        "allocates_identity": false,
+        "expected_receipt": "repeat_changed"
       },
       {
         "name": "stale_token_first_adoption",
         "request": "request",
         "prior": null,
         "current_token": "preflight-default-v2",
-        "outcome": "changed",
-        "allocates_identity": false
+        "outcome": "adoption_changed",
+        "allocates_identity": false,
+        "expected_receipt": "changed"
       }
-    ]
+    ],
+    "repeat_changed": {
+      "schema_version": 1,
+      "request_id": "adopt-default-2",
+      "action": "adopt_default",
+      "profile_id": null,
+      "installation_id": null,
+      "lifecycle_id": null,
+      "status": "failed",
+      "error": {
+        "code": "adoption_changed",
+        "message": "Default adoption metadata changed."
+      }
+    }
   },
   "setup": {
     "first_agent": {
@@ -617,6 +634,22 @@
       "completed_steps": [
         "hooks"
       ],
+      "data": {}
+    },
+    "cancelled_original_result": {
+      "schema_version": 2,
+      "request_id": "setup-a1",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "action": "first_agent",
+      "seq": 1,
+      "type": "result",
+      "status": "failed",
+      "code": "request_cancelled",
+      "message": "This setup request was cancelled; choose a new request ID.",
+      "retry": "new_request",
+      "completed_steps": [],
       "data": {}
     }
   },
@@ -836,7 +869,16 @@
           "expected_registration_id": "1234567890abcdef1234567890abcdef"
         },
         "registered_id": null,
-        "outcome": "unavailable"
+        "outcome": "registration_changed"
+      },
+      {
+        "name": "retained_inspect_now_unregistered",
+        "endpoint": "inspect",
+        "query": {
+          "expected_registration_id": "1234567890abcdef1234567890abcdef"
+        },
+        "registered_id": null,
+        "outcome": "registration_changed"
       }
     ],
     "missing": {
