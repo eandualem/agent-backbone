@@ -362,8 +362,14 @@ class Codex(Runtime):
                 break
         return tuple(observations.values())
 
-    def pre_trust(self, directory: Path | str) -> None:
-        pre_trust_codex_directory(directory)
+    def pre_trust(self, directory: Path | str, *, env: dict[str, str] | None = None) -> None:
+        if env is None:
+            pre_trust_codex_directory(directory)
+            return
+        home = Path(
+            env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or agent_home(env) / ".codex"
+        ).expanduser()
+        pre_trust_codex_directory(directory, codex_config=home / "config.toml")
 
     def writable_dir_args(self, dirs: tuple[str, ...]) -> list[str]:
         """``--add-dir <path>`` per writable root, including Git bookkeeping

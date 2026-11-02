@@ -460,8 +460,8 @@ class Runtime:
         ``project`` as for ``user_instructions``."""
         return None
 
-    def pre_trust(self, directory: Path | str) -> None:
-        """Answer the runtime's folder-trust dialog ahead of launch, if it has one."""
+    def pre_trust(self, directory: Path | str, *, env: dict[str, str] | None = None) -> None:
+        """Prepare folder trust in the same native environment as the child process."""
 
     def launch_env(self, model: str | None, effort: str | None = None) -> dict[str, str]:
         """Extra environment the session needs (runtimes that take the model or

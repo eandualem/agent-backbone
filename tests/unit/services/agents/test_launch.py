@@ -1935,3 +1935,54 @@ async def test_recovery_bookkeeping_cannot_mask_launch_result_or_error(config, d
         else:
             result = await start_agent(next(iter(config.agents)), config, db=db)
             assert result.ok and result.ready == "ready"
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_preparation_and_launch_share_the_selected_native_environment(tmp_path, runtime):
+    project = tmp_path / "project"
+    project.mkdir()
+    rt = RUNTIMES[runtime]
+    first_files = {}
+    for profile in ("a", "b"):
+        root = tmp_path / profile
+        root.mkdir()
+        env = {
+            "HOME": str(root / "home"),
+            "CLAUDE_CONFIG_DIR": str(root / "claude"),
+            "CODEX_HOME": str(root / "codex"),
+            "XDG_CONFIG_HOME": str(root / "config"),
+            "XDG_DATA_HOME": str(root / "data"),
+        }
+        config = bootstrap_config(root / "backbone")
+        spec = AgentSpec(name="worker", dir=str(project), runtime=runtime, env=env)
+        with (
+            patch(f"{_MOD}.session_exists", AsyncMock(return_value=False)),
+            patch(f"{_MOD}.start_session", AsyncMock(return_value=True)) as start,
+            patch(f"{_BASE}.resolve_command", return_value=f"/bin/{runtime}"),
+            patch.object(rt, "pre_trust", wraps=rt.pre_trust) as prepare,
+            patch.object(rt, "build_command", wraps=rt.build_command) as command,
+        ):
+            assert (await start_agent(spec, config, wait=False)).ok
+        prepared = prepare.call_args.kwargs["env"]
+        assert command.call_args.kwargs["env"] == prepared
+        assert all(
+            start.await_args.kwargs["environment"][key] == value for key, value in env.items()
+        )
+        assert all(prepared[key] == value for key, value in env.items())
+        if runtime == "claude":
+            trust = root / "claude" / ".claude.json"
+            assert json.loads(trust.read_text())["projects"][str(project)]["hasTrustDialogAccepted"]
+        elif runtime == "codex":
+            trust = root / "codex" / "config.toml"
+            assert str(project) in trust.read_text()
+        else:
+            # OpenCode has no folder trust file; its native paths still reach
+            # preparation and the launched process, without another CLI's writes.
+            assert not (root / "claude").exists()
+            assert not (root / "codex").exists()
+            continue
+        assert not (root / "home" / ".claude.json").exists()
+        assert not (root / "home" / ".codex" / "config.toml").exists()
+        for path, content in first_files.items():
+            assert path.read_bytes() == content
+        first_files[trust] = trust.read_bytes()

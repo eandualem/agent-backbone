@@ -232,8 +232,13 @@ class ClaudeCode(Runtime):
     plan_approve_keys = ("1",)
     plan_reject_keys = ("Escape",)
 
-    def pre_trust(self, directory: Path | str) -> None:
-        pre_trust_directory(directory)
+    def pre_trust(self, directory: Path | str, *, env: dict[str, str] | None = None) -> None:
+        if env is None:
+            pre_trust_directory(directory)
+            return
+        config_dir = env.get("CLAUDE_CONFIG_DIR") or os.environ.get("CLAUDE_CONFIG_DIR")
+        config = (Path(config_dir).expanduser() if config_dir else agent_home(env)) / ".claude.json"
+        pre_trust_directory(directory, claude_config=config)
 
     @staticmethod
     def _unnumbered_dialog(pane_content: str) -> bool:
