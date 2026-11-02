@@ -132,6 +132,26 @@ async def test_before_enrollment_nothing_changes(api_client, auth_headers, api_a
     assert deliver.await_count == 2
 
 
+async def test_profile_rejection_does_not_consume_nonce(api_client, auth_headers, api_app, deliver):
+    key = Ed25519PrivateKey.generate()
+    await _enroll(api_client, auth_headers, api_app.state.db, key)
+    raw, signed = await _signed(api_app.state.db, key, "POST", "/api/messages", MESSAGE)
+    response = await api_client.post(
+        "/api/messages",
+        headers={**auth_headers, **signed, "X-Backbone-Profile-ID": "profile-a"},
+        content=raw,
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "binding_mismatch"
+    deliver.assert_not_awaited()
+    # Explicitly submit as legacy work: rejection must not have spent the nonce.
+    response = await api_client.post(
+        "/api/messages", headers={**auth_headers, **signed}, content=raw
+    )
+    assert response.status_code == 200
+    deliver.assert_awaited_once()
+
+
 async def test_an_enrolled_name_needs_a_valid_signature(api_client, auth_headers, api_app, deliver):
     db = api_app.state.db
     key = Ed25519PrivateKey.generate()

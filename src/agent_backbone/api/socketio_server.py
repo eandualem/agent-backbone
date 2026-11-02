@@ -20,6 +20,7 @@ from pathlib import Path
 import socketio
 
 from agent_backbone.api.auth import credential_registration, credential_role
+from agent_backbone.api.profile_binding import BINDING_MISMATCH, PROFILE_FIELDS
 from agent_backbone.api.session_updates import SESSIONS_NAMESPACE
 from agent_backbone.services.terminal import (
     PtyManager,
@@ -172,6 +173,10 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
                 "Socket.IO %s connection rejected — invalid auth (sid=%s)", self.namespace, sid
             )
             return False
+        if isinstance(auth, dict) and any(field in auth for field in PROFILE_FIELDS):
+            raise socketio.exceptions.ConnectionRefusedError(
+                BINDING_MISMATCH["message"], {"code": BINDING_MISMATCH["code"]}
+            )
         config = self._config()
         raw = auth.get("api_key") if isinstance(auth, dict) else None
         if registration := credential_registration(raw, config.api_key):
