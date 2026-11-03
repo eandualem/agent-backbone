@@ -123,6 +123,20 @@ async def test_cancelled_registry_workers_keep_their_slots(prepared, monkeypatch
         return original(self, *args)
 
     monkeypatch.setattr(ProfileRegistry, "check_reservation", delayed)
+    all_closed = asyncio.Event()
+    closed_count = 0
+    original_operation = ProfileRegistry.operation
+
+    @contextmanager
+    def tracked_operation(self, *args):
+        nonlocal closed_count
+        with original_operation(self, *args):
+            yield
+        closed_count += 1
+        if closed_count == 5:  # Four cancelled admissions and the later request.
+            all_closed.set()
+
+    monkeypatch.setattr(ProfileRegistry, "operation", tracked_operation)
 
     async def call():
         if admission:
@@ -145,6 +159,8 @@ async def test_cancelled_registry_workers_keep_their_slots(prepared, monkeypatch
         release.set()
         await asyncio.wait_for(later, 3)
         await asyncio.wait_for(extra_started.wait(), 3)
+        if admission:
+            await asyncio.wait_for(all_closed.wait(), 3)
     finally:
         release.set()
         for task in [*requests, *([later] if later else [])]:
