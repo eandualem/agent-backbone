@@ -294,9 +294,12 @@ async def list_runtimes(request: Request, check_setup: bool = False):
         await require_operator(request)
         task = getattr(request.app.state, "runtime_setup_checks", None)
         if task is None or task.done():
-            task = asyncio.create_task(_runtime_setup_checks())
-            # Observe failures even if all clients disconnect before completion.
-            task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+            task = request.app.state.api_tasks.create(
+                _runtime_setup_checks,
+                config=request.app.state.config,
+                db=request.app.state.db,
+                provider=getattr(request.state, "profile_provider", None),
+            )
             request.app.state.runtime_setup_checks = task
         # Disconnecting clients must not free capacity while workers still run.
         checks = await asyncio.shield(task)

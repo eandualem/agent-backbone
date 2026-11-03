@@ -12,9 +12,11 @@ import asyncio
 import time
 from collections import Counter
 from dataclasses import dataclass, field
+from functools import partial
 
 from fastapi import Request
 
+from agent_backbone.api.background import ApiTasks
 from agent_backbone.api.confirmations import refuse
 from agent_backbone.config import AgentSpec, BackboneConfig
 from agent_backbone.services.integrations import notify_humans
@@ -79,9 +81,9 @@ class Validations:
     be identified): an incident lasts until INCIDENT_SECONDS pass without a
     checked failure."""
 
-    def __init__(self) -> None:
+    def __init__(self, tasks: ApiTasks) -> None:
         self._incidents: dict[str, _Incident] = {}
-        self._notices: set[asyncio.Task] = set()
+        self._tasks = tasks
         self._locks: dict[str, asyncio.Lock] = {}
 
     def lock(self, caller: str) -> asyncio.Lock:
@@ -117,13 +119,19 @@ class Validations:
         now: float,
         *,
         checked: bool = True,
+        provider=None,
+        db=None,
     ) -> None:
         incident = self._current(caller, now)
         if incident is None:
             incident = self._incidents[caller] = _Incident(last=now)
-            task = asyncio.get_running_loop().create_task(self._notice(config, caller, incident))
-            self._notices.add(task)
-            task.add_done_callback(self._notices.discard)
+            if not self._tasks.closing:
+                self._tasks.create(
+                    lambda: self._notice(config, caller, incident),
+                    config=config,
+                    db=db,
+                    provider=provider,
+                )
         incident.reasons[reason] += 1
         if checked:
             incident.last = now
@@ -181,27 +189,28 @@ async def validate(request: Request, config: BackboneConfig, db, confirmation_id
     """Claim, recover or close the calling agent's grant; the confirmed text
     is returned only on a claim or recovery."""
     validations: Validations = request.app.state.validations
+    failed = partial(
+        validations.failed, provider=getattr(request.state, "profile_provider", None), db=db
+    )
     # Identification runs one at a time. Callers that couldn't be identified
     # share one budget, and a caller can't be told apart before the lookup:
     # once that budget is spent, every validation waits out the incident.
     async with validations.lock(_UNIDENTIFIED):
         now = time.monotonic()
         if validations.spent(_UNIDENTIFIED, now):
-            validations.failed(
-                config, _UNIDENTIFIED, confirmation_id, "rate_limited", now, checked=False
-            )
+            failed(config, _UNIDENTIFIED, confirmation_id, "rate_limited", now, checked=False)
             raise refuse(429, "rate_limited", _UNIDENTIFIED_LIMIT)
         try:
             agent = await caller_agent(request, config)
         except CallerUnknown as exc:
-            validations.failed(config, _UNIDENTIFIED, confirmation_id, "caller_unidentified", now)
+            failed(config, _UNIDENTIFIED, confirmation_id, "caller_unidentified", now)
             status, message = REFUSALS["caller_unidentified"]
             raise refuse(status, "caller_unidentified", f"{message}: {exc}") from exc
     # One check at a time per caller, so a burst can't outrun the bound.
     async with validations.lock(agent.name):
         now = time.monotonic()
         if reason := validations.refused(agent.name, confirmation_id, now):
-            validations.failed(config, agent.name, confirmation_id, reason, now, checked=False)
+            failed(config, agent.name, confirmation_id, reason, now, checked=False)
             raise refuse(REFUSALS[reason][0], reason, REFUSALS[reason][1])
         outcome, record = await _check(db, agent, confirmation_id, done)
         if outcome == "not_delivered":
@@ -210,7 +219,7 @@ async def validate(request: Request, config: BackboneConfig, db, confirmation_id
             await settle_steers(config, db, read_states=False)
             outcome, record = await _check(db, agent, confirmation_id, done)
         if record is None:
-            validations.failed(config, agent.name, confirmation_id, outcome, now)
+            failed(config, agent.name, confirmation_id, outcome, now)
             raise refuse(REFUSALS[outcome][0], outcome, REFUSALS[outcome][1])
     receipt, grant = record["receipt"], record["grant"]
     result = {
