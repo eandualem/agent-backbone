@@ -671,11 +671,12 @@ def project_resources(
             raise ValueError("Cannot identify the main checkout for a new worktree")
         if git_dir is not None:
             resources.append(git_dir)
-            # Only linked-worktree metadata supplies the main-checkout config
-            # path. A standalone separate Git directory has no commondir;
-            # claiming its parent would capture unrelated repositories.
+            # Linked worktrees consume Git's canonical main-checkout config.
+            # Reserve that root before creating one too, including when a
+            # separate Git directory named .git makes its parent Git's main.
+            # Standalone agents need no inferred parent reservation.
             private = _git_dir(root)
-            if private is not None and (private / "commondir").is_file():
+            if for_worktree or (private is not None and (private / "commondir").is_file()):
                 if git_dir.name != ".git":
                     raise ValueError("Cannot identify the main checkout for separate Git metadata")
                 resources.append(git_dir.parent)

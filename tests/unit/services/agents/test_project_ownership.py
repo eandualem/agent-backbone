@@ -332,3 +332,46 @@ async def test_swarm_refuses_separate_metadata_before_creating_a_worktree(owners
     assert not list(store.agents)
     assert not (project / ".backbone").exists()
     registry.claim_projects(b.reservation.identity, b.reservation.data_dir, (project, metadata))
+
+
+async def test_swarm_claims_separate_dot_git_main_before_creation(owners, tmp_path, db):
+    registry, (a, b) = owners
+    project = tmp_path / "project"
+    project.mkdir()
+    metadata = tmp_path / "metadata/.git"
+    metadata.mkdir(parents=True)
+    (project / ".git").write_text(f"gitdir: {metadata}\n")
+    sibling = tmp_path / "metadata/other.git"
+    sibling.mkdir()
+    registry.claim_projects(b.reservation.identity, b.reservation.data_dir, (sibling,))
+    await install_project_ownership(a)
+    config = bootstrap_config(a.reservation.data_dir)
+    config = replace(
+        config,
+        agents=agents_from_rows([{"name": "owner", "dir": str(project), "repo": "acme/app"}]),
+    )
+    store = AgentStore(db, a.reservation.data_dir)
+    await store.start()
+    gh = AsyncMock()
+    gh.get_issue.return_value = AsyncMock(state="open", title="Example")
+    with (
+        patch("agent_backbone.services.swarm.interface.session_exists", return_value=False),
+        patch("agent_backbone.services.swarm.interface.is_git_repo", return_value=True),
+        patch("agent_backbone.services.swarm.interface.current_branch", return_value="develop"),
+        patch("agent_backbone.services.swarm.interface.create_worktree") as create,
+    ):
+        with pytest.raises(ValueError, match="separate checkout"):
+            await create_swarm(
+                config,
+                db,
+                store,
+                gh,
+                name="team",
+                issue_ref="acme/app#1",
+                member_specs=["coordinator@shell"],
+                initiator="owner",
+            )
+        create.assert_not_called()
+    assert await db.swarms.get("team") is None
+    assert not list(store.agents)
+    registry.claim_projects(b.reservation.identity, b.reservation.data_dir, (project, metadata))
