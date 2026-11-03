@@ -7,6 +7,7 @@ isolation, nor permission to activate a reserved provider.
 from __future__ import annotations
 
 import os
+import stat
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,10 +20,12 @@ class NativeEnvironment(Mapping[str, str]):
     executable: str | None
     variables: Mapping[str, str]
     path_keys: frozenset[str] = frozenset()
+    file_paths: tuple[str, ...] = ()
 
     def __post_init__(self):
         object.__setattr__(self, "variables", MappingProxyType(dict(self.variables)))
         object.__setattr__(self, "path_keys", frozenset(self.path_keys))
+        object.__setattr__(self, "file_paths", tuple(self.file_paths))
         self.check()
 
     def __getitem__(self, key: str) -> str:
@@ -48,6 +51,14 @@ class NativeEnvironment(Mapping[str, str]):
                 raise ValueError("Invalid native environment value")
             if key in _PATH_KEYS | self.path_keys:
                 self.check_path(Path(value))
+        for relative in self.file_paths:
+            path = self.check_path(self.root / relative)
+            try:
+                info = path.stat()
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError("Native store must be a regular file without hard links")
 
     def check_path(self, path: Path) -> Path:
         resolved = path.resolve()
@@ -60,7 +71,9 @@ class NativeEnvironment(Mapping[str, str]):
         for key, value in values.items():
             if key not in _OVERRIDES and self.variables.get(key) != value:
                 raise ValueError("Agent environment overrides a captured runtime setting")
-        return NativeEnvironment(self.root, self.executable, {**self, **values}, self.path_keys)
+        return NativeEnvironment(
+            self.root, self.executable, {**self, **values}, self.path_keys, self.file_paths
+        )
 
 
 _PATH_KEYS = frozenset(

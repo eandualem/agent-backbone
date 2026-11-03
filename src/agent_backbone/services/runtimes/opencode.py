@@ -65,6 +65,16 @@ class OpenCode(Runtime):
     def native_environment_values(self, root):
         return {}
 
+    native_files = (
+        "data/opencode/auth.json",
+        "data/opencode/opencode.db",
+        "data/opencode/opencode.db-wal",
+        "data/opencode/opencode.db-shm",
+        "data/opencode/opencode.db-journal",
+        "config/opencode/opencode.json",
+        "config/opencode/opencode.jsonc",
+    )
+
     setup_hooks = True
 
     supports_exact_resume = True
