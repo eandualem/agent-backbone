@@ -1268,14 +1268,51 @@ async def test_detached_api_task_refuses_retired_or_mismatched_provider(api_app,
     )
     with pytest.raises(ValueError, match="context does not match"):
         await task
-    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
     task = api_app.state.api_tasks.create(
         run,
         config=original,
         db=api_app.state.db,
         provider=provider,
     )
+    # Scheduling alone does not authorize execution. Retirement before the
+    # task acquires its guard must refuse work without effects.
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
     with pytest.raises(ValueError):
         await task
     run.assert_not_awaited()
     await api_app.state.api_tasks.stop()
+
+
+async def test_http_validation_notice_captures_request_provider(
+    api_app, api_client, auth_headers, bound_provider, monkeypatch
+):
+    from agent_backbone.api import validation
+    from agent_backbone.services.terminal import CallerUnknown
+
+    provider, registry, headers = bound_provider
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def delay(_seconds):
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr(validation, "_sleep", delay)
+    monkeypatch.setattr(validation, "caller_agent", AsyncMock(side_effect=CallerUnknown("test")))
+    notify = AsyncMock()
+    monkeypatch.setattr(validation, "notify_humans", notify)
+    try:
+        response = await api_client.post(
+            "/api/messages/validate",
+            headers={**auth_headers, **headers},
+            json={"confirmation_id": "12345678-1234-4234-8234-123456789abc"},
+        )
+        assert response.status_code == 403
+        await asyncio.wait_for(entered.wait(), 5)
+        with pytest.raises(ValueError, match="fence is busy"):
+            registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    finally:
+        release.set()
+        await api_app.state.api_tasks.stop()
+    notify.assert_awaited_once()
+    assert notify.call_args.args[0] is api_app.state.config
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)

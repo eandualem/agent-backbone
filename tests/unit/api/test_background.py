@@ -4,6 +4,29 @@ import asyncio
 from unittest.mock import AsyncMock
 
 from agent_backbone.api.background import ApiTasks
+from agent_backbone.api.validation import Validations
+
+
+async def test_notice_skipped_during_shutdown_is_scheduled_once_after_restart(monkeypatch):
+    tasks = ApiTasks()
+    validations = Validations(tasks)
+    notice = AsyncMock()
+    monkeypatch.setattr(validations, "_notice", notice)
+    tasks.close_admission()
+    validations.failed(None, "worker", "first", "unknown_confirmation", 0)
+    notice.assert_not_awaited()
+    await tasks.start()
+    validations.failed(None, "worker", "second", "unknown_confirmation", 1)
+    validations.failed(None, "worker", "third", "unknown_confirmation", 2)
+    await tasks.stop()
+    notice.assert_awaited_once()
+    incident = notice.call_args.args[2]
+    assert incident.checked == 3
+    assert incident.reasons == {"unknown_confirmation": 3}
+    await tasks.start()
+    validations.failed(None, "worker", "fourth", "unknown_confirmation", 3)
+    await tasks.stop()
+    notice.assert_awaited_once()
 
 
 async def test_restarting_task_owner_drains_previous_work_before_reopening():

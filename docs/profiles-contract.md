@@ -110,8 +110,10 @@ operations, retained attachments and emissions before disposing services or the
 database. Cancelled shutdown callers leave the drain owned; failed cleanup retains
 its resources and dependencies for retry. An unsuccessful lifespan shutdown prevents
 an automatic in-process upgrade restart. Delayed validation notices and runtime
-setup checks capture their originating configuration, database and provider and
-retain a separate operation guard. Client cancellation does not cancel setup
+setup checks capture their originating configuration, database and provider. Before
+starting, they acquire a separate operation guard and recheck the captured context;
+work whose reservation retires before that check is refused without side effects.
+The guard is retained through execution. Client cancellation does not cancel setup
 workers, and cancellation of the owned batch waits for its executor functions to
 exit before releasing the reservation. Shutdown closes admission and drains these API tasks, including every
 setup worker, before stopping integrations or storage; cancelling the shutdown

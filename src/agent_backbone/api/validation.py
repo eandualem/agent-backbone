@@ -72,6 +72,7 @@ _sleep = asyncio.sleep
 class _Incident:
     last: float
     checked: int = 0
+    notice_scheduled: bool = False
     reasons: Counter = field(default_factory=Counter)
     refused: dict[str, str] = field(default_factory=dict)
 
@@ -125,13 +126,14 @@ class Validations:
         incident = self._current(caller, now)
         if incident is None:
             incident = self._incidents[caller] = _Incident(last=now)
-            if not self._tasks.closing:
-                self._tasks.create(
-                    lambda: self._notice(config, caller, incident),
-                    config=config,
-                    db=db,
-                    provider=provider,
-                )
+        if not incident.notice_scheduled and not self._tasks.closing:
+            self._tasks.create(
+                lambda: self._notice(config, caller, incident),
+                config=config,
+                db=db,
+                provider=provider,
+            )
+            incident.notice_scheduled = True
         incident.reasons[reason] += 1
         if checked:
             incident.last = now
