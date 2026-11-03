@@ -130,10 +130,12 @@ async def test_hung_tool_reports_timeout_after_reaping(monkeypatch):
     from unittest.mock import AsyncMock, patch
 
     process = SimpleNamespace(returncode=None)
+    reaped = []
 
     async def communicate():
         if process.returncode is None:
             await asyncio.Event().wait()
+        reaped.append(process.returncode)
         return b"", b""
 
     def kill():
@@ -147,3 +149,4 @@ async def test_hung_tool_reports_timeout_after_reaping(monkeypatch):
     ):
         await _callers._output("lsof")
     assert process.returncode == -9
+    assert reaped == [-9]

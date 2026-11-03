@@ -168,3 +168,52 @@ async def test_report_flush_continues_after_integration_failure(method):
     setattr(second, method, AsyncMock())
     await getattr(Integrations([first, second]), method)()
     getattr(second, method).assert_awaited_once()
+
+
+async def test_registry_cancellation_drains_background_then_stops_components():
+    import asyncio
+
+    entered, cleaning, release_background, stopping, release_stop, stopped = (
+        asyncio.Event() for _ in range(6)
+    )
+
+    async def background():
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaning.set()
+            await release_background.wait()
+
+    async def stop_component():
+        stopping.set()
+        await release_stop.wait()
+        stopped.set()
+
+    component = _Fake()
+    component.stop = AsyncMock(side_effect=stop_component)
+    registry = Integrations([component])
+    registry._background.add(asyncio.create_task(background()))
+    await entered.wait()
+    task = asyncio.create_task(registry.stop())
+    try:
+        await asyncio.wait_for(cleaning.wait(), 2)
+        for _ in range(3):
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+        component.stop.assert_not_awaited()
+        release_background.set()
+        await asyncio.wait_for(stopping.wait(), 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done() and not stopped.is_set()
+        release_stop.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert stopped.is_set()
+        component.stop.assert_awaited_once()
+    finally:
+        release_background.set()
+        release_stop.set()
+        await asyncio.gather(task, return_exceptions=True)

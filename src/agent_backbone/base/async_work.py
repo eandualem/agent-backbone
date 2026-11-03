@@ -34,7 +34,11 @@ async def run_thread(function, /, *args, **kwargs):
 
 @asynccontextmanager
 async def owned_process(spawn, *, process_group=False):
-    """Own subprocess creation and reaping across caller cancellation."""
+    """Own subprocess creation and reaping across caller cancellation.
+
+    ``process_group=True`` requires a new process-group leader, such as a child
+    spawned with ``start_new_session=True``. Its PID must identify its own group.
+    """
     creation = asyncio.ensure_future(spawn)
     completed = False
     cancelled = None

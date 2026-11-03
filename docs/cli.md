@@ -923,8 +923,10 @@ backbone profiles show PROFILE_ID --json
 
 Omit `--json` for a labeled table or record. Discovery reads the private local
 registry at `~/.local/share/agent-backbone-profiles/registry.db`, independently of
-`BACKBONE_DATA_DIR` and provider credentials. Managed agent contexts cannot use
-these commands. An unavailable registry or unknown profile exits nonzero with an
+`BACKBONE_DATA_DIR` and provider credentials. Recognized managed-agent markers and
+credentials are refused. Local OS-user file access remains the authority boundary;
+clearing environment markers is not an OS isolation boundary (see
+[security](security.md)). An unavailable registry or unknown profile exits nonzero with an
 error on stderr; listing never initializes or repairs it. Current reservations
 are non-ready (`creating` or `failed`) and have no usable binding. Provisioning
 state does not report whether a daemon is running.

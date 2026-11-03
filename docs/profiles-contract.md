@@ -129,7 +129,8 @@ retain their callers through actual worker exit,
 including repeated cancellation. Native command creation and cleanup retain the
 child handle through reaping; Git cleanup also covers its process group. Telegram
 shutdown closes topic-discovery admission and drains its retained topic tasks before
-closing the client. Integration-wide admission and native account acceptance remain
+closing the client. Integration-registry shutdown retains both background drainage
+and component stops through repeated caller cancellation. Integration-wide admission and native account acceptance remain
 prerequisites before activation. Session-feed
 history writes retain their own captured provider guard through transaction
 cleanup, including after a snapshot times out or is cancelled. They recheck the
@@ -230,8 +231,14 @@ Agent-facing tools cannot use them as a gateway to discover sibling fleets.
 Listing is read-only: it does not adopt, start, migrate or repair providers. An
 unavailable registry is an error, not an empty successful list.
 
-Run these commands from a local operator terminal. Managed agent contexts and
-agent credentials are refused before accessing the registry. They read
+Run these commands from a local operator terminal. Recognized managed-agent
+environment markers and agent credentials are refused before registry access.
+The local OS user and filesystem permissions are the authority boundary here;
+these environment checks are defensive routing checks, not proof against an
+unrestricted same-user process that removes its markers. The CLI does not load a
+selected provider's operator key to authorize this independent control plane.
+Runtime sandbox restrictions still apply; see the [security model](security.md).
+The commands read
 `~/.local/share/agent-backbone-profiles/registry.db`, outside provider data trees;
 `BACKBONE_DATA_DIR` does not select the control-plane registry. No provider secret,
 configuration, API or database is loaded. Human output labels provisioning state;
@@ -322,7 +329,11 @@ classification and receipt storage commit atomically, so a failure before that c
 does not leave a pending reservation. They do not
 create provider directories, start/stop services, adopt an installation or publish
 ready discovery. An unchanged failed request continues to return that failure;
-new work after prerequisites change requires a new request ID.
+new work after prerequisites change requires a new request ID. Receipts have no
+automatic expiry or pruning: the original outcome and changed-input conflict are
+retained without a replay window. Any future compaction or storage quota needs an
+explicit policy that preserves those guarantees; provider event retention does
+not apply to this external lifecycle journal.
 
 The fixture includes exact create/start/stop request shapes. Start and stop name
 `profile_id`, `expected_installation_id` and `expected_lifecycle_id`. Create takes

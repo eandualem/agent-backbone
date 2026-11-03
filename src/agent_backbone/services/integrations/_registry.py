@@ -125,9 +125,12 @@ class Integrations:
 
     async def stop(self) -> None:
         self._stopping = True
+        await complete_before_cancel(self._stop())
+
+    async def _stop(self) -> None:
         for task in self._background:
             task.cancel()
-        await complete_before_cancel(asyncio.gather(*self._background, return_exceptions=True))
+        await asyncio.gather(*self._background, return_exceptions=True)
         async with self._lifecycle_lock:
             for integration in reversed(self._items):
                 await integration.stop()
