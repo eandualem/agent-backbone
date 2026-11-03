@@ -815,6 +815,8 @@ def _common_git_dir(repo_dir: Path, *, strict: bool = False) -> Path | None:
     common = git_dir / "commondir"
     if common.is_file() or (strict and os.path.lexists(common)):
         try:
+            if strict and not stat.S_ISREG(common.stat().st_mode):
+                raise ValueError("Project common Git pointer must be a regular file")
             rel = common.read_text(encoding="utf-8").strip()
             if strict and not rel:
                 raise ValueError("Project common Git directory is unavailable")

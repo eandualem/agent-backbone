@@ -1,11 +1,13 @@
 """Internal project claims reject cross-profile effects before materialization."""
 
 import json
+import os
 import shutil
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from functools import partial
+from pathlib import Path
 
 import pytest
 
@@ -204,3 +206,21 @@ def test_external_git_exclude_fails_before_cleanup(profiles, tmp_path):
     assert not apply(registry, a, repo, rt, release=True).ok
     assert outside.read_text() == "preserve"
     assert (repo / rt.skill_dirs[0] / "example").is_symlink()
+
+
+def test_nonregular_common_git_pointer_is_rejected_without_reading(profiles, tmp_path, monkeypatch):
+    registry, (a, _) = profiles
+    repo = make_repo(tmp_path / "project")
+    pointer = repo / ".git/commondir"
+    os.mkfifo(pointer)
+    read_text = Path.read_text
+
+    def read_regular(path, *args, **kwargs):
+        assert path != pointer, "must not block reading the FIFO"
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_regular)
+    result = apply(registry, a, repo, RUNTIMES["codex"])
+    assert not result.ok and "regular file" in result.broken[0]
+    assert not manifest_path(a.data_dir, "worker").exists()
+    assert (repo / ".git/info/exclude").read_text() == "# original\n"
