@@ -1,8 +1,10 @@
 """Internal project claims reject cross-profile effects before materialization."""
 
 import json
+import shutil
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from functools import partial
 
 import pytest
@@ -160,6 +162,33 @@ def test_old_registry_needs_explicit_initialization_not_discovery(profiles, tmp_
         registry.claim_projects(a.identity, a.data_dir, (repo,))
     ProfileRegistry.create(registry.path).claim_projects(a.identity, a.data_dir, (repo,))
     assert registry.check_reservation(a.identity, a.data_dir) == a
+
+
+def test_new_profile_directory_cannot_take_an_existing_project_claim(profiles, tmp_path):
+    registry, (a, _) = profiles
+    repo = make_repo(tmp_path / "project")
+    registry.claim_projects(a.identity, a.data_dir, (repo,))
+    candidate = replace(a, identity=ProfileIdentity("c", "installation-c", "lifecycle-c"))
+    for path in (repo, repo / "nested"):
+        with pytest.raises(ValueError, match="project claim"):
+            registry.reserve(replace(candidate, data_dir=path))
+    assert len(registry.list()["items"]) == 2
+
+
+def test_removed_checkout_can_relocate_or_release_without_losing_ownership(profiles, tmp_path):
+    registry, (a, b) = profiles
+    old, new = (make_repo(tmp_path / name) for name in ("old", "new"))
+    rt = RUNTIMES["codex"]
+    assert apply(registry, a, old, rt).ok
+    shutil.rmtree(old)
+    assert apply(registry, a, new, rt).ok
+    assert (new / rt.skill_dirs[0] / "example").is_symlink()
+    shutil.rmtree(new)
+    assert apply(registry, a, new, rt, release=True).ok
+    assert not manifest_path(a.data_dir, "worker").exists()
+    for repo in (old, new):
+        make_repo(repo)
+        assert not apply(registry, b, repo, rt).ok
 
 
 def test_external_git_exclude_fails_before_cleanup(profiles, tmp_path):

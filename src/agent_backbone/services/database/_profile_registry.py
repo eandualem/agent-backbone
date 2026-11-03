@@ -213,7 +213,8 @@ class ProfileRegistry:
             raise ValueError("New profile reservations must be creating")
         self._external(reservation.data_dir)
         with self._connection(write=True) as conn:
-            for stored in self._records(conn):
+            records = self._records(conn)
+            for stored in records:
                 if stored.identity.profile_id == reservation.identity.profile_id:
                     if (
                         stored.identity != reservation.identity
@@ -230,6 +231,11 @@ class ProfileRegistry:
                     or self._overlap(stored.data_dir, reservation.data_dir)
                 ):
                     raise ValueError("Profile reservation conflicts with an existing reservation")
+            if any(
+                self._overlap(reservation.data_dir, path)
+                for path, _ in self._project_claims(conn, records)
+            ):
+                raise ValueError("Profile directory conflicts with an existing project claim")
             conn.execute(
                 "INSERT INTO profiles VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
@@ -298,7 +304,7 @@ class ProfileRegistry:
         """
         self._external(data_dir)
         resources = tuple(dict.fromkeys(_resolve(path) for path in paths))
-        if not resources or any(not path.is_dir() for path in resources):
+        if not resources:
             raise ValueError("Project resources must be existing directories")
         with self._connection(write=True) as conn:
             if conn.execute("PRAGMA user_version").fetchone()[0] != 2:
@@ -307,26 +313,25 @@ class ProfileRegistry:
             owner = self._matching(conn, identity, data_dir)
             if owner.state != "creating":
                 raise ValueError("Profile lifecycle has been invalidated")
+            claims = self._project_claims(conn, records)
+            owned = {path for path, claimant in claims if claimant == identity}
             for path in resources:
+                try:
+                    info = path.stat()
+                except FileNotFoundError:
+                    # A removed checkout has nothing to clean up, but its
+                    # existing claim must survive relocation or release.
+                    if path not in owned:
+                        raise ValueError("Project resources must be existing directories") from None
+                else:
+                    if not stat.S_ISDIR(info.st_mode):
+                        raise ValueError("Project resources must be directories")
                 if self._contains(path, self.path) or any(
                     record.identity != identity and self._overlap(path, record.data_dir)
                     for record in records
                 ):
                     raise ValueError("Project resource conflicts with profile storage")
-            for row in conn.execute("SELECT * FROM project_claims"):
-                try:
-                    claimed = Path(row["path"])
-                    claimant = ProfileIdentity(
-                        row["profile_id"], row["installation_id"], row["lifecycle_id"]
-                    )
-                except (TypeError, IndexError) as exc:
-                    raise ValueError("Invalid project ownership metadata") from exc
-                if (
-                    not claimed.is_absolute()
-                    or _resolve(claimed) != claimed
-                    or not any(record.identity == claimant for record in records)
-                ):
-                    raise ValueError("Invalid project ownership metadata")
+            for claimed, claimant in claims:
                 if claimant != identity and any(self._overlap(path, claimed) for path in resources):
                     raise ValueError("Project belongs to another profile; use a separate checkout")
             conn.executemany(
@@ -341,6 +346,27 @@ class ProfileRegistry:
                     for path in resources
                 ],
             )
+
+    def _project_claims(self, conn, records) -> list[tuple[Path, ProfileIdentity]]:
+        if conn.execute("PRAGMA user_version").fetchone()[0] == 1:
+            return []
+        claims = []
+        for row in conn.execute("SELECT * FROM project_claims"):
+            try:
+                path = Path(row["path"])
+                identity = ProfileIdentity(
+                    row["profile_id"], row["installation_id"], row["lifecycle_id"]
+                )
+            except (TypeError, IndexError) as exc:
+                raise ValueError("Invalid project ownership metadata") from exc
+            if (
+                not path.is_absolute()
+                or _resolve(path) != path
+                or not any(record.identity == identity for record in records)
+            ):
+                raise ValueError("Invalid project ownership metadata")
+            claims.append((path, identity))
+        return claims
 
     def _matching(self, conn, identity, data_dir):
         for record in self._records(conn):
