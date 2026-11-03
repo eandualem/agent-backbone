@@ -592,7 +592,10 @@ class TerminalNamespace(_AuthenticatedNamespace):
         if not session_name or not cols or not rows:
             return
 
-        if session_name not in self._subscriptions.get(sid, {}):
+        if (
+            session_name not in self._subscriptions.get(sid, {})
+            and (sid, session_name) not in self._resource_tasks
+        ):
             await self.emit("error", {"message": f"Not joined to session '{session_name}'"}, to=sid)
             return
 
@@ -619,7 +622,7 @@ class TerminalNamespace(_AuthenticatedNamespace):
 
     async def on_release_dims(self, sid: str, data: dict) -> None:
         session_name = self._session_of(data)
-        if not session_name or session_name not in self._subscriptions.get(sid, {}):
+        if not session_name:
             return
         await self._detach_subscription_client(sid, session_name)
 

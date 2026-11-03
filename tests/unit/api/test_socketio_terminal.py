@@ -403,3 +403,55 @@ async def test_cancelled_attach_retires_worker_result_before_caller_resumes(canc
             await ns.on_disconnect("sid")
             await asyncio.gather(*tuple(ns._background), return_exceptions=True)
             await manager.cleanup_all()
+
+
+@pytest.mark.parametrize("stage", ["queued", "fence"])
+@pytest.mark.parametrize("control", ["release_dims", "resize"])
+async def test_terminal_controls_wait_for_pending_attach(stage, control):
+    from contextlib import asynccontextmanager
+
+    from agent_backbone.services.terminal import PtyManager, PtySession
+
+    entered, allow = asyncio.Event(), asyncio.Event()
+
+    @asynccontextmanager
+    async def operation():
+        entered.set()
+        await allow.wait()
+        yield
+
+    ns = TerminalNamespace("/terminal")
+    ns._profiles["sid"] = SimpleNamespace(operation=operation) if stage == "fence" else None
+    ns.emit = AsyncMock()
+    ns.leave_room = AsyncMock()
+    manager = PtyManager()
+    with (
+        patch.object(PtySession, "start"),
+        patch.object(PtySession, "resize") as resize,
+        patch(f"{_MOD}.resize_window", new_callable=AsyncMock, return_value=True),
+        patch(f"{_MOD}._restore_dynamic_window_size", new_callable=AsyncMock),
+        patch(f"{_MOD}.get_pty_manager", return_value=manager),
+    ):
+        attach = asyncio.create_task(ns._attach_subscription_client("sid", "app", 80, 24))
+        try:
+            if stage == "fence":
+                await asyncio.wait_for(entered.wait(), 2)
+            else:
+                await asyncio.sleep(0)  # Request queued its independent worker.
+            assert "app" not in ns._subscriptions.get("sid", {})
+            asyncio.get_running_loop().call_soon(allow.set)
+            await getattr(ns, f"on_{control}")("sid", {"session": "app", "cols": 120, "rows": 40})
+            await attach
+            if control == "release_dims":
+                assert not manager._sessions
+                assert not ns._resources
+            else:
+                assert manager.get("sid", "app") is not None
+                resize.assert_called_once_with(120, 40)
+            ns.emit.assert_not_awaited()
+        finally:
+            allow.set()
+            await attach
+            await ns.on_disconnect("sid")
+            await asyncio.gather(*tuple(ns._background), return_exceptions=True)
+            await manager.cleanup_all()
