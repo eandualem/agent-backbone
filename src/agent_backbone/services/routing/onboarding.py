@@ -6,12 +6,12 @@ unrelated agent, weakens runtime trust, or guesses that a lost send was unsent.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
+from agent_backbone.base import run_thread
 from agent_backbone.config import AgentSpec
 from agent_backbone.fs import AtomicCreateUnsupported, atomic_create_text
 from agent_backbone.git import detect_repo
@@ -258,7 +258,7 @@ async def _first(request, receipt, store, db):
     if not any(
         receipt.record.get(key)
         for key in ("registration_id", "registration_pending", "launch_operation")
-    ) and (error := await asyncio.to_thread(selected.setup_error)):
+    ) and (error := await run_thread(selected.setup_error)):
         return _answer(receipt, "runtime_permission", error)
     path = spec.path
     if path.resolve() != path or (path.exists() and not path.is_dir()):

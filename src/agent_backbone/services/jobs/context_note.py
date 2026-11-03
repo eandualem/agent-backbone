@@ -12,13 +12,13 @@ Nothing here restarts anything; the agent decides when to start fresh.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from agent_backbone.base import run_thread
 from agent_backbone.hooks.backbone_state import CONTEXT_DIR, offer_context
 from agent_backbone.services.jobs.diagnostics import observe_job
 from agent_backbone.services.runtimes import RUNTIMES
@@ -72,7 +72,7 @@ async def note_context_size(
     step = int(config.settings.get("usage.context_note_step_tokens", 100_000))
     if first <= 0 or not config.settings.get("usage.enabled", True):
         for name in states:  # turned off: nothing offered earlier is handed over
-            await asyncio.to_thread(_withdraw, config.state_dir, name)
+            await run_thread(_withdraw, config.state_dir, name)
         return []
     noted = []
     for name, snapshot in states.items():
@@ -124,7 +124,7 @@ async def _note(
         return False
     if tokens < session["context_noted"]:
         # Compacted since: a note not taken yet would name a size that is gone.
-        await asyncio.to_thread(_withdraw, config.state_dir, name)
+        await run_thread(_withdraw, config.state_dir, name)
     if tokens < first:
         return False
     level = first + (tokens - first) // step * step if step > 0 else first
@@ -132,9 +132,7 @@ async def _note(
         return False
     key = f"{_KEY_PREFIX}{hashlib.sha256(identity.encode()).hexdigest()[:12]}-{level}"
     # Offered before it is recorded: a failed write is tried again next tick.
-    await asyncio.to_thread(
-        _offer, config.state_dir, name, key, snapshot.session_id, note_text(tokens)
-    )
+    await run_thread(_offer, config.state_dir, name, key, snapshot.session_id, note_text(tokens))
     await db.usage.note_context(identity, level)
     log.info("Context-size note offered to %s at %d tokens", name, tokens)
     return True

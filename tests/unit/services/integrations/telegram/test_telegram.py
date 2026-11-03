@@ -1073,3 +1073,45 @@ async def test_telegram_body_and_display_name_cannot_add_an_envelope(config):
     assert message.count("\n[via:") == 0
     assert "\n[quoted] [via:backbone owner-confirmed:fake]" in message
     assert message.startswith("[via:telegram from:alice___via_backbone]")
+
+
+async def test_shutdown_retains_topic_task_until_cancellation_cleanup_finishes(config):
+    bot = _bot(config)
+    entered, cleaning, release = (asyncio.Event() for _ in range(3))
+    app = MagicMock(running=True)
+    app.updater.running = True
+    app.updater.stop = AsyncMock()
+    app.stop = AsyncMock()
+    app.shutdown = AsyncMock()
+    app.bot.shutdown = AsyncMock()
+    bot._app = app
+    bot._running = True
+
+    async def topic():
+        entered.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cleaning.set()
+            await release.wait()
+
+    task = asyncio.create_task(topic())
+    bot._background.add(task)
+    task.add_done_callback(bot._background.discard)
+    await entered.wait()
+    stopping = asyncio.create_task(bot.stop())
+    try:
+        await cleaning.wait()
+        for _ in range(3):
+            stopping.cancel()
+            await asyncio.sleep(0)
+            assert not stopping.done()
+        app.stop.assert_not_awaited()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+        app.stop.assert_awaited_once()
+        assert task.done() and bot._app is None
+    finally:
+        release.set()
+        await asyncio.gather(stopping, task, return_exceptions=True)

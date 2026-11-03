@@ -91,6 +91,7 @@ class ProfileRegistry:
         if registry.path.exists():
             registry.list()
             registry._initialize_project_claims()
+            registry._initialize_operations()
             return registry
         fd, temporary = tempfile.mkstemp(prefix=".registry-", dir=registry.path.parent)
         os.close(fd)
@@ -118,6 +119,7 @@ class ProfileRegistry:
             Path(temporary).unlink(missing_ok=True)
         registry.list()
         registry._initialize_project_claims()
+        registry._initialize_operations()
         return registry
 
     def _initialize_project_claims(self) -> None:
@@ -130,6 +132,22 @@ class ProfileRegistry:
                     "installation_id TEXT NOT NULL, lifecycle_id TEXT NOT NULL)"
                 )
                 conn.execute("PRAGMA user_version = 2")
+
+    def _initialize_operations(self) -> None:
+        with self._connection(write=True) as conn:
+            if conn.execute("PRAGMA user_version").fetchone()[0] == 2:
+                conn.execute(
+                    "CREATE TABLE lifecycle_operations ("
+                    "request_id TEXT PRIMARY KEY NOT NULL, request_json TEXT NOT NULL, "
+                    "scope TEXT NOT NULL, status TEXT NOT NULL "
+                    "CHECK(status IN ('pending', 'succeeded', 'failed')), "
+                    "receipt_json TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "CREATE UNIQUE INDEX lifecycle_pending ON lifecycle_operations(scope) "
+                    "WHERE status = 'pending'"
+                )
+                conn.execute("PRAGMA user_version = 3")
 
     def _check_parent(self) -> None:
         info = self.path.parent.stat()
@@ -150,7 +168,11 @@ class ProfileRegistry:
                 conn.execute("PRAGMA synchronous = EXTRA")
                 conn.execute("PRAGMA fullfsync = ON")
             conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
-            if not initializing and conn.execute("PRAGMA user_version").fetchone()[0] not in {1, 2}:
+            if not initializing and conn.execute("PRAGMA user_version").fetchone()[0] not in {
+                1,
+                2,
+                3,
+            }:
                 raise ValueError("Unsupported profile registry schema")
             yield conn
             if write:
@@ -317,7 +339,7 @@ class ProfileRegistry:
         if not resources:
             raise ValueError("Project resources must be existing directories")
         with self._connection(write=True) as conn:
-            if conn.execute("PRAGMA user_version").fetchone()[0] != 2:
+            if conn.execute("PRAGMA user_version").fetchone()[0] not in {2, 3}:
                 raise ValueError("Profile registry needs explicit project ownership initialization")
             records = self._records(conn)
             owner = self._matching(conn, identity, data_dir)

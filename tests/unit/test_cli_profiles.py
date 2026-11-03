@@ -97,3 +97,55 @@ def test_human_discovery_retains_fields(tmp_path, capsys, monkeypatch, width):
         output = capsys.readouterr().out
         for value in ("profile-a", "Work [blue]", "isolated", "creating"):
             assert value in output
+
+
+async def test_lifecycle_refusal_replay_and_unknown_lookup(tmp_path, capsys):
+    fixtures = json.loads(Path("docs/contracts/profiles-v1.json").read_text())
+    request = fixtures["lifecycle"]["create"]
+    source = tmp_path / "request.json"
+    source.write_text(json.dumps(request))
+    receipts = []
+    for args in (
+        ["apply", "--file", str(source)],
+        ["operation", request["request_id"]],
+        ["apply", "--file", str(source)],
+    ):
+        with pytest.raises(SystemExit) as result:
+            main(["profiles", *args, "--json"])
+        assert result.value.code == 1
+        receipts.append(json.loads(capsys.readouterr().out))
+    assert receipts[0] == receipts[1] == receipts[2]
+    assert receipts[0]["error"]["code"] == "baseline_unavailable"
+    with pytest.raises(SystemExit) as result:
+        main(["profiles", "operation", "operation-unknown", "--json"])
+    assert result.value.code == fixtures["operation_lookup_unknown"]["exit_code"]
+    assert json.loads(capsys.readouterr().out) == fixtures["operation_lookup_unknown"]["body"]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["apply", "--file", "/missing/request.json"],
+        ["operation", "request"],
+    ],
+)
+def test_managed_agent_cannot_apply_or_lookup(args, monkeypatch, capsys):
+    monkeypatch.setenv("BACKBONE_AGENT", "worker")
+    with patch("agent_backbone.cli.profiles.ProfileRegistry") as registry:
+        with pytest.raises(SystemExit) as result:
+            main(["profiles", *args, "--json"])
+    assert result.value.code == 1
+    assert "local operator" in capsys.readouterr().err
+    registry.assert_not_called()
+
+
+@pytest.mark.parametrize("body", ['{"action":"create","action":"stop"}', "[" * 2000])
+def test_ambiguous_or_deep_json_is_rejected_before_registry_access(tmp_path, capsys, body):
+    source = tmp_path / "request.json"
+    source.write_text(body)
+    with patch("agent_backbone.cli.profiles.ProfileRegistry") as registry:
+        with pytest.raises(SystemExit) as result:
+            main(["profiles", "apply", "--file", str(source), "--json"])
+    assert result.value.code == 1
+    assert capsys.readouterr().out == ""
+    registry.assert_not_called()

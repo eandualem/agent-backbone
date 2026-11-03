@@ -19,6 +19,10 @@ from agent_backbone.services.database._documents_repo import (
     DocumentRateLimit,
 )
 from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
+from agent_backbone.services.database._profile_operations import (
+    ProfileOperations,
+    validate_profile_operation,
+)
 from agent_backbone.services.database._profile_provider import (
     ProfileProvider,
     reconcile_profile_provider,
@@ -50,6 +54,7 @@ __all__ = [
     "DocumentRateLimit",
     "Limits",
     "ProfileIdentity",
+    "ProfileOperations",
     "ProfileProvider",
     "ProfileRegistry",
     "ProfileReservation",
@@ -66,4 +71,5 @@ __all__ = [
     "now_iso",
     "parse_iso",
     "reconcile_profile_provider",
+    "validate_profile_operation",
 ]

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from typing import TYPE_CHECKING
 
+from agent_backbone.base import complete_before_cancel
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.integrations.base import Integration
 
@@ -126,7 +127,7 @@ class Integrations:
         self._stopping = True
         for task in self._background:
             task.cancel()
-        await asyncio.gather(*self._background, return_exceptions=True)
+        await complete_before_cancel(asyncio.gather(*self._background, return_exceptions=True))
         async with self._lifecycle_lock:
             for integration in reversed(self._items):
                 await integration.stop()
