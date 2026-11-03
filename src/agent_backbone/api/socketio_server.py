@@ -691,7 +691,9 @@ class TerminalNamespace(_AuthenticatedNamespace):
     ) -> None:
         """Forward PTY output to the client, coalescing rapid small chunks."""
         try:
-            while True:
+            # Socket.IO can swallow cancellation during inline disconnect.
+            # Do not resume an idle read after a detach has cancelled this task.
+            while not asyncio.current_task().cancelling():
                 data = await queue.get()
                 if data is None:
                     await self._emit_ended(sid, session_name)

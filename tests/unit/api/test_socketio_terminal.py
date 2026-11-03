@@ -299,3 +299,54 @@ async def test_retired_reader_is_excluded_even_when_disconnect_is_still_pending(
         await sio.emit("sessions:update", [], namespace=ns.namespace)
     disconnect.assert_awaited_once_with(sid)
     sio._send_eio_packet.assert_not_awaited()
+
+
+async def test_concurrent_collapse_finishes_after_forwarder_disconnect_swallows_cancel(api_app):
+    from agent_backbone.services.terminal import PtyManager, PtySession
+
+    sio, ns, sid, spec = await _scoped_connection(api_app, "/terminal")
+    manager = PtyManager()
+    locked, disconnecting, allow_detach = (asyncio.Event() for _ in range(3))
+    cleanup, detach = ns._cleanup_session, ns._detach_locked
+
+    async def observe_disconnect(*args):
+        disconnecting.set()
+        await cleanup(*args)
+
+    async def hold_detach(*args):
+        locked.set()
+        await allow_detach.wait()
+        await detach(*args)
+
+    with (
+        patch.object(PtySession, "start"),
+        patch(f"{_MOD}.get_pty_manager", return_value=manager),
+    ):
+        await ns._attach_subscription_client(sid, spec.name, 80, 24)
+        pty = manager.get(sid, spec.name)
+        forwarding = ns._subscriptions[sid][spec.name]
+        await api_app.state.db.agents.delete(spec.name)
+        with (
+            patch.object(ns, "_detach_locked", side_effect=hold_detach),
+            patch.object(ns, "_cleanup_session", side_effect=observe_disconnect),
+        ):
+            collapse = asyncio.create_task(ns.on_release_dims(sid, {"session": spec.name}))
+            try:
+                await asyncio.wait_for(locked.wait(), 2)
+                pty.output_queue.put_nowait("retired output")
+                await asyncio.wait_for(disconnecting.wait(), 2)
+                assert len(ns._resource_tasks[(sid, spec.name)]) == 2
+                # Collapse now cancels a forwarder awaiting disconnect cleanup
+                # behind its lock. AsyncNamespace swallows that cancellation.
+                allow_detach.set()
+                await asyncio.wait_for(asyncio.shield(collapse), 2)
+                assert forwarding.done()
+                assert manager.get(sid, spec.name) is None
+                assert not ns._resources
+            finally:
+                allow_detach.set()
+                pty.output_queue.put_nowait(None)
+                await asyncio.gather(forwarding, collapse, return_exceptions=True)
+                await asyncio.gather(*tuple(ns._background), return_exceptions=True)
+                await ns.on_disconnect(sid)
+                await manager.cleanup_all()
