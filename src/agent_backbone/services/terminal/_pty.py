@@ -378,10 +378,14 @@ class PtyManager:
         """
         keys = set(self._sessions) | set(self._locks)
         if keys:
-            await asyncio.gather(
+            results = await asyncio.gather(
                 *(self.remove(*key) for key in keys),
                 return_exceptions=True,
             )
+            failures = [result for result in results if isinstance(result, BaseException)]
+            if failures:
+                log.error("Failed to clean up %d PTY session(s)", len(failures))
+                return
         log.info("All PTY sessions cleaned up")
 
 

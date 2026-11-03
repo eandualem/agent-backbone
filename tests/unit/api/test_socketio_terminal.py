@@ -97,7 +97,9 @@ class TestTerminalJoin:
         ns = _namespace(config)
         with patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True):
             await ns.on_join("sid1", {"session": "ike", "cols": 80, "rows": 24})
-        ns._attach_subscription_client.assert_awaited_once_with("sid1", "ike", 80, 24)
+        ns._attach_subscription_client.assert_awaited_once_with(
+            "sid1", "ike", 80, 24, join_room=True
+        )
         ns.emit.assert_not_awaited()
 
 
@@ -399,6 +401,7 @@ async def test_cancelled_attach_retires_worker_result_before_caller_resumes(canc
                 )
             assert not manager._sessions
             assert not ns._resources
+            assert ns._subscriptions.get("sid", {}).get("app") is None
         finally:
             await ns.on_disconnect("sid")
             await asyncio.gather(*tuple(ns._background), return_exceptions=True)
@@ -452,6 +455,45 @@ async def test_terminal_controls_wait_for_pending_attach(stage, control):
         finally:
             allow.set()
             await attach
+            await ns.on_disconnect("sid")
+            await asyncio.gather(*tuple(ns._background), return_exceptions=True)
+            await manager.cleanup_all()
+
+
+async def test_failed_join_cannot_remove_a_successful_overlapping_join(config):
+    from agent_backbone.services.terminal import PtyManager, PtySession
+
+    ns = TerminalNamespace("/terminal")
+    ns.server = SimpleNamespace(fastapi_app=SimpleNamespace(state=SimpleNamespace(config=config)))
+    ns._profiles["sid"] = None
+    ns.emit = AsyncMock()
+    rooms = set()
+
+    async def enter(sid, room):
+        rooms.add((sid, room))
+
+    async def leave(sid, room):
+        rooms.discard((sid, room))
+
+    ns.enter_room, ns.leave_room = enter, leave
+    manager = PtyManager()
+    with (
+        patch.object(PtySession, "start", side_effect=[OSError("spawn failed"), None]),
+        patch(f"{_MOD}.get_pty_manager", return_value=manager),
+        patch(f"{_MOD}.session_exists", new_callable=AsyncMock, return_value=True),
+    ):
+        joins = [
+            asyncio.create_task(ns.on_join("sid", {"session": "ike", "cols": 80, "rows": 24}))
+            for _ in range(2)
+        ]
+        try:
+            results = await asyncio.gather(*joins, return_exceptions=True)
+            assert isinstance(results[0], OSError)
+            assert results[1] is None
+            assert manager.get("sid", "ike") is not None
+            assert isinstance(ns._subscriptions["sid"]["ike"], asyncio.Task)
+            assert ("sid", "session:ike") in rooms
+        finally:
             await ns.on_disconnect("sid")
             await asyncio.gather(*tuple(ns._background), return_exceptions=True)
             await manager.cleanup_all()

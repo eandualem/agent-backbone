@@ -423,10 +423,20 @@ class TerminalNamespace(_AuthenticatedNamespace):
             raise
 
     async def _attach_subscription_client(
-        self, sid: str, session_name: str, cols: int, rows: int
+        self, sid: str, session_name: str, cols: int, rows: int, *, join_room: bool = False
     ) -> None:
         async def attach(abandoned, origin):
-            return await self._attach_locked(sid, session_name, cols, rows, abandoned, origin)
+            if sid not in self._profiles or abandoned.is_set():
+                return
+            try:
+                if join_room:
+                    await self.enter_room(sid, f"session:{session_name}")
+                return await self._attach_locked(sid, session_name, cols, rows, abandoned, origin)
+            except Exception:
+                if join_room:
+                    # Retire this failed join before another worker can replace it.
+                    await self._cleanup_locked(sid, session_name, origin)
+                raise
 
         await self._resource_operation(sid, session_name, attach)
 
@@ -544,9 +554,6 @@ class TerminalNamespace(_AuthenticatedNamespace):
             await self.emit("error", {"message": f"Session '{session_name}' not found"}, to=sid)
             return
 
-        if session_name in self._subscriptions.get(sid, {}):
-            await self._cleanup_session(sid, session_name)
-
         client_cols = data.get("cols")
         client_rows = data.get("rows")
         if client_cols is not None and client_rows is not None:
@@ -560,12 +567,7 @@ class TerminalNamespace(_AuthenticatedNamespace):
 
         if sid not in self._profiles:
             return
-        try:
-            await self.enter_room(sid, f"session:{session_name}")
-            await self._attach_subscription_client(sid, session_name, cols, rows)
-        except Exception:
-            await self._cleanup_session(sid, session_name)
-            raise
+        await self._attach_subscription_client(sid, session_name, cols, rows, join_room=True)
 
         log.info("sid=%s joined session '%s' (read-only stream)", sid, session_name)
 
@@ -659,14 +661,17 @@ class TerminalNamespace(_AuthenticatedNamespace):
                 and (sid, session_name) not in self._resources
             ):
                 return
-            await self._detach_locked(sid, session_name, origin)
-            sid_subs = self._subscriptions.get(sid, {})
-            sid_subs.pop(session_name, None)
-            if not sid_subs:
-                self._subscriptions.pop(sid, None)
-            await self.leave_room(sid, f"session:{session_name}")
+            await self._cleanup_locked(sid, session_name, origin)
 
         await self._resource_operation(sid, session_name, cleanup)
+
+    async def _cleanup_locked(self, sid, session_name, origin):
+        await self._detach_locked(sid, session_name, origin)
+        sid_subs = self._subscriptions.get(sid, {})
+        sid_subs.pop(session_name, None)
+        if not sid_subs:
+            self._subscriptions.pop(sid, None)
+        await self.leave_room(sid, f"session:{session_name}")
 
     def _on_data_dropped(self, sid: str, session_name: str) -> None:
         try:

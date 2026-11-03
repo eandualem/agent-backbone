@@ -327,6 +327,25 @@ class TestConcurrentPtyLifecycle:
         assert ("sid", "app") in manager._sessions
         await manager.remove("sid", "app")
 
+    async def test_partial_start_retires_process_after_pid_record_failure(self):
+        manager = PtyManager()
+        proc = MagicMock(pid=999)
+        with (
+            patch(f"{_PTY}.os.openpty", return_value=(42, 43)),
+            patch(f"{_PTY}.fcntl.ioctl"),
+            patch(f"{_PTY}.os.close") as close,
+            patch(f"{_PTY}.subprocess.Popen", return_value=proc),
+            patch(f"{_PTY}._record_pid", side_effect=OSError("pid record failed")),
+            patch(f"{_PTY}._unrecord_pid") as unrecord,
+        ):
+            with pytest.raises(OSError, match="pid record failed"):
+                await manager.create("sid", "app")
+            proc.send_signal.assert_called_once_with(signal.SIGTERM)
+            proc.wait.assert_called_once_with(timeout=2)
+            unrecord.assert_called_once_with(None, 999)
+            assert [call.args for call in close.call_args_list] == [(43,), (42,)]
+            assert not manager._sessions
+
     @pytest.mark.parametrize("stage", ["termination", "executor_shutdown"])
     async def test_cancelled_cleanup_waits_for_workers_and_concurrent_callers(self, stage):
         session = PtySession("app")
@@ -549,6 +568,23 @@ class TestPtyManager:
             await mgr.cleanup_all()
             assert mgr.get("sid1", "a") is None
             assert mgr.get("sid2", "b") is None
+
+    async def test_cleanup_all_reports_failure_and_keeps_session_for_retry(self, caplog):
+        mgr = PtyManager()
+        with patch.object(PtySession, "start"):
+            failed = await mgr.create("sid1", "a")
+            await mgr.create("sid2", "b")
+        with (
+            caplog.at_level(logging.INFO, logger=_PTY),
+            patch.object(failed, "cleanup", side_effect=OSError("busy")),
+        ):
+            await mgr.cleanup_all()
+            assert mgr._sessions[("sid1", "a")] is failed
+            assert ("sid2", "b") not in mgr._sessions
+            assert "Failed to clean up 1 PTY session(s)" in caplog.text
+            assert "All PTY sessions cleaned up" not in caplog.text
+        await mgr.cleanup_all()
+        assert not mgr._sessions
 
 
 class TestIncrementalDecoder:
