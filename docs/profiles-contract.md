@@ -74,8 +74,17 @@ unbound `POST /webhooks/github` retains webhook signature authentication; both
 still reject an invalidated provider context. Any profile header, including an
 empty or partial tuple, keeps the API-key and binding checks on those routes.
 Invalidation or changed
-metadata refuses subsequent operations; this does not drain in-flight requests
-or fence background jobs. Complete replacement/restore fencing, ready publication
+metadata refuses subsequent operations. Internally bound HTTP requests retain a
+per-profile, cross-process shared lock from admission through response completion,
+including streamed responses and cancellation. Invalidation takes an exclusive
+lock and refuses as busy while such a request is active; it can be retried after
+the request finishes. Other profiles remain independent. Private lock files live
+beside the external registry and are never removed during provider restore or
+cleanup. Discovery and reconciliation do not create them; guarded operations do.
+The lock covers the ASGI call lifetime. Work that outlives that call, including
+detached tasks or threads, needs its own captured operation guard. This does not
+yet fence Socket.IO events, background jobs or native processes.
+Complete replacement/restore fencing, ready publication
 and runtime/integration isolation remain required before activation is exposed.
 The legacy identity endpoint authenticates and then returns 404.
 

@@ -1,6 +1,8 @@
 """External reservations survive provider restore without advertising readiness."""
 
+import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -34,6 +36,116 @@ def reservation(tmp_path):
 @pytest.fixture
 def registry(tmp_path):
     return ProfileRegistry.create(tmp_path / "control" / "registry.db")
+
+
+def test_operation_fence_blocks_invalidation_across_processes(registry, reservation):
+    registry.reserve(reservation)
+    script = """
+import sys
+from pathlib import Path
+from agent_backbone.services.database import ProfileRegistry, ProfileIdentity
+registry = ProfileRegistry(Path(sys.argv[1]))
+identity = ProfileIdentity(*sys.argv[3:])
+try:
+    registry.invalidate(identity, Path(sys.argv[2]))
+except ValueError as exc:
+    assert str(exc) == 'Profile has operations in progress'
+    sys.exit(7)
+"""
+    command = [
+        sys.executable,
+        "-c",
+        script,
+        str(registry.path),
+        str(reservation.data_dir),
+        *vars(reservation.identity).values(),
+    ]
+    with registry.operation(reservation.identity, reservation.data_dir):
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        assert result.returncode == 7, result.stderr
+        assert registry.check_reservation(reservation.identity, reservation.data_dir) == reservation
+    result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    with pytest.raises(ValueError, match="invalidated"):
+        with registry.operation(reservation.identity, reservation.data_dir):
+            pytest.fail("invalidated operation admitted")
+    registry.invalidate(reservation.identity, reservation.data_dir)  # Exact replay remains valid.
+
+
+def test_operation_fence_is_per_profile_and_releases_on_error(registry, reservation):
+    registry.reserve(reservation)
+    other = replace(
+        reservation,
+        identity=ProfileIdentity("profile-b", "installation-b", "lifecycle-b1"),
+        data_dir=reservation.data_dir.with_name("b"),
+    )
+    registry.reserve(other)
+    with pytest.raises(RuntimeError, match="operation failed"):
+        with registry.operation(reservation.identity, reservation.data_dir):
+            registry.invalidate(other.identity, other.data_dir)
+            with registry.operation(reservation.identity, reservation.data_dir):
+                with pytest.raises(ValueError, match="in progress"):
+                    registry.invalidate(reservation.identity, reservation.data_dir)
+            raise RuntimeError("operation failed")
+    registry.invalidate(reservation.identity, reservation.data_dir)
+
+
+def test_operation_directory_cannot_be_provider_or_project_storage(registry, reservation):
+    directory = registry.path.with_name(registry.path.name + ".operations")
+    for path in (directory, directory / "child", directory.with_name(directory.name.upper())):
+        with pytest.raises(ValueError, match="outside"):
+            registry.reserve(replace(reservation, data_dir=path))
+    registry.reserve(reservation)
+    directory.mkdir(mode=0o700)
+    with pytest.raises(ValueError, match="profile storage"):
+        registry.claim_projects(reservation.identity, reservation.data_dir, (directory,))
+    # A registry written before fences existed may already claim this location.
+    with sqlite3.connect(registry.path) as conn:
+        conn.execute(
+            "INSERT INTO project_claims VALUES (?, ?, ?, ?)",
+            (str(directory), *vars(reservation.identity).values()),
+        )
+    with pytest.raises(ValueError, match="project storage"):
+        with registry.operation(reservation.identity, reservation.data_dir):
+            pytest.fail("conflicting storage admitted")
+    assert not list(directory.iterdir())
+
+
+def test_registry_hardlink_cannot_bypass_an_active_fence(registry, reservation):
+    registry.reserve(reservation)
+    alias = registry.path.with_name("alias.db")
+    with registry.operation(reservation.identity, reservation.data_dir):
+        os.link(registry.path, alias)
+        try:
+            with pytest.raises(ValueError, match="unaliased registry"):
+                ProfileRegistry(alias).invalidate(reservation.identity, reservation.data_dir)
+        finally:
+            alias.unlink()
+    registry.invalidate(reservation.identity, reservation.data_dir)
+
+
+@pytest.mark.parametrize("alias", ["symlink", "hardlink", "fifo", "public"])
+def test_operation_fence_refuses_unsafe_lock_files(registry, reservation, tmp_path, alias):
+    registry.reserve(reservation)
+    with registry.operation(reservation.identity, reservation.data_dir):
+        pass
+    directory = registry.path.with_name(registry.path.name + ".operations")
+    lock = directory / hashlib.sha256(reservation.identity.profile_id.encode()).hexdigest()
+    target = tmp_path / "unrelated"
+    target.write_text("sentinel")
+    lock.unlink()
+    if alias == "symlink":
+        lock.symlink_to(target)
+    elif alias == "hardlink":
+        os.link(target, lock)
+    elif alias == "fifo":
+        os.mkfifo(lock)
+    else:
+        lock.touch(mode=0o644)
+    with pytest.raises(ValueError, match="fence"):
+        registry.invalidate(reservation.identity, reservation.data_dir)
+    assert registry.check_reservation(reservation.identity, reservation.data_dir) == reservation
+    assert target.read_text() == "sentinel"
 
 
 def test_read_never_creates_or_repairs_registry(tmp_path):

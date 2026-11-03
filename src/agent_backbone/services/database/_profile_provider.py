@@ -34,6 +34,12 @@ class ProfileProvider:
     database_path: Path
     socket_path: Path
 
+    def operation(self):
+        """Retain this reservation until a guarded operation finishes or cancels."""
+        return ProfileRegistry(self.registry_path).operation(
+            self.reservation.identity, self.reservation.data_dir
+        )
+
     async def check(self) -> None:
         """Recheck external ownership and local identity without creating storage.
 

@@ -6,6 +6,8 @@ non-ready reservations; a successful guard check never authorizes serving work.
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import os
 import sqlite3
 import stat
@@ -189,8 +191,14 @@ class ProfileRegistry:
         self._outside(data_dir)
 
     def _outside(self, data_dir: Path) -> None:
-        if self._contains(data_dir, self.path):
+        if self._contains(data_dir, self.path) or self._overlap(
+            data_dir, self._operation_directory
+        ):
             raise ValueError("Profile registry must be outside the provider data directory")
+
+    @property
+    def _operation_directory(self) -> Path:
+        return self.path.with_name(self.path.name + ".operations")
 
     @staticmethod
     def _contains(parent: Path, child: Path) -> bool:
@@ -326,9 +334,13 @@ class ProfileRegistry:
                 else:
                     if not stat.S_ISDIR(info.st_mode):
                         raise ValueError("Project resources must be directories")
-                if self._contains(path, self.path) or any(
-                    record.identity != identity and self._overlap(path, record.data_dir)
-                    for record in records
+                if (
+                    self._contains(path, self.path)
+                    or self._overlap(path, self._operation_directory)
+                    or any(
+                        record.identity != identity and self._overlap(path, record.data_dir)
+                        for record in records
+                    )
                 ):
                     raise ValueError("Project resource conflicts with profile storage")
             for claimed, claimant in claims:
@@ -389,13 +401,88 @@ class ProfileRegistry:
                 return record
         raise ValueError("Profile reservation does not match")
 
+    @contextmanager
+    def _operation_fence(self, identity: ProfileIdentity, data_dir: Path, *, exclusive: bool):
+        # Keep the fence outside the provider tree so restoring its database
+        # cannot replace a lock held by an admitted operation. Never delete locks.
+        if self.path.stat().st_nlink != 1:
+            raise ValueError("Profile operation fence requires an unaliased registry")
+        with self._connection(write=exclusive) as conn:
+            self._matching(conn, identity, data_dir)
+            if any(
+                self._project_overlap(self._operation_directory, path)
+                for path, _ in self._project_claims(conn, self._records(conn))
+            ):
+                raise ValueError("Profile operation fence conflicts with project storage")
+        directory = self._operation_directory
+        fd = None
+        try:
+            directory.mkdir(mode=0o700, exist_ok=True)
+            info = directory.lstat()
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or info.st_mode & 0o077
+            ):
+                raise ValueError("Profile operation fence must be private")
+            name = hashlib.sha256(identity.profile_id.encode()).hexdigest()
+            path = directory / name
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError("Profile operation fence must be a regular file")
+            fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+            info = os.fstat(fd)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or info.st_uid != os.geteuid()
+                or info.st_mode & 0o077
+            ):
+                raise ValueError("Profile operation fence must be a private regular file")
+            try:
+                fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ValueError("Profile has operations in progress") from None
+        except OSError as exc:
+            if fd is not None:
+                os.close(fd)
+                fd = None
+            raise ValueError("Profile operation fence is unavailable") from exc
+        except BaseException:
+            if fd is not None:
+                os.close(fd)
+            raise
+        try:
+            yield
+        finally:
+            os.close(fd)
+
+    @contextmanager
+    def operation(self, identity: ProfileIdentity, data_dir: Path):
+        """Hold admission through completion; invalidation refuses while busy.
+
+        This creates only private control-plane lock files, never provider data.
+        Each operation rechecks its reservation after acquiring the shared lock.
+        Callers must retain this context through all effects, including streaming.
+        """
+        with self._operation_fence(identity, data_dir, exclusive=False):
+            self.check_reservation(identity, data_dir)
+            yield
+
     def invalidate(self, identity: ProfileIdentity, data_dir: Path) -> None:
         """Permanently fail this reservation, including across provider DB restore.
 
-        This only fences future reservation checks. It cannot stop a service,
-        cancel jobs or replace a generation, and must not be used to claim that.
+        Refuse while an admitted guarded operation is in progress. This does not
+        stop services or unguarded jobs, or implement generation replacement.
         """
-        with self._connection(write=True) as conn:
+        with (
+            self._operation_fence(identity, data_dir, exclusive=True),
+            self._connection(write=True) as conn,
+        ):
             self._matching(conn, identity, data_dir)
             conn.execute(
                 "UPDATE profiles SET state = 'failed' WHERE profile_id = ?",

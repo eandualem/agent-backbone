@@ -1,5 +1,6 @@
 """Legacy providers must not silently accept an operation pinned to a profile."""
 
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -135,6 +136,79 @@ async def bound_provider(api_app, tmp_path, monkeypatch):
 
 async def test_identity_requires_authentication_even_on_legacy(api_client):
     assert (await api_client.get("/api/profile")).status_code == 401
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_admitted_http_effect_finishes_before_invalidation(
+    api_client, api_app, bound_provider, runtime
+):
+    provider, registry, headers = bound_provider
+    spec = await api_app.state.agent_store.update("ike", runtime=runtime)
+    key = agent_api_key(api_app.state.config.api_key, spec.registration_id)
+    headers = {**headers, "Authorization": f"Bearer {key}"}
+    entered, finish = asyncio.Event(), asyncio.Event()
+    effects = []
+
+    @api_app.post("/api/fenced-effect")
+    async def effect():
+        entered.set()
+        await finish.wait()
+        effects.append("original provider")
+        return {"ok": True}
+
+    request = asyncio.create_task(api_client.post("/api/fenced-effect", headers=headers))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        with pytest.raises(ValueError, match="in progress"):
+            registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        assert registry.show(provider.reservation.identity.profile_id)["state"] == "creating"
+        finish.set()
+        assert (await asyncio.wait_for(request, 5)).status_code == 200
+    finally:
+        request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    assert (await api_client.post("/api/fenced-effect", headers=headers)).status_code == 409
+    assert effects == ["original provider"]
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_stream_retains_fence_until_finished_or_cancelled(
+    api_client, api_app, auth_headers, bound_provider, cancel
+):
+    from starlette.responses import StreamingResponse
+
+    provider, registry, headers = bound_provider
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def chunks():
+        yield b"first"
+        entered.set()
+        await finish.wait()
+        yield b"last"
+
+    @api_app.get("/api/fenced-stream")
+    async def stream():
+        return StreamingResponse(chunks())
+
+    request = asyncio.create_task(
+        api_client.get("/api/fenced-stream", headers={**auth_headers, **headers})
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        with pytest.raises(ValueError, match="in progress"):
+            registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        if cancel:
+            request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request
+        else:
+            finish.set()
+            assert (await asyncio.wait_for(request, 5)).content == b"firstlast"
+    finally:
+        request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
 
 
 async def test_bound_identity_handshake_and_replaced_endpoint(

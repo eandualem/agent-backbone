@@ -1,5 +1,7 @@
 """Authenticate and compare a captured provider identity before content access."""
 
+from contextlib import ExitStack
+
 from fastapi import HTTPException, Request
 from sqlalchemy.engine import make_url
 from starlette.datastructures import Headers
@@ -91,26 +93,31 @@ class ProfileBindingMiddleware:
         prefix = scope.get("root_path", "").rstrip("/")
         if prefix and path.startswith(prefix + "/"):
             path = path[len(prefix) :]
-        if not values and (scope["method"], path) in UNBOUND_ROUTES:
-            # Preserve route authentication without letting an invalidated provider
-            # receive integration events. Any profile header still takes the gate below.
-            if await provider_current(provider, scope["app"]):
-                return await self.app(scope, receive, send)
-            return await JSONResponse({"detail": BINDING_MISMATCH}, status_code=409)(
-                scope, receive, send
-            )
-        try:
-            await require_api_key(Request(scope))
-        except HTTPException as exc:
-            response = JSONResponse(
-                {"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers
-            )
-        else:
-            error = await binding_error(provider, values, scope["app"])
-            if any(len(headers.getlist(header)) > 1 for header in PROFILE_HEADERS):
-                error = BINDING_MISMATCH
+        exempt = not values and (scope["method"], path) in UNBOUND_ROUTES
+        if not exempt:
+            try:
+                await require_api_key(Request(scope))
+            except HTTPException as exc:
+                return await JSONResponse(
+                    {"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers
+                )(scope, receive, send)
+        with ExitStack() as operations:
+            try:
+                if provider is not None:
+                    operations.enter_context(provider.operation())
+            except (ValueError, OSError):
+                return await JSONResponse({"detail": BINDING_MISMATCH}, status_code=409)(
+                    scope, receive, send
+                )
+            if exempt:
+                # Preserve the route's authentication. Hold its fence through the
+                # entire response, just as for authenticated bound content.
+                error = None if await provider_current(provider, scope["app"]) else BINDING_MISMATCH
+            else:
+                error = await binding_error(provider, values, scope["app"])
+                if any(len(headers.getlist(header)) > 1 for header in PROFILE_HEADERS):
+                    error = BINDING_MISMATCH
             if error is None:
                 scope.setdefault("state", {})["profile_provider"] = provider
                 return await self.app(scope, receive, send)
-            response = JSONResponse({"detail": error}, status_code=409)
-        return await response(scope, receive, send)
+            return await JSONResponse({"detail": error}, status_code=409)(scope, receive, send)
