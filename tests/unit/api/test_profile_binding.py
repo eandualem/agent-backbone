@@ -1232,9 +1232,17 @@ async def test_setup_workers_retain_provider_after_client_and_shutdown_cancellat
             assert not batch.done()
             with pytest.raises(ValueError, match="fence is busy"):
                 registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        # Event-loop teardown can cancel the owned task itself as well.
+        for _ in range(2):
+            batch.cancel()
+            for _ in range(5):
+                await asyncio.sleep(0)
+            assert not batch.done()
+            with pytest.raises(ValueError, match="fence is busy"):
+                registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
         release.set()
         await asyncio.wait_for(api_app.state.api_tasks.stop(), 5)
-        assert batch.result() == {runtime: {"compatible": True}}
+        assert batch.cancelled()
         response = await api_client.get(
             "/api/runtimes?check_setup=true", headers={**auth_headers, **headers}
         )

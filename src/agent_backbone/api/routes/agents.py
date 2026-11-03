@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextvars import copy_context
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -274,10 +275,30 @@ async def inspect_agent(
     )
 
 
+async def _runtime_setup_check(runtime):
+    # Task cancellation cannot stop a running executor function. Keep the batch
+    # (and its provider reservation) alive until that function actually exits.
+    worker = asyncio.get_running_loop().run_in_executor(
+        None, copy_context().run, runtime.setup_compatibility
+    )
+    cancelled = False
+    while not worker.done():
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            break
+    if cancelled:
+        worker.exception()  # Observe a failure even when cancellation wins.
+        raise asyncio.CancelledError
+    return worker.result()
+
+
 async def _runtime_setup_checks():
     # Drain every worker before allowing another batch, including on failure.
     values = await asyncio.gather(
-        *(asyncio.to_thread(rt.setup_compatibility) for rt in RUNTIMES.values()),
+        *(_runtime_setup_check(rt) for rt in RUNTIMES.values()),
         return_exceptions=True,
     )
     for value in values:

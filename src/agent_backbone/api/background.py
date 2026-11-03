@@ -43,7 +43,8 @@ class ApiTasks:
         self.closing = True
 
     async def start(self):
-        pass
+        await self.stop()
+        self.closing = False
 
     async def stop(self):
         self.close_admission()
