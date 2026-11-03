@@ -726,8 +726,9 @@ async def test_terminal_packet_timeout_can_finish_disconnect_cleanup(
 
     monkeypatch.setattr(sio, "_send_eio_packet", send)
     queue = asyncio.Queue()
-    forwarding = asyncio.create_task(ns._forward_pty_output(sid, "ike", queue))
-    ns._subscriptions[sid] = {"ike": forwarding}
+    manager.create = AsyncMock(return_value=SimpleNamespace(output_queue=queue))
+    await ns._attach_subscription_client(sid, "ike", 80, 24)
+    forwarding = ns._subscriptions[sid]["ike"]
     queue.put_nowait("sentinel")
     try:
         await asyncio.wait_for(asyncio.shield(forwarding), 2)
@@ -744,6 +745,7 @@ async def test_terminal_packet_timeout_can_finish_disconnect_cleanup(
         forwarding.cancel()
         await asyncio.gather(forwarding, *packet_tasks, *emission_tasks, return_exceptions=True)
         await asyncio.gather(*getattr(sio, "_profile_emissions", ()), return_exceptions=True)
+        await asyncio.gather(*tuple(ns._background), return_exceptions=True)
     registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
 
 
@@ -965,4 +967,149 @@ async def test_failed_admission_fence_exit_retires_captured_state(
         )
     assert not ns._profiles and not ns._registrations and not ns._connecting
     assert not list(sio.manager.get_participants(ns.namespace, None))
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+
+
+@pytest.mark.parametrize(
+    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+)
+@pytest.mark.parametrize(
+    "ending",
+    ["disconnect", "cancel", "eof", "forwarder_cancel", "failed_cleanup", "failed_disconnect"],
+)
+async def test_attached_terminal_owns_fence_until_resource_cleanup(
+    api_app, bound_provider, monkeypatch, runtime, ending
+):
+    from types import SimpleNamespace
+
+    provider, registry, _ = bound_provider
+    spec = await api_app.state.agent_store.update("ike", runtime=runtime)
+    sio = api_app.state.sio
+    ns = sio.namespace_handlers["/terminal"]
+    sid = await sio.manager.connect("engine", ns.namespace)
+    assert await ns.on_connect(
+        sid,
+        {},
+        {
+            "api_key": agent_api_key(api_app.state.config.api_key, spec.registration_id),
+            **vars(provider.reservation.identity),
+        },
+    )
+    ns.emit = AsyncMock()
+    creating, created, removing, removed = (asyncio.Event() for _ in range(4))
+    queue = asyncio.Queue()
+
+    async def create(*args):
+        creating.set()
+        await created.wait()
+        return SimpleNamespace(output_queue=queue)
+
+    fail = ending in {"failed_cleanup", "failed_disconnect"}
+
+    async def remove(*args):
+        removing.set()
+        await removed.wait()
+        if fail:
+            raise OSError("process is still alive")
+
+    manager = SimpleNamespace(
+        create=AsyncMock(side_effect=create), remove=AsyncMock(side_effect=remove)
+    )
+    monkeypatch.setattr("agent_backbone.api.socketio_server.get_pty_manager", lambda: manager)
+    attach = asyncio.create_task(ns._attach_subscription_client(sid, "ike", 80, 24))
+    disconnect = None
+    try:
+        await asyncio.wait_for(creating.wait(), 2)
+        replacement = SimpleNamespace(create=AsyncMock(), remove=AsyncMock())
+        monkeypatch.setattr(
+            "agent_backbone.api.socketio_server.get_pty_manager", lambda: replacement
+        )
+        with pytest.raises(ValueError, match="fence is busy"):
+            registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        if ending in {"disconnect", "failed_disconnect"}:
+            disconnect = asyncio.create_task(ns.on_disconnect(sid))
+            await asyncio.sleep(0)
+        elif ending == "cancel":
+            attach.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await attach
+        created.set()
+        if ending not in {"cancel", "disconnect", "failed_disconnect"}:
+            await attach
+            with pytest.raises(ValueError, match="fence is busy"):
+                registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+            # A forwarder ending naturally must trigger process/worker cleanup.
+            if ending == "forwarder_cancel":
+                ns._subscriptions[sid]["ike"].cancel()
+            else:
+                queue.put_nowait(None)
+        await asyncio.wait_for(removing.wait(), 2)
+        with pytest.raises(ValueError, match="fence is busy"):
+            registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        removed.set()
+        await asyncio.gather(attach, *([disconnect] if disconnect else []), return_exceptions=True)
+        while ns._resource_tasks or ns._background:
+            await asyncio.gather(
+                *(t for pending in tuple(ns._resource_tasks.values()) for t in tuple(pending)),
+                *tuple(ns._background),
+                return_exceptions=True,
+            )
+        if fail:
+            with pytest.raises(ValueError, match="fence is busy"):
+                registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+            assert ns._resources
+            fail = False
+            await ns._cleanup_session(sid, "ike")
+        assert not ns._resources
+        manager.remove.assert_awaited()
+        replacement.remove.assert_not_awaited()
+        assert all(task is None for task in ns._subscriptions.get(sid, {}).values())
+        registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    finally:
+        fail = False
+        created.set()
+        removed.set()
+        await asyncio.gather(attach, *([disconnect] if disconnect else []), return_exceptions=True)
+        await ns.on_disconnect(sid)
+        while ns._resource_tasks or ns._background:
+            await asyncio.gather(
+                *(t for pending in tuple(ns._resource_tasks.values()) for t in tuple(pending)),
+                *tuple(ns._background),
+                return_exceptions=True,
+            )
+
+
+async def test_terminal_join_cannot_attach_after_disconnect_during_validation(
+    api_app, bound_provider, monkeypatch
+):
+    provider, registry, _ = bound_provider
+    sio = api_app.state.sio
+    ns = sio.namespace_handlers["/terminal"]
+    sid = await sio.manager.connect("engine", ns.namespace)
+    assert await ns.on_connect(
+        sid, {}, {"api_key": api_app.state.config.api_key, **vars(provider.reservation.identity)}
+    )
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def exists(*args):
+        entered.set()
+        await finish.wait()
+        return True
+
+    from types import SimpleNamespace
+
+    manager = SimpleNamespace(create=AsyncMock(), remove=AsyncMock())
+    monkeypatch.setattr("agent_backbone.api.socketio_server.get_pty_manager", lambda: manager)
+    monkeypatch.setattr("agent_backbone.api.socketio_server.session_exists", exists)
+    join = asyncio.create_task(
+        ns.trigger_event("join", sid, {"session": "ike", "cols": 80, "rows": 24})
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await sio.disconnect(sid, namespace=ns.namespace)
+    finally:
+        finish.set()
+        await join
+    manager.create.assert_not_called()
+    assert not ns._resources
     registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)

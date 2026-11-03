@@ -99,13 +99,14 @@ can return immediately, allowing reentrant disconnect cleanup to finish, while
 the emission task retains its own fence. Connection admission captures the
 provider before reading registrations and holds its fence through the initial session snapshot. Failed, cancelled or disconnected
 admissions discard their captured state; a changed application context is refused.
-Disconnect cleanup and the full lifetime of terminal PTYs still require their own
-fencing before activation. PTY cleanup waits for process termination and reader-executor shutdown before propagating
-caller cancellation; concurrent cleanup callers share that work, and the manager
-retains the session until resource cleanup succeeds. This preserves cleanup
-ownership; retiring sessions are not reused by resize, and failed cleanup can be
-retried after its cause is corrected. This does not establish a provider fence
-for an attached PTY. Session-feed
+Attached PTYs acquire their own captured provider fence before creation and retain
+it until process termination and reader-executor shutdown succeed. Per-attachment
+resource tasks serialize creation, resize and cleanup independently of handler
+cancellation. Disconnect retires pending attaches; EOF or forwarder cancellation
+triggers resource cleanup rather than releasing the fence. A failed cleanup keeps
+its session and fence for retry after the cause is corrected. Complete shutdown
+drainage, including pending handlers and other background effects, remains required
+before activation. Session-feed
 history writes retain their own captured provider guard through transaction
 cleanup, including after a snapshot times out or is cancelled. They recheck the
 feed's database, configuration and terminal context before writing; a retired or

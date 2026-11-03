@@ -839,7 +839,14 @@ be read are skipped. The portable process check uses second-resolution start
 times; it is not an atomic process handle across the check and signal.
 Attachments use exact session names; an offline `app` never resolves to
 `app-2`. Replacing or removing the same viewer attachment waits for its
-previous PTY cleanup to finish.
+previous PTY cleanup to finish. A disconnected viewer cannot finish a pending
+attach. Room membership and failed-join cleanup use the same attachment lock,
+so a failed join cannot retire a later successful join. Cancellation or output EOF does not establish process exit: cleanup
+retains the attachment until its process exits and its reader worker finishes.
+Failed cleanup remains tracked for retry. Internally bound providers retain their
+lifecycle fence across creation and cleanup, independently of the requesting
+handler or output forwarder. Profile activation remains unavailable.
+Bulk PTY cleanup logs failures instead of reporting that all sessions were cleaned.
 
 ```js
 const sio = io("http://127.0.0.1:7120/sessions", { auth: { api_key: KEY } });
