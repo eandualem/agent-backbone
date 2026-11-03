@@ -49,7 +49,7 @@ identity = ProfileIdentity(*sys.argv[3:])
 try:
     registry.invalidate(identity, Path(sys.argv[2]))
 except ValueError as exc:
-    assert str(exc) == 'Profile has operations in progress'
+    assert str(exc) == 'Profile operation fence is busy'
     sys.exit(7)
 """
     command = [
@@ -84,7 +84,7 @@ def test_operation_fence_is_per_profile_and_releases_on_error(registry, reservat
         with registry.operation(reservation.identity, reservation.data_dir):
             registry.invalidate(other.identity, other.data_dir)
             with registry.operation(reservation.identity, reservation.data_dir):
-                with pytest.raises(ValueError, match="in progress"):
+                with pytest.raises(ValueError, match="fence is busy"):
                     registry.invalidate(reservation.identity, reservation.data_dir)
             raise RuntimeError("operation failed")
     registry.invalidate(reservation.identity, reservation.data_dir)
@@ -109,6 +109,51 @@ def test_operation_directory_cannot_be_provider_or_project_storage(registry, res
         with registry.operation(reservation.identity, reservation.data_dir):
             pytest.fail("conflicting storage admitted")
     assert not list(directory.iterdir())
+
+
+@pytest.mark.parametrize("suffix", ["", "/child"])
+def test_old_fence_directory_reservations_remain_readable(registry, reservation, suffix):
+    registry.reserve(reservation)
+    directory = registry.path.with_name(registry.path.name + ".operations")
+    legacy = replace(
+        reservation,
+        identity=ProfileIdentity("profile-old", "installation-old", "lifecycle-old"),
+        data_dir=Path(str(directory) + suffix),
+    )
+    # Simulate a valid reservation written before the fence directory was reserved.
+    with sqlite3.connect(registry.path) as conn:
+        conn.execute(
+            "INSERT INTO profiles VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                *vars(legacy.identity).values(),
+                str(legacy.data_dir),
+                legacy.display_name,
+                legacy.baseline_version,
+                legacy.state,
+            ),
+        )
+    before = registry.path.read_bytes()
+    assert len(registry.list()["items"]) == 2
+    assert registry.show(legacy.identity.profile_id)["binding"] is None
+    assert registry.check_reservation(legacy.identity, legacy.data_dir) == legacy
+    assert registry.check_reservation(reservation.identity, reservation.data_dir) == reservation
+    for item in (legacy, reservation):
+        with pytest.raises(ValueError, match="provider storage"):
+            with registry.operation(item.identity, item.data_dir):
+                pytest.fail("conflicting storage admitted")
+        with pytest.raises(ValueError, match="provider storage"):
+            registry.invalidate(item.identity, item.data_dir)
+    assert registry.path.read_bytes() == before
+    assert not directory.exists()
+
+
+def test_concurrent_invalidation_reports_fence_contention(registry, reservation):
+    registry.reserve(reservation)
+    with registry._operation_fence(reservation.identity, reservation.data_dir, exclusive=True):
+        with pytest.raises(ValueError, match="fence is busy"):
+            registry.invalidate(reservation.identity, reservation.data_dir)
+    registry.invalidate(reservation.identity, reservation.data_dir)
+    registry.invalidate(reservation.identity, reservation.data_dir)
 
 
 def test_registry_hardlink_cannot_bypass_an_active_fence(registry, reservation):
@@ -141,7 +186,8 @@ def test_operation_fence_refuses_unsafe_lock_files(registry, reservation, tmp_pa
     elif alias == "fifo":
         os.mkfifo(lock)
     else:
-        lock.touch(mode=0o644)
+        lock.touch()
+        lock.chmod(0o644)
     with pytest.raises(ValueError, match="fence"):
         registry.invalidate(reservation.identity, reservation.data_dir)
     assert registry.check_reservation(reservation.identity, reservation.data_dir) == reservation

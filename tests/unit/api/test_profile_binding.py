@@ -159,7 +159,7 @@ async def test_admitted_http_effect_finishes_before_invalidation(
     request = asyncio.create_task(api_client.post("/api/fenced-effect", headers=headers))
     try:
         await asyncio.wait_for(entered.wait(), 5)
-        with pytest.raises(ValueError, match="in progress"):
+        with pytest.raises(ValueError, match="fence is busy"):
             registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
         assert registry.show(provider.reservation.identity.profile_id)["state"] == "creating"
         finish.set()
@@ -196,7 +196,7 @@ async def test_stream_retains_fence_until_finished_or_cancelled(
     )
     try:
         await asyncio.wait_for(entered.wait(), 5)
-        with pytest.raises(ValueError, match="in progress"):
+        with pytest.raises(ValueError, match="fence is busy"):
             registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
         if cancel:
             request.cancel()

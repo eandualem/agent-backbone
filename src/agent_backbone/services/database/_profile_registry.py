@@ -191,9 +191,7 @@ class ProfileRegistry:
         self._outside(data_dir)
 
     def _outside(self, data_dir: Path) -> None:
-        if self._contains(data_dir, self.path) or self._overlap(
-            data_dir, self._operation_directory
-        ):
+        if self._contains(data_dir, self.path):
             raise ValueError("Profile registry must be outside the provider data directory")
 
     @property
@@ -220,6 +218,8 @@ class ProfileRegistry:
         if reservation.state != "creating":
             raise ValueError("New profile reservations must be creating")
         self._external(reservation.data_dir)
+        if self._overlap(reservation.data_dir, self._operation_directory):
+            raise ValueError("Profile registry fence must be outside the provider data directory")
         with self._connection(write=True) as conn:
             records = self._records(conn)
             for stored in records:
@@ -409,9 +409,12 @@ class ProfileRegistry:
             raise ValueError("Profile operation fence requires an unaliased registry")
         with self._connection(write=exclusive) as conn:
             self._matching(conn, identity, data_dir)
+            records = self._records(conn)
+            if any(self._overlap(self._operation_directory, r.data_dir) for r in records):
+                raise ValueError("Profile operation fence conflicts with provider storage")
             if any(
                 self._project_overlap(self._operation_directory, path)
-                for path, _ in self._project_claims(conn, self._records(conn))
+                for path, _ in self._project_claims(conn, records)
             ):
                 raise ValueError("Profile operation fence conflicts with project storage")
         directory = self._operation_directory
@@ -446,7 +449,7 @@ class ProfileRegistry:
             try:
                 fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
             except BlockingIOError:
-                raise ValueError("Profile has operations in progress") from None
+                raise ValueError("Profile operation fence is busy") from None
         except OSError as exc:
             if fd is not None:
                 os.close(fd)
