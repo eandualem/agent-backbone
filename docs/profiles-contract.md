@@ -464,3 +464,21 @@ account-isolation acceptance: real-account login/logout/refresh, native configur
 and credential-helper constraints, project materialization conflicts, and lifecycle
 fencing remain prerequisites before activation. No shipped capability coverage or
 profile readiness is promoted by these internal tests.
+
+Internal skill materialization can now claim the old and new checkout and their
+common Git directories in the external profile registry before removing links,
+creating links or updating Git excludes. A competing profile is refused and must
+use a separate checkout; linked worktrees still share the common Git directory.
+Claims are atomic and remain after skill cleanup or profile invalidation. Releasing
+or transferring them requires explicit reconciliation, not automatic expiry.
+No ownership marker is added to the project. Explicit registry initialization
+upgrades the internal store; discovery remains read-only.
+Guarded materialization also refuses symlinked or hard-linked Git excludes and
+nonregular Git `commondir` files before cleanup or writes.
+
+The guard is an internal prerequisite, with the same materialization behavior
+tests for Claude Code, Codex and OpenCode. Production startup does not install it
+yet. Default adoption must reconcile existing materializations, and launch trust
+preparation, swarm creation and native project configuration still need ownership
+checks before isolated providers can activate. Claims do not fence in-flight
+operations or a same-user process replacing files concurrently.

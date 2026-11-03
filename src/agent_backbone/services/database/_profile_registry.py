@@ -88,6 +88,7 @@ class ProfileRegistry:
         registry._check_parent()
         if registry.path.exists():
             registry.list()
+            registry._initialize_project_claims()
             return registry
         fd, temporary = tempfile.mkstemp(prefix=".registry-", dir=registry.path.parent)
         os.close(fd)
@@ -114,7 +115,19 @@ class ProfileRegistry:
         finally:
             Path(temporary).unlink(missing_ok=True)
         registry.list()
+        registry._initialize_project_claims()
         return registry
+
+    def _initialize_project_claims(self) -> None:
+        """Explicitly upgrade reservations; discovery never changes the schema."""
+        with self._connection(write=True) as conn:
+            if conn.execute("PRAGMA user_version").fetchone()[0] == 1:
+                conn.execute(
+                    "CREATE TABLE project_claims ("
+                    "path TEXT PRIMARY KEY NOT NULL, profile_id TEXT NOT NULL, "
+                    "installation_id TEXT NOT NULL, lifecycle_id TEXT NOT NULL)"
+                )
+                conn.execute("PRAGMA user_version = 2")
 
     def _check_parent(self) -> None:
         info = self.path.parent.stat()
@@ -135,7 +148,7 @@ class ProfileRegistry:
                 conn.execute("PRAGMA synchronous = EXTRA")
                 conn.execute("PRAGMA fullfsync = ON")
             conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
-            if not initializing and conn.execute("PRAGMA user_version").fetchone()[0] != 1:
+            if not initializing and conn.execute("PRAGMA user_version").fetchone()[0] not in {1, 2}:
                 raise ValueError("Unsupported profile registry schema")
             yield conn
             if write:
@@ -200,7 +213,8 @@ class ProfileRegistry:
             raise ValueError("New profile reservations must be creating")
         self._external(reservation.data_dir)
         with self._connection(write=True) as conn:
-            for stored in self._records(conn):
+            records = self._records(conn)
+            for stored in records:
                 if stored.identity.profile_id == reservation.identity.profile_id:
                     if (
                         stored.identity != reservation.identity
@@ -217,6 +231,11 @@ class ProfileRegistry:
                     or self._overlap(stored.data_dir, reservation.data_dir)
                 ):
                     raise ValueError("Profile reservation conflicts with an existing reservation")
+            if any(
+                self._project_overlap(reservation.data_dir, path)
+                for path, _ in self._project_claims(conn, records)
+            ):
+                raise ValueError("Profile directory conflicts with an existing project claim")
             conn.execute(
                 "INSERT INTO profiles VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
@@ -272,6 +291,97 @@ class ProfileRegistry:
         with self._connection() as conn:
             if any(self._overlap(r.data_dir, data_dir) for r in self._records(conn)):
                 raise ValueError("Provider directory belongs to a reserved profile")
+
+    def claim_projects(
+        self, identity: ProfileIdentity, data_dir: Path, paths: tuple[Path, ...]
+    ) -> None:
+        """Reserve mutable project resources together, before any materialization.
+
+        Claims survive cleanup, invalidation and provider database restores. They
+        are not leases: releasing or transferring them needs explicit lifecycle
+        reconciliation, which is not implemented here. This is not an in-flight
+        service fence or permission to activate a provider.
+        """
+        self._external(data_dir)
+        resources = tuple(dict.fromkeys(_resolve(path) for path in paths))
+        if not resources:
+            raise ValueError("Project resources must be existing directories")
+        with self._connection(write=True) as conn:
+            if conn.execute("PRAGMA user_version").fetchone()[0] != 2:
+                raise ValueError("Profile registry needs explicit project ownership initialization")
+            records = self._records(conn)
+            owner = self._matching(conn, identity, data_dir)
+            if owner.state != "creating":
+                raise ValueError("Profile lifecycle has been invalidated")
+            claims = self._project_claims(conn, records)
+            owned = {path for path, claimant in claims if claimant == identity}
+            for path in resources:
+                try:
+                    info = path.stat()
+                except FileNotFoundError:
+                    # A removed checkout has nothing to clean up, but its
+                    # existing claim must survive relocation or release.
+                    if path not in owned:
+                        raise ValueError("Project resources must be existing directories") from None
+                else:
+                    if not stat.S_ISDIR(info.st_mode):
+                        raise ValueError("Project resources must be directories")
+                if self._contains(path, self.path) or any(
+                    record.identity != identity and self._overlap(path, record.data_dir)
+                    for record in records
+                ):
+                    raise ValueError("Project resource conflicts with profile storage")
+            for claimed, claimant in claims:
+                if claimant != identity and any(
+                    self._project_overlap(path, claimed) for path in resources
+                ):
+                    raise ValueError("Project belongs to another profile; use a separate checkout")
+            conn.executemany(
+                "INSERT OR IGNORE INTO project_claims VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        str(path),
+                        identity.profile_id,
+                        identity.installation_id,
+                        identity.lifecycle_id,
+                    )
+                    for path in resources
+                ],
+            )
+
+    def _project_claims(self, conn, records) -> list[tuple[Path, ProfileIdentity]]:
+        if conn.execute("PRAGMA user_version").fetchone()[0] == 1:
+            return []
+        claims = []
+        for row in conn.execute("SELECT * FROM project_claims"):
+            try:
+                path = Path(row["path"])
+                identity = ProfileIdentity(
+                    row["profile_id"], row["installation_id"], row["lifecycle_id"]
+                )
+            except (TypeError, IndexError) as exc:
+                raise ValueError("Invalid project ownership metadata") from exc
+            if (
+                not path.is_absolute()
+                or ".." in path.parts
+                or "\x00" in str(path)
+                or not any(record.identity == identity for record in records)
+            ):
+                raise ValueError("Invalid project ownership metadata")
+            claims.append((path, identity))
+        return claims
+
+    @classmethod
+    def _project_overlap(cls, requested: Path, claimed: Path) -> bool:
+        # Retain the original reservation even if its checkout is moved. A live
+        # alias must not let another profile acquire the same resource, but an
+        # unavailable old path must not invalidate every unrelated reservation.
+        if cls._overlap(requested, claimed):
+            return True
+        try:
+            return cls._overlap(requested, _resolve(claimed))
+        except ValueError:
+            return False
 
     def _matching(self, conn, identity, data_dir):
         for record in self._records(conn):
