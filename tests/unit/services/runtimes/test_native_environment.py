@@ -193,7 +193,13 @@ def test_native_store_aliases_refuse_accounts_and_launch_without_touching_siblin
             os.link(sibling, path)
         else:
             os.mkfifo(path)
-        with patch("agent_backbone.services.runtimes.base.subprocess.run") as run:
+        with (
+            patch("agent_backbone.services.runtimes.base.subprocess.run") as run,
+            patch.object(Path, "open", side_effect=AssertionError("unexpected file read")) as read,
+        ):
+            with patch.object(_environment, "_CONTEXT", None):
+                with pytest.raises(ValueError, match="escapes|regular file"):
+                    rt.capture_environment(captured.root)
             for action in ("status", "login", "logout"):
                 with pytest.raises(ValueError, match="escapes|regular file"):
                     rt.account_invocation(action)
@@ -201,6 +207,7 @@ def test_native_store_aliases_refuse_accounts_and_launch_without_touching_siblin
                 with pytest.raises(ValueError, match="escapes|regular file"):
                     rt.build_command(resume=resume)
             run.assert_not_called()
+            read.assert_not_called()
         path.unlink()
         assert sibling.read_text() == "sibling account sentinel"
     assert not list(sibling.parent.glob("*.json"))
