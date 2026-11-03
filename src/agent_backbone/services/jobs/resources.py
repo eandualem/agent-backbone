@@ -11,12 +11,12 @@ machine records nothing.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import platform
 import re
 import uuid
 from typing import TYPE_CHECKING
 
+from agent_backbone.base import owned_process
 from agent_backbone.services.terminal import process_memory
 
 if TYPE_CHECKING:
@@ -31,18 +31,18 @@ _SWAP = re.compile(r"total = ([\d.]+)M\s+used = ([\d.]+)M")
 
 
 async def _sysctl(*names: str) -> list[str]:
-    proc = await asyncio.create_subprocess_exec(
-        "sysctl", "-n", *names, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
-    )
-    try:
+    async with owned_process(
+        asyncio.create_subprocess_exec(
+            "sysctl",
+            "-n",
+            *names,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    ) as proc:
         async with asyncio.timeout(5):
             out, _ = await proc.communicate()
-    finally:
-        if proc.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            await proc.communicate()
-    return out.decode(errors="replace").splitlines()
+        return out.decode(errors="replace").splitlines()
 
 
 def _meminfo(text: str) -> dict[str, int]:

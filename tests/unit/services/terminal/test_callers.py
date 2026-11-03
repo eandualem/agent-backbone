@@ -123,3 +123,30 @@ async def test_the_real_lsof_finds_this_process_on_its_own_connection(monkeypatc
     finally:
         for sock in (accepted, client, server):
             sock.close()
+
+
+async def test_hung_tool_reports_timeout_after_reaping(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    process = SimpleNamespace(returncode=None)
+    reaped = []
+
+    async def communicate():
+        if process.returncode is None:
+            await asyncio.Event().wait()
+        reaped.append(process.returncode)
+        return b"", b""
+
+    def kill():
+        process.returncode = -9
+
+    process.communicate, process.kill = communicate, kill
+    monkeypatch.setattr(_callers, "_TIMEOUT", 0)
+    with (
+        patch("asyncio.create_subprocess_exec", AsyncMock(return_value=process)),
+        pytest.raises(CallerUnknown, match="did not answer within 0s"),
+    ):
+        await _callers._output("lsof")
+    assert process.returncode == -9
+    assert reaped == [-9]

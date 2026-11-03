@@ -911,7 +911,7 @@ appends a revision; a stale base is refused. Use `create --schema`, and see
 [Sheets](sheets.md) for examples, typed values and all commands.
 
 
-## `backbone profiles list|show`
+## `backbone profiles`
 
 From a local operator terminal, inspect profile reservations without starting a
 provider:
@@ -923,9 +923,33 @@ backbone profiles show PROFILE_ID --json
 
 Omit `--json` for a labeled table or record. Discovery reads the private local
 registry at `~/.local/share/agent-backbone-profiles/registry.db`, independently of
-`BACKBONE_DATA_DIR` and provider credentials. Managed agent contexts cannot use
-these commands. An unavailable registry or unknown profile exits nonzero with an
+`BACKBONE_DATA_DIR` and provider credentials. Recognized managed-agent markers and
+credentials are refused. Local OS-user file access remains the authority boundary;
+clearing environment markers is not an OS isolation boundary (see
+[security](security.md)). An unavailable registry or unknown profile exits nonzero with an
 error on stderr; listing never initializes or repairs it. Current reservations
 are non-ready (`creating` or `failed`) and have no usable binding. Provisioning
-state does not report whether a daemon is running. Profile activation and
-create/start/stop commands are not implemented. See the [profile contract](profiles-contract.md).
+state does not report whether a daemon is running.
+
+Lifecycle requests use the same local operator boundary:
+
+```bash
+backbone profiles apply --file request.json --json
+backbone profiles operation REQUEST_ID --json
+```
+
+`apply` validates the request, explicitly initializes or upgrades the external
+registry, and durably retains the request and its receipt. Identical replay returns
+the original receipt; different input under the same ID returns `request_conflict`.
+`operation` only reads the receipt and never initializes or recovers the registry.
+An unknown request returns the lookup error `operation_not_found`, not a fabricated
+operation receipt. Omit `--json` for labeled details.
+
+Successful create/start/stop, Default adoption and ready activation remain
+unimplemented. Apply returns durable refusal receipts: `baseline_unavailable` for
+create, `adoption_unavailable` for adoption, `profile_not_ready` for an exact creating
+reservation, or `binding_mismatch` for an unknown, stale or invalidated tuple.
+Pending work on the same profile or installation returns `operation_busy`.
+Errors exit nonzero. Replay of a pending request never repeats unknown effects;
+explicit reconciliation is still required after interruption. See the
+[profile contract](profiles-contract.md) for request shapes and receipt semantics.

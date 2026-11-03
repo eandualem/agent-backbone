@@ -26,6 +26,7 @@ from functools import wraps
 from typing import TYPE_CHECKING, TypeVar
 from weakref import WeakValueDictionary
 
+from agent_backbone.base import run_thread
 from agent_backbone.hooks.backbone_state import (
     claim_context,
     clear_context,
@@ -552,7 +553,7 @@ async def safe_deliver(
         # The receipt is the only proof the hook delivered it: settle the
         # row first, so a failure or restart in between never pastes it.
         await db.queue.mark_delivered(batch_id)
-        await asyncio.to_thread(clear_context, config.state_dir, session_name, str(batch_id))
+        await run_thread(clear_context, config.state_dir, session_name, str(batch_id))
         return DeliveryReport(
             DeliveryOutcome.DELIVERED,
             operation_id=batch_operation,
@@ -674,7 +675,7 @@ async def safe_deliver(
             # several batches, and each receipt must cover only its own text.
             for batch_id, batch_text in receipt.context_offers:
                 try:
-                    await asyncio.to_thread(
+                    await run_thread(
                         offer_context, config.state_dir, session_name, str(batch_id), batch_text
                     )
                 except OSError as exc:
@@ -783,9 +784,7 @@ async def safe_deliver(
         # hook context. Settle that right before pasting, under the session
         # lock that also serializes the offer, so the same text is never
         # pasted as well — and an offer outlives a drain that could not paste.
-        claim = await asyncio.to_thread(
-            claim_context, config.state_dir, session_name, str(queue_id)
-        )
+        claim = await run_thread(claim_context, config.state_dir, session_name, str(queue_id))
         if claim == "taken":
             return await record_hook_delivery(queue_id, message, operation_id)
 
@@ -831,9 +830,7 @@ async def prompt_hook_after(state_dir, session_name: str, since: float, message:
     digest = prompt_digest(message)
     deadline = time.monotonic() + PROMPT_HOOK_WAIT_SECONDS
     while True:
-        snapshot = await asyncio.to_thread(
-            read_state_file, state_dir, session_name, current_launch=True
-        )
+        snapshot = await run_thread(read_state_file, state_dir, session_name, current_launch=True)
         if (
             snapshot is not None
             and snapshot.source == "push"

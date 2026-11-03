@@ -16,11 +16,11 @@ after it, so nothing is silently dropped.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from agent_backbone.base import run_thread
 from agent_backbone.services.agents._file_reader import read_launch_session, read_state_file
 from agent_backbone.services.runtimes import get_runtime, sanitize_pane_content
 from agent_backbone.services.terminal import capture_pane, query_environment_var, session_exists
@@ -234,13 +234,13 @@ async def output_page(
     live_runtime = await query_environment_var(name, "BACKBONE_RUNTIME") if online else None
     evidence: list[str] = []
     if not screen:
-        path, rt, session_id, why = await asyncio.to_thread(
+        path, rt, session_id, why = await run_thread(
             locate_transcript, config, name, live_runtime, online=online
         )
         evidence.extend(why)
         if path is not None:
             try:
-                messages, more_before, more_after, notes = await asyncio.to_thread(
+                messages, more_before, more_after, notes = await run_thread(
                     read_messages,
                     path,
                     rt,

@@ -7,7 +7,8 @@ another profile affects new work; it cannot retarget an existing request.
 
 **Implementation status:** this page and its fixtures define the agreed contract.
 Operator list/show discovery and refusal of unreconciled startup are implemented.
-Ready profile activation and lifecycle commands remain unimplemented. The identity
+Lifecycle apply/lookup commands retain requests and refusal receipts. Successful
+creation, start/stop, adoption and ready activation remain unimplemented. The identity
 endpoint and bound-request checks have an internal reconciliation context, but no
 production startup installs it yet; the contract below is not a procedure for
 activating profiles.
@@ -17,7 +18,8 @@ consumer in [agent-interface#182](https://github.com/eandualem/agent-interface/i
 The agreed design revision is **2**; JSON `schema_version: 1` is the first wire
 version. Extension revision **1** adds Default adoption, setup schema 2 and
 registration-aware permission inspection without changing revision 2 identity or
-lifecycle rules. These extension operations are agreed but not implemented.
+lifecycle rules. The apply journal accepts the adoption request shape but refuses it until original
+provider capture is available. Other extension operations remain unimplemented.
 There is no earlier released profile protocol.
 
 Provider-local identity persistence is implemented as an internal database
@@ -90,8 +92,8 @@ waiting for a slot do not enter the executor queue; cancellation retains an
 occupied slot until its worker finishes. This includes admission and subsequent
 registry checks, so cancelled requests cannot accumulate unbounded registry work.
 The lock covers the ASGI call lifetime. Work that outlives that call, including
-detached tasks or threads, needs its own captured operation guard. This does not
-yet fence background jobs or native processes. Connected Socket.IO event handlers
+detached tasks or threads, needs its own captured operation guard. Periodic callbacks retain their own guards; detached integration work still
+requires complete admission fencing before activation. Connected Socket.IO event handlers
 retain the captured provider fence through handler completion or cancellation
 cleanup. Emissions acquire a separate fence before recipient validation and keep
 it in a tracked task until Socket.IO's packet-send tasks finish. Caller cancellation
@@ -117,8 +119,19 @@ The guard is retained through execution. Client cancellation does not cancel set
 workers, and cancellation of the owned batch waits for its executor functions to
 exit before releasing the reservation. Shutdown closes admission and drains these API tasks, including every
 setup worker, before stopping integrations or storage; cancelling the shutdown
-caller leaves the work owned for a later drain. Detached job threads and other native
-lifetimes still require complete drainage before activation. Session-feed
+caller leaves the work owned for a later drain. Periodic job callbacks and diagnostic
+writes now acquire the captured provider guard in application wiring; the scheduler
+remains independent of profile services. Job callbacks retain their entry configuration
+and database; integration, source, session-feed and lifecycle-hook suppliers remain live so persistent
+polling tasks see authorization and configuration changes. Complete integration and
+source operation fencing is still required before activation. Provider worker threads
+retain their callers through actual worker exit,
+including repeated cancellation. Native command creation and cleanup retain the
+child handle through reaping; Git cleanup also covers its process group. Telegram
+shutdown closes topic-discovery admission and drains its retained topic tasks before
+closing the client. Integration-registry shutdown retains both background drainage
+and component stops through repeated caller cancellation. Integration-wide admission and native account acceptance remain
+prerequisites before activation. Session-feed
 history writes retain their own captured provider guard through transaction
 cleanup, including after a snapshot times out or is cancelled. They recheck the
 feed's database, configuration and terminal context before writing; a retired or
@@ -136,8 +149,11 @@ inspect provider directories. Reservation and reconciliation check the selected
 directory against the filesystem. A changed provider path cannot prevent reading
 other records or invalidating the exact stored reservation.
 If SQLite needs writable journal recovery after an interrupted mutation,
-discovery reports the registry as unavailable. Replaying the original reservation
-or invalidation can recover the journal; reads never perform that write or
+discovery and operation lookup report the registry as unavailable. Explicit
+initialization/apply, or replay of the original reservation or invalidation, can
+recover the journal before validating the recovered metadata. Apply preserves the
+original committed receipt and never repeats unknown effects; reads never perform
+that write or
 substitute an empty registry. Reconciliation and mutation callers must preserve
 the original identity and directory through recovery.
 
@@ -215,14 +231,21 @@ Agent-facing tools cannot use them as a gateway to discover sibling fleets.
 Listing is read-only: it does not adopt, start, migrate or repair providers. An
 unavailable registry is an error, not an empty successful list.
 
-Run these commands from a local operator terminal. Managed agent contexts and
-agent credentials are refused before accessing the registry. They read
+Run these commands from a local operator terminal. Recognized managed-agent
+environment markers and agent credentials are refused before registry access.
+The local OS user and filesystem permissions are the authority boundary here;
+these environment checks are defensive routing checks, not proof against an
+unrestricted same-user process that removes its markers. The CLI does not load a
+selected provider's operator key to authorize this independent control plane.
+Runtime sandbox restrictions still apply; see the [security model](security.md).
+The commands read
 `~/.local/share/agent-backbone-profiles/registry.db`, outside provider data trees;
 `BACKBONE_DATA_DIR` does not select the control-plane registry. No provider secret,
 configuration, API or database is loaded. Human output labels provisioning state;
 `--json` returns the exact list/show shape. The current registry supports only
-`creating` and `failed` records, with null bindings. There is no creation command
-yet; a missing registry returns a nonzero exit and an error on stderr.
+`creating` and `failed` records, with null bindings. A missing registry returns a nonzero exit and an error on stderr. Lifecycle
+`apply` explicitly initializes or upgrades the external registry; discovery and
+`operation` lookup never initialize or recover it.
 
 Before opening mutable storage, both daemon startup and direct CLI fallback check
 that the canonical provider directory and configured SQLite database path
@@ -285,6 +308,32 @@ cannot start itself. The agreed command forms are:
 backbone profiles apply --file request.json --json
 backbone profiles operation REQUEST_ID --json
 ```
+
+The commands are available as a durable request journal. Apply validates the request
+before initializing the external registry, reserves its exact normalized input and
+returns the original receipt on replay. Changed input returns `request_conflict`
+without replacing the original record. A pending operation prevents another
+start/stop request for that profile; the conflicting request retains a failed
+`operation_busy` receipt. Pending adoption and lifecycle requests also serialize by
+installation identity. An interrupted pending operation stays pending across
+reopen and exact replay, without repeating effects or automatically releasing its
+reservation. Its outcome needs explicit reconciliation.
+
+Execution is still unavailable: create returns `baseline_unavailable`, adoption
+returns `adoption_unavailable`, and start/stop return `profile_not_ready` for an
+exact `creating` reservation or `binding_mismatch` for a stale, invalidated or
+unknown tuple. A `failed` reservation is a permanent invalidation tombstone, not
+a valid binding awaiting readiness.
+These are durable failed-operation receipts with nonzero exit status. Refusal
+classification and receipt storage commit atomically, so a failure before that commit
+does not leave a pending reservation. They do not
+create provider directories, start/stop services, adopt an installation or publish
+ready discovery. An unchanged failed request continues to return that failure;
+new work after prerequisites change requires a new request ID. Receipts have no
+automatic expiry or pruning: the original outcome and changed-input conflict are
+retained without a replay window. Any future compaction or storage quota needs an
+explicit policy that preserves those guarantees; provider event retention does
+not apply to this external lifecycle journal.
 
 The fixture includes exact create/start/stop request shapes. Start and stop name
 `profile_id`, `expected_installation_id` and `expected_lifecycle_id`. Create takes

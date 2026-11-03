@@ -11,10 +11,10 @@ and nothing is being routed. ``backbone.restart_on_upgrade`` turns it off.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
+from agent_backbone.base import run_thread
 from agent_backbone.release import Installation, code_identity, installation, same_line
 
 log = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ class UpgradeWatch:
     async def run(self) -> dict:
         if self.requested:
             return {"restart": "requested"}
-        current = await asyncio.to_thread(self._identity, self._install)
+        current = await run_thread(self._identity, self._install)
         if current == self.started:
             return {"code": current}
         if not same_line(self.started, current):

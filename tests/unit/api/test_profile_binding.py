@@ -1316,3 +1316,64 @@ async def test_http_validation_notice_captures_request_provider(
     notify.assert_awaited_once()
     assert notify.call_args.args[0] is api_app.state.config
     registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_job_thread_retains_fence_and_config_through_shutdown(
+    api_app, bound_provider, monkeypatch, cancel
+):
+    import threading
+    from dataclasses import replace
+    from unittest.mock import Mock
+
+    from agent_backbone.api.app import _register_jobs
+
+    provider, registry, _ = bound_provider
+    original_config = api_app.state.config
+    entered, release = threading.Event(), threading.Event()
+    paths = []
+
+    def receipts(path):
+        paths.append(path)
+        entered.set()
+        assert release.wait(5)
+        return ["receipt"]
+
+    monkeypatch.setattr("agent_backbone.api.app.batch_receipts", receipts)
+    monkeypatch.setattr("agent_backbone.api.app.prune_context_receipts", lambda *_: 0)
+    rotate = Mock(return_value=0)
+    monkeypatch.setattr("agent_backbone.services.agents.rotate_action_log", rotate)
+    scheduler = _register_jobs(api_app)
+    task = asyncio.create_task(scheduler._jobs["prune"].fn())
+    try:
+        assert await asyncio.to_thread(entered.wait, 3)
+        api_app.state.config = replace(
+            original_config,
+            backbone=replace(
+                original_config.backbone, data_dir=str(original_config.data_dir / "changed")
+            ),
+        )
+        if cancel:
+            for _ in range(3):
+                task.cancel()
+                await asyncio.sleep(0)
+                assert not task.done()
+        with pytest.raises(ValueError, match="busy"):
+            registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        release.set()
+        if cancel:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            rotate.assert_not_called()
+        else:
+            await task
+            assert rotate.call_args.args[0] == original_config.action_log_path
+        assert paths == [original_config.state_dir]
+        registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        with pytest.raises(ValueError):
+            await scheduler._jobs["prune"].fn()
+        assert paths == [original_config.state_dir]
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        api_app.state.config = original_config

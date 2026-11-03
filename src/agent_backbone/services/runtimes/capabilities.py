@@ -271,7 +271,7 @@ CAPABILITIES: tuple[Capability, ...] = (
     ),
     _row(
         "profile-reservation-boundary",
-        "Operator-only non-ready profile discovery and reserved-provider startup refusal",
+        "Operator-only profile discovery, lifecycle refusal receipts and reserved startup refusal",
         "cli/profiles.py; services/database/_profile_startup.py; api/app.py; "
         "cli/_common.py; cli/setup.py; cli/onboarding.py",
         fallback="Reserved providers cannot start; profile activation is not implemented.",

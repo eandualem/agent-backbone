@@ -15,7 +15,6 @@ project, no OAuth client. Without the two variables the source is disabled.
 
 from __future__ import annotations
 
-import asyncio
 import email.header
 import email.parser
 import imaplib
@@ -26,6 +25,7 @@ import unicodedata
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
+from agent_backbone.base import run_thread
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.sources.base import Source, SourceEvent
 
@@ -121,7 +121,7 @@ class GmailSource(Source):
         config = self.config
         if not config.gmail_ready or not filters:
             return []
-        return await asyncio.to_thread(self._poll, list(filters), since, config)
+        return await run_thread(self._poll, list(filters), since, config)
 
     # -- blocking IMAP work, run in a thread --------------------------------
 

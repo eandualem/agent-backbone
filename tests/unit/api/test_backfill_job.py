@@ -12,7 +12,7 @@ from agent_backbone.config import AgentsConfig, AgentSpec, bootstrap_config
 
 
 @pytest.mark.parametrize("intake,backfill", [("webhook", True), ("webhook", False), ("poll", True)])
-def test_only_enabled_webhook_backfill_is_a_one_shot(tmp_path, intake, backfill):
+async def test_only_enabled_webhook_backfill_is_a_one_shot(tmp_path, intake, backfill):
     config = bootstrap_config(tmp_path)
     config = replace(
         config,
@@ -35,6 +35,7 @@ def test_only_enabled_webhook_backfill_is_a_one_shot(tmp_path, intake, backfill)
         patch("agent_backbone.services.jobs.UpgradeWatch"),
         patch("agent_backbone.services.jobs.GitHubPoller") as poller,
     ):
+        poller.return_value.backfill = AsyncMock()
         scheduler = _register_jobs(app)
     jobs = scheduler._jobs
     if intake == "poll":
@@ -44,7 +45,8 @@ def test_only_enabled_webhook_backfill_is_a_one_shot(tmp_path, intake, backfill)
     elif backfill:
         job = jobs["github-backfill"]
         assert job.once and job.run_immediately
-        assert job.fn is poller.return_value.backfill
+        await job.fn()
+        poller.return_value.backfill.assert_awaited_once()
         assert job.interval == 0
     else:
         assert "github-backfill" not in jobs and "github-poll" not in jobs
@@ -56,6 +58,7 @@ async def test_upgrade_requests_server_exit_without_sending_a_signal(tmp_path):
     app = FastAPI()
     app.state.config = bootstrap_config(tmp_path)
     app.state.github = None
+    app.state.db = AsyncMock()
     app.state.integrations = SimpleNamespace(
         reconcile=AsyncMock(), flush_reports=AsyncMock(), flush_report_audio=AsyncMock()
     )
@@ -128,3 +131,62 @@ async def test_failed_startup_backfill_retries_only_unfinished_repos_on_existing
         row for row in await db.diagnostics.query() if row["source"] == "github-backfill"
     ]
     assert {row["code"] for row in observations} == {"run_failed", "run_recovered"}
+
+
+async def test_job_started_inside_another_run_does_not_inherit_its_config(tmp_path, db):
+    import asyncio
+
+    app = FastAPI()
+    app.state.config = bootstrap_config(tmp_path)
+    app.state.db = db
+    app.state.github = None
+    captured, release = asyncio.Event(), asyncio.Event()
+    later = []
+    observed = []
+
+    async def resource(config, database):
+        observed.append(config)
+
+    async def nested():
+        async def run_later():
+            captured.set()
+            await release.wait()
+            await scheduler._jobs["resource-sample"].fn()
+
+        later.append(asyncio.create_task(run_later()))
+        await captured.wait()
+
+    app.state.integrations = SimpleNamespace(
+        reconcile=nested, flush_reports=AsyncMock(), flush_report_audio=AsyncMock()
+    )
+    with patch("agent_backbone.services.jobs.sample_resources", resource):
+        scheduler = _register_jobs(app)
+    await scheduler._jobs["integrations-sync"].fn()
+    refreshed = replace(app.state.config, settings={"diagnostics.mode": "off"})
+    app.state.config = refreshed
+    release.set()
+    await later[0]
+    assert observed == [refreshed]
+
+
+async def test_monitor_uses_its_fresh_roster_without_changing_provider(tmp_path, db):
+    app = FastAPI()
+    app.state.config = bootstrap_config(tmp_path)
+    app.state.db = db
+    app.state.github = None
+    refreshed = replace(
+        app.state.config, agents=AgentsConfig({"new": AgentSpec(name="new", dir=str(tmp_path))})
+    )
+
+    async def refresh():
+        app.state.config = refreshed
+
+    app.state.agent_store = SimpleNamespace(refresh=refresh)
+    app.state.integrations = SimpleNamespace(
+        reconcile=AsyncMock(), flush_reports=AsyncMock(), flush_report_audio=AsyncMock()
+    )
+    monitor = AsyncMock()
+    with patch("agent_backbone.services.jobs.monitor_agents", monitor):
+        scheduler = _register_jobs(app)
+    await scheduler._jobs["agent-monitor"].fn()
+    assert monitor.call_args.args[0] is refreshed

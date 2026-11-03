@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import re
-import signal
 from pathlib import Path
+
+from agent_backbone.base import owned_process
 
 _GITHUB_REMOTE_RE = re.compile(
     r"^(?:https?://(?:[^@/]+@)?github\.com/|ssh://(?:[^@/]+@)?github\.com/|git@github\.com:)"
@@ -23,29 +23,25 @@ async def run_git(repo_dir: Path | str, *args: str, timeout: float = 30.0) -> tu
     A missing binary or a timeout reads as a failed command (``rc`` 1).
     """
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "git",
-            "-C",
-            str(repo_dir),
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
-        )
+        async with owned_process(
+            asyncio.create_subprocess_exec(
+                "git",
+                "-C",
+                str(repo_dir),
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            ),
+            process_group=True,
+        ) as proc:
+            async with asyncio.timeout(timeout):
+                out, err = await proc.communicate()
+            return proc.returncode or 0, out.decode().strip(), err.decode().strip()
+    except TimeoutError:
+        return 1, "", f"git {' '.join(args)} timed out"
     except OSError as exc:
         return 1, "", str(exc)
-    try:
-        async with asyncio.timeout(timeout):
-            out, err = await proc.communicate()
-    except BaseException as exc:
-        # Hooks and SSH children can keep pipes open after Git itself exits.
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)
-        await proc.communicate()
-        if isinstance(exc, TimeoutError):
-            return 1, "", f"git {' '.join(args)} timed out"
-        raise
-    return proc.returncode or 0, out.decode().strip(), err.decode().strip()
 
 
 def parse_github_remote(url: str) -> str:

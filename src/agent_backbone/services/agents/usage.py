@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from weakref import WeakKeyDictionary
 
+from agent_backbone.base import run_thread
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents._file_reader import read_state_file
 from agent_backbone.services.runtimes import RUNTIMES
@@ -76,7 +77,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
             key = (agent, runtime, stage)
             checks[key] = checks.get(key) or error_type
 
-        registrations = await asyncio.to_thread(_registrations, config)
+        registrations = await run_thread(_registrations, config)
         registered = set()
         for row in registrations:
             if row.get("agent") not in config.agents.names or row.get("runtime") not in RUNTIMES:
@@ -138,7 +139,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
 
         async def discover_children(session, path, env):
             rt = RUNTIMES[session["runtime"]]
-            children = await asyncio.to_thread(rt.usage_children, path, session["session_id"], env)
+            children = await run_thread(rt.usage_children, path, session["session_id"], env)
             for child_id, child_path in children:
                 child_key = usage_id(session["runtime"], child_id)
                 child = known.get(child_key)
@@ -184,7 +185,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                     ):
                         await discover_children(session, path, env)
                         continue  # searched once; a new launch (a resume) searches again
-                    paths = await asyncio.to_thread(rt.usage_paths, session["session_id"], env)
+                    paths = await run_thread(rt.usage_paths, session["session_id"], env)
                     if len(paths) == 1:
                         path = paths[0]
                     elif path and not paths:
@@ -206,7 +207,7 @@ async def collect_usage(config: BackboneConfig, db: BackboneDB) -> dict:
                 if path is None:
                     continue
                 processed.add(session["id"])
-                batch = await asyncio.to_thread(
+                batch = await run_thread(
                     rt.read_usage,
                     path,
                     session["offset"],
@@ -418,7 +419,7 @@ async def usage_view(
         )
     ) as batches:
         async for batch in batches:
-            await asyncio.to_thread(summarize, batch)
+            await run_thread(summarize, batch)
     rows = []
     for s in selected:
         summary = summaries.get(s["id"])

@@ -89,8 +89,9 @@ class ProfileRegistry:
         registry.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         registry._check_parent()
         if registry.path.exists():
-            registry.list()
+            registry._validate_for_write()
             registry._initialize_project_claims()
+            registry._initialize_operations()
             return registry
         fd, temporary = tempfile.mkstemp(prefix=".registry-", dir=registry.path.parent)
         os.close(fd)
@@ -116,9 +117,16 @@ class ProfileRegistry:
                 os.close(parent)
         finally:
             Path(temporary).unlink(missing_ok=True)
-        registry.list()
+        registry._validate_for_write()
         registry._initialize_project_claims()
+        registry._initialize_operations()
         return registry
+
+    def _validate_for_write(self) -> None:
+        # Explicit initialization/apply may recover an interrupted SQLite write.
+        # A read-only validation first would strand a hot rollback journal.
+        with self._connection(write=True) as conn:
+            self._records(conn)
 
     def _initialize_project_claims(self) -> None:
         """Explicitly upgrade reservations; discovery never changes the schema."""
@@ -130,6 +138,26 @@ class ProfileRegistry:
                     "installation_id TEXT NOT NULL, lifecycle_id TEXT NOT NULL)"
                 )
                 conn.execute("PRAGMA user_version = 2")
+
+    def _initialize_operations(self) -> None:
+        with self._connection(write=True) as conn:
+            if conn.execute("PRAGMA user_version").fetchone()[0] == 2:
+                conn.execute(
+                    "CREATE TABLE lifecycle_operations ("
+                    "request_id TEXT PRIMARY KEY NOT NULL, request_json TEXT NOT NULL, "
+                    "scope TEXT NOT NULL, installation_id TEXT, status TEXT NOT NULL "
+                    "CHECK(status IN ('pending', 'succeeded', 'failed')), "
+                    "receipt_json TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "CREATE UNIQUE INDEX lifecycle_pending ON lifecycle_operations(scope) "
+                    "WHERE status = 'pending'"
+                )
+                conn.execute(
+                    "CREATE UNIQUE INDEX lifecycle_installation_pending "
+                    "ON lifecycle_operations(installation_id) WHERE status = 'pending'"
+                )
+                conn.execute("PRAGMA user_version = 3")
 
     def _check_parent(self) -> None:
         info = self.path.parent.stat()
@@ -150,7 +178,11 @@ class ProfileRegistry:
                 conn.execute("PRAGMA synchronous = EXTRA")
                 conn.execute("PRAGMA fullfsync = ON")
             conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
-            if not initializing and conn.execute("PRAGMA user_version").fetchone()[0] not in {1, 2}:
+            if not initializing and conn.execute("PRAGMA user_version").fetchone()[0] not in {
+                1,
+                2,
+                3,
+            }:
                 raise ValueError("Unsupported profile registry schema")
             yield conn
             if write:
@@ -317,7 +349,7 @@ class ProfileRegistry:
         if not resources:
             raise ValueError("Project resources must be existing directories")
         with self._connection(write=True) as conn:
-            if conn.execute("PRAGMA user_version").fetchone()[0] != 2:
+            if conn.execute("PRAGMA user_version").fetchone()[0] not in {2, 3}:
                 raise ValueError("Profile registry needs explicit project ownership initialization")
             records = self._records(conn)
             owner = self._matching(conn, identity, data_dir)

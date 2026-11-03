@@ -30,6 +30,7 @@ from telegram.ext import (
     filters,
 )
 
+from agent_backbone.base import complete_before_cancel
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.integrations.base import Integration
 from agent_backbone.services.integrations.telegram import _commands, _routing, _updates
@@ -135,6 +136,8 @@ class TelegramService(Integration):
         self._app: Application | None = None
         self._discovery = load_discovery(self.config.telegram_topic_discovery_path)
         self._background: set[asyncio.Task] = set()
+        self._stopping = False
+        self._stop_lock = asyncio.Lock()
         self._sync_lock = asyncio.Lock()
         self._report_lock = asyncio.Lock()
         self._audio_lock = asyncio.Lock()
@@ -204,6 +207,8 @@ class TelegramService(Integration):
         allow-listed chats teach anything: a stranger's group must never
         become "the" group and receive agent topics.
         """
+        if self._stopping:
+            return
         chat = getattr(update, "effective_chat", None)
         if chat is None or not self._is_authorized(chat.id):
             return
@@ -330,6 +335,7 @@ class TelegramService(Integration):
     # -- Lifecycle --
 
     async def start(self) -> None:
+        self._stopping = False
         if not self.enabled:
             log.info("Telegram bot disabled (TELEGRAM_TOKEN not set)")
             return
@@ -355,6 +361,15 @@ class TelegramService(Integration):
         log.info("Telegram bot polling started")
 
     async def stop(self) -> None:
+        self._stopping = True
+        async with self._stop_lock:
+            await complete_before_cancel(self._stop())
+
+    async def _stop(self) -> None:
+        tasks = tuple(self._background)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         app = self._app
         if app is None:
             return

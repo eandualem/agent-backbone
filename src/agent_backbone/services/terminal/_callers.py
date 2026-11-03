@@ -10,9 +10,9 @@ caller sends is used. Any step that can't be completed raises
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import ipaddress
 
+from agent_backbone.base import owned_process
 from agent_backbone.services.terminal._core import _run_tmux
 
 _TIMEOUT = 5.0
@@ -40,22 +40,18 @@ def is_loopback(host: str) -> bool:
 
 async def _output(*argv: str) -> tuple[int, str]:
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
-        )
-    except OSError as exc:
-        raise CallerUnknown(f"{argv[0]} can't run here ({exc.strerror})") from exc
-    try:
-        async with asyncio.timeout(_TIMEOUT):
-            out, _ = await proc.communicate()
+        async with owned_process(
+            asyncio.create_subprocess_exec(
+                *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+            )
+        ) as proc:
+            async with asyncio.timeout(_TIMEOUT):
+                out, _ = await proc.communicate()
+            return proc.returncode, out.decode(errors="replace")
     except TimeoutError as exc:
         raise CallerUnknown(f"{argv[0]} did not answer within {_TIMEOUT:g}s") from exc
-    finally:
-        if proc.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            await proc.communicate()
-    return proc.returncode, out.decode(errors="replace")
+    except OSError as exc:
+        raise CallerUnknown(f"{argv[0]} can't run here ({exc.strerror})") from exc
 
 
 def _endpoint(text: str) -> tuple[object, int] | None:
