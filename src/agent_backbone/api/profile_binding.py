@@ -8,7 +8,8 @@ from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 
 from agent_backbone.api.auth import require_api_key
-from agent_backbone.services.database import ProfileProvider
+from agent_backbone.config import BackboneConfig
+from agent_backbone.services.database import BackboneDB, ProfileProvider
 from agent_backbone.services.terminal import tmux_server_socket
 
 PROFILE_HEADERS = (
@@ -23,14 +24,22 @@ BINDING_REQUIRED = {"code": "binding_required", "message": "Profile binding is r
 
 
 async def provider_current(provider: ProfileProvider, app) -> bool:
+    try:
+        return await provider_context_current(provider, app.state.config, app.state.db)
+    except Exception:
+        return False
+
+
+async def provider_context_current(
+    provider: ProfileProvider, config: BackboneConfig, db: BackboneDB
+) -> bool:
     """Never expose metadata or storage failures in a binding refusal."""
     if tmux_server_socket() != str(provider.socket_path):
         return False
     try:
-        db = app.state.db
         url = make_url(db.url)
         if (
-            app.state.config.data_dir != provider.reservation.data_dir
+            config.data_dir != provider.reservation.data_dir
             or url.get_backend_name() != "sqlite"
             or url.database != str(provider.database_path)
             or url.query
