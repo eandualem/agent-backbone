@@ -317,7 +317,10 @@ async def lifespan(app: FastAPI):
     if app.state.github is not None:
         lifecycle.register("github", app.state.github)
     app.state.feed = SessionFeed(
-        lambda: app.state.config, getattr(app.state, "sio", None), db=app.state.db
+        lambda: app.state.config,
+        getattr(app.state, "sio", None),
+        db=app.state.db,
+        profile_provider=getattr(app.state, "profile_provider", None),
     )
     app.state.integrations = build_integrations(lambda: app.state.config, db=app.state.db)
     lifecycle.register("integrations", app.state.integrations)

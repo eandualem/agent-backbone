@@ -91,7 +91,11 @@ occupied slot until its worker finishes. This includes admission and subsequent
 registry checks, so cancelled requests cannot accumulate unbounded registry work.
 The lock covers the ASGI call lifetime. Work that outlives that call, including
 detached tasks or threads, needs its own captured operation guard. This does not
-yet fence Socket.IO events, background jobs or native processes.
+yet fence Socket.IO events, background jobs or native processes. Session-feed
+history writes retain their own captured provider guard through transaction
+cleanup, including after a snapshot times out or is cancelled. They recheck the
+feed's database, configuration and terminal context before writing; a retired or
+mismatched context cannot record history.
 Complete replacement/restore fencing, ready publication
 and runtime/integration isolation remain required before activation is exposed.
 The legacy identity endpoint authenticates and then returns 404.

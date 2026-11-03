@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 import socketio
 
+from agent_backbone.api.session_updates import SessionFeed
 from agent_backbone.config import agent_api_key
 
 FIXTURES = json.loads((Path(__file__).parents[3] / "docs/contracts/profiles-v1.json").read_text())
@@ -336,6 +337,80 @@ async def test_invalidation_disconnects_operator_before_broadcast(
     assert sid not in ns._profiles
     assert all(call.args[1].packet_type == 1 for call in sio._send_packet.await_args_list)
     sio._send_eio_packet.assert_not_awaited()
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_detached_history_cleanup_keeps_profile_fenced(
+    api_app, bound_provider, monkeypatch, cancel
+):
+    from agent_backbone.api import session_updates
+
+    provider, registry, _ = bound_provider
+    feed = SessionFeed(lambda: api_app.state.config, db=api_app.state.db, profile_provider=provider)
+    entered, cancelling, release = (asyncio.Event() for _ in range(3))
+
+    async def stalled_write(states):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelling.set()
+            await release.wait()
+
+    monkeypatch.setattr(session_updates, "build_session_snapshot", AsyncMock(return_value=[]))
+    monkeypatch.setattr(session_updates, "HISTORY_WRITE_TIMEOUT_SECONDS", 10 if cancel else 0.1)
+    monkeypatch.setattr(api_app.state.db.state_history, "observe", stalled_write)
+    snapshot = asyncio.create_task(feed.snapshot())
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        if cancel:
+            snapshot.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await snapshot
+        else:
+            assert await asyncio.wait_for(snapshot, 3) == []
+        await asyncio.wait_for(cancelling.wait(), 3)
+        assert not feed._history_task.done()
+        with pytest.raises(ValueError, match="busy"):
+            registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    finally:
+        release.set()
+        await asyncio.gather(snapshot, return_exceptions=True)
+        await feed.close()
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+
+
+@pytest.mark.parametrize("change", ["invalidate", "database", "config", "terminal"])
+async def test_history_refuses_retired_or_mismatched_context(
+    api_app, bound_provider, monkeypatch, change
+):
+    from dataclasses import replace
+
+    from agent_backbone.services.database import BackboneDB
+    from agent_backbone.services.terminal import _server
+
+    provider, registry, _ = bound_provider
+    feed = SessionFeed(lambda: api_app.state.config, db=api_app.state.db, profile_provider=provider)
+    observe = AsyncMock()
+    monkeypatch.setattr(api_app.state.db.state_history, "observe", observe)
+    if change == "invalidate":
+        registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    elif change == "database":
+        feed._db = BackboneDB("sqlite+aiosqlite:///:memory:")
+        monkeypatch.setattr(feed._db.state_history, "observe", observe)
+    elif change == "config":
+        monkeypatch.setattr(
+            api_app.state,
+            "config",
+            replace(
+                api_app.state.config,
+                backbone=replace(api_app.state.config.backbone, data_dir="/other-provider"),
+            ),
+        )
+    else:
+        monkeypatch.setattr(_server, "_socket", "/other-provider/tmux.sock")
+    await feed._record_history([("ike", "idle", None)])
+    observe.assert_not_awaited()
 
 
 async def test_context_cannot_attest_another_serving_database(
