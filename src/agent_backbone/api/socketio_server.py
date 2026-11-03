@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 import socketio
@@ -89,43 +90,71 @@ class RegistrationAwareServer(socketio.AsyncServer):
         callback=None,
         ignore_queue=False,
     ):
-        ns = self.namespace_handlers.get(namespace or "/")
-        excluded = [skip_sid] if isinstance(skip_sid, str) else list(skip_sid or [])
-        if isinstance(ns, _AuthenticatedNamespace):
-            recipients = tuple(
-                sid
-                for sid, _ in self.manager.get_participants(ns.namespace, to or room)
-                if sid not in excluded and sid in ns._profiles
+        async with AsyncExitStack() as operations:
+            guarded = False
+            ns = self.namespace_handlers.get(namespace or "/")
+            excluded = [skip_sid] if isinstance(skip_sid, str) else list(skip_sid or [])
+            if isinstance(ns, _AuthenticatedNamespace):
+                recipients = tuple(
+                    sid
+                    for sid, _ in self.manager.get_participants(ns.namespace, to or room)
+                    if sid not in excluded and sid in ns._profiles
+                )
+                if not recipients:
+                    return
+                app = getattr(self, "fastapi_app", None)
+                provider = getattr(getattr(app, "state", None), "profile_provider", None)
+                admitted_operation = True
+                if provider is not None:
+                    try:
+                        await operations.enter_async_context(provider.operation())
+                        guarded = True
+                    except (ValueError, OSError):
+                        admitted_operation = False
+                # Reuse only within this emission; each SID still checks its captured
+                # context and registration, and the next emission reconciles again.
+                provider_check = (
+                    provider,
+                    admitted_operation
+                    and (provider is None or await provider_current(provider, app)),
+                )
+                admitted = []
+                for sid in recipients:
+                    if sid in ns._profiles and await ns.registration_current(
+                        sid, provider_check=provider_check
+                    ):
+                        admitted.append(sid)
+                # Socket.IO joins the room before on_connect finishes. Revalidation
+                # yields too: clients joining during it were never checked. Target
+                # only admitted SIDs, never re-enumerate the original broadcast room.
+                if not admitted:
+                    return
+                to, room = admitted, None
+            emission = super().emit(
+                event,
+                data,
+                to=to,
+                room=room,
+                skip_sid=excluded or None,
+                namespace=namespace,
+                callback=callback,
+                ignore_queue=ignore_queue,
             )
-            if not recipients:
-                return
-            app = getattr(self, "fastapi_app", None)
-            provider = getattr(getattr(app, "state", None), "profile_provider", None)
-            # Reuse only within this emission; each SID still checks its captured
-            # context and registration, and the next emission reconciles again.
-            provider_check = (provider, provider is None or await provider_current(provider, app))
-            admitted = []
-            for sid in recipients:
-                if sid in ns._profiles and await ns.registration_current(
-                    sid, provider_check=provider_check
-                ):
-                    admitted.append(sid)
-            # Socket.IO joins the room before on_connect finishes. Revalidation
-            # yields too: clients joining during it were never checked. Target
-            # only admitted SIDs, never re-enumerate the original broadcast room.
-            if not admitted:
-                return
-            to, room = admitted, None
-        return await super().emit(
-            event,
-            data,
-            to=to,
-            room=room,
-            skip_sid=excluded or None,
-            namespace=namespace,
-            callback=callback,
-            ignore_queue=ignore_queue,
-        )
+            if not guarded:
+                return await emission
+            # The Socket.IO manager creates packet tasks and waits for them without
+            # cancelling them when its caller is cancelled. Keep their owner alive
+            # and retain the fence until all sends finish, even on repeated cancel.
+            sending = asyncio.create_task(emission)
+            cancelled = None
+            while not sending.done():
+                try:
+                    await asyncio.shield(sending)
+                except asyncio.CancelledError as exc:
+                    cancelled = exc
+            if cancelled is not None:
+                raise cancelled
+            return sending.result()
 
 
 class _AuthenticatedNamespace(socketio.AsyncNamespace):
@@ -164,13 +193,22 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
         return False
 
     async def trigger_event(self, event, *args):
-        if (
-            event not in {"connect", "disconnect"}
-            and args
-            and not await self.registration_current(args[0])
-        ):
+        if event in {"connect", "disconnect"} or not args:
+            return await super().trigger_event(event, *args)
+        sid = args[0]
+        if sid not in self._profiles:
             return None
-        return await super().trigger_event(event, *args)
+        provider = self._profiles[sid]
+        async with AsyncExitStack() as operations:
+            if provider is not None:
+                try:
+                    await operations.enter_async_context(provider.operation())
+                except (ValueError, OSError):
+                    await self.disconnect(sid)
+                    return None
+            if not await self.registration_current(sid):
+                return None
+            return await super().trigger_event(event, *args)
 
     async def on_disconnect(self, sid: str) -> None:
         self._registrations.pop(sid, None)

@@ -580,6 +580,109 @@ async def test_broadcast_reconciles_once_and_keeps_recipient_checks(
     registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
     sio._send_eio_packet.reset_mock()
     await sio.emit("sentinel", {}, namespace=namespace)
-    assert check.await_count == 2
+    assert check.await_count == 1  # Failed admission refuses before reconciliation.
     assert not sio.manager.is_connected(sids["operator"], namespace)
     sio._send_eio_packet.assert_not_awaited()
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_socket_event_holds_fence_through_handler(api_app, bound_provider, runtime, cancel):
+    provider, registry, _ = bound_provider
+    await api_app.state.agent_store.update("ike", runtime=runtime)
+    sio = api_app.state.sio
+    sio._send_packet = AsyncMock()
+    ns = sio.namespace_handlers["/terminal"]
+    sid = await sio.manager.connect("engine", ns.namespace)
+    assert await ns.on_connect(
+        sid, {}, {"api_key": api_app.state.config.api_key, **vars(provider.reservation.identity)}
+    )
+    entered, finish = asyncio.Event(), asyncio.Event()
+    cleaning, cleaned = asyncio.Event(), asyncio.Event()
+    effects = []
+
+    async def pause(sid, data):
+        entered.set()
+        try:
+            await finish.wait()
+            effects.append(data)
+        finally:
+            cleaning.set()
+            await cleaned.wait()
+
+    ns.on_pause = pause
+    event = asyncio.create_task(ns.trigger_event("pause", sid, {"session": "ike"}))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        with pytest.raises(ValueError, match="fence is busy"):
+            registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        if cancel:
+            event.cancel()
+            await asyncio.wait_for(cleaning.wait(), 5)
+            with pytest.raises(ValueError, match="fence is busy"):
+                registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+            cleaned.set()
+            # Socket.IO preserves its existing cancellation-to-None behavior.
+            assert await asyncio.wait_for(event, 5) is None
+        else:
+            finish.set()
+            cleaned.set()
+            await asyncio.wait_for(event, 5)
+    finally:
+        finish.set()
+        cleaned.set()
+        await asyncio.gather(event, return_exceptions=True)
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    await ns.trigger_event("pause", sid, {"session": "retired"})
+    assert effects == ([] if cancel else [{"session": "ike"}])
+    assert not sio.manager.is_connected(sid, ns.namespace)
+
+
+@pytest.mark.parametrize("namespace,callback", [("/sessions", None), ("/terminal", lambda: None)])
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_socket_emission_holds_fence_until_packet_tasks_finish(
+    api_app, bound_provider, namespace, callback, cancel
+):
+    provider, registry, _ = bound_provider
+    sio = api_app.state.sio
+    sio._send_packet = AsyncMock()
+    sio._send_eio_packet = AsyncMock()
+    api_app.state.feed.snapshot = AsyncMock(return_value=[])
+    ns = sio.namespace_handlers[namespace]
+    sid = await sio.manager.connect("engine", namespace)
+    assert await ns.on_connect(
+        sid, {}, {"api_key": api_app.state.config.api_key, **vars(provider.reservation.identity)}
+    )
+    entered, finish = asyncio.Event(), asyncio.Event()
+    sent = []
+
+    async def send(*args):
+        entered.set()
+        await finish.wait()
+        sent.append(args[0])
+
+    sio._send_packet = AsyncMock(side_effect=send)
+    sio._send_eio_packet = AsyncMock(side_effect=send)
+    emission = asyncio.create_task(sio.emit("sentinel", {}, namespace=namespace, callback=callback))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        with pytest.raises(ValueError, match="fence is busy"):
+            registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        if cancel:
+            emission.cancel()
+            await asyncio.sleep(0)
+            emission.cancel()
+            await asyncio.sleep(0)
+            with pytest.raises(ValueError, match="fence is busy"):
+                registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        finish.set()
+        if cancel:
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(emission, 5)
+        else:
+            await asyncio.wait_for(emission, 5)
+        assert sent == ["engine"]
+    finally:
+        finish.set()
+        await asyncio.gather(emission, return_exceptions=True)
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
