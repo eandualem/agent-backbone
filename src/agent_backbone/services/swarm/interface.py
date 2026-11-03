@@ -229,7 +229,7 @@ async def create_swarm(
         base_branch = await current_branch(repo_dir)
     except RuntimeError as exc:
         raise SwarmError(str(exc)) from exc
-    claim_project_directories(config.data_dir, (repo_dir,))
+    claim_project_directories(config.data_dir, (repo_dir,), for_worktree=True)
     worktree, branch = await create_worktree(repo_dir, name)
 
     try:

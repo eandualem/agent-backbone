@@ -42,6 +42,8 @@ def project_claims(data_dir: Path) -> Callable[[tuple[Path, ...]], None] | None:
     return claim
 
 
-def claim_project_directories(data_dir: Path, directories: tuple[Path, ...]) -> None:
+def claim_project_directories(
+    data_dir: Path, directories: tuple[Path, ...], *, for_worktree: bool = False
+) -> None:
     if claim := project_claims(data_dir):
-        claim(project_resources(directories))
+        claim(project_resources(directories, for_worktree=for_worktree))

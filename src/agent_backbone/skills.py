@@ -646,7 +646,9 @@ def repository_skills(
     return owned
 
 
-def project_resources(directories: tuple[Path, ...]) -> tuple[Path, ...]:
+def project_resources(
+    directories: tuple[Path, ...], *, for_worktree: bool = False
+) -> tuple[Path, ...]:
     """Checkouts, canonical main checkouts and shared Git state claimed together.
 
     Starting in a subdirectory still consumes its containing checkout's native
@@ -663,6 +665,10 @@ def project_resources(directories: tuple[Path, ...]) -> tuple[Path, ...]:
         )
         resources.append(root)
         git_dir = _common_git_dir(root, strict=True)
+        if for_worktree and (
+            git_dir is None or git_dir.name != ".git" or directory.is_relative_to(git_dir)
+        ):
+            raise ValueError("Cannot identify the main checkout for a new worktree")
         if git_dir is not None:
             resources.append(git_dir)
             # Only linked-worktree metadata supplies the main-checkout config
