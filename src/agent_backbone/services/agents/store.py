@@ -31,6 +31,10 @@ from agent_backbone.config import (
 from agent_backbone.git import detect_repo
 from agent_backbone.hooks.backbone_state import CONTEXT_DIR
 from agent_backbone.services.agents._locks import lifecycle_lock, serialized_mutation
+from agent_backbone.services.agents._project_ownership import (
+    claim_project_directories,
+    project_claims,
+)
 from agent_backbone.services.agents._validation import validate_agent_spec, validate_repo
 from agent_backbone.services.agents.credentials import _provision_agent_profiles, profile_lock
 from agent_backbone.services.terminal import session_exists
@@ -402,12 +406,24 @@ class AgentStore:
         async with profile_lock(self._data_dir):
             if await session_exists(name):
                 raise RuntimeError(f"'{name}' is running — stop it first")
-            spec = self._agents.get(name)
+            guarded = project_claims(self.config.data_dir) is not None
+            spec = (
+                agents_from_rows(await self._db.agents.list()).get(name)
+                if guarded
+                else self._agents.get(name)
+            )
+            released = False
+            if guarded and spec is not None:
+                if spec.path.is_dir():
+                    claim_project_directories(self.config.data_dir, (spec.path,))
+                if not self._release_skills(spec.name):
+                    raise ValueError("Could not release the agent's owned project links")
+                released = True
             removed = await self._db.agents.delete(name)
             if removed:
                 # Clear old context before another process can reuse the name.
                 shutil.rmtree(self.config.state_dir / CONTEXT_DIR / name, ignore_errors=True)
-                if spec is not None:
+                if spec is not None and not released:
                     self._release_skills(spec.name)
         await self.refresh()
         return removed
@@ -427,9 +443,28 @@ class AgentStore:
         try:
             # The links live in the checkout the manifest records, which may
             # not be the agent's directory any more (``agent set dir=``).
-            repo = json.loads(manifest.read_text(encoding="utf-8")).get("repo")
+            recorded = json.loads(manifest.read_text(encoding="utf-8"))
+            repo = recorded.get("repo")
+            if project_claims(self.config.data_dir) is not None:
+                if store is None:
+                    previous_store = recorded.get("store")
+                    if (
+                        not isinstance(previous_store, str)
+                        or not Path(previous_store).is_absolute()
+                    ):
+                        return False
+                    store = Path(previous_store)
+                if not isinstance(repo, str) or not isinstance(recorded.get("links"), list):
+                    return False
             if store is not None and isinstance(repo, str):
-                result = materialize(store, Path(repo), (), [], manifest)
+                result = materialize(
+                    store,
+                    Path(repo),
+                    (),
+                    [],
+                    manifest,
+                    claim_projects=project_claims(self.config.data_dir),
+                )
                 if not result.ok:
                     log.warning(
                         "Could not release skill links for %s: %s",

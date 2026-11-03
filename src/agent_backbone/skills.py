@@ -646,6 +646,48 @@ def repository_skills(
     return owned
 
 
+def project_resources(
+    directories: tuple[Path, ...], *, for_worktree: bool = False
+) -> tuple[Path, ...]:
+    """Checkouts, canonical main checkouts and shared Git state claimed together.
+
+    Starting in a subdirectory still consumes its containing checkout's native
+    configuration. Linked worktrees can also consume main-checkout configuration.
+    Check Git excludes before callers can update them; no files are written here.
+    """
+    resources: list[Path] = []
+    for directory in directories:
+        directory = directory.resolve()
+        resources.append(directory)
+        root = next(
+            (p for p in (directory, *directory.parents) if os.path.lexists(p / ".git")),
+            directory,
+        )
+        resources.append(root)
+        git_dir = _common_git_dir(root, strict=True)
+        if for_worktree and (
+            git_dir is None or git_dir.name != ".git" or directory.is_relative_to(git_dir)
+        ):
+            raise ValueError("Cannot identify the main checkout for a new worktree")
+        if git_dir is not None:
+            resources.append(git_dir)
+            # Linked worktrees consume Git's canonical main-checkout config.
+            # Reserve that root before creating one too, including when a
+            # separate Git directory named .git makes its parent Git's main.
+            # Standalone agents need no inferred parent reservation.
+            private = _git_dir(root)
+            if for_worktree or (private is not None and (private / "commondir").is_file()):
+                if git_dir.name != ".git":
+                    raise ValueError("Cannot identify the main checkout for separate Git metadata")
+                resources.append(git_dir.parent)
+            exclude = contained_path(git_dir, "info/exclude")
+            if os.path.lexists(exclude):
+                info = exclude.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise ValueError("Git exclude must be a regular file without hard links")
+    return tuple(dict.fromkeys(resources))
+
+
 def materialize(
     store: Path,
     repo_dir: Path,
@@ -701,20 +743,7 @@ def materialize(
             for skill in selected:
                 contained_path(repo_dir, Path(directory) / skill.name, follow_leaf=False)
         if claim_projects is not None:
-            resources: list[Path] = []
-            for repo in dict.fromkeys((repo_dir, old_repo or repo_dir)):
-                resources.append(repo.resolve())
-                git_dir = _common_git_dir(repo, strict=True)
-                if git_dir is not None:
-                    resources.append(git_dir)
-                    exclude = contained_path(git_dir, "info/exclude")
-                    if os.path.lexists(exclude):
-                        info = exclude.lstat()
-                        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-                            raise ValueError(
-                                "Git exclude must be a regular file without hard links"
-                            )
-            claim_projects(tuple(dict.fromkeys(resources)))
+            claim_projects(project_resources((repo_dir, old_repo or repo_dir)))
     except (ValueError, OSError) as exc:
         result.broken.append(str(exc))
         return result

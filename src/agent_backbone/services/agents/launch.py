@@ -298,6 +298,9 @@ async def _start_agent(
         log.error("Directory '%s' does not exist for agent '%s'", spec.path, spec.name)
         return StartResult(ok=False, evidence=(f"directory does not exist: {spec.path}",))
 
+    from agent_backbone.services.agents._project_ownership import claim_project_directories
+
+    claim_project_directories(config.data_dir, (spec.path,))
     runtime_id = runtime or spec.runtime
     if runtime_id not in RUNTIMES:
         details["reason"] = "unknown_runtime"
@@ -591,6 +594,8 @@ def _materialize_skills(
     own skills in a directory this runtime does not read are linked where
     it does, so they reach whichever CLI runs the agent.
     """
+    from agent_backbone.services.agents._project_ownership import project_claims
+
     store = config.skills.store_path
     if store is None or not rt.skill_dirs:
         return [], None
@@ -604,6 +609,7 @@ def _materialize_skills(
             manifest_path(config.data_dir, spec.name),
             read=rt.skill_read_dirs,
             sources=project_skill_dirs(),
+            claim_projects=project_claims(config.data_dir),
         )
     except OSError as exc:
         return [], f"skills: could not link into {spec.path}: {exc}"

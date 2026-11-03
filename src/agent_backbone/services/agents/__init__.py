@@ -16,6 +16,11 @@ from agent_backbone.services.agents._inference import (
     note_submission,
 )
 from agent_backbone.services.agents._locks import lifecycle_lock
+from agent_backbone.services.agents._project_ownership import (
+    claim_project_directories,
+    install_project_ownership,
+    project_claims,
+)
 from agent_backbone.services.agents._validation import validate_agent_spec
 from agent_backbone.services.agents.acknowledgement import (
     find_outgoing_comment,
@@ -55,6 +60,7 @@ __all__ = [
     "build_enriched_agent",
     "build_session_snapshot",
     "case_twin",
+    "claim_project_directories",
     "clear_starting_marker",
     "collect_usage",
     "deny_agent",
@@ -63,12 +69,14 @@ __all__ = [
     "get_agent_state",
     "has_commented_on_issue",
     "infer_state_from_pane",
+    "install_project_ownership",
     "instruction_preview",
     "lifecycle_lock",
     "listable_sessions",
     "note_submission",
     "plan_control",
     "profile_lock",
+    "project_claims",
     "prompt_id",
     "read_comment_receipts",
     "read_plan",
