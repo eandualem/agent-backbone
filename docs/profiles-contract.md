@@ -437,6 +437,13 @@ record support or a gap. No runtime coverage is changed by retaining this contra
 
 ## Internal native environment preparation
 
+Captured contexts also recheck adapter-declared account and configuration files
+before use. An external symlink, hard-linked file or non-regular file refuses
+the operation without reading its contents or invoking the native command.
+Missing files remain valid for an empty profile. These checks do not inspect
+credential-helper settings, machine policy or project configuration, and do not
+protect against concurrent writes by another process with the same OS identity.
+
 Reserved profiles still cannot start. Internal preparation captures a separate,
 immutable native environment and executable for each runtime before use. Trust
 preparation, hooks, user-file readers, transcript and usage readers, version probes,

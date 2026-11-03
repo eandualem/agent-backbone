@@ -407,6 +407,13 @@ class Runtime:
         """Adapter-owned store locations; unsupported adapters fail closed."""
         raise ValueError("Isolated native environment is unavailable for this runtime")
 
+    native_files: tuple[str, ...] = ()
+    """Mutable account/configuration files relative to the captured native root.
+
+    Rechecked without reading contents on every captured-context access. This is
+    path ownership only; settings that invoke external helpers need separate checks.
+    """
+
     def capture_environment(self, root: Path) -> NativeEnvironment:
         """Capture native locators and binary before installing a process context.
 
@@ -437,7 +444,7 @@ class Runtime:
         executable = self.resolve_binary()
         if self.binary is not None and executable is None:
             raise ValueError("Native runtime executable is unavailable")
-        return NativeEnvironment(root, executable, values, frozenset(native))
+        return NativeEnvironment(root, executable, values, frozenset(native), self.native_files)
 
     def resolve_binary(self) -> str | None:
         """Find this runtime now, including any adapter-specific install location."""

@@ -140,6 +140,8 @@ class Codex(Runtime):
     def native_environment_values(self, root):
         return {"CODEX_HOME": str(root / "codex")}
 
+    native_files = ("codex/auth.json", "codex/config.toml", "codex/hooks.json")
+
     setup_hooks = True
 
     supports_exact_resume = True

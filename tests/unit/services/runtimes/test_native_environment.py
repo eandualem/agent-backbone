@@ -1,5 +1,6 @@
 """A captured native context cannot drift to ambient or sibling account stores."""
 
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -129,12 +130,12 @@ def test_legacy_environment_and_account_refusal_are_explicit(monkeypatch):
 def test_trust_preparation_refuses_a_config_file_symlink(tmp_path, runtime, relative):
     rt = RUNTIMES[runtime]
     captured = rt.capture_environment(tmp_path / "a")
+    install_native_environments({runtime: captured})
     target = captured.root / relative
     target.parent.mkdir(parents=True)
     outside = tmp_path / "outside-config"
     outside.write_text('{"outside": "account-state"}')
     target.symlink_to(outside)
-    install_native_environments({runtime: captured})
     with pytest.raises(ValueError, match="escapes"):
         rt.pre_trust(tmp_path)
     assert target.is_symlink()
@@ -170,3 +171,100 @@ def test_missing_captured_binary_never_falls_back_to_host(tmp_path, monkeypatch,
         with pytest.raises(RuntimeError, match="binary not found"):
             rt.build_command()
         run.assert_not_called()
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+@pytest.mark.parametrize("alias", ["symlink", "hardlink", "fifo"])
+def test_native_store_aliases_refuse_accounts_and_launch_without_touching_sibling(
+    tmp_path, runtime, alias
+):
+    rt = RUNTIMES[runtime]
+    captured = rt.capture_environment(tmp_path / "a")
+    sibling = tmp_path / "b" / "account"
+    sibling.parent.mkdir()
+    sibling.write_text("sibling account sentinel")
+    install_native_environments({runtime: captured})
+    for relative in rt.native_files:
+        path = captured.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if alias == "symlink":
+            path.symlink_to(sibling)
+        elif alias == "hardlink":
+            os.link(sibling, path)
+        else:
+            os.mkfifo(path)
+        with (
+            patch("agent_backbone.services.runtimes.base.subprocess.run") as run,
+            patch.object(Path, "open", side_effect=AssertionError("unexpected file read")) as read,
+        ):
+            with patch.object(_environment, "_CONTEXT", None):
+                with pytest.raises(ValueError, match="escapes|regular file"):
+                    rt.capture_environment(captured.root)
+            for action in ("status", "login", "logout"):
+                with pytest.raises(ValueError, match="escapes|regular file"):
+                    rt.account_invocation(action)
+            for resume in (False, "session-test"):
+                with pytest.raises(ValueError, match="escapes|regular file"):
+                    rt.build_command(resume=resume)
+            run.assert_not_called()
+            read.assert_not_called()
+        path.unlink()
+        assert sibling.read_text() == "sibling account sentinel"
+    assert not list(sibling.parent.glob("*.json"))
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+def test_native_file_checks_survive_overlay_and_allow_private_store_updates(tmp_path, runtime):
+    rt = RUNTIMES[runtime]
+    captured = rt.capture_environment(tmp_path / "a")
+    assert not captured.root.exists()  # Capture never creates account storage.
+    overlaid = captured.overlay({"TERM": "xterm"})
+    for relative in rt.native_files:
+        path = captured.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("private store")
+    overlaid.check()
+    # Native writes can replace a file; the snapshot pins paths, not inodes.
+    target = captured.root / rt.native_files[0]
+    target.unlink()
+    target.write_text("updated private store")
+    overlaid.check()
+    target.unlink()
+    target.symlink_to(tmp_path / "missing-sibling-store")
+    with pytest.raises(ValueError, match="escapes"):
+        overlaid.check()
+
+
+def test_legacy_account_file_alias_does_not_enable_native_context_checks(tmp_path, monkeypatch):
+    home = tmp_path / "legacy"
+    home.mkdir()
+    (home / "auth.json").symlink_to(tmp_path / "external-account")
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    assert RUNTIMES["codex"].environment({"CUSTOM": "value"}) == {"CUSTOM": "value"}
+
+
+@pytest.mark.parametrize("condition", ["parent_file", "loop", "denied"])
+def test_unavailable_native_store_is_a_bounded_refusal(tmp_path, monkeypatch, condition):
+    rt = RUNTIMES["opencode"]
+    captured = rt.capture_environment(tmp_path / "a")
+    install_native_environments({rt.id: captured})
+    target = captured.root / "data/opencode/auth.json"
+    target.parent.parent.mkdir(parents=True)
+    if condition == "parent_file":
+        target.parent.write_text("not a directory")
+    else:
+        target.parent.mkdir()
+        if condition == "loop":
+            target.symlink_to(target)
+        else:
+            original = Path.stat
+
+            def denied(path, *args, **kwargs):
+                if path == target:
+                    raise PermissionError("sensitive filesystem diagnostic")
+                return original(path, *args, **kwargs)
+
+            monkeypatch.setattr(Path, "stat", denied)
+    for operation in (lambda: rt.account_invocation("status"), rt.installed_version):
+        with pytest.raises(ValueError, match="^Native (store|path) is unavailable$"):
+            operation()

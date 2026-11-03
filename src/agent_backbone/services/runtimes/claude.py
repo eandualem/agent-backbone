@@ -124,6 +124,13 @@ class ClaudeCode(Runtime):
     def native_environment_values(self, root):
         return {"CLAUDE_CONFIG_DIR": str(root / "claude")}
 
+    native_files = (
+        "claude/.claude.json",
+        "claude/.credentials.json",
+        "claude/settings.json",
+        "claude/settings.local.json",
+    )
+
     setup_hooks = True
 
     supports_exact_resume = True
