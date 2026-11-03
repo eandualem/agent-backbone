@@ -347,6 +347,7 @@ async def lifespan(app: FastAPI):
     )
     app.state.integrations = build_integrations(lambda: app.state.config, db=app.state.db)
     lifecycle.register("integrations", app.state.integrations)
+    lifecycle.register("api-tasks", app.state.api_tasks)
     app.state.sources = build_sources(lambda: app.state.config)
 
     # A closed issue ends the swarm that was working it (PR merged -> issue
@@ -385,6 +386,7 @@ async def lifespan(app: FastAPI):
         )
         yield
     finally:
+        app.state.api_tasks.close_admission()
         sio = getattr(app.state, "sio", None)
         if sio is not None:
             sio.close_admission()
@@ -405,11 +407,13 @@ def create_app(config: BackboneConfig | None = None):
     )
     app.state.config = config
 
+    from agent_backbone.api.background import ApiTasks
     from agent_backbone.api.profile_binding import ProfileBindingMiddleware, profile_identity
     from agent_backbone.api.signed import SignedSenderMiddleware
     from agent_backbone.api.validation import Validations
 
-    app.state.validations = Validations()
+    app.state.api_tasks = ApiTasks()
+    app.state.validations = Validations(app.state.api_tasks)
 
     app.add_middleware(SignedSenderMiddleware)
     app.add_middleware(ProfileBindingMiddleware)

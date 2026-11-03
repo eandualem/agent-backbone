@@ -109,7 +109,15 @@ admission before stopping producers, then drains admitted handlers, pending term
 operations, retained attachments and emissions before disposing services or the
 database. Cancelled shutdown callers leave the drain owned; failed cleanup retains
 its resources and dependencies for retry. An unsuccessful lifespan shutdown prevents
-an automatic in-process upgrade restart. Detached job threads and other native
+an automatic in-process upgrade restart. Delayed validation notices and runtime
+setup checks capture their originating configuration, database and provider. Before
+starting, they acquire a separate operation guard and recheck the captured context;
+work whose reservation retires before that check is refused without side effects.
+The guard is retained through execution. Client cancellation does not cancel setup
+workers, and cancellation of the owned batch waits for its executor functions to
+exit before releasing the reservation. Shutdown closes admission and drains these API tasks, including every
+setup worker, before stopping integrations or storage; cancelling the shutdown
+caller leaves the work owned for a later drain. Detached job threads and other native
 lifetimes still require complete drainage before activation. Session-feed
 history writes retain their own captured provider guard through transaction
 cleanup, including after a snapshot times out or is cancelled. They recheck the

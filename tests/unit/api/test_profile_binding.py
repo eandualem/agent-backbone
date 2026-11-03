@@ -1124,3 +1124,195 @@ async def test_terminal_join_cannot_attach_after_disconnect_during_validation(
     manager.create.assert_not_called()
     assert not ns._resources
     registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+
+
+async def test_validation_notice_retains_original_provider_until_shutdown_drains(
+    api_app, bound_provider, monkeypatch
+):
+    from dataclasses import replace
+
+    from agent_backbone.api import validation
+
+    provider, registry, _ = bound_provider
+    original = api_app.state.config
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def delay(_seconds):
+        entered.set()
+        await release.wait()
+
+    notify = AsyncMock()
+    monkeypatch.setattr(validation, "_sleep", delay)
+    monkeypatch.setattr(validation, "notify_humans", notify)
+    api_app.state.validations.failed(
+        original,
+        "worker",
+        "confirmation",
+        "unknown_confirmation",
+        0,
+        provider=provider,
+        db=api_app.state.db,
+    )
+    await asyncio.wait_for(entered.wait(), 5)
+    # Changing app selection cannot redirect the accepted notice's configuration.
+    api_app.state.config = replace(original, api_key="other-provider")
+    api_app.state.profile_provider = None
+    shutdown = asyncio.create_task(api_app.state.api_tasks.stop())
+    try:
+        await asyncio.sleep(0)
+        assert not shutdown.done()
+        with pytest.raises(ValueError, match="fence is busy"):
+            registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        api_app.state.validations.failed(
+            original,
+            "later",
+            "confirmation",
+            "unknown_confirmation",
+            1,
+            provider=provider,
+            db=api_app.state.db,
+        )
+        release.set()
+        await asyncio.wait_for(shutdown, 5)
+        notify.assert_awaited_once()
+        assert notify.call_args.args[0] is original
+        registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    finally:
+        release.set()
+        await api_app.state.api_tasks.stop()
+        await asyncio.gather(shutdown, return_exceptions=True)
+
+
+@pytest.mark.parametrize(
+    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+)
+async def test_setup_workers_retain_provider_after_client_and_shutdown_cancellation(
+    api_app, api_client, auth_headers, bound_provider, monkeypatch, runtime
+):
+    import threading
+    from types import SimpleNamespace
+
+    from agent_backbone.api.routes import agents
+
+    provider, registry, headers = bound_provider
+    loop = asyncio.get_running_loop()
+    entered, release = asyncio.Event(), threading.Event()
+
+    def probe():
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(10)
+        return {"compatible": True}
+
+    monkeypatch.setattr(
+        agents,
+        "RUNTIMES",
+        {
+            runtime: SimpleNamespace(
+                id=runtime,
+                display_name=runtime,
+                models=[],
+                available=lambda: True,
+                setup_compatibility=probe,
+            )
+        },
+    )
+    request = asyncio.create_task(
+        api_client.get("/api/runtimes?check_setup=true", headers={**auth_headers, **headers})
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
+        batch = api_app.state.runtime_setup_checks
+        for _ in range(2):
+            shutdown = asyncio.create_task(api_app.state.api_tasks.stop())
+            await asyncio.sleep(0)
+            shutdown.cancel()
+            await asyncio.gather(shutdown, return_exceptions=True)
+            assert not batch.done()
+            with pytest.raises(ValueError, match="fence is busy"):
+                registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        # Event-loop teardown can cancel the owned task itself as well.
+        for _ in range(2):
+            batch.cancel()
+            for _ in range(5):
+                await asyncio.sleep(0)
+            assert not batch.done()
+            with pytest.raises(ValueError, match="fence is busy"):
+                registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        release.set()
+        await asyncio.wait_for(api_app.state.api_tasks.stop(), 5)
+        assert batch.cancelled()
+        response = await api_client.get(
+            "/api/runtimes?check_setup=true", headers={**auth_headers, **headers}
+        )
+        assert response.status_code == 503
+        registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    finally:
+        release.set()
+        await asyncio.gather(request, return_exceptions=True)
+        await api_app.state.api_tasks.stop()
+
+
+async def test_detached_api_task_refuses_retired_or_mismatched_provider(api_app, bound_provider):
+    from dataclasses import replace
+
+    provider, registry, _ = bound_provider
+    run = AsyncMock()
+    original = api_app.state.config
+    task = api_app.state.api_tasks.create(
+        run,
+        config=replace(original, backbone=replace(original.backbone, data_dir="/other")),
+        db=api_app.state.db,
+        provider=provider,
+    )
+    with pytest.raises(ValueError, match="context does not match"):
+        await task
+    task = api_app.state.api_tasks.create(
+        run,
+        config=original,
+        db=api_app.state.db,
+        provider=provider,
+    )
+    # Scheduling alone does not authorize execution. Retirement before the
+    # task acquires its guard must refuse work without effects.
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    with pytest.raises(ValueError):
+        await task
+    run.assert_not_awaited()
+    await api_app.state.api_tasks.stop()
+
+
+async def test_http_validation_notice_captures_request_provider(
+    api_app, api_client, auth_headers, bound_provider, monkeypatch
+):
+    from agent_backbone.api import validation
+    from agent_backbone.services.terminal import CallerUnknown
+
+    provider, registry, headers = bound_provider
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def delay(_seconds):
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr(validation, "_sleep", delay)
+    monkeypatch.setattr(validation, "caller_agent", AsyncMock(side_effect=CallerUnknown("test")))
+    notify = AsyncMock()
+    monkeypatch.setattr(validation, "notify_humans", notify)
+    try:
+        response = await api_client.post(
+            "/api/messages/validate",
+            headers={**auth_headers, **headers},
+            json={"confirmation_id": "12345678-1234-4234-8234-123456789abc"},
+        )
+        assert response.status_code == 403
+        await asyncio.wait_for(entered.wait(), 5)
+        with pytest.raises(ValueError, match="fence is busy"):
+            registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    finally:
+        release.set()
+        await api_app.state.api_tasks.stop()
+    notify.assert_awaited_once()
+    assert notify.call_args.args[0] is api_app.state.config
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)

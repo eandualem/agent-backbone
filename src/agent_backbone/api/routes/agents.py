@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextvars import copy_context
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -274,10 +275,30 @@ async def inspect_agent(
     )
 
 
+async def _runtime_setup_check(runtime):
+    # Task cancellation cannot stop a running executor function. Keep the batch
+    # (and its provider reservation) alive until that function actually exits.
+    worker = asyncio.get_running_loop().run_in_executor(
+        None, copy_context().run, runtime.setup_compatibility
+    )
+    cancelled = False
+    while not worker.done():
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            break
+    if cancelled:
+        worker.exception()  # Observe a failure even when cancellation wins.
+        raise asyncio.CancelledError
+    return worker.result()
+
+
 async def _runtime_setup_checks():
     # Drain every worker before allowing another batch, including on failure.
     values = await asyncio.gather(
-        *(asyncio.to_thread(rt.setup_compatibility) for rt in RUNTIMES.values()),
+        *(_runtime_setup_check(rt) for rt in RUNTIMES.values()),
         return_exceptions=True,
     )
     for value in values:
@@ -294,9 +315,12 @@ async def list_runtimes(request: Request, check_setup: bool = False):
         await require_operator(request)
         task = getattr(request.app.state, "runtime_setup_checks", None)
         if task is None or task.done():
-            task = asyncio.create_task(_runtime_setup_checks())
-            # Observe failures even if all clients disconnect before completion.
-            task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+            task = request.app.state.api_tasks.create(
+                _runtime_setup_checks,
+                config=request.app.state.config,
+                db=request.app.state.db,
+                provider=getattr(request.state, "profile_provider", None),
+            )
             request.app.state.runtime_setup_checks = task
         # Disconnecting clients must not free capacity while workers still run.
         checks = await asyncio.shield(task)
