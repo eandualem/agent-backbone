@@ -91,7 +91,13 @@ occupied slot until its worker finishes. This includes admission and subsequent
 registry checks, so cancelled requests cannot accumulate unbounded registry work.
 The lock covers the ASGI call lifetime. Work that outlives that call, including
 detached tasks or threads, needs its own captured operation guard. This does not
-yet fence Socket.IO events, background jobs or native processes. Session-feed
+yet fence background jobs or native processes. Connected Socket.IO event handlers
+retain the captured provider fence through handler completion or cancellation
+cleanup. Emissions acquire a separate fence before recipient validation and keep
+it in a tracked task until Socket.IO's packet-send tasks finish. Caller cancellation
+can return immediately, allowing reentrant disconnect cleanup to finish, while
+the emission task retains its own fence. Connection setup, disconnect cleanup and the full lifetime
+of terminal PTYs still require their own fencing before activation. Session-feed
 history writes retain their own captured provider guard through transaction
 cleanup, including after a snapshot times out or is cancelled. They recheck the
 feed's database, configuration and terminal context before writing; a retired or
