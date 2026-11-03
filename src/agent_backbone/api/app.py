@@ -32,6 +32,12 @@ STARTED_AT = time.time()
 """When this process started: /health reports it so a restart is observable."""
 
 
+def _job_configuration(state):
+    """A job and its collaborators share one snapshot; other calls read live config."""
+    context = getattr(state, "job_config", None)
+    return context.get(state.config) if context is not None else state.config
+
+
 async def hint_inboxes(config, db, feed) -> None:
     """The monitor tick's inbox hints: rows written outside a tell (expiry
     notices, escalations to an inbox-only agent) reach their hint here."""
@@ -72,9 +78,10 @@ def _register_jobs(app: FastAPI):
     github = state.github
     store = getattr(state, "agent_store", None)
     captured_config = ContextVar("job_config")
+    state.job_config = captured_config
 
     def current_config():
-        return captured_config.get(state.config)
+        return _job_configuration(state)
 
     def guarded(fn):
         async def run(*args):
@@ -349,7 +356,13 @@ async def lifespan(app: FastAPI):
         # per-agent surfaces (Telegram topics) against the new snapshot.
         integrations = getattr(app.state, "integrations", None)
         if integrations is not None:
-            integrations.schedule_sync()
+            context = getattr(app.state, "job_config", None)
+            token = context.set(new_config) if context is not None else None
+            try:
+                integrations.schedule_sync()
+            finally:
+                if token is not None:
+                    context.reset(token)
 
     app.state.agent_store = AgentStore(
         app.state.db,
@@ -380,7 +393,7 @@ async def lifespan(app: FastAPI):
     if app.state.github is not None:
         lifecycle.register("github", app.state.github)
     app.state.feed = SessionFeed(
-        lambda: app.state.config,
+        lambda: _job_configuration(app.state),
         getattr(app.state, "sio", None),
         db=app.state.db,
         profile_provider=getattr(app.state, "profile_provider", None),
@@ -389,10 +402,14 @@ async def lifespan(app: FastAPI):
         "socket-streams",
         _SocketStreams(getattr(app.state, "sio", None), app.state.feed, get_pty_manager()),
     )
-    app.state.integrations = build_integrations(lambda: app.state.config, db=app.state.db)
+    app.state.integrations = build_integrations(
+        lambda: _job_configuration(app.state), db=app.state.db
+    )
     lifecycle.register("integrations", app.state.integrations)
     lifecycle.register("api-tasks", app.state.api_tasks)
-    app.state.sources = build_sources(lambda: app.state.config)
+    app.state.sources = build_sources(lambda: _job_configuration(app.state))
+
+    provider_db, provider_store = app.state.db, app.state.agent_store
 
     # A closed issue ends the swarm that was working it (PR merged -> issue
     # closed via "Closes #N" -> teardown). Handed to ingest as a hook so
@@ -400,7 +417,7 @@ async def lifespan(app: FastAPI):
     async def _swarm_teardown(repo: str, issue_number: int) -> None:
         try:
             name = await teardown_for_issue(
-                app.state.config, app.state.db, app.state.agent_store, repo, issue_number
+                _job_configuration(app.state), provider_db, provider_store, repo, issue_number
             )
         except SwarmError as exc:
             # A member that would not stop keeps its worktree; the swarm stays

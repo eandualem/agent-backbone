@@ -3,7 +3,7 @@
 import asyncio
 import threading
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -85,3 +85,33 @@ async def test_thread_success_and_failure_are_preserved():
     assert await run_thread(lambda *, n: n, n=42) == 42
     with pytest.raises(ZeroDivisionError):
         await run_thread(lambda: 1 / 0)
+
+
+@pytest.mark.parametrize("caller", ["context", "git"])
+async def test_failed_spawn_cannot_swallow_owner_cancellation(caller):
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def spawn(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        raise OSError("spawn failed")
+
+    async def work():
+        if caller == "git":
+            from agent_backbone.git import run_git
+
+            with patch("asyncio.create_subprocess_exec", spawn):
+                await run_git(".", "status")
+        else:
+            async with owned_process(spawn()):
+                pytest.fail("failed creation cannot enter its body")
+        pytest.fail("cancellation cannot become an ordinary command failure")
+
+    task = asyncio.create_task(work())
+    await entered.wait()
+    task.cancel("owner stopped")
+    await asyncio.sleep(0)
+    assert not task.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError, match="owner stopped"):
+        await task

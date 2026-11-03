@@ -49,7 +49,7 @@ class Integration:
 
     @property
     def config(self) -> BackboneConfig:
-        """Always the latest published configuration snapshot."""
+        """Configuration snapshot supplied by the owning execution context."""
         return self._config_provider()
 
     @property

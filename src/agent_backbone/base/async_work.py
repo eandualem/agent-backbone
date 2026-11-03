@@ -37,6 +37,7 @@ async def owned_process(spawn, *, process_group=False):
     """Own subprocess creation and reaping across caller cancellation."""
     creation = asyncio.ensure_future(spawn)
     completed = False
+    cancelled = None
 
     async def reap():
         process = await creation
@@ -54,7 +55,15 @@ async def owned_process(spawn, *, process_group=False):
         process = await asyncio.shield(creation)
         yield process
         completed = True
+    except asyncio.CancelledError as exc:
+        cancelled = exc
+        raise
     finally:
         # Spawn itself can be cancelled after the OS child exists. Keep its
         # future alive until we can obtain the handle and reap that child.
-        await complete_before_cancel(reap())
+        try:
+            await complete_before_cancel(reap())
+        except BaseException:
+            if cancelled is not None:
+                raise cancelled from None
+            raise

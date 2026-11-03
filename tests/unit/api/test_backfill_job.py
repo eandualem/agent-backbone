@@ -190,3 +190,37 @@ async def test_monitor_uses_its_fresh_roster_without_changing_provider(tmp_path,
         scheduler = _register_jobs(app)
     await scheduler._jobs["agent-monitor"].fn()
     assert monitor.call_args.args[0] is refreshed
+
+
+async def test_job_collaborators_keep_snapshot_then_return_to_live_config(tmp_path, db):
+    import asyncio
+
+    from agent_backbone.api.app import _job_configuration
+    from agent_backbone.services.integrations.base import Integration
+    from agent_backbone.services.sources.base import Source
+
+    app = FastAPI()
+    original = bootstrap_config(tmp_path)
+    replacement = replace(original, settings={"diagnostics.mode": "off"})
+    app.state.config, app.state.db, app.state.github = original, db, None
+    integration = Integration(lambda: _job_configuration(app.state))
+    source = Source(lambda: _job_configuration(app.state))
+    seen = []
+
+    async def flush():
+        seen.append((integration.config, source.config))
+        app.state.config = replacement
+        await asyncio.sleep(0)
+        seen.append((integration.config, source.config))
+
+    app.state.integrations = SimpleNamespace(
+        reconcile=AsyncMock(), flush_reports=flush, flush_report_audio=AsyncMock()
+    )
+    scheduler = _register_jobs(app)
+    await scheduler._jobs["report-notifications"].fn()
+    assert seen == [(original, original), (original, original)]
+    assert integration.config is replacement
+    assert source.config is replacement
+    seen.clear()
+    await scheduler._jobs["report-notifications"].fn()
+    assert seen == [(replacement, replacement), (replacement, replacement)]

@@ -65,7 +65,14 @@ def test_opposing_actions_are_serialized_across_connections(operations, fixtures
     busy = next(r for r, execute in results if not execute)
     assert busy["error"]["code"] == "operation_busy"
     # Independent profile work does not wait for A's unknown outcome.
-    other, execute = operations.begin({**first, "profile_id": "profile-b", "request_id": "other"})
+    other, execute = operations.begin(
+        {
+            **first,
+            "profile_id": "profile-b",
+            "expected_installation_id": "installation-b",
+            "request_id": "other",
+        }
+    )
     assert execute and other["profile_id"] == "profile-b"
 
 
@@ -125,3 +132,31 @@ def test_all_agreed_action_shapes_are_accepted(fixtures):
         validate_profile_operation(fixtures["adoption"]["request"])
         == fixtures["adoption"]["request"]
     )
+
+
+@pytest.mark.parametrize("adoption_first", [False, True])
+def test_adoption_serializes_with_lifecycle_on_its_installation(
+    operations, fixtures, adoption_first
+):
+    start = fixtures["lifecycle"]["start"]
+    adoption = {
+        **fixtures["adoption"]["request"],
+        "expected_installation_id": start["expected_installation_id"],
+    }
+    first, second = (adoption, start) if adoption_first else (start, adoption)
+    assert operations.begin(first)[1]
+    receipt, execute = operations.begin(second)
+    assert not execute
+    assert receipt["error"]["code"] == "operation_busy"
+    assert operations.lookup(second["request_id"]) == receipt
+
+
+def test_failed_reservation_is_an_invalidated_binding(operations, fixtures):
+    request = fixtures["lifecycle"]["start"]
+    operations.registry.invalidate(
+        ProfileIdentity("profile-a", "installation-a", "lifecycle-a1"),
+        operations.registry.path.parent.parent / "provider-a",
+    )
+    receipt = operations.apply(request)
+    assert receipt["error"]["code"] == "binding_mismatch"
+    assert operations.lookup(request["request_id"]) == receipt

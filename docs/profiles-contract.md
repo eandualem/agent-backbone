@@ -301,13 +301,16 @@ before initializing the external registry, reserves its exact normalized input a
 returns the original receipt on replay. Changed input returns `request_conflict`
 without replacing the original record. A pending operation prevents another
 start/stop request for that profile; the conflicting request retains a failed
-`operation_busy` receipt. An interrupted pending operation stays pending across
+`operation_busy` receipt. Pending adoption and lifecycle requests also serialize by
+installation identity. An interrupted pending operation stays pending across
 reopen and exact replay, without repeating effects or automatically releasing its
 reservation. Its outcome needs explicit reconciliation.
 
 Execution is still unavailable: create returns `baseline_unavailable`, adoption
 returns `adoption_unavailable`, and start/stop return `profile_not_ready` for an
-exact non-ready reservation or `binding_mismatch` for a stale or unknown tuple.
+exact `creating` reservation or `binding_mismatch` for a stale, invalidated or
+unknown tuple. A `failed` reservation is a permanent invalidation tombstone, not
+a valid binding awaiting readiness.
 These are durable failed-operation receipts with nonzero exit status. They do not
 create provider directories, start/stop services, adopt an installation or publish
 ready discovery. An unchanged failed request continues to return that failure;

@@ -48,10 +48,10 @@ async def _output(*argv: str) -> tuple[int, str]:
             async with asyncio.timeout(_TIMEOUT):
                 out, _ = await proc.communicate()
             return proc.returncode, out.decode(errors="replace")
-    except OSError as exc:
-        raise CallerUnknown(f"{argv[0]} can't run here ({exc.strerror})") from exc
     except TimeoutError as exc:
         raise CallerUnknown(f"{argv[0]} did not answer within {_TIMEOUT:g}s") from exc
+    except OSError as exc:
+        raise CallerUnknown(f"{argv[0]} can't run here ({exc.strerror})") from exc
 
 
 def _endpoint(text: str) -> tuple[object, int] | None:

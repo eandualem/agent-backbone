@@ -93,6 +93,7 @@ class ProfileOperations:
             if action == "adopt_default"
             else "create:" + request["request_id"]
         )
+        installation_id = request.get("expected_installation_id")
         bound = action in {"start", "stop"}
         receipt = {
             "schema_version": 1,
@@ -116,16 +117,26 @@ class ProfileOperations:
                     return operation_error(request["request_id"], "request_conflict"), False
                 return json.loads(previous[1]), False
             pending = conn.execute(
-                "SELECT 1 FROM lifecycle_operations WHERE scope = ? AND status = 'pending'",
-                (scope,),
+                "SELECT 1 FROM lifecycle_operations WHERE (scope = ? OR installation_id = ?) "
+                "AND status = 'pending'",
+                (scope, installation_id),
             ).fetchone()
             if pending:
                 receipt.update(
                     status="failed", error=operation_error("", "operation_busy")["error"]
                 )
             conn.execute(
-                "INSERT INTO lifecycle_operations VALUES (?, ?, ?, ?, ?)",
-                (request["request_id"], body, scope, receipt["status"], _json(receipt)),
+                "INSERT INTO lifecycle_operations "
+                "(request_id, request_json, scope, installation_id, status, receipt_json) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    request["request_id"],
+                    body,
+                    scope,
+                    installation_id,
+                    receipt["status"],
+                    _json(receipt),
+                ),
             )
         return receipt, not bool(pending)
 

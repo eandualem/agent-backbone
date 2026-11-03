@@ -139,13 +139,17 @@ class ProfileRegistry:
                 conn.execute(
                     "CREATE TABLE lifecycle_operations ("
                     "request_id TEXT PRIMARY KEY NOT NULL, request_json TEXT NOT NULL, "
-                    "scope TEXT NOT NULL, status TEXT NOT NULL "
+                    "scope TEXT NOT NULL, installation_id TEXT, status TEXT NOT NULL "
                     "CHECK(status IN ('pending', 'succeeded', 'failed')), "
                     "receipt_json TEXT NOT NULL)"
                 )
                 conn.execute(
                     "CREATE UNIQUE INDEX lifecycle_pending ON lifecycle_operations(scope) "
                     "WHERE status = 'pending'"
+                )
+                conn.execute(
+                    "CREATE UNIQUE INDEX lifecycle_installation_pending "
+                    "ON lifecycle_operations(installation_id) WHERE status = 'pending'"
                 )
                 conn.execute("PRAGMA user_version = 3")
 
