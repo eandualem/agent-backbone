@@ -1,6 +1,6 @@
 """Authenticate and compare a captured provider identity before content access."""
 
-from contextlib import ExitStack
+from contextlib import AsyncExitStack
 
 from fastapi import HTTPException, Request
 from sqlalchemy.engine import make_url
@@ -101,10 +101,10 @@ class ProfileBindingMiddleware:
                 return await JSONResponse(
                     {"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers
                 )(scope, receive, send)
-        with ExitStack() as operations:
+        async with AsyncExitStack() as operations:
             try:
                 if provider is not None:
-                    operations.enter_context(provider.operation())
+                    await operations.enter_async_context(provider.operation())
             except (ValueError, OSError):
                 return await JSONResponse({"detail": BINDING_MISMATCH}, status_code=409)(
                     scope, receive, send

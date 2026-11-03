@@ -1,5 +1,8 @@
 """Reconciliation is read-only and cannot turn a reservation into activation."""
 
+import asyncio
+import threading
+from contextlib import contextmanager
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
@@ -48,6 +51,53 @@ async def test_reconcile_captures_identity_without_writes_or_activation(prepared
     assert before == (path.read_bytes(), registry.path.read_bytes())
     with pytest.raises(ValueError, match="not ready"):
         await check_profile_startup(db.url, reservation.data_dir)
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_admission_wait_keeps_loop_responsive_and_releases_after_cancellation(
+    prepared, monkeypatch, cancel
+):
+    registry, reservation, path, socket, _ = prepared
+    provider = await reconcile_profile_provider(registry, reservation, path, socket)
+    acquired, finish_acquiring, released = (threading.Event() for _ in range(3))
+    entered = False
+    original = ProfileRegistry.operation
+
+    @contextmanager
+    def delayed(self, *args):
+        with original(self, *args):
+            acquired.set()
+            assert finish_acquiring.wait(5)
+            try:
+                yield
+            finally:
+                released.set()
+
+    monkeypatch.setattr(ProfileRegistry, "operation", delayed)
+
+    async def serve():
+        nonlocal entered
+        async with provider.operation():
+            entered = True
+
+    request = asyncio.create_task(serve())
+    try:
+        assert await asyncio.to_thread(acquired.wait, 3)
+        assert not request.done()
+        if cancel:
+            request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request
+        finish_acquiring.set()
+        if not cancel:
+            await request
+        assert await asyncio.to_thread(released.wait, 3)
+        assert entered is not cancel
+    finally:
+        finish_acquiring.set()
+        request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
+    registry.invalidate(reservation.identity, reservation.data_dir)
 
 
 @pytest.mark.parametrize("change", ["invalidate", "identity", "audience", "missing", "baseline"])

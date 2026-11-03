@@ -7,6 +7,7 @@ guard continues to refuse reserved providers until their isolation is complete.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,11 +35,29 @@ class ProfileProvider:
     database_path: Path
     socket_path: Path
 
-    def operation(self):
+    @asynccontextmanager
+    async def operation(self):
         """Retain this reservation until a guarded operation finishes or cancels."""
-        return ProfileRegistry(self.registry_path).operation(
+        operation = ProfileRegistry(self.registry_path).operation(
             self.reservation.identity, self.reservation.data_dir
         )
+        # Registry reads can wait on SQLite recovery/writers. Keep that wait off
+        # the event loop, without abandoning a lock acquired after cancellation.
+        acquisition = asyncio.create_task(asyncio.to_thread(operation.__enter__))
+        try:
+            await asyncio.shield(acquisition)
+        except BaseException:
+
+            def release_when_acquired(done):
+                if not done.cancelled() and done.exception() is None:
+                    operation.__exit__(None, None, None)
+
+            acquisition.add_done_callback(release_when_acquired)
+            raise
+        try:
+            yield
+        finally:
+            operation.__exit__(None, None, None)
 
     async def check(self) -> None:
         """Recheck external ownership and local identity without creating storage.
