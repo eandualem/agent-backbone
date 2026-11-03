@@ -183,6 +183,8 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
         return
     if not server.started:
         raise SystemExit(3)  # preserve uvicorn.run's startup-failure exit status
+    if getattr(getattr(server, "lifespan", None), "shutdown_failed", False) is True:
+        raise SystemExit(3)  # never re-exec over unfinished resource cleanup
     if restart_requested(app):
         # The upgrade watch asked for new code: become a fresh `backbone up`
         # in place, so the login service or tmux session is unchanged.

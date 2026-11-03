@@ -245,6 +245,25 @@ def _register_jobs(app: FastAPI):
     return scheduler
 
 
+class _SocketStreams:
+    """Drain socket consumers after producers stop, before their dependencies."""
+
+    def __init__(self, sio, feed, manager):
+        self.sio, self.feed, self.manager = sio, feed, manager
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        if self.sio is not None:
+            await self.sio.shutdown()
+        await self.feed.close()
+        await self.manager.cleanup_all()
+
+    async def health_check(self) -> dict:
+        return {"healthy": self.sio is None or not self.sio._closing}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Open the data directory, start the database, load config, wire services."""
@@ -322,6 +341,10 @@ async def lifespan(app: FastAPI):
         db=app.state.db,
         profile_provider=getattr(app.state, "profile_provider", None),
     )
+    lifecycle.register(
+        "socket-streams",
+        _SocketStreams(getattr(app.state, "sio", None), app.state.feed, get_pty_manager()),
+    )
     app.state.integrations = build_integrations(lambda: app.state.config, db=app.state.db)
     lifecycle.register("integrations", app.state.integrations)
     app.state.sources = build_sources(lambda: app.state.config)
@@ -362,9 +385,10 @@ async def lifespan(app: FastAPI):
         )
         yield
     finally:
-        await app.state.feed.close()
+        sio = getattr(app.state, "sio", None)
+        if sio is not None:
+            sio.close_admission()
         await lifecycle.stop_all()
-        await get_pty_manager().cleanup_all()
         log.info("agent-backbone shutting down")
 
 

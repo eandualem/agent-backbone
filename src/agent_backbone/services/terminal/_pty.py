@@ -385,7 +385,7 @@ class PtyManager:
             failures = [result for result in results if isinstance(result, BaseException)]
             if failures:
                 log.error("Failed to clean up %d PTY session(s)", len(failures))
-                return
+                raise BaseExceptionGroup("PTY cleanup failed", failures)
         log.info("All PTY sessions cleaned up")
 
 

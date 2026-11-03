@@ -578,7 +578,8 @@ class TestPtyManager:
             caplog.at_level(logging.INFO, logger=_PTY),
             patch.object(failed, "cleanup", side_effect=OSError("busy")),
         ):
-            await mgr.cleanup_all()
+            with pytest.raises(ExceptionGroup, match="PTY cleanup failed"):
+                await mgr.cleanup_all()
             assert mgr._sessions[("sid1", "a")] is failed
             assert ("sid2", "b") not in mgr._sessions
             assert "Failed to clean up 1 PTY session(s)" in caplog.text

@@ -104,9 +104,13 @@ it until process termination and reader-executor shutdown succeed. Per-attachmen
 resource tasks serialize creation, resize and cleanup independently of handler
 cancellation. Disconnect retires pending attaches; EOF or forwarder cancellation
 triggers resource cleanup rather than releasing the fence. A failed cleanup keeps
-its session and fence for retry after the cause is corrected. Complete shutdown
-drainage, including pending handlers and other background effects, remains required
-before activation. Session-feed
+its session and fence for retry after the cause is corrected. Shutdown closes socket
+admission before stopping producers, then drains admitted handlers, pending terminal
+operations, retained attachments and emissions before disposing services or the
+database. Cancelled shutdown callers leave the drain owned; failed cleanup retains
+its resources and dependencies for retry. An unsuccessful lifespan shutdown prevents
+an automatic in-process upgrade restart. Detached job threads and other native
+lifetimes still require complete drainage before activation. Session-feed
 history writes retain their own captured provider guard through transaction
 cleanup, including after a snapshot times out or is cancelled. They recheck the
 feed's database, configuration and terminal context before writing; a retired or

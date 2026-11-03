@@ -975,7 +975,15 @@ async def test_failed_admission_fence_exit_retires_captured_state(
 )
 @pytest.mark.parametrize(
     "ending",
-    ["disconnect", "cancel", "eof", "forwarder_cancel", "failed_cleanup", "failed_disconnect"],
+    [
+        "disconnect",
+        "cancel",
+        "eof",
+        "forwarder_cancel",
+        "failed_cleanup",
+        "failed_disconnect",
+        "shutdown",
+    ],
 )
 async def test_attached_terminal_owns_fence_until_resource_cleanup(
     api_app, bound_provider, monkeypatch, runtime, ending
@@ -1029,12 +1037,15 @@ async def test_attached_terminal_owns_fence_until_resource_cleanup(
         if ending in {"disconnect", "failed_disconnect"}:
             disconnect = asyncio.create_task(ns.on_disconnect(sid))
             await asyncio.sleep(0)
+        elif ending == "shutdown":
+            disconnect = asyncio.create_task(sio.shutdown())
+            await asyncio.sleep(0)
         elif ending == "cancel":
             attach.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await attach
         created.set()
-        if ending not in {"cancel", "disconnect", "failed_disconnect"}:
+        if ending not in {"cancel", "disconnect", "failed_disconnect", "shutdown"}:
             await attach
             with pytest.raises(ValueError, match="fence is busy"):
                 registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
