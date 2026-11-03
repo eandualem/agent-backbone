@@ -670,19 +670,78 @@ async def test_socket_emission_holds_fence_until_packet_tasks_finish(
             registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
         if cancel:
             emission.cancel()
-            await asyncio.sleep(0)
             emission.cancel()
-            await asyncio.sleep(0)
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(emission, 5)
             with pytest.raises(ValueError, match="fence is busy"):
                 registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
         finish.set()
-        if cancel:
-            with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(emission, 5)
-        else:
+        if not cancel:
             await asyncio.wait_for(emission, 5)
+        await asyncio.wait_for(asyncio.gather(*sio._profile_emissions), 5)
         assert sent == ["engine"]
+        assert not sio._profile_emissions
     finally:
         finish.set()
-        await asyncio.gather(emission, return_exceptions=True)
+        await asyncio.gather(emission, *sio._profile_emissions, return_exceptions=True)
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+
+
+async def test_terminal_packet_timeout_can_finish_disconnect_cleanup(
+    api_app, bound_provider, monkeypatch
+):
+    import time
+    from types import SimpleNamespace
+
+    from engineio.async_socket import AsyncSocket
+
+    provider, registry, _ = bound_provider
+    sio = api_app.state.sio
+    ns = sio.namespace_handlers["/terminal"]
+    sid = await sio.manager.connect("engine", ns.namespace)
+    assert await ns.on_connect(
+        sid, {}, {"api_key": api_app.state.config.api_key, **vars(provider.reservation.identity)}
+    )
+    socket = AsyncSocket(sio.eio, "engine")
+    socket.last_ping = time.time() - sio.eio.ping_timeout - 1
+    sio.eio.sockets["engine"] = socket
+    manager = SimpleNamespace(remove=AsyncMock())
+    monkeypatch.setattr("agent_backbone.api.socketio_server.get_pty_manager", lambda: manager)
+    packet_tasks = []
+    emission_tasks = set()
+    sent = asyncio.Event()
+    original_send = sio._send_eio_packet
+
+    async def send(*args):
+        packet_tasks.append(asyncio.current_task())
+        emission_tasks.update(
+            task
+            for task in asyncio.all_tasks()
+            if task.get_coro().__qualname__ == "AsyncServer.emit"
+        )
+        try:
+            return await original_send(*args)
+        finally:
+            sent.set()
+
+    monkeypatch.setattr(sio, "_send_eio_packet", send)
+    queue = asyncio.Queue()
+    forwarding = asyncio.create_task(ns._forward_pty_output(sid, "ike", queue))
+    ns._subscriptions[sid] = {"ike": forwarding}
+    queue.put_nowait("sentinel")
+    try:
+        await asyncio.wait_for(asyncio.shield(forwarding), 2)
+        await asyncio.wait_for(sent.wait(), 2)
+        assert socket.closed
+        manager.remove.assert_awaited_once_with(sid, "ike")
+        assert sid not in ns._subscriptions
+        assert not sio.manager.is_connected(sid, ns.namespace)
+    finally:
+        for task in emission_tasks:
+            task.cancel()
+        for task in packet_tasks:
+            task.cancel()
+        forwarding.cancel()
+        await asyncio.gather(forwarding, *packet_tasks, *emission_tasks, return_exceptions=True)
+        await asyncio.gather(*getattr(sio, "_profile_emissions", ()), return_exceptions=True)
     registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)

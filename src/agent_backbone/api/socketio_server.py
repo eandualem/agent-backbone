@@ -79,6 +79,15 @@ async def _restore_dynamic_window_size(session_name: str) -> None:
 class RegistrationAwareServer(socketio.AsyncServer):
     """Retire scoped connections before they receive another broadcast or stream."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._profile_emissions: set[asyncio.Task] = set()
+
+    def _emission_done(self, task: asyncio.Task) -> None:
+        self._profile_emissions.discard(task)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            log.warning("Profile socket emission failed (%s)", type(error).__name__)
+
     async def emit(
         self,
         event,
@@ -90,8 +99,34 @@ class RegistrationAwareServer(socketio.AsyncServer):
         callback=None,
         ignore_queue=False,
     ):
+        app = getattr(self, "fastapi_app", None)
+        provider = getattr(getattr(app, "state", None), "profile_provider", None)
+        emission = self._emit(
+            provider, event, data, to, room, skip_sid, namespace, callback, ignore_queue
+        )
+        if provider is None:
+            return await emission
+        # Own the fence in this task, independently of the caller. Packet sends
+        # can trigger disconnect cleanup that cancels and awaits the caller;
+        # making caller cancellation wait here would create a circular wait.
+        task = asyncio.create_task(emission)
+        self._profile_emissions.add(task)
+        task.add_done_callback(self._emission_done)
+        return await asyncio.shield(task)
+
+    async def _emit(
+        self,
+        provider: ProfileProvider | None,
+        event,
+        data=None,
+        to=None,
+        room=None,
+        skip_sid=None,
+        namespace=None,
+        callback=None,
+        ignore_queue=False,
+    ):
         async with AsyncExitStack() as operations:
-            guarded = False
             ns = self.namespace_handlers.get(namespace or "/")
             excluded = [skip_sid] if isinstance(skip_sid, str) else list(skip_sid or [])
             if isinstance(ns, _AuthenticatedNamespace):
@@ -103,12 +138,10 @@ class RegistrationAwareServer(socketio.AsyncServer):
                 if not recipients:
                     return
                 app = getattr(self, "fastapi_app", None)
-                provider = getattr(getattr(app, "state", None), "profile_provider", None)
                 admitted_operation = True
                 if provider is not None:
                     try:
                         await operations.enter_async_context(provider.operation())
-                        guarded = True
                     except (ValueError, OSError):
                         admitted_operation = False
                 # Reuse only within this emission; each SID still checks its captured
@@ -130,7 +163,7 @@ class RegistrationAwareServer(socketio.AsyncServer):
                 if not admitted:
                     return
                 to, room = admitted, None
-            emission = super().emit(
+            return await super().emit(
                 event,
                 data,
                 to=to,
@@ -140,21 +173,6 @@ class RegistrationAwareServer(socketio.AsyncServer):
                 callback=callback,
                 ignore_queue=ignore_queue,
             )
-            if not guarded:
-                return await emission
-            # The Socket.IO manager creates packet tasks and waits for them without
-            # cancelling them when its caller is cancelled. Keep their owner alive
-            # and retain the fence until all sends finish, even on repeated cancel.
-            sending = asyncio.create_task(emission)
-            cancelled = None
-            while not sending.done():
-                try:
-                    await asyncio.shield(sending)
-                except asyncio.CancelledError as exc:
-                    cancelled = exc
-            if cancelled is not None:
-                raise cancelled
-            return sending.result()
 
 
 class _AuthenticatedNamespace(socketio.AsyncNamespace):

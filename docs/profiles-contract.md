@@ -94,8 +94,9 @@ detached tasks or threads, needs its own captured operation guard. This does not
 yet fence background jobs or native processes. Connected Socket.IO event handlers
 retain the captured provider fence through handler completion or cancellation
 cleanup. Emissions acquire a separate fence before recipient validation and keep
-it until Socket.IO's packet-send tasks finish; cancellation waits for those sends
-before releasing it. Connection setup, disconnect cleanup and the full lifetime
+it in a tracked task until Socket.IO's packet-send tasks finish. Caller cancellation
+can return immediately, allowing reentrant disconnect cleanup to finish, while
+the emission task retains its own fence. Connection setup, disconnect cleanup and the full lifetime
 of terminal PTYs still require their own fencing before activation. Session-feed
 history writes retain their own captured provider guard through transaction
 cleanup, including after a snapshot times out or is cancelled. They recheck the
