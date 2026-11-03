@@ -85,6 +85,10 @@ cleanup. Discovery and reconciliation do not create them; guarded operations do.
 Older reservations overlapping the lock directory remain readable for recovery,
 but fencing refuses until that storage conflict is reconciled. New reservations
 cannot overlap the lock directory.
+Each reconciled provider limits outstanding registry workers to four. Requests
+waiting for a slot do not enter the executor queue; cancellation retains an
+occupied slot until its worker finishes. This includes admission and subsequent
+registry checks, so cancelled requests cannot accumulate unbounded registry work.
 The lock covers the ASGI call lifetime. Work that outlives that call, including
 detached tasks or threads, needs its own captured operation guard. This does not
 yet fence Socket.IO events, background jobs or native processes.

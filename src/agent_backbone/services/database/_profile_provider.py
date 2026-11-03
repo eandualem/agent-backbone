@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from sqlalchemy import inspect, text
@@ -34,6 +34,27 @@ class ProfileProvider:
     registry_path: Path
     database_path: Path
     socket_path: Path
+    _registry_slots: asyncio.Semaphore = field(
+        default_factory=lambda: asyncio.Semaphore(4), compare=False, repr=False
+    )
+
+    async def _registry_call(self, call):
+        # Cancellation of the caller must not free a slot while SQLite recovery
+        # or a writer still occupies its worker. Keep the executor queue bounded.
+        await self._registry_slots.acquire()
+        try:
+            future = asyncio.get_running_loop().run_in_executor(None, call)
+        except BaseException:
+            self._registry_slots.release()
+            raise
+
+        def finished(done):
+            self._registry_slots.release()
+            if not done.cancelled():
+                done.exception()  # Observe failures even if the caller left.
+
+        future.add_done_callback(finished)
+        return future
 
     @asynccontextmanager
     async def operation(self):
@@ -43,7 +64,7 @@ class ProfileProvider:
         )
         # Registry reads can wait on SQLite recovery/writers. Keep that wait off
         # the event loop, without abandoning a lock acquired after cancellation.
-        acquisition = asyncio.create_task(asyncio.to_thread(operation.__enter__))
+        acquisition = await self._registry_call(operation.__enter__)
         try:
             await asyncio.shield(acquisition)
         except BaseException:
@@ -84,7 +105,7 @@ class ProfileProvider:
             if registry.check_reservation(self.reservation.identity, root) != self.reservation:
                 raise ValueError("Provider reservation metadata does not match")
 
-        await asyncio.to_thread(check_reservation)
+        await asyncio.shield(await self._registry_call(check_reservation))
         engine = create_async_engine(
             f"sqlite+aiosqlite:///{self.database_path.as_uri()}?mode=ro&uri=true"
         )
@@ -96,7 +117,7 @@ class ProfileProvider:
                     raise ValueError("Provider identity does not match its reservation")
         finally:
             await engine.dispose()
-        await asyncio.to_thread(check_reservation)
+        await asyncio.shield(await self._registry_call(check_reservation))
 
     def identity_response(self) -> dict:
         identity = self.reservation.identity

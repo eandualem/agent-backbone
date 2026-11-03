@@ -100,6 +100,76 @@ async def test_admission_wait_keeps_loop_responsive_and_releases_after_cancellat
     registry.invalidate(reservation.identity, reservation.data_dir)
 
 
+@pytest.mark.parametrize("admission", [False, True])
+async def test_cancelled_registry_workers_keep_their_slots(prepared, monkeypatch, admission):
+    registry, reservation, path, socket, _ = prepared
+    provider = await reconcile_profile_provider(registry, reservation, path, socket)
+    loop = asyncio.get_running_loop()
+    saturated, extra_started = asyncio.Event(), asyncio.Event()
+    release = threading.Event()
+    counter_lock = threading.Lock()
+    started = 0
+    original = ProfileRegistry.check_reservation
+
+    def delayed(self, *args):
+        nonlocal started
+        with counter_lock:
+            started += 1
+            if started == 4:
+                loop.call_soon_threadsafe(saturated.set)
+            elif started > 4:
+                loop.call_soon_threadsafe(extra_started.set)
+        assert release.wait(5)
+        return original(self, *args)
+
+    monkeypatch.setattr(ProfileRegistry, "check_reservation", delayed)
+    all_closed = asyncio.Event()
+    closed_count = 0
+    original_operation = ProfileRegistry.operation
+
+    @contextmanager
+    def tracked_operation(self, *args):
+        nonlocal closed_count
+        with original_operation(self, *args):
+            yield
+        closed_count += 1
+        if closed_count == 5:  # Four cancelled admissions and the later request.
+            all_closed.set()
+
+    monkeypatch.setattr(ProfileRegistry, "operation", tracked_operation)
+
+    async def call():
+        if admission:
+            async with provider.operation():
+                pass
+        else:
+            await provider.check()
+
+    requests = [asyncio.create_task(call()) for _ in range(12)]
+    later = None
+    try:
+        await asyncio.wait_for(saturated.wait(), 3)
+        for task in requests:
+            task.cancel()
+        await asyncio.gather(*requests, return_exceptions=True)
+        later = asyncio.create_task(call())
+        # Cancelled coroutines cannot admit more workers behind the stalled four.
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(extra_started.wait(), 0.05)
+        release.set()
+        await asyncio.wait_for(later, 3)
+        await asyncio.wait_for(extra_started.wait(), 3)
+        if admission:
+            await asyncio.wait_for(all_closed.wait(), 3)
+    finally:
+        release.set()
+        for task in [*requests, *([later] if later else [])]:
+            task.cancel()
+        await asyncio.gather(*requests, *([later] if later else []), return_exceptions=True)
+    # Late admission completion has also released every lock.
+    registry.invalidate(reservation.identity, reservation.data_dir)
+
+
 @pytest.mark.parametrize("change", ["invalidate", "identity", "audience", "missing", "baseline"])
 async def test_recheck_refuses_replacement_or_restore(prepared, change):
     registry, reservation, path, socket, db = prepared
