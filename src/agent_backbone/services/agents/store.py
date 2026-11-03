@@ -414,7 +414,8 @@ class AgentStore:
             )
             released = False
             if guarded and spec is not None:
-                claim_project_directories(self.config.data_dir, (spec.path,))
+                if spec.path.exists():
+                    claim_project_directories(self.config.data_dir, (spec.path,))
                 if not self._release_skills(spec.name):
                     raise ValueError("Could not release the agent's owned project links")
                 released = True

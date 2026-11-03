@@ -1,6 +1,7 @@
 """Captured ownership gates project effects across the agent and swarm paths."""
 
 import asyncio
+import shutil
 from contextlib import AsyncExitStack
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
@@ -151,20 +152,42 @@ async def test_subdirectories_and_linked_worktrees_claim_the_canonical_main(owne
             registry.claim_projects(b.reservation.identity, b.reservation.data_dir, (directory,))
 
 
-async def test_forget_uses_current_registration_without_nesting_profile_lock(owners, tmp_path, db):
+@pytest.mark.parametrize("missing", [False, True])
+async def test_forget_uses_current_registration_without_nesting_profile_lock(
+    owners, tmp_path, db, missing
+):
     registry, (a, b) = owners
     project = repo_at(tmp_path / "project")
     store = AgentStore(db, a.reservation.data_dir)
     await store.start()
     await store.register(AgentSpec(name="worker", dir=str(project)))
+    if missing:
+        shutil.rmtree(project)
     await install_project_ownership(a)
     store._agents = agents_from_rows([])
     store._credential_endpoint = ("127.0.0.1", 9000)
     with patch("agent_backbone.services.terminal.session_exists", return_value=False):
         assert await asyncio.wait_for(store.forget("worker"), timeout=2)
     assert store.agents.get("worker") is None
-    with pytest.raises(ValueError, match="separate checkout"):
-        registry.claim_projects(b.reservation.identity, b.reservation.data_dir, (project,))
+    if not missing:
+        with pytest.raises(ValueError, match="separate checkout"):
+            registry.claim_projects(b.reservation.identity, b.reservation.data_dir, (project,))
+
+
+@pytest.mark.parametrize("first_git_dir", ["alpha.git", ".git"])
+async def test_separate_git_directories_do_not_claim_the_metadata_parent(
+    owners, tmp_path, monkeypatch, first_git_dir
+):
+    _, providers = owners
+    for name, provider in zip(("alpha", "beta"), providers, strict=True):
+        repo = tmp_path / name
+        repo.mkdir()
+        metadata = tmp_path / "metadata" / (first_git_dir if name == "alpha" else "beta.git")
+        metadata.mkdir(parents=True)
+        (repo / ".git").write_text(f"gitdir: {metadata}\n")
+        monkeypatch.setattr(_project_ownership, "_PROVIDER", None)
+        await install_project_ownership(provider)
+        claim_project_directories(provider.reservation.data_dir, (repo,))
 
 
 async def test_swarm_conflict_precedes_worktree_creation_and_teardown(owners, tmp_path, db):

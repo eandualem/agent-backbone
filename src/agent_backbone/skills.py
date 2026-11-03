@@ -664,7 +664,13 @@ def project_resources(directories: tuple[Path, ...]) -> tuple[Path, ...]:
         resources.append(root)
         git_dir = _common_git_dir(root, strict=True)
         if git_dir is not None:
-            resources.extend((git_dir, git_dir.parent))
+            resources.append(git_dir)
+            # Only linked-worktree metadata supplies the main-checkout config
+            # path. A standalone separate Git directory has no commondir;
+            # claiming its parent would capture unrelated repositories.
+            private = _git_dir(root)
+            if private is not None and (private / "commondir").is_file():
+                resources.append(git_dir.parent)
             exclude = contained_path(git_dir, "info/exclude")
             if os.path.lexists(exclude):
                 info = exclude.lstat()
