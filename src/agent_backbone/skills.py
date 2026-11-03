@@ -38,6 +38,7 @@ import re
 import shutil
 import stat
 import tempfile
+from collections.abc import Callable
 from contextlib import ExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -654,6 +655,7 @@ def materialize(
     *,
     read: tuple[str, ...] = (),
     sources: tuple[str, ...] = (),
+    claim_projects: Callable[[tuple[Path, ...]], None] | None = None,
 ) -> Materialization:
     """Bring ``<repo>/<dir>/<name>`` links in line with ``selected``.
 
@@ -670,6 +672,10 @@ def materialize(
     a source the CLI does not read is linked into ``dirs`` by a relative
     link, so it reaches whichever CLI runs the agent, and it wins over a
     store skill of the same name.
+
+    A future isolated provider supplies ``claim_projects`` bound to its captured
+    registry identity. It claims both checkouts and their common Git directories
+    before cleanup or writes. Legacy callers keep their existing behavior.
     """
     store = Path(store).expanduser()
     repo_dir = Path(repo_dir)
@@ -694,7 +700,22 @@ def materialize(
         for directory in dirs:
             for skill in selected:
                 contained_path(repo_dir, Path(directory) / skill.name, follow_leaf=False)
-    except ValueError as exc:
+        if claim_projects is not None:
+            resources: list[Path] = []
+            for repo in dict.fromkeys((repo_dir, old_repo or repo_dir)):
+                resources.append(repo.resolve())
+                git_dir = _common_git_dir(repo, strict=True)
+                if git_dir is not None:
+                    resources.append(git_dir)
+                    exclude = contained_path(git_dir, "info/exclude")
+                    if exclude.exists():
+                        info = exclude.stat()
+                        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                            raise ValueError(
+                                "Git exclude must be a regular file without hard links"
+                            )
+            claim_projects(tuple(dict.fromkeys(resources)))
+    except (ValueError, OSError) as exc:
         result.broken.append(str(exc))
         return result
     old_git: Path | None = None
@@ -783,21 +804,30 @@ def _git_dir(repo_dir: Path) -> Path | None:
     return None
 
 
-def _common_git_dir(repo_dir: Path) -> Path | None:
+def _common_git_dir(repo_dir: Path, *, strict: bool = False) -> Path | None:
     """The git directory whose ``info/exclude`` governs ``repo_dir`` — a
     worktree's is its parent checkout's."""
     git_dir = _git_dir(repo_dir)
     if git_dir is None:
+        if strict and os.path.lexists(repo_dir / ".git"):
+            raise ValueError("Project Git directory is unavailable")
         return None
     common = git_dir / "commondir"
-    if common.is_file():
+    if common.is_file() or (strict and os.path.lexists(common)):
         try:
             rel = common.read_text(encoding="utf-8").strip()
+            if strict and not rel:
+                raise ValueError("Project common Git directory is unavailable")
             git_dir = Path(os.path.normpath(git_dir / rel)) if rel else git_dir
         except OSError:
+            if strict:
+                raise
             pass
     try:
-        return git_dir.resolve()
+        resolved = git_dir.resolve()
+        if strict and not resolved.is_dir():
+            raise ValueError("Project common Git directory is unavailable")
+        return resolved
     except OSError:
         return git_dir
 

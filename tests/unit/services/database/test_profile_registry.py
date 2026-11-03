@@ -222,7 +222,7 @@ async def test_provider_database_restore_cannot_resurrect_invalidated_reservatio
 @pytest.mark.parametrize(
     "statement",
     [
-        "PRAGMA user_version = 2",
+        "PRAGMA user_version = 3",
         "UPDATE profiles SET profile_id = ''",
         "UPDATE profiles SET data_dir = 'relative'",
         "UPDATE profiles SET baseline_version = ''",
