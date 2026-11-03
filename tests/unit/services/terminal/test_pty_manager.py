@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import signal
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -271,6 +272,89 @@ class TestPtySession:
 
 
 class TestConcurrentPtyLifecycle:
+    @pytest.mark.parametrize("stage", ["termination", "executor_shutdown"])
+    async def test_cancelled_cleanup_waits_for_workers_and_concurrent_callers(self, stage):
+        session = PtySession("app")
+        proc = MagicMock(pid=999)
+        session._process = proc
+        session.master_fd = 42
+        entered, release = asyncio.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+
+        def blocked_worker(*args, **kwargs):
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5), "test did not release cleanup worker"
+
+        target = (
+            patch.object(session, "_terminate_process", side_effect=blocked_worker)
+            if stage == "termination"
+            else patch.object(session._executor, "shutdown", side_effect=blocked_worker)
+        )
+        with target as worker, patch(f"{_PTY}.os.close") as close:
+            first = asyncio.create_task(session.cleanup())
+            second = None
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                first.cancel()
+                await asyncio.sleep(0)
+                first.cancel()  # Repeated cancellation cannot abandon the thread.
+                second = asyncio.create_task(session.cleanup())
+                await asyncio.sleep(0)
+                assert not first.done()
+                assert not second.done()
+                assert session.master_fd == 42
+                if stage == "termination":
+                    assert session._process is proc
+                close.assert_not_called()
+            finally:
+                release.set()
+                results = await asyncio.gather(
+                    first, *([second] if second else []), return_exceptions=True
+                )
+            assert isinstance(results[0], asyncio.CancelledError)
+            assert results[1] is None
+            assert session.master_fd is None
+            assert session._process is None
+            close.assert_called_once_with(42)
+            worker.assert_called_once()
+            await session.cleanup()  # A completed cleanup is idempotent.
+            close.assert_called_once_with(42)
+
+    @pytest.mark.parametrize("operation", ["create", "remove"])
+    async def test_cancelled_manager_operation_retains_session_until_cleanup(self, operation):
+        manager = PtyManager()
+        old = PtySession("app")
+        manager._sessions[("sid", "app")] = old
+        old._process = MagicMock(pid=999)
+        entered, release = asyncio.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+
+        def terminate(proc):
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5), "test did not release termination"
+
+        with patch.object(old, "_terminate_process", side_effect=terminate):
+            first = asyncio.create_task(getattr(manager, operation)("sid", "app"))
+            shutdown = None
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                first.cancel()
+                await asyncio.sleep(0)
+                assert manager.get("sid", "app") is old
+                if operation == "remove":
+                    shutdown = asyncio.create_task(manager.cleanup_all())
+                    await asyncio.sleep(0)
+                    assert not shutdown.done()
+                assert not first.done()
+            finally:
+                release.set()
+                results = await asyncio.gather(
+                    first, *([shutdown] if shutdown else []), return_exceptions=True
+                )
+            assert isinstance(results[0], asyncio.CancelledError)
+            assert all(result is None for result in results[1:])
+            assert manager.get("sid", "app") is None
+
     @pytest.mark.parametrize("operation", ["create", "remove", "cleanup_all"])
     async def test_replacement_cleanup_serializes_same_key_operations(self, operation):
         manager = PtyManager()
@@ -589,17 +673,16 @@ class TestFullCleanupOrdering:
         mock_proc.pid = 999
         session._process = mock_proc
 
-        # Mock the reader task
-        mock_task = MagicMock()
-        mock_task.done.return_value = False
-        session._reader_task = mock_task
-
         call_order: list[str] = []
 
-        def track_cancel():
-            call_order.append("cancel_reader")
+        async def reader():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                call_order.append("cancel_reader")
 
-        mock_task.cancel = track_cancel
+        session._reader_task = asyncio.create_task(reader())
+        await asyncio.sleep(0)
 
         original_terminate = PtySession._terminate_process
 

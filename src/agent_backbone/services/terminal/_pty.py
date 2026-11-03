@@ -47,6 +47,7 @@ class PtySession:
         self.master_fd: int | None = None
         self._process: subprocess.Popen | None = None
         self._reader_task: asyncio.Task | None = None
+        self._cleanup_task: asyncio.Task | None = None
         # Single output queue for the 1:1 connection
         self._output_queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=_MAX_QUEUE_SIZE)
         # Cleared while the viewer asks for backpressure; the read loop waits on it
@@ -188,6 +189,24 @@ class PtySession:
         self._resume_event.set()
 
     async def cleanup(self) -> None:
+        """Finish resource cleanup before propagating caller cancellation.
+
+        Concurrent callers share one cleanup task. Shielding alone would let a
+        cancelled owner release its lock while executor work still runs.
+        """
+        if self._cleanup_task is None:
+            self._cleanup_task = asyncio.create_task(self._cleanup())
+        cancelled = False
+        while not self._cleanup_task.done():
+            try:
+                await asyncio.shield(self._cleanup_task)
+            except asyncio.CancelledError:
+                cancelled = True
+        self._cleanup_task.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _cleanup(self) -> None:
         """Close PTY and terminate tmux attach process.
 
         Ordering matters to avoid FD races:
@@ -198,15 +217,16 @@ class PtySession:
         """
         if self._reader_task and not self._reader_task.done():
             self._reader_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._reader_task
 
         # Kill process first — this unblocks the os.read thread
         if self._process is not None:
             pid = self._process.pid
             proc = self._process
-            self._process = None
-
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._terminate_process, proc)
+            self._process = None
             _unrecord_pid(self._pid_file, pid)
 
         # Now safe to wait for the executor — the read thread should have exited
@@ -308,9 +328,16 @@ class PtyManager:
         key = (sid, session_name)
         async with self._lock(key):
             # Replacement and removal must wait for the old process to exit.
-            existing = self._sessions.pop(key, None)
+            existing = self._sessions.get(key)
             if existing:
-                await existing.cleanup()
+                try:
+                    await existing.cleanup()
+                except asyncio.CancelledError:
+                    # Confirm shared cleanup succeeded before forgetting it.
+                    await existing.cleanup()
+                    del self._sessions[key]
+                    raise
+                del self._sessions[key]
 
             pty_session = PtySession(session_name, self._pid_file)
             pty_session.start(cols, rows)
@@ -325,9 +352,15 @@ class PtyManager:
         """Remove and clean up a PTY session immediately."""
         key = (sid, session_name)
         async with self._lock(key):
-            session = self._sessions.pop(key, None)
+            session = self._sessions.get(key)
             if session:
-                await session.cleanup()
+                try:
+                    await session.cleanup()
+                except asyncio.CancelledError:
+                    await session.cleanup()
+                    del self._sessions[key]
+                    raise
+                del self._sessions[key]
 
     async def cleanup_all(self) -> None:
         """Clean up all PTY sessions concurrently. Called from app lifespan shutdown.
