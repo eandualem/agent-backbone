@@ -296,6 +296,8 @@ class ProfileRegistry:
         except FileNotFoundError:
             return
         self._external(data_dir)
+        if self._overlap(data_dir, self._operation_directory):
+            raise ValueError("Profile registry fence must be outside the provider data directory")
         with self._connection() as conn:
             if any(self._overlap(r.data_dir, data_dir) for r in self._records(conn)):
                 raise ValueError("Provider directory belongs to a reserved profile")

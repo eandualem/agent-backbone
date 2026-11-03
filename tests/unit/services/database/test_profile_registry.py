@@ -147,6 +147,16 @@ def test_old_fence_directory_reservations_remain_readable(registry, reservation,
     assert not directory.exists()
 
 
+@pytest.mark.parametrize("suffix", ["", "/child"])
+def test_unreserved_provider_cannot_start_in_fence_directory(registry, reservation, suffix):
+    registry.reserve(reservation)
+    directory = registry.path.with_name(registry.path.name + ".operations")
+    with registry.operation(reservation.identity, reservation.data_dir):
+        with pytest.raises(ValueError, match="fence must be outside"):
+            registry.check_unadopted(Path(str(directory) + suffix))
+    registry.check_unadopted(reservation.data_dir.with_name("legacy"))
+
+
 def test_concurrent_invalidation_reports_fence_contention(registry, reservation):
     registry.reserve(reservation)
     with registry._operation_fence(reservation.identity, reservation.data_dir, exclusive=True):
