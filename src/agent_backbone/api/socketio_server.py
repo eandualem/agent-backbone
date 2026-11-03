@@ -17,6 +17,7 @@ import asyncio
 import logging
 from contextlib import AsyncExitStack
 from pathlib import Path
+from weakref import WeakValueDictionary
 
 import socketio
 
@@ -372,31 +373,116 @@ class TerminalNamespace(_AuthenticatedNamespace):
         # sid -> {session_name: forwarding_task or None when collapsed/detached}
         self._subscriptions: dict[str, dict[str, asyncio.Task | None]] = {}
         self._background: set[asyncio.Task] = set()
+        self._resource_tasks: dict[tuple[str, str], set[asyncio.Task]] = {}
+        self._resource_locks: WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
+            WeakValueDictionary()
+        )
+        self._resources: dict[tuple[str, str], tuple[PtyManager, AsyncExitStack]] = {}
+
+    async def _resource_operation(self, sid: str, session_name: str, action):
+        """Register pending work before yielding; the resource task owns its cleanup."""
+        key = (sid, session_name)
+        lock = self._resource_locks.setdefault(key, asyncio.Lock())
+        abandoned = asyncio.Event()
+        origin = asyncio.current_task()
+
+        async def run():
+            async with lock:
+                return await action(abandoned, origin)
+
+        task = asyncio.create_task(run())
+        pending = self._resource_tasks.setdefault(key, set())
+        pending.add(task)
+
+        def finished(done):
+            pending.discard(done)
+            if not pending:
+                self._resource_tasks.pop(key, None)
+            if not done.cancelled() and (error := done.exception()) is not None:
+                log.warning("Terminal resource operation failed (%s)", type(error).__name__)
+
+        task.add_done_callback(finished)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # Do not cancel a worker or wait on it here: a packet send may be
+            # disconnecting this very caller. The worker retires an abandoned attach.
+            abandoned.set()
+            raise
 
     async def _attach_subscription_client(
         self, sid: str, session_name: str, cols: int, rows: int
     ) -> None:
-        mgr = get_pty_manager()
-        pty_session = await mgr.create(sid, session_name, cols, rows)
+        async def attach(abandoned, origin):
+            await self._attach_locked(sid, session_name, cols, rows, abandoned, origin)
 
-        def _on_drop(sn: str, _sid: str = sid) -> None:
-            self._on_data_dropped(_sid, sn)
+        await self._resource_operation(sid, session_name, attach)
 
-        pty_session.on_data_dropped = _on_drop
-
-        task = asyncio.create_task(
-            self._forward_pty_output(sid, session_name, pty_session.output_queue),
-            name=f"sio-pty-{sid}-{session_name}",
-        )
-        self._subscriptions.setdefault(sid, {})[session_name] = task
-
-    async def _detach_subscription_client(self, sid: str, session_name: str) -> None:
-        sid_subs = self._subscriptions.get(sid, {})
-        if session_name not in sid_subs:
+    async def _attach_locked(self, sid, session_name, cols, rows, abandoned, origin):
+        if sid not in self._profiles or abandoned.is_set():
             return
+        provider = self._profiles[sid]
+        key = (sid, session_name)
+        await self._detach_locked(sid, session_name, origin)
+        if sid not in self._profiles or self._profiles[sid] is not provider or abandoned.is_set():
+            return
+        fence = AsyncExitStack()
+        if provider is not None:
+            await fence.enter_async_context(provider.operation())
+        mgr = get_pty_manager()
+        self._resources[key] = (mgr, fence)
+        self._subscriptions.setdefault(sid, {})[session_name] = None
+        try:
+            if (
+                sid not in self._profiles
+                or self._profiles[sid] is not provider
+                or abandoned.is_set()
+            ):
+                return
+            pty_session = await mgr.create(sid, session_name, cols, rows)
+            if (
+                sid not in self._profiles
+                or self._profiles[sid] is not provider
+                or abandoned.is_set()
+            ):
+                return
 
+            pty_session.on_data_dropped = lambda sn: self._on_data_dropped(sid, sn)
+            task = asyncio.create_task(
+                self._forward_pty_output(sid, session_name, pty_session.output_queue),
+                name=f"sio-pty-{sid}-{session_name}",
+            )
+            self._subscriptions[sid][session_name] = task
+
+            def ended(done):
+                # EOF or a cancelled forwarder is not proof of process exit.
+                cleanup = asyncio.create_task(self._retire_forwarder(sid, session_name, done))
+                self._background.add(cleanup)
+                cleanup.add_done_callback(self._background.discard)
+
+            task.add_done_callback(ended)
+        finally:
+            if self._subscriptions.get(sid, {}).get(session_name) is None:
+                await self._detach_locked(sid, session_name, origin)
+
+    async def _retire_forwarder(self, sid, session_name, forwarding):
+        async def retire(abandoned, origin):
+            if self._subscriptions.get(sid, {}).get(session_name) is forwarding:
+                await self._detach_locked(sid, session_name, origin)
+
+        try:
+            await self._resource_operation(sid, session_name, retire)
+        except Exception:
+            # Keep the subscription and fence available for a later cleanup retry.
+            log.exception("Could not retire ended terminal attachment")
+
+    async def _detach_locked(self, sid, session_name, origin):
+        key = (sid, session_name)
+        sid_subs = self._subscriptions.get(sid, {})
         task = sid_subs.get(session_name)
-        if isinstance(task, asyncio.Task) and task is not asyncio.current_task():
+        if task is None and key not in self._resources:
+            return
+        if isinstance(task, asyncio.Task) and task is not origin:
             task.cancel()
             try:
                 await task
@@ -404,9 +490,22 @@ class TerminalNamespace(_AuthenticatedNamespace):
                 pass
             except Exception as e:
                 log.warning("PTY forwarding task failed during detach: %s", e)
-
-        await get_pty_manager().remove(sid, session_name)
+        await self._manager_for(sid, session_name).remove(sid, session_name)
+        resource = self._resources.get(key)
+        if resource is not None:
+            await resource[1].aclose()
+            del self._resources[key]
         sid_subs[session_name] = None
+
+    def _manager_for(self, sid: str, session_name: str) -> PtyManager:
+        resource = self._resources.get((sid, session_name))
+        return resource[0] if resource is not None else get_pty_manager()
+
+    async def _detach_subscription_client(self, sid: str, session_name: str) -> None:
+        async def detach(abandoned, origin):
+            await self._detach_locked(sid, session_name, origin)
+
+        await self._resource_operation(sid, session_name, detach)
 
     async def on_join(self, sid: str, data: dict) -> None:
         session_name = data.get("session", "") if isinstance(data, dict) else ""
@@ -446,11 +545,13 @@ class TerminalNamespace(_AuthenticatedNamespace):
         else:
             cols, rows = await active_pane_size(session_name) or (80, 24)
 
+        if sid not in self._profiles:
+            return
         try:
             await self.enter_room(sid, f"session:{session_name}")
             await self._attach_subscription_client(sid, session_name, cols, rows)
         except Exception:
-            await get_pty_manager().remove(sid, session_name)
+            await self._cleanup_session(sid, session_name)
             raise
 
         log.info("sid=%s joined session '%s' (read-only stream)", sid, session_name)
@@ -488,15 +589,21 @@ class TerminalNamespace(_AuthenticatedNamespace):
         except (ValueError, TypeError):
             return
 
-        pty_session = get_pty_manager().get(sid, session_name)
-        if pty_session is None:
-            await self._attach_subscription_client(sid, session_name, clamped_cols, clamped_rows)
-            return
+        async def resize(abandoned, origin):
+            if sid not in self._profiles or session_name not in self._subscriptions.get(sid, {}):
+                return
+            pty_session = self._manager_for(sid, session_name).get(sid, session_name)
+            if pty_session is None:
+                await self._attach_locked(
+                    sid, session_name, clamped_cols, clamped_rows, abandoned, origin
+                )
+                return
+            pty_session.resize(clamped_cols, clamped_rows)
+            if not await resize_window(session_name, clamped_cols, clamped_rows):
+                log.error("resize_window failed for '%s'", session_name)
+            await _restore_dynamic_window_size(session_name)
 
-        pty_session.resize(clamped_cols, clamped_rows)
-        if not await resize_window(session_name, clamped_cols, clamped_rows):
-            log.error("resize_window failed for '%s'", session_name)
-        await _restore_dynamic_window_size(session_name)
+        await self._resource_operation(sid, session_name, resize)
 
     async def on_release_dims(self, sid: str, data: dict) -> None:
         session_name = self._session_of(data)
@@ -505,18 +612,22 @@ class TerminalNamespace(_AuthenticatedNamespace):
         await self._detach_subscription_client(sid, session_name)
 
     async def on_pause(self, sid: str, data: dict) -> None:
-        pty_session = get_pty_manager().get(sid, self._session_of(data))
+        session_name = self._session_of(data)
+        pty_session = self._manager_for(sid, session_name).get(sid, session_name)
         if pty_session:
             pty_session.pause()
 
     async def on_resume(self, sid: str, data: dict) -> None:
-        pty_session = get_pty_manager().get(sid, self._session_of(data))
+        session_name = self._session_of(data)
+        pty_session = self._manager_for(sid, session_name).get(sid, session_name)
         if pty_session:
             pty_session.resume()
 
     async def on_disconnect(self, sid: str) -> None:
         await super().on_disconnect(sid)
-        sessions = list(self._subscriptions.get(sid, {}).keys())
+        sessions = set(self._subscriptions.get(sid, {})) | {
+            name for owner, name in self._resource_tasks if owner == sid
+        }
         for session_name in sessions:
             try:
                 await self._cleanup_session(sid, session_name)
@@ -524,20 +635,23 @@ class TerminalNamespace(_AuthenticatedNamespace):
                 # Let Socket.IO finish removing the client from its rooms even
                 # if a PTY fails to detach, and still clean up other sessions.
                 log.exception("Could not clean up disconnected terminal subscription")
-        self._subscriptions.pop(sid, None)
-        log.info("sid=%s disconnected, cleaned up %d sessions", sid, len(sessions))
+        log.info("sid=%s disconnected, attempted cleanup of %d sessions", sid, len(sessions))
 
     async def _cleanup_session(self, sid: str, session_name: str) -> None:
-        sid_subs = self._subscriptions.get(sid, {})
-        if session_name not in sid_subs:
-            return
+        async def cleanup(abandoned, origin):
+            if (
+                session_name not in self._subscriptions.get(sid, {})
+                and (sid, session_name) not in self._resources
+            ):
+                return
+            await self._detach_locked(sid, session_name, origin)
+            sid_subs = self._subscriptions.get(sid, {})
+            sid_subs.pop(session_name, None)
+            if not sid_subs:
+                self._subscriptions.pop(sid, None)
+            await self.leave_room(sid, f"session:{session_name}")
 
-        await self._detach_subscription_client(sid, session_name)
-        sid_subs.pop(session_name, None)
-        if not sid_subs:
-            self._subscriptions.pop(sid, None)
-
-        await self.leave_room(sid, f"session:{session_name}")
+        await self._resource_operation(sid, session_name, cleanup)
 
     def _on_data_dropped(self, sid: str, session_name: str) -> None:
         try:

@@ -19,6 +19,7 @@ async def test_resize_reattaches_after_concurrent_terminal_collapse():
     manager = PtyManager()
     ns = TerminalNamespace("/terminal")
     ns.emit = AsyncMock()
+    ns._profiles["sid"] = None
     ns._subscriptions["sid"] = {"app": None}
     entered, release = asyncio.Event(), asyncio.Event()
     with (
@@ -27,7 +28,8 @@ async def test_resize_reattaches_after_concurrent_terminal_collapse():
         patch(f"{_MOD}.resize_window", new_callable=AsyncMock, return_value=True),
         patch(f"{_MOD}._restore_dynamic_window_size", new_callable=AsyncMock),
     ):
-        old = await manager.create("sid", "app")
+        await ns._attach_subscription_client("sid", "app", 80, 24)
+        old = manager.get("sid", "app")
         cleanup = old._cleanup
 
         async def paused_cleanup():
@@ -66,6 +68,7 @@ def _namespace(config) -> TerminalNamespace:
     ns.server = SimpleNamespace(fastapi_app=SimpleNamespace(state=SimpleNamespace(config=config)))
     ns.emit = AsyncMock()
     ns._attach_subscription_client = AsyncMock()
+    ns._profiles["sid1"] = None
     ns.enter_room = AsyncMock()
     return ns
 
@@ -208,7 +211,7 @@ async def test_disconnect_cleanup_failure_still_removes_scoped_reader(api_app):
     ) as cleanup:
         await sio.disconnect(sid, namespace=ns.namespace)
     assert cleanup.await_count == 2
-    assert sid not in ns._subscriptions and sid not in ns._registrations
+    assert sid in ns._subscriptions and sid not in ns._registrations
     assert not list(sio.manager.get_participants(ns.namespace, None))
     await sio.emit("terminal_output", "must not be sent", namespace=ns.namespace)
     sio._send_eio_packet.assert_not_awaited()

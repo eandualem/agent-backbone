@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -290,6 +291,41 @@ class TestConcurrentPtyLifecycle:
             assert manager.get("sid", "app") is None
             assert session.master_fd is None
             close.assert_called_once_with(42)
+
+    @pytest.mark.parametrize("failure", [subprocess.TimeoutExpired("tmux", 1), OSError("busy")])
+    async def test_live_process_keeps_cleanup_retryable(self, failure):
+        manager = PtyManager()
+        session = PtySession("app")
+        proc = MagicMock(pid=999)
+        proc.wait.side_effect = failure
+        proc.poll.return_value = None
+        session._process = proc
+        session.master_fd = 42
+        manager._sessions[("sid", "app")] = session
+        with patch(f"{_PTY}.os.close") as close, patch(f"{_PTY}._unrecord_pid") as unrecord:
+            with pytest.raises(type(failure)):
+                await manager.remove("sid", "app")
+            assert manager._sessions[("sid", "app")] is session
+            assert session._process is proc
+            assert manager.get("sid", "app") is None
+            close.assert_not_called()
+            unrecord.assert_not_called()
+            proc.wait.side_effect = None
+            await manager.remove("sid", "app")
+            assert ("sid", "app") not in manager._sessions
+            close.assert_called_once_with(42)
+            unrecord.assert_called_once_with(None, 999)
+
+    async def test_partial_start_remains_tracked_when_cleanup_fails(self):
+        manager = PtyManager()
+        with (
+            patch.object(PtySession, "start", side_effect=RuntimeError("partial start")),
+            patch.object(PtySession, "cleanup", side_effect=OSError("cleanup failed")),
+        ):
+            with pytest.raises(OSError, match="cleanup failed"):
+                await manager.create("sid", "app")
+        assert ("sid", "app") in manager._sessions
+        await manager.remove("sid", "app")
 
     @pytest.mark.parametrize("stage", ["termination", "executor_shutdown"])
     async def test_cancelled_cleanup_waits_for_workers_and_concurrent_callers(self, stage):

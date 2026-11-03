@@ -256,7 +256,8 @@ class PtySession:
                 proc.kill()
                 proc.wait(timeout=1)
             except (OSError, subprocess.TimeoutExpired):
-                pass
+                if proc.poll() is None:
+                    raise
 
 
 class PtyManager:
@@ -341,8 +342,13 @@ class PtyManager:
                 del self._sessions[key]
 
             pty_session = PtySession(session_name, self._pid_file)
-            pty_session.start(cols, rows)
             self._sessions[key] = pty_session
+            try:
+                pty_session.start(cols, rows)
+            except BaseException:
+                await pty_session.cleanup()
+                del self._sessions[key]
+                raise
             return pty_session
 
     def get(self, sid: str, session_name: str) -> PtySession | None:
