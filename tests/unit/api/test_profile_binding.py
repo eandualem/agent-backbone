@@ -432,7 +432,6 @@ async def test_pending_binding_cannot_receive_broadcast(api_app, bound_provider,
     from agent_backbone.api import socketio_server
 
     provider, registry, _ = bound_provider
-    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
     entered, release = asyncio.Event(), asyncio.Event()
     check = socketio_server.binding_error
 
@@ -454,6 +453,7 @@ async def test_pending_binding_cannot_receive_broadcast(api_app, bound_provider,
             {
                 "api_key": api_app.state.config.api_key,
                 **vars(provider.reservation.identity),
+                "lifecycle_id": "stale",
             },
         )
     )
@@ -744,4 +744,165 @@ async def test_terminal_packet_timeout_can_finish_disconnect_cleanup(
         forwarding.cancel()
         await asyncio.gather(forwarding, *packet_tasks, *emission_tasks, return_exceptions=True)
         await asyncio.gather(*getattr(sio, "_profile_emissions", ()), return_exceptions=True)
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+
+
+@pytest.mark.parametrize(
+    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+)
+@pytest.mark.parametrize("stage", ["registration", "snapshot"])
+async def test_socket_admission_holds_original_fence(
+    api_app, bound_provider, monkeypatch, runtime, stage
+):
+    provider, registry, _ = bound_provider
+    agent = await api_app.state.agent_store.update("ike", runtime=runtime)
+    ns = api_app.state.sio.namespace_handlers["/sessions"]
+    ns.emit = AsyncMock()
+    entered, release = asyncio.Event(), asyncio.Event()
+    read_registration = api_app.state.db.agents.registration_name
+
+    async def registration(registration_id):
+        entered.set()
+        await release.wait()
+        return await read_registration(registration_id)
+
+    async def snapshot():
+        entered.set()
+        await release.wait()
+        return []
+
+    api_app.state.feed.snapshot = AsyncMock(return_value=[])
+    if stage == "registration":
+        monkeypatch.setattr(api_app.state.db.agents, "registration_name", registration)
+    else:
+        api_app.state.feed.snapshot = snapshot
+    connecting = asyncio.create_task(
+        ns.trigger_event(
+            "connect",
+            "pending",
+            {},
+            {
+                "api_key": agent_api_key(api_app.state.config.api_key, agent.registration_id),
+                **vars(provider.reservation.identity),
+            },
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        with pytest.raises(ValueError, match="fence is busy"):
+            registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        release.set()
+        assert await asyncio.wait_for(connecting, 3) is True
+        assert not ns._connecting
+    finally:
+        release.set()
+        await asyncio.gather(connecting, return_exceptions=True)
+        await ns.on_disconnect("pending")
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+
+
+@pytest.mark.parametrize("change", ["provider", "config", "database", "disconnect", "cancel"])
+async def test_pending_connection_cannot_recapture_or_outlive_admission(
+    api_app, bound_provider, monkeypatch, change
+):
+    from dataclasses import replace
+
+    provider, registry, _ = bound_provider
+    agent = await api_app.state.agent_store.update("ike", runtime="codex")
+    ns = api_app.state.sio.namespace_handlers["/sessions"]
+    entered, release = asyncio.Event(), asyncio.Event()
+    read_registration = api_app.state.db.agents.registration_name
+
+    async def registration(registration_id):
+        entered.set()
+        await release.wait()
+        return await read_registration(registration_id)
+
+    monkeypatch.setattr(api_app.state.db.agents, "registration_name", registration)
+    api_app.state.feed.snapshot = AsyncMock(return_value=[])
+    ns.emit = AsyncMock()
+    connecting = asyncio.create_task(
+        ns.trigger_event(
+            "connect",
+            "pending",
+            {},
+            {
+                "api_key": agent_api_key(api_app.state.config.api_key, agent.registration_id),
+                **vars(provider.reservation.identity),
+            },
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        if change == "provider":
+            monkeypatch.setattr(api_app.state, "profile_provider", replace(provider))
+        elif change == "config":
+            monkeypatch.setattr(api_app.state, "config", replace(api_app.state.config))
+        elif change == "database":
+            monkeypatch.setattr(api_app.state, "db", object())
+        elif change == "disconnect":
+            await ns.on_disconnect("pending")
+        else:
+            connecting.cancel()
+        release.set()
+        if change == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(connecting, 3)
+        else:
+            assert await asyncio.wait_for(connecting, 3) is False
+        assert not ns._profiles
+        assert not ns._registrations
+        assert not ns._connecting
+        api_app.state.feed.snapshot.assert_not_awaited()
+        ns.emit.assert_not_awaited()
+    finally:
+        release.set()
+        await asyncio.gather(connecting, return_exceptions=True)
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+
+
+@pytest.mark.parametrize("change", ["disconnect", "cancel", "feed"])
+async def test_initial_snapshot_drops_failed_admission(
+    api_app, bound_provider, monkeypatch, change
+):
+    provider, registry, _ = bound_provider
+    ns = api_app.state.sio.namespace_handlers["/sessions"]
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def snapshot():
+        entered.set()
+        await release.wait()
+        return []
+
+    api_app.state.feed.snapshot = snapshot
+    ns.emit = AsyncMock()
+    connecting = asyncio.create_task(
+        ns.trigger_event(
+            "connect",
+            "pending",
+            {},
+            {"api_key": api_app.state.config.api_key, **vars(provider.reservation.identity)},
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        if change == "disconnect":
+            await ns.on_disconnect("pending")
+        elif change == "feed":
+            monkeypatch.setattr(api_app.state, "feed", object())
+        else:
+            connecting.cancel()
+        release.set()
+        if change == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(connecting, 3)
+        else:
+            assert await asyncio.wait_for(connecting, 3) is False
+        assert not ns._profiles
+        assert not ns._registrations
+        assert not ns._connecting
+        ns.emit.assert_not_awaited()
+    finally:
+        release.set()
+        await asyncio.gather(connecting, return_exceptions=True)
     registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)

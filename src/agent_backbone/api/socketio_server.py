@@ -21,7 +21,12 @@ from pathlib import Path
 import socketio
 
 from agent_backbone.api.auth import credential_registration, credential_role
-from agent_backbone.api.profile_binding import PROFILE_FIELDS, binding_error, provider_current
+from agent_backbone.api.profile_binding import (
+    BINDING_MISMATCH,
+    PROFILE_FIELDS,
+    binding_error,
+    provider_current,
+)
 from agent_backbone.api.session_updates import SESSIONS_NAMESPACE
 from agent_backbone.services.database import ProfileProvider
 from agent_backbone.services.terminal import (
@@ -182,6 +187,7 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
         super().__init__(namespace)
         self._registrations: dict[str, str] = {}
         self._profiles: dict = {}
+        self._connecting: dict[str, object] = {}
 
     async def registration_current(
         self, sid: str, *, provider_check: tuple[ProfileProvider | None, bool] | None = None
@@ -211,7 +217,11 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
         return False
 
     async def trigger_event(self, event, *args):
-        if event in {"connect", "disconnect"} or not args:
+        if event == "connect":
+            # AsyncNamespace converts cancellation to None, which Socket.IO
+            # treats as accepted. A cancelled admission must never acknowledge.
+            return await self.on_connect(*args)
+        if event == "disconnect" or not args:
             return await super().trigger_event(event, *args)
         sid = args[0]
         if sid not in self._profiles:
@@ -229,6 +239,7 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
             return await super().trigger_event(event, *args)
 
     async def on_disconnect(self, sid: str) -> None:
+        self._connecting.pop(sid, None)
         self._registrations.pop(sid, None)
         self._profiles.pop(sid, None)
 
@@ -236,45 +247,82 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
         app = getattr(self.server, "fastapi_app", None)
         return getattr(getattr(app, "state", None), "config", None)
 
-    async def _auth_valid(self, auth: dict | None) -> bool:
-        config = self._config()
-        if config is None:
-            return False
-        if not config.api_key:
-            return config.security.allow_unauthenticated
+    async def on_connect(self, sid: str, environ: dict, auth: dict | None = None) -> bool:
+        app = getattr(self.server, "fastapi_app", None)
+        state = getattr(app, "state", None)
+        provider = getattr(state, "profile_provider", None)
+        config = getattr(state, "config", None)
+        db = getattr(state, "db", None)
+        feed = getattr(state, "feed", None)
         raw = auth.get("api_key") if isinstance(auth, dict) else None
         candidate = raw if isinstance(raw, str) else None
-        if credential_role(candidate, config.api_key) is None:
-            return False
-        if registration := credential_registration(candidate, config.api_key):
-            app = getattr(self.server, "fastapi_app", None)
-            db = getattr(getattr(app, "state", None), "db", None)
-            return bool(db and await db.agents.registration_name(registration))
-        return True
-
-    async def on_connect(self, sid: str, environ: dict, auth: dict | None = None) -> bool:
-        if not await self._auth_valid(auth):
+        if config is None or (
+            credential_role(candidate, config.api_key) is None
+            if config.api_key
+            else not config.security.allow_unauthenticated
+        ):
             log.warning(
                 "Socket.IO %s connection rejected — invalid auth (sid=%s)", self.namespace, sid
             )
             return False
-        app = getattr(self.server, "fastapi_app", None)
-        provider = getattr(getattr(app, "state", None), "profile_provider", None)
-        values = {
-            field: auth[field]
-            for field in PROFILE_FIELDS
-            if isinstance(auth, dict) and field in auth
-        }
-        if error := await binding_error(provider, values, app):
-            raise socketio.exceptions.ConnectionRefusedError(
-                error["message"], {"code": error["code"]}
+
+        admission = object()
+        self._connecting[sid] = admission
+        accepted = False
+
+        def current() -> bool:
+            # Do not recapture a provider or its content after any admission await.
+            return (
+                self._connecting.get(sid) is admission
+                and getattr(self.server, "fastapi_app", None) is app
+                and getattr(state, "profile_provider", None) is provider
+                and getattr(state, "config", None) is config
+                and getattr(state, "db", None) is db
+                and getattr(state, "feed", None) is feed
             )
-        self._profiles[sid] = provider
-        config = self._config()
-        raw = auth.get("api_key") if isinstance(auth, dict) else None
-        if registration := credential_registration(raw, config.api_key):
-            self._registrations[sid] = registration
-        return True
+
+        try:
+            async with AsyncExitStack() as operations:
+                if provider is not None:
+                    try:
+                        await operations.enter_async_context(provider.operation())
+                    except (ValueError, OSError):
+                        raise socketio.exceptions.ConnectionRefusedError(
+                            BINDING_MISMATCH["message"], {"code": BINDING_MISMATCH["code"]}
+                        ) from None
+                if not current():
+                    return False
+                registration = credential_registration(candidate, config.api_key)
+                if registration and not (db and await db.agents.registration_name(registration)):
+                    return False
+                if not current():
+                    return False
+                values = {
+                    field: auth[field]
+                    for field in PROFILE_FIELDS
+                    if isinstance(auth, dict) and field in auth
+                }
+                if error := await binding_error(provider, values, app):
+                    raise socketio.exceptions.ConnectionRefusedError(
+                        error["message"], {"code": error["code"]}
+                    )
+                if not current():
+                    return False
+                self._profiles[sid] = provider
+                if registration:
+                    self._registrations[sid] = registration
+                await self._connected(sid, feed, current)
+                accepted = current() and sid in self._profiles
+                return accepted
+        finally:
+            if self._connecting.get(sid) is admission:
+                self._connecting.pop(sid)
+            if not accepted:
+                self._registrations.pop(sid, None)
+                self._profiles.pop(sid, None)
+
+    async def _connected(self, sid: str, feed, current) -> None:
+        """Finish namespace setup while the captured admission fence is held."""
 
 
 class SessionsNamespace(_AuthenticatedNamespace):
@@ -284,21 +332,17 @@ class SessionsNamespace(_AuthenticatedNamespace):
     connect so subscribers never start blind.
     """
 
-    async def on_connect(self, sid: str, environ: dict, auth: dict | None = None) -> bool:
-        if not await super().on_connect(sid, environ, auth):
-            return False
+    async def _connected(self, sid: str, feed, current) -> None:
         from agent_backbone.api.session_updates import SESSIONS_UPDATE_EVENT
 
-        app = getattr(self.server, "fastapi_app", None)
-        feed = getattr(getattr(app, "state", None), "feed", None)
         if feed is None:
-            return True
+            return
         try:
             payload = [agent.model_dump(mode="json") for agent in await feed.snapshot()]
-            await self.emit(SESSIONS_UPDATE_EVENT, payload, to=sid)
+            if current():
+                await self.emit(SESSIONS_UPDATE_EVENT, payload, to=sid)
         except Exception:
             log.exception("Could not send the initial /sessions snapshot (non-fatal)")
-        return True
 
 
 class TerminalNamespace(_AuthenticatedNamespace):
@@ -462,6 +506,7 @@ class TerminalNamespace(_AuthenticatedNamespace):
             pty_session.resume()
 
     async def on_disconnect(self, sid: str) -> None:
+        await super().on_disconnect(sid)
         sessions = list(self._subscriptions.get(sid, {}).keys())
         for session_name in sessions:
             try:
@@ -471,7 +516,6 @@ class TerminalNamespace(_AuthenticatedNamespace):
                 # if a PTY fails to detach, and still clean up other sessions.
                 log.exception("Could not clean up disconnected terminal subscription")
         self._subscriptions.pop(sid, None)
-        await super().on_disconnect(sid)
         log.info("sid=%s disconnected, cleaned up %d sessions", sid, len(sessions))
 
     async def _cleanup_session(self, sid: str, session_name: str) -> None:

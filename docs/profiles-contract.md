@@ -96,9 +96,11 @@ retain the captured provider fence through handler completion or cancellation
 cleanup. Emissions acquire a separate fence before recipient validation and keep
 it in a tracked task until Socket.IO's packet-send tasks finish. Caller cancellation
 can return immediately, allowing reentrant disconnect cleanup to finish, while
-the emission task retains its own fence. Connection setup, disconnect cleanup and the full lifetime
-of terminal PTYs still require their own fencing before activation. PTY cleanup
-waits for process termination and reader-executor shutdown before propagating
+the emission task retains its own fence. Connection admission captures the
+provider before reading registrations and holds its fence through the initial session snapshot. Failed, cancelled or disconnected
+admissions discard their captured state; a changed application context is refused.
+Disconnect cleanup and the full lifetime of terminal PTYs still require their own
+fencing before activation. PTY cleanup waits for process termination and reader-executor shutdown before propagating
 caller cancellation; concurrent cleanup callers share that work, and the manager
 retains the session until resource cleanup succeeds. This preserves cleanup
 ownership; retiring sessions are not reused by resize, and failed cleanup can be
