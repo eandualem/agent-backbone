@@ -234,3 +234,30 @@ def test_legacy_account_file_alias_does_not_enable_native_context_checks(tmp_pat
     (home / "auth.json").symlink_to(tmp_path / "external-account")
     monkeypatch.setenv("CODEX_HOME", str(home))
     assert RUNTIMES["codex"].environment({"CUSTOM": "value"}) == {"CUSTOM": "value"}
+
+
+@pytest.mark.parametrize("condition", ["parent_file", "loop", "denied"])
+def test_unavailable_native_store_is_a_bounded_refusal(tmp_path, monkeypatch, condition):
+    rt = RUNTIMES["opencode"]
+    captured = rt.capture_environment(tmp_path / "a")
+    install_native_environments({rt.id: captured})
+    target = captured.root / "data/opencode/auth.json"
+    target.parent.parent.mkdir(parents=True)
+    if condition == "parent_file":
+        target.parent.write_text("not a directory")
+    else:
+        target.parent.mkdir()
+        if condition == "loop":
+            target.symlink_to(target)
+        else:
+            original = Path.stat
+
+            def denied(path, *args, **kwargs):
+                if path == target:
+                    raise PermissionError("sensitive filesystem diagnostic")
+                return original(path, *args, **kwargs)
+
+            monkeypatch.setattr(Path, "stat", denied)
+    for operation in (lambda: rt.account_invocation("status"), rt.installed_version):
+        with pytest.raises(ValueError, match="^Native (store|path) is unavailable$"):
+            operation()

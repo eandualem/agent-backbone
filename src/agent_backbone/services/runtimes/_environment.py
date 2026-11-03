@@ -57,11 +57,16 @@ class NativeEnvironment(Mapping[str, str]):
                 info = path.stat()
             except FileNotFoundError:
                 continue
+            except OSError as exc:
+                raise ValueError("Native store is unavailable") from exc
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                 raise ValueError("Native store must be a regular file without hard links")
 
     def check_path(self, path: Path) -> Path:
-        resolved = path.resolve()
+        try:
+            resolved = path.resolve()
+        except (OSError, RuntimeError) as exc:
+            raise ValueError("Native path is unavailable") from exc
         if not path.is_absolute() or not resolved.is_relative_to(self.root):
             raise ValueError("Native path escapes the captured runtime environment")
         return path
