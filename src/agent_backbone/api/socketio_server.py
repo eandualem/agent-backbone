@@ -219,8 +219,12 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
     async def trigger_event(self, event, *args):
         if event == "connect":
             # AsyncNamespace converts cancellation to None, which Socket.IO
-            # treats as accepted. A cancelled admission must never acknowledge.
-            return await self.on_connect(*args)
+            # treats as accepted. Refuse instead so it also removes the pending
+            # namespace membership before completing the handshake.
+            try:
+                return await self.on_connect(*args)
+            except asyncio.CancelledError:
+                return False
         if event == "disconnect" or not args:
             return await super().trigger_event(event, *args)
         sid = args[0]

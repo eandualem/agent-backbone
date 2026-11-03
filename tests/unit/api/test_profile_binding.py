@@ -845,11 +845,7 @@ async def test_pending_connection_cannot_recapture_or_outlive_admission(
         else:
             connecting.cancel()
         release.set()
-        if change == "cancel":
-            with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(connecting, 3)
-        else:
-            assert await asyncio.wait_for(connecting, 3) is False
+        assert await asyncio.wait_for(connecting, 3) is False
         assert not ns._profiles
         assert not ns._registrations
         assert not ns._connecting
@@ -893,11 +889,7 @@ async def test_initial_snapshot_drops_failed_admission(
         else:
             connecting.cancel()
         release.set()
-        if change == "cancel":
-            with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(connecting, 3)
-        else:
-            assert await asyncio.wait_for(connecting, 3) is False
+        assert await asyncio.wait_for(connecting, 3) is False
         assert not ns._profiles
         assert not ns._registrations
         assert not ns._connecting
@@ -906,3 +898,35 @@ async def test_initial_snapshot_drops_failed_admission(
         release.set()
         await asyncio.gather(connecting, return_exceptions=True)
     registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+
+
+async def test_cancelled_handshake_refuses_and_removes_socket_membership(api_app, bound_provider):
+    provider, _, _ = bound_provider
+    sio = api_app.state.sio
+    ns = sio.namespace_handlers["/sessions"]
+    entered = asyncio.Event()
+
+    async def snapshot():
+        entered.set()
+        await asyncio.Event().wait()
+
+    api_app.state.feed.snapshot = snapshot
+    sio.environ["engine"] = {}
+    sio._send_packet = AsyncMock()
+    connecting = asyncio.create_task(
+        sio._handle_connect(
+            "engine",
+            ns.namespace,
+            {"api_key": api_app.state.config.api_key, **vars(provider.reservation.identity)},
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        connecting.cancel()
+        await asyncio.wait_for(connecting, 3)
+        assert not list(sio.manager.get_participants(ns.namespace, None))
+        assert not ns._profiles and not ns._registrations and not ns._connecting
+        assert [call.args[1].packet_type for call in sio._send_packet.await_args_list] == [4]
+    finally:
+        connecting.cancel()
+        await asyncio.gather(connecting, return_exceptions=True)
