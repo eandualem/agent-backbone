@@ -380,7 +380,7 @@ class TerminalNamespace(_AuthenticatedNamespace):
         self._resources: dict[tuple[str, str], tuple[PtyManager, AsyncExitStack]] = {}
 
     async def _resource_operation(self, sid: str, session_name: str, action):
-        """Register pending work before yielding; the resource task owns its cleanup."""
+        """Own pending work; attaches return a forwarder to retire on cancellation."""
         key = (sid, session_name)
         lock = self._resource_locks.setdefault(key, asyncio.Lock())
         abandoned = asyncio.Event()
@@ -388,6 +388,8 @@ class TerminalNamespace(_AuthenticatedNamespace):
 
         async def run():
             async with lock:
+                if origin.cancelling():
+                    abandoned.set()
                 return await action(abandoned, origin)
 
         task = asyncio.create_task(run())
@@ -408,13 +410,23 @@ class TerminalNamespace(_AuthenticatedNamespace):
             # Do not cancel a worker or wait on it here: a packet send may be
             # disconnecting this very caller. The worker retires an abandoned attach.
             abandoned.set()
+
+            def retire_attachment(done):
+                # An attach can finish before its cancelled caller resumes.
+                # Its returned forwarder owns a retirement callback, even then.
+                if not done.cancelled() and done.exception() is None:
+                    forwarding = done.result()
+                    if forwarding is not None:
+                        forwarding.cancel()
+
+            task.add_done_callback(retire_attachment)
             raise
 
     async def _attach_subscription_client(
         self, sid: str, session_name: str, cols: int, rows: int
     ) -> None:
         async def attach(abandoned, origin):
-            await self._attach_locked(sid, session_name, cols, rows, abandoned, origin)
+            return await self._attach_locked(sid, session_name, cols, rows, abandoned, origin)
 
         await self._resource_operation(sid, session_name, attach)
 
@@ -461,6 +473,7 @@ class TerminalNamespace(_AuthenticatedNamespace):
                 cleanup.add_done_callback(self._background.discard)
 
             task.add_done_callback(ended)
+            return task
         finally:
             if self._subscriptions.get(sid, {}).get(session_name) is None:
                 await self._detach_locked(sid, session_name, origin)
@@ -594,10 +607,9 @@ class TerminalNamespace(_AuthenticatedNamespace):
                 return
             pty_session = self._manager_for(sid, session_name).get(sid, session_name)
             if pty_session is None:
-                await self._attach_locked(
+                return await self._attach_locked(
                     sid, session_name, clamped_cols, clamped_rows, abandoned, origin
                 )
-                return
             pty_session.resize(clamped_cols, clamped_rows)
             if not await resize_window(session_name, clamped_cols, clamped_rows):
                 log.error("resize_window failed for '%s'", session_name)

@@ -350,3 +350,56 @@ async def test_concurrent_collapse_finishes_after_forwarder_disconnect_swallows_
                 await asyncio.gather(*tuple(ns._background), return_exceptions=True)
                 await ns.on_disconnect(sid)
                 await manager.cleanup_all()
+
+
+@pytest.mark.parametrize("cancel_at", ["queued", "created"])
+async def test_cancelled_attach_retires_worker_result_before_caller_resumes(cancel_at):
+    from agent_backbone.services.terminal import PtyManager, PtySession
+
+    ns = TerminalNamespace("/terminal")
+    ns._profiles["sid"] = None
+    ns.emit = AsyncMock()
+    ns.leave_room = AsyncMock()
+    manager = PtyManager()
+    create, remove = manager.create, manager.remove
+    removed = asyncio.Event()
+    request = None
+
+    async def observe_remove(*args):
+        await remove(*args)
+        removed.set()
+
+    async def create_then_cancel(*args):
+        result = await create(*args)
+        if cancel_at == "created":
+            # Queue cancellation before the worker's result wakes its caller.
+            asyncio.get_running_loop().call_soon(request.cancel)
+        return result
+
+    with (
+        patch.object(PtySession, "start"),
+        patch.object(manager, "create", side_effect=create_then_cancel),
+        patch.object(manager, "remove", side_effect=observe_remove),
+        patch(f"{_MOD}.get_pty_manager", return_value=manager),
+    ):
+        request = asyncio.create_task(ns._attach_subscription_client("sid", "app", 80, 24))
+        try:
+            if cancel_at == "queued":
+                await asyncio.sleep(0)  # Worker is queued ahead of the cancelled caller.
+                request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request
+            if cancel_at == "created":
+                await asyncio.wait_for(removed.wait(), 2)
+            while ns._resource_tasks or ns._background:
+                await asyncio.gather(
+                    *(t for pending in tuple(ns._resource_tasks.values()) for t in tuple(pending)),
+                    *tuple(ns._background),
+                    return_exceptions=True,
+                )
+            assert not manager._sessions
+            assert not ns._resources
+        finally:
+            await ns.on_disconnect("sid")
+            await asyncio.gather(*tuple(ns._background), return_exceptions=True)
+            await manager.cleanup_all()
