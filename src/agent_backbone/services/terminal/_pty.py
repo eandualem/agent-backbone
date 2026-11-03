@@ -194,15 +194,16 @@ class PtySession:
         Concurrent callers share one cleanup task. Shielding alone would let a
         cancelled owner release its lock while executor work still runs.
         """
-        if self._cleanup_task is None:
-            self._cleanup_task = asyncio.create_task(self._cleanup())
+        task = self._cleanup_task
+        if task is None or (task.done() and not task.cancelled() and task.exception() is not None):
+            task = self._cleanup_task = asyncio.create_task(self._cleanup())
         cancelled = False
-        while not self._cleanup_task.done():
+        while not task.done():
             try:
-                await asyncio.shield(self._cleanup_task)
+                await asyncio.shield(task)
             except asyncio.CancelledError:
                 cancelled = True
-        self._cleanup_task.result()
+        task.result()
         if cancelled:
             raise asyncio.CancelledError
 
@@ -345,8 +346,9 @@ class PtyManager:
             return pty_session
 
     def get(self, sid: str, session_name: str) -> PtySession | None:
-        """Get existing PTY session or None."""
-        return self._sessions.get((sid, session_name))
+        """Get an active PTY; retiring sessions remain tracked only for cleanup."""
+        session = self._sessions.get((sid, session_name))
+        return session if session is not None and session._cleanup_task is None else None
 
     async def remove(self, sid: str, session_name: str) -> None:
         """Remove and clean up a PTY session immediately."""

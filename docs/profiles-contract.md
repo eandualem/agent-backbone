@@ -101,7 +101,9 @@ of terminal PTYs still require their own fencing before activation. PTY cleanup
 waits for process termination and reader-executor shutdown before propagating
 caller cancellation; concurrent cleanup callers share that work, and the manager
 retains the session until resource cleanup succeeds. This preserves cleanup
-ownership but does not establish a provider fence for an attached PTY. Session-feed
+ownership; retiring sessions are not reused by resize, and failed cleanup can be
+retried after its cause is corrected. This does not establish a provider fence
+for an attached PTY. Session-feed
 history writes retain their own captured provider guard through transaction
 cleanup, including after a snapshot times out or is cancelled. They recheck the
 feed's database, configuration and terminal context before writing; a retired or

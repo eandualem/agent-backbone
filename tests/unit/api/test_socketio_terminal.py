@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -10,6 +11,54 @@ import pytest
 from agent_backbone.api.socketio_server import TerminalNamespace
 
 _MOD = "agent_backbone.api.socketio_server"
+
+
+async def test_resize_reattaches_after_concurrent_terminal_collapse():
+    from agent_backbone.services.terminal import PtyManager, PtySession
+
+    manager = PtyManager()
+    ns = TerminalNamespace("/terminal")
+    ns.emit = AsyncMock()
+    ns._subscriptions["sid"] = {"app": None}
+    entered, release = asyncio.Event(), asyncio.Event()
+    with (
+        patch.object(PtySession, "start"),
+        patch(f"{_MOD}.get_pty_manager", return_value=manager),
+        patch(f"{_MOD}.resize_window", new_callable=AsyncMock, return_value=True),
+        patch(f"{_MOD}._restore_dynamic_window_size", new_callable=AsyncMock),
+    ):
+        old = await manager.create("sid", "app")
+        cleanup = old._cleanup
+
+        async def paused_cleanup():
+            entered.set()
+            await release.wait()
+            await cleanup()
+
+        with patch.object(old, "_cleanup", side_effect=paused_cleanup):
+            collapse = asyncio.create_task(ns.on_release_dims("sid", {"session": "app"}))
+            resize = None
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                resize = asyncio.create_task(
+                    ns.on_resize("sid", {"session": "app", "cols": 80, "rows": 24})
+                )
+                await asyncio.sleep(0)
+                assert not resize.done()
+                release.set()
+                await asyncio.gather(collapse, resize)
+                assert manager.get("sid", "app") not in (None, old)
+                assert isinstance(ns._subscriptions["sid"]["app"], asyncio.Task)
+            finally:
+                release.set()
+                await asyncio.gather(
+                    collapse, *([resize] if resize else []), return_exceptions=True
+                )
+                forwarding = [t for t in ns._subscriptions.get("sid", {}).values() if t]
+                for task in forwarding:
+                    task.cancel()
+                await asyncio.gather(*forwarding, return_exceptions=True)
+                await manager.cleanup_all()
 
 
 def _namespace(config) -> TerminalNamespace:

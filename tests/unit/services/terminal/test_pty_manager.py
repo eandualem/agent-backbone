@@ -272,6 +272,25 @@ class TestPtySession:
 
 
 class TestConcurrentPtyLifecycle:
+    async def test_failed_cleanup_can_retry_after_pid_file_is_repaired(self, tmp_path):
+        pid_file = tmp_path / "pty-pids.txt"
+        manager = PtyManager(pid_file)
+        session = PtySession("app", pid_file)
+        manager._sessions[("sid", "app")] = session
+        session._process = MagicMock(pid=999)
+        session.master_fd = 42
+        pid_file.write_bytes(b"\xff")
+        with patch(f"{_PTY}.os.close") as close:
+            with pytest.raises(UnicodeDecodeError):
+                await manager.remove("sid", "app")
+            assert manager._sessions[("sid", "app")] is session
+            close.assert_not_called()
+            pid_file.write_text("")
+            await manager.remove("sid", "app")
+            assert manager.get("sid", "app") is None
+            assert session.master_fd is None
+            close.assert_called_once_with(42)
+
     @pytest.mark.parametrize("stage", ["termination", "executor_shutdown"])
     async def test_cancelled_cleanup_waits_for_workers_and_concurrent_callers(self, stage):
         session = PtySession("app")
@@ -340,7 +359,8 @@ class TestConcurrentPtyLifecycle:
                 await asyncio.wait_for(entered.wait(), 2)
                 first.cancel()
                 await asyncio.sleep(0)
-                assert manager.get("sid", "app") is old
+                assert manager._sessions[("sid", "app")] is old
+                assert manager.get("sid", "app") is None
                 if operation == "remove":
                     shutdown = asyncio.create_task(manager.cleanup_all())
                     await asyncio.sleep(0)
@@ -369,7 +389,7 @@ class TestConcurrentPtyLifecycle:
         created = []
 
         def new_session(*args):
-            session = MagicMock(cleanup=AsyncMock())
+            session = MagicMock(cleanup=AsyncMock(), _cleanup_task=None)
             created.append(session)
             return session
 
