@@ -414,7 +414,7 @@ class AgentStore:
             )
             released = False
             if guarded and spec is not None:
-                if spec.path.exists():
+                if spec.path.is_dir():
                     claim_project_directories(self.config.data_dir, (spec.path,))
                 if not self._release_skills(spec.name):
                     raise ValueError("Could not release the agent's owned project links")
@@ -443,11 +443,19 @@ class AgentStore:
         try:
             # The links live in the checkout the manifest records, which may
             # not be the agent's directory any more (``agent set dir=``).
-            repo = json.loads(manifest.read_text(encoding="utf-8")).get("repo")
-            if project_claims(self.config.data_dir) is not None and (
-                store is None or not isinstance(repo, str)
-            ):
-                return False
+            recorded = json.loads(manifest.read_text(encoding="utf-8"))
+            repo = recorded.get("repo")
+            if project_claims(self.config.data_dir) is not None:
+                if store is None:
+                    previous_store = recorded.get("store")
+                    if (
+                        not isinstance(previous_store, str)
+                        or not Path(previous_store).is_absolute()
+                    ):
+                        return False
+                    store = Path(previous_store)
+                if not isinstance(repo, str) or not isinstance(recorded.get("links"), list):
+                    return False
             if store is not None and isinstance(repo, str):
                 result = materialize(
                     store,

@@ -484,6 +484,13 @@ cleanup retains the agent registration and its links. Subdirectory launches clai
 the containing checkout, and linked worktrees also claim the canonical main checkout
 whose native configuration they may consume. Retained callbacks recheck the registry
 and refuse an invalidated lifecycle.
+Standalone separate Git directories remain independent. Linked worktrees whose
+shared Git directory does not use the conventional `.git` layout are refused
+before claims are saved, because the main checkout cannot be identified safely.
+Disabling the skill store does not block cleanup: guarded cleanup uses the store
+location retained in the agent's manifest.
+A manifest with a missing or non-list `links` field is retained for repair instead
+of discarding it and leaving its links behind.
 
 The same launch and materialization behavior tests run for Claude Code, Codex and
 OpenCode. Production startup does not install this context yet. Default adoption

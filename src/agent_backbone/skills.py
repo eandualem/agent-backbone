@@ -670,6 +670,8 @@ def project_resources(directories: tuple[Path, ...]) -> tuple[Path, ...]:
             # claiming its parent would capture unrelated repositories.
             private = _git_dir(root)
             if private is not None and (private / "commondir").is_file():
+                if git_dir.name != ".git":
+                    raise ValueError("Cannot identify the main checkout for separate Git metadata")
                 resources.append(git_dir.parent)
             exclude = contained_path(git_dir, "info/exclude")
             if os.path.lexists(exclude):

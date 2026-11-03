@@ -1,6 +1,7 @@
 """Captured ownership gates project effects across the agent and swarm paths."""
 
 import asyncio
+import json
 import shutil
 from contextlib import AsyncExitStack
 from dataclasses import replace
@@ -152,24 +153,26 @@ async def test_subdirectories_and_linked_worktrees_claim_the_canonical_main(owne
             registry.claim_projects(b.reservation.identity, b.reservation.data_dir, (directory,))
 
 
-@pytest.mark.parametrize("missing", [False, True])
+@pytest.mark.parametrize("path_state", ["directory", "missing", "file"])
 async def test_forget_uses_current_registration_without_nesting_profile_lock(
-    owners, tmp_path, db, missing
+    owners, tmp_path, db, path_state
 ):
     registry, (a, b) = owners
     project = repo_at(tmp_path / "project")
     store = AgentStore(db, a.reservation.data_dir)
     await store.start()
     await store.register(AgentSpec(name="worker", dir=str(project)))
-    if missing:
+    if path_state != "directory":
         shutil.rmtree(project)
+        if path_state == "file":
+            project.write_text("replacement file")
     await install_project_ownership(a)
     store._agents = agents_from_rows([])
     store._credential_endpoint = ("127.0.0.1", 9000)
     with patch("agent_backbone.services.terminal.session_exists", return_value=False):
         assert await asyncio.wait_for(store.forget("worker"), timeout=2)
     assert store.agents.get("worker") is None
-    if not missing:
+    if path_state == "directory":
         with pytest.raises(ValueError, match="separate checkout"):
             registry.claim_projects(b.reservation.identity, b.reservation.data_dir, (project,))
 
@@ -235,3 +238,56 @@ async def test_swarm_conflict_precedes_worktree_creation_and_teardown(owners, tm
         remove.assert_not_called()
         stop.assert_not_called()
     assert not (project / ".backbone").exists()
+
+
+async def test_separate_linked_metadata_refuses_before_reserving_unrelated_parent(owners, tmp_path):
+    registry, (a, b) = owners
+    repo = tmp_path / "linked"
+    repo.mkdir()
+    metadata = tmp_path / "metadata/alpha.git"
+    private = metadata / "worktrees/linked"
+    private.mkdir(parents=True)
+    (private / "commondir").write_text("../..\n")
+    (repo / ".git").write_text(f"gitdir: {private}\n")
+    await install_project_ownership(a)
+    with pytest.raises(ValueError, match="Cannot identify the main checkout"):
+        claim_project_directories(a.reservation.data_dir, (repo,))
+    # Refusal must not leave even a partial reservation for this attempt.
+    registry.claim_projects(b.reservation.identity, b.reservation.data_dir, (repo, metadata.parent))
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_disabling_store_still_releases_owned_links(owners, tmp_path, db, runtime):
+    _, (a, _) = owners
+    project = repo_at(tmp_path / "project")
+    spec = AgentSpec(name="worker", dir=str(project), runtime=runtime)
+    store = AgentStore(db, a.reservation.data_dir)
+    await store.start()
+    await store.register(spec)
+    source = a.reservation.data_dir / "skills/store/example"
+    source.mkdir(parents=True)
+    content = "---\nname: example\ndescription: Example\nmetadata:\n  backbone-tags: all\n---\n"
+    (source / "SKILL.md").write_text(content)
+    await store.set_setting("skills.store", str(source.parent))
+    await install_project_ownership(a)
+    rt = RUNTIMES[runtime]
+    assert _materialize_skills(store.config, spec, rt)[1] is None
+    link = project / rt.skill_dirs[0] / "example"
+    assert link.is_symlink()
+    await store.set_setting("skills.store", "")
+    assert store.config.skills.store_path is None
+    manifest = manifest_path(a.reservation.data_dir, "worker")
+    original = manifest.read_text()
+    malformed = json.loads(original)
+    malformed["links"] = "not a list"
+    manifest.write_text(json.dumps(malformed))
+    with patch("agent_backbone.services.terminal.session_exists", return_value=False):
+        with pytest.raises(ValueError, match="Could not release"):
+            await store.forget("worker")
+        assert link.is_symlink() and json.loads(manifest.read_text()) == malformed
+        assert store.agents.get("worker") is not None
+        manifest.write_text(original)
+        assert await store.forget("worker")
+    assert not link.is_symlink()
+    assert not manifest_path(a.reservation.data_dir, "worker").exists()
+    assert (source / "SKILL.md").read_text() == content
