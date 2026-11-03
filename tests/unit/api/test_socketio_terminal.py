@@ -183,6 +183,7 @@ async def test_retirement_stops_existing_terminal_stream_without_emitting_its_da
         await api_app.state.db.agents.delete(spec.name)
         await queue.put("must not be sent")
         await asyncio.wait_for(task, timeout=1)
+        await asyncio.wait_for(sio.shutdown(), timeout=1)
     manager.remove.assert_awaited_once_with(sid, spec.name)
     assert not sio.manager.is_connected(sid, "/terminal")
     assert sid not in ns._subscriptions and sid not in ns._registrations

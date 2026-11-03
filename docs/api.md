@@ -846,7 +846,10 @@ retains the attachment until its process exits and its reader worker finishes.
 Failed cleanup remains tracked for retry. Internally bound providers retain their
 lifecycle fence across creation and cleanup, independently of the requesting
 handler or output forwarder. Profile activation remains unavailable.
-Bulk PTY cleanup logs failures instead of reporting that all sessions were cleaned.
+Shutdown closes socket admission, stops producers, then drains handlers, terminal
+resources and emissions before closing services and the database. Bulk PTY cleanup
+reports failure and retains resources for retry; a failed component stop preserves
+its dependencies and prevents automatic in-process upgrade restart.
 
 ```js
 const sio = io("http://127.0.0.1:7120/sessions", { auth: { api_key: KEY } });

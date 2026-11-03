@@ -76,6 +76,15 @@ def create_sio(cors_origins: list[str]) -> socketio.AsyncServer:
     return sio
 
 
+async def _drain_tasks(tasks) -> None:
+    """Drain a live task collection, including work scheduled by completions."""
+    while tasks:
+        await asyncio.gather(*tuple(tasks), return_exceptions=True)
+        # gather may complete synchronously for already-finished tasks. Let
+        # their ownership/retirement callbacks run before reading the set again.
+        await asyncio.sleep(0)
+
+
 async def _restore_dynamic_window_size(session_name: str) -> None:
     """Return tmux size selection to active-client control after a browser resize."""
     if not await set_window_size_mode(session_name, "latest"):
@@ -88,6 +97,50 @@ class RegistrationAwareServer(socketio.AsyncServer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._profile_emissions: set[asyncio.Task] = set()
+        self._handlers: set[asyncio.Task] = set()
+        self._closing = False
+        self._shutdown_task: asyncio.Task | None = None
+
+    def close_admission(self) -> None:
+        """Prevent new socket work before producers and dependencies stop."""
+        self._closing = True
+        for ns in self.namespace_handlers.values():
+            if isinstance(ns, _AuthenticatedNamespace):
+                ns.close_admission()
+
+    async def _handle_event(self, eio_sid, namespace, id, data):
+        if not self._closing:
+            await super()._handle_event(eio_sid, namespace, id, data)
+
+    def start_background_task(self, target, *args, **kwargs):
+        # Socket.IO creates event handlers here before they first run. Its own
+        # shutdown only stops Engine.IO's service task, not these handlers.
+        task = super().start_background_task(target, *args, **kwargs)
+        self._handlers.add(task)
+        task.add_done_callback(self._handler_done)
+        return task
+
+    def _handler_done(self, task: asyncio.Task) -> None:
+        self._handlers.discard(task)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            log.warning("Socket handler failed (%s)", type(error).__name__)
+
+    async def shutdown(self) -> None:
+        self.close_admission()
+        task = self._shutdown_task
+        if task is None or (task.done() and (task.cancelled() or task.exception() is not None)):
+            task = self._shutdown_task = asyncio.create_task(self._shutdown())
+        # A cancelled lifespan caller cannot orphan the drain. A later shutdown
+        # joins it, or retries a failed drain with all retained resources intact.
+        await asyncio.shield(task)
+
+    async def _shutdown(self) -> None:
+        await _drain_tasks(self._handlers)
+        for ns in self.namespace_handlers.values():
+            if isinstance(ns, _AuthenticatedNamespace):
+                await ns.shutdown()
+        await _drain_tasks(self._profile_emissions)
+        await super().shutdown()
 
     def _emission_done(self, task: asyncio.Task) -> None:
         self._profile_emissions.discard(task)
@@ -105,13 +158,13 @@ class RegistrationAwareServer(socketio.AsyncServer):
         callback=None,
         ignore_queue=False,
     ):
+        if self._closing:
+            return
         app = getattr(self, "fastapi_app", None)
         provider = getattr(getattr(app, "state", None), "profile_provider", None)
         emission = self._emit(
             provider, event, data, to, room, skip_sid, namespace, callback, ignore_queue
         )
-        if provider is None:
-            return await emission
         # Own the fence in this task, independently of the caller. Packet sends
         # can trigger disconnect cleanup that cancels and awaits the caller;
         # making caller cancellation wait here would create a circular wait.
@@ -189,6 +242,20 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
         self._registrations: dict[str, str] = {}
         self._profiles: dict = {}
         self._connecting: dict[str, object] = {}
+        self._closing = False
+        self._handlers: dict[asyncio.Task, int] = {}
+        self._handlers_idle = asyncio.Event()
+        self._handlers_idle.set()
+
+    def close_admission(self) -> None:
+        self._closing = True
+        self._connecting.clear()
+        self._profiles.clear()
+        self._registrations.clear()
+
+    async def shutdown(self) -> None:
+        self.close_admission()
+        await self._handlers_idle.wait()
 
     async def registration_current(
         self, sid: str, *, provider_check: tuple[ProfileProvider | None, bool] | None = None
@@ -218,6 +285,22 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
         return False
 
     async def trigger_event(self, event, *args):
+        if self._closing:
+            return False if event == "connect" else None
+        task = asyncio.current_task()
+        # Inline disconnect can re-enter the namespace in the same task.
+        self._handlers_idle.clear()
+        self._handlers[task] = self._handlers.get(task, 0) + 1
+        try:
+            return await self._trigger_admitted_event(event, *args)
+        finally:
+            self._handlers[task] -= 1
+            if not self._handlers[task]:
+                del self._handlers[task]
+            if not self._handlers:
+                self._handlers_idle.set()
+
+    async def _trigger_admitted_event(self, event, *args):
         if event == "connect":
             # AsyncNamespace converts cancellation to None, which Socket.IO
             # treats as accepted. Refuse instead so it also removes the pending
@@ -258,6 +341,8 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
         return getattr(getattr(app, "state", None), "config", None)
 
     async def on_connect(self, sid: str, environ: dict, auth: dict | None = None) -> bool:
+        if self._closing:
+            return False
         app = getattr(self.server, "fastapi_app", None)
         state = getattr(app, "state", None)
         provider = getattr(state, "profile_provider", None)
@@ -378,6 +463,30 @@ class TerminalNamespace(_AuthenticatedNamespace):
             WeakValueDictionary()
         )
         self._resources: dict[tuple[str, str], tuple[PtyManager, AsyncExitStack]] = {}
+
+    async def shutdown(self) -> None:
+        await super().shutdown()
+        # Pending creates and controls can outlive a cancelled event caller.
+        while self._resource_tasks:
+            await asyncio.gather(
+                *(task for tasks in self._resource_tasks.values() for task in tasks),
+                return_exceptions=True,
+            )
+            await asyncio.sleep(0)
+        keys = set(self._resources) | {
+            (sid, name)
+            for sid, subscriptions in self._subscriptions.items()
+            for name in subscriptions
+        }
+        results = await asyncio.gather(
+            *(self._cleanup_session(*key) for key in keys), return_exceptions=True
+        )
+        # Forwarder completion schedules retirement callbacks and data-drop
+        # sends independently. Their fences must also end before disposal.
+        await _drain_tasks(self._background)
+        failures = [result for result in results if isinstance(result, BaseException)]
+        if failures:
+            raise BaseExceptionGroup("Terminal shutdown cleanup failed", failures)
 
     async def _resource_operation(self, sid: str, session_name: str, action):
         """Own pending work; attaches return a forwarder to retire on cancellation."""
@@ -674,6 +783,8 @@ class TerminalNamespace(_AuthenticatedNamespace):
         await self.leave_room(sid, f"session:{session_name}")
 
     def _on_data_dropped(self, sid: str, session_name: str) -> None:
+        if self._closing:
+            return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
