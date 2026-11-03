@@ -193,7 +193,8 @@ def test_removed_checkout_can_relocate_or_release_without_losing_ownership(profi
         assert not apply(registry, b, repo, rt).ok
 
 
-def test_external_git_exclude_fails_before_cleanup(profiles, tmp_path):
+@pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+def test_external_git_exclude_fails_before_cleanup(profiles, tmp_path, link_kind):
     registry, (a, _) = profiles
     repo = make_repo(tmp_path / "project")
     rt = RUNTIMES["codex"]
@@ -202,21 +203,81 @@ def test_external_git_exclude_fails_before_cleanup(profiles, tmp_path):
     outside = tmp_path / "outside"
     outside.write_text("preserve")
     exclude.unlink()
-    exclude.symlink_to(outside)
+    if link_kind == "symlink":
+        exclude.symlink_to(outside)
+    else:
+        exclude.hardlink_to(outside)
     assert not apply(registry, a, repo, rt, release=True).ok
     assert outside.read_text() == "preserve"
     assert (repo / rt.skill_dirs[0] / "example").is_symlink()
 
 
-def test_nonregular_common_git_pointer_is_rejected_without_reading(profiles, tmp_path, monkeypatch):
+def test_moved_checkout_alias_does_not_block_unrelated_profile_work(profiles, tmp_path):
+    registry, (a, b) = profiles
+    old = make_repo(tmp_path / "old")
+    rt = RUNTIMES["codex"]
+    assert apply(registry, a, old, rt).ok
+    moved = tmp_path / "moved"
+    old.rename(moved)
+    old.symlink_to(moved, target_is_directory=True)
+    other = make_repo(tmp_path / "other")
+    assert apply(registry, b, other, rt).ok
+    candidate = replace(
+        b, identity=ProfileIdentity("c", "installation-c", "lifecycle-c"), data_dir=tmp_path / "c"
+    )
+    registry.reserve(candidate)
+    # The moved resource still belongs to A, through either spelling.
+    for path in (old, moved):
+        assert not apply(registry, b, path, rt).ok
+        with pytest.raises(ValueError, match="project claim"):
+            registry.reserve(
+                replace(
+                    candidate,
+                    identity=ProfileIdentity("d", "i-d", "l-d"),
+                    data_dir=path.resolve() / "nested",
+                )
+            )
+    assert apply(registry, a, moved, rt).ok
+    # A broken retired alias is no longer a registry-wide failure either.
+    old.unlink()
+    old.symlink_to(old)
+    assert apply(registry, b, other, rt).ok
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_internal_git_exclude_symlink_fails_before_cleanup(profiles, tmp_path, missing):
+    registry, (a, _) = profiles
+    repo = make_repo(tmp_path / "project")
+    rt = RUNTIMES["codex"]
+    assert apply(registry, a, repo, rt).ok
+    target = repo / ".git/config"
+    if not missing:
+        target.write_text("[core]\n")
+    exclude = repo / ".git/info/exclude"
+    exclude.unlink()
+    exclude.symlink_to("../config")
+    assert not apply(registry, a, repo, rt, release=True).ok
+    assert not target.exists() if missing else target.read_text() == "[core]\n"
+    assert (repo / rt.skill_dirs[0] / "example").is_symlink()
+
+
+@pytest.mark.parametrize("kind", ["fifo", "symlink"])
+def test_nonregular_common_git_pointer_is_rejected_without_reading(
+    profiles, tmp_path, monkeypatch, kind
+):
     registry, (a, _) = profiles
     repo = make_repo(tmp_path / "project")
     pointer = repo / ".git/commondir"
-    os.mkfifo(pointer)
+    if kind == "fifo":
+        os.mkfifo(pointer)
+    else:
+        target = tmp_path / "pointer.txt"
+        target.write_text("../..\n")
+        pointer.symlink_to(target)
     read_text = Path.read_text
 
     def read_regular(path, *args, **kwargs):
-        assert path != pointer, "must not block reading the FIFO"
+        assert path != pointer, "must not read the nonregular pointer"
         return read_text(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "read_text", read_regular)

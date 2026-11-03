@@ -473,6 +473,8 @@ Claims are atomic and remain after skill cleanup or profile invalidation. Releas
 or transferring them requires explicit reconciliation, not automatic expiry.
 No ownership marker is added to the project. Explicit registry initialization
 upgrades the internal store; discovery remains read-only.
+Guarded materialization also refuses symlinked or hard-linked Git excludes and
+nonregular Git `commondir` files before cleanup or writes.
 
 The guard is an internal prerequisite, with the same materialization behavior
 tests for Claude Code, Codex and OpenCode. Production startup does not install it

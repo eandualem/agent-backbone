@@ -708,8 +708,8 @@ def materialize(
                 if git_dir is not None:
                     resources.append(git_dir)
                     exclude = contained_path(git_dir, "info/exclude")
-                    if exclude.exists():
-                        info = exclude.stat()
+                    if os.path.lexists(exclude):
+                        info = exclude.lstat()
                         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                             raise ValueError(
                                 "Git exclude must be a regular file without hard links"
@@ -815,7 +815,7 @@ def _common_git_dir(repo_dir: Path, *, strict: bool = False) -> Path | None:
     common = git_dir / "commondir"
     if common.is_file() or (strict and os.path.lexists(common)):
         try:
-            if strict and not stat.S_ISREG(common.stat().st_mode):
+            if strict and not stat.S_ISREG(common.lstat().st_mode):
                 raise ValueError("Project common Git pointer must be a regular file")
             rel = common.read_text(encoding="utf-8").strip()
             if strict and not rel:

@@ -232,7 +232,7 @@ class ProfileRegistry:
                 ):
                     raise ValueError("Profile reservation conflicts with an existing reservation")
             if any(
-                self._overlap(reservation.data_dir, path)
+                self._project_overlap(reservation.data_dir, path)
                 for path, _ in self._project_claims(conn, records)
             ):
                 raise ValueError("Profile directory conflicts with an existing project claim")
@@ -332,7 +332,9 @@ class ProfileRegistry:
                 ):
                     raise ValueError("Project resource conflicts with profile storage")
             for claimed, claimant in claims:
-                if claimant != identity and any(self._overlap(path, claimed) for path in resources):
+                if claimant != identity and any(
+                    self._project_overlap(path, claimed) for path in resources
+                ):
                     raise ValueError("Project belongs to another profile; use a separate checkout")
             conn.executemany(
                 "INSERT OR IGNORE INTO project_claims VALUES (?, ?, ?, ?)",
@@ -361,12 +363,25 @@ class ProfileRegistry:
                 raise ValueError("Invalid project ownership metadata") from exc
             if (
                 not path.is_absolute()
-                or _resolve(path) != path
+                or ".." in path.parts
+                or "\x00" in str(path)
                 or not any(record.identity == identity for record in records)
             ):
                 raise ValueError("Invalid project ownership metadata")
             claims.append((path, identity))
         return claims
+
+    @classmethod
+    def _project_overlap(cls, requested: Path, claimed: Path) -> bool:
+        # Retain the original reservation even if its checkout is moved. A live
+        # alias must not let another profile acquire the same resource, but an
+        # unavailable old path must not invalidate every unrelated reservation.
+        if cls._overlap(requested, claimed):
+            return True
+        try:
+            return cls._overlap(requested, _resolve(claimed))
+        except ValueError:
+            return False
 
     def _matching(self, conn, identity, data_dir):
         for record in self._records(conn):
