@@ -225,6 +225,11 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
                 return await self.on_connect(*args)
             except asyncio.CancelledError:
                 return False
+            except Exception:
+                # Socket.IO only handles explicit refusals. Retire provisional
+                # membership on other setup failures, then preserve the error.
+                await self.server.manager.disconnect(args[0], self.namespace)
+                raise
         if event == "disconnect" or not args:
             return await super().trigger_event(event, *args)
         sid = args[0]
@@ -316,8 +321,8 @@ class _AuthenticatedNamespace(socketio.AsyncNamespace):
                 if registration:
                     self._registrations[sid] = registration
                 await self._connected(sid, feed, current)
-                accepted = current() and sid in self._profiles
-                return accepted
+            accepted = current() and sid in self._profiles
+            return accepted
         finally:
             if self._connecting.get(sid) is admission:
                 self._connecting.pop(sid)

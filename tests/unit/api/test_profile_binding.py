@@ -930,3 +930,39 @@ async def test_cancelled_handshake_refuses_and_removes_socket_membership(api_app
     finally:
         connecting.cancel()
         await asyncio.gather(connecting, return_exceptions=True)
+
+
+async def test_failed_admission_fence_exit_retires_captured_state(
+    api_app, bound_provider, monkeypatch
+):
+    from contextlib import asynccontextmanager
+
+    provider, registry, _ = bound_provider
+    operation = type(provider).operation
+
+    @asynccontextmanager
+    async def failed_exit(self):
+        async with operation(self):
+            yield
+        raise OSError("fence exit failed")
+
+    monkeypatch.setattr(type(provider), "operation", failed_exit)
+    agent = await api_app.state.agent_store.update("ike", runtime="codex")
+    ns = api_app.state.sio.namespace_handlers["/sessions"]
+    api_app.state.feed.snapshot = AsyncMock(return_value=[])
+    ns.emit = AsyncMock()
+    sio = api_app.state.sio
+    sio.environ["engine"] = {}
+    sio._send_packet = AsyncMock()
+    with pytest.raises(OSError, match="fence exit failed"):
+        await sio._handle_connect(
+            "engine",
+            ns.namespace,
+            {
+                "api_key": agent_api_key(api_app.state.config.api_key, agent.registration_id),
+                **vars(provider.reservation.identity),
+            },
+        )
+    assert not ns._profiles and not ns._registrations and not ns._connecting
+    assert not list(sio.manager.get_participants(ns.namespace, None))
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
