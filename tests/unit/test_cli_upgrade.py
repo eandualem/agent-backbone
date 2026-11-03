@@ -386,20 +386,34 @@ def test_server_startup_failure_is_not_reported_as_success(tmp_path):
 
 
 def test_failed_shutdown_does_not_exec_a_replacement(tmp_path):
-    from types import SimpleNamespace
+    from contextlib import asynccontextmanager
+
+    from fastapi import FastAPI
 
     from agent_backbone.cli import server
+    from agent_backbone.config import AgentsConfig, build_config
 
-    wrapper = SimpleNamespace(
-        other_asgi_app=SimpleNamespace(state=SimpleNamespace(restart_requested=True))
+    @asynccontextmanager
+    async def failing_lifespan(app):
+        yield
+        raise RuntimeError("shutdown cleanup failed")
+
+    app = FastAPI(lifespan=failing_lifespan)
+    app.state.restart_requested = True
+    config = build_config(
+        tmp_path,
+        settings={"backbone.host": "127.0.0.1", "backbone.port": 0},
+        agents=AgentsConfig(),
+        env={},
     )
     with (
-        patch("agent_backbone.api.app.create_app", return_value=wrapper),
-        patch("uvicorn.Server") as uvicorn_server,
+        patch("agent_backbone.api.app.create_app", return_value=app),
+        # Finish serving immediately; startup, lifespan failure and shutdown
+        # run through the real Uvicorn server on a private ephemeral port.
+        patch("uvicorn.Server.main_loop", new_callable=AsyncMock),
         patch.object(server.os, "execv") as execv,
     ):
-        uvicorn_server.return_value.lifespan.shutdown_failed = True
         with pytest.raises(SystemExit) as exc:
-            server._run_server(bootstrap_config(tmp_path))
+            server._run_server(config)
     assert exc.value.code == 3
     execv.assert_not_called()
