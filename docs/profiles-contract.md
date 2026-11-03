@@ -148,8 +148,11 @@ inspect provider directories. Reservation and reconciliation check the selected
 directory against the filesystem. A changed provider path cannot prevent reading
 other records or invalidating the exact stored reservation.
 If SQLite needs writable journal recovery after an interrupted mutation,
-discovery reports the registry as unavailable. Replaying the original reservation
-or invalidation can recover the journal; reads never perform that write or
+discovery and operation lookup report the registry as unavailable. Explicit
+initialization/apply, or replay of the original reservation or invalidation, can
+recover the journal before validating the recovered metadata. Apply preserves the
+original committed receipt and never repeats unknown effects; reads never perform
+that write or
 substitute an empty registry. Reconciliation and mutation callers must preserve
 the original identity and directory through recovery.
 

@@ -89,7 +89,7 @@ class ProfileRegistry:
         registry.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         registry._check_parent()
         if registry.path.exists():
-            registry.list()
+            registry._validate_for_write()
             registry._initialize_project_claims()
             registry._initialize_operations()
             return registry
@@ -117,10 +117,16 @@ class ProfileRegistry:
                 os.close(parent)
         finally:
             Path(temporary).unlink(missing_ok=True)
-        registry.list()
+        registry._validate_for_write()
         registry._initialize_project_claims()
         registry._initialize_operations()
         return registry
+
+    def _validate_for_write(self) -> None:
+        # Explicit initialization/apply may recover an interrupted SQLite write.
+        # A read-only validation first would strand a hot rollback journal.
+        with self._connection(write=True) as conn:
+            self._records(conn)
 
     def _initialize_project_claims(self) -> None:
         """Explicitly upgrade reservations; discovery never changes the schema."""

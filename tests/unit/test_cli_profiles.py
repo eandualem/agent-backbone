@@ -1,6 +1,9 @@
 """Operator discovery never opens a provider or promotes a reservation."""
 
 import json
+import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,7 +11,13 @@ import pytest
 
 from agent_backbone.cli import main
 from agent_backbone.config import PROFILE_REGISTRY_PATH, agent_api_key
-from agent_backbone.services.database import ProfileIdentity, ProfileRegistry, ProfileReservation
+from agent_backbone.services.database import (
+    ProfileIdentity,
+    ProfileOperations,
+    ProfileRegistry,
+    ProfileReservation,
+    check_profile_startup,
+)
 
 
 def test_discovery_is_local_atomic_and_read_only(tmp_path, capsys):
@@ -149,3 +158,55 @@ def test_ambiguous_or_deep_json_is_rejected_before_registry_access(tmp_path, cap
     assert result.value.code == 1
     assert capsys.readouterr().out == ""
     registry.assert_not_called()
+
+
+@pytest.mark.parametrize("pending", [False, True])
+async def test_explicit_apply_recovers_hot_journal_and_replays_original_receipt(
+    tmp_path, capsys, pending
+):
+    registry = ProfileRegistry.create(Path(PROFILE_REGISTRY_PATH).expanduser())
+    request = json.loads(Path("docs/contracts/profiles-v1.json").read_text())["lifecycle"]["create"]
+    operations = ProfileOperations(registry)
+    expected = operations.begin(request)[0] if pending else operations.apply(request)
+    with sqlite3.connect(registry.path) as conn:
+        conn.execute("CREATE TABLE spill (data BLOB)")
+        conn.execute("INSERT INTO spill VALUES (zeroblob(262144))")
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os, sqlite3, sys; "
+            "c = sqlite3.connect(sys.argv[1]); "
+            "c.execute('PRAGMA cache_size=1'); "
+            "c.execute('BEGIN IMMEDIATE'); "
+            "c.execute(\"UPDATE lifecycle_operations SET receipt_json = 'uncommitted'\"); "
+            "c.execute('UPDATE spill SET data=randomblob(262144)'); "
+            "os._exit(0)",
+            str(registry.path),
+        ],
+        check=True,
+        timeout=10,
+    )
+    journal = Path(str(registry.path) + "-journal")
+    before = registry.path.read_bytes(), journal.read_bytes()
+    for args in (["list"], ["operation", request["request_id"]]):
+        with pytest.raises(SystemExit) as result:
+            main(["profiles", *args, "--json"])
+        assert result.value.code == 1
+        captured = capsys.readouterr()
+        assert not captured.out and "unavailable" in captured.err
+        assert (registry.path.read_bytes(), journal.read_bytes()) == before
+    provider = tmp_path / "legacy"
+    url = f"sqlite+aiosqlite:///{provider / 'backbone.db'}"
+    with pytest.raises(ValueError, match="unavailable"):
+        await check_profile_startup(url, provider)
+    source = tmp_path / "request.json"
+    source.write_text(json.dumps(request))
+    with pytest.raises(SystemExit) as result:
+        main(["profiles", "apply", "--file", str(source), "--json"])
+    assert result.value.code == (0 if pending else 1)
+    assert json.loads(capsys.readouterr().out) == expected
+    assert not journal.exists()
+    assert operations.lookup(request["request_id"]) == expected
+    await check_profile_startup(url, provider)
+    assert not provider.exists()
