@@ -52,7 +52,7 @@ class Source:
 
     @property
     def config(self) -> BackboneConfig:
-        """Configuration snapshot supplied by the owning execution context."""
+        """Always the latest published configuration snapshot."""
         return self._config_provider()
 
     @property

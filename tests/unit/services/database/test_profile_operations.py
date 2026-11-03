@@ -160,3 +160,18 @@ def test_failed_reservation_is_an_invalidated_binding(operations, fixtures):
     receipt = operations.apply(request)
     assert receipt["error"]["code"] == "binding_mismatch"
     assert operations.lookup(request["request_id"]) == receipt
+
+
+def test_refusal_read_failure_cannot_leave_pending_work(operations, fixtures, monkeypatch):
+    request = fixtures["lifecycle"]["start"]
+    with monkeypatch.context() as context:
+
+        def unreadable(conn):
+            raise ValueError("storage unavailable")
+
+        context.setattr(operations.registry, "_records", unreadable)
+        with pytest.raises(ValueError, match="storage unavailable"):
+            operations.apply(request)
+    unknown = {**fixtures["operation_lookup_unknown"]["body"], "request_id": request["request_id"]}
+    assert operations.lookup(request["request_id"]) == unknown
+    assert operations.apply(request)["error"]["code"] == "profile_not_ready"

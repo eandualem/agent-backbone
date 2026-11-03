@@ -121,8 +121,11 @@ exit before releasing the reservation. Shutdown closes admission and drains thes
 setup worker, before stopping integrations or storage; cancelling the shutdown
 caller leaves the work owned for a later drain. Periodic job callbacks and diagnostic
 writes now acquire the captured provider guard in application wiring; the scheduler
-remains independent of profile services. Each run retains its configuration and
-database. Provider worker threads retain their callers through actual worker exit,
+remains independent of profile services. Job callbacks retain their entry configuration
+and database; integration, source, session-feed and lifecycle-hook suppliers remain live so persistent
+polling tasks see authorization and configuration changes. Complete integration and
+source operation fencing is still required before activation. Provider worker threads
+retain their callers through actual worker exit,
 including repeated cancellation. Native command creation and cleanup retain the
 child handle through reaping; Git cleanup also covers its process group. Telegram
 shutdown closes topic-discovery admission and drains its retained topic tasks before
@@ -311,7 +314,9 @@ returns `adoption_unavailable`, and start/stop return `profile_not_ready` for an
 exact `creating` reservation or `binding_mismatch` for a stale, invalidated or
 unknown tuple. A `failed` reservation is a permanent invalidation tombstone, not
 a valid binding awaiting readiness.
-These are durable failed-operation receipts with nonzero exit status. They do not
+These are durable failed-operation receipts with nonzero exit status. Refusal
+classification and receipt storage commit atomically, so a failure before that commit
+does not leave a pending reservation. They do not
 create provider directories, start/stop services, adopt an installation or publish
 ready discovery. An unchanged failed request continues to return that failure;
 new work after prerequisites change requires a new request ID.

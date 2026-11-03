@@ -81,6 +81,9 @@ class ProfileOperations:
             return json.loads(row[0]) if row else operation_error(request_id, "operation_not_found")
 
     def begin(self, request: dict) -> tuple[dict, bool]:
+        return self._record(request)
+
+    def _record(self, request: dict, *, refuse=False) -> tuple[dict, bool]:
         request = validate_profile_operation(request)
         body = _json(request)
         action = request["action"]
@@ -125,6 +128,9 @@ class ProfileOperations:
                 receipt.update(
                     status="failed", error=operation_error("", "operation_busy")["error"]
                 )
+            elif refuse:
+                code = self._refusal(request, conn)
+                receipt.update(status="failed", error=operation_error("", code)["error"])
             conn.execute(
                 "INSERT INTO lifecycle_operations "
                 "(request_id, request_json, scope, installation_id, status, receipt_json) "
@@ -138,7 +144,7 @@ class ProfileOperations:
                     _json(receipt),
                 ),
             )
-        return receipt, not bool(pending)
+        return receipt, not (pending or refuse)
 
     def fail(self, request: dict, code: str) -> dict:
         """Finish the exact reserved input with a fixed, non-secret refusal."""
@@ -169,25 +175,22 @@ class ProfileOperations:
         No baseline is shipped and no activation or original-provider capture is
         installed yet. These are durable failures, never success-shaped mocks.
         """
-        receipt, execute = self.begin(request)
-        if not execute:
-            return receipt
+        # Refusal has no effects to reconcile. Classify and retain its receipt
+        # in one transaction so a failed read/write cannot leave a pending lock.
+        return self._record(request, refuse=True)[0]
+
+    def _refusal(self, request, conn) -> str:
         if request["action"] == "create":
-            code = "baseline_unavailable"
-        elif request["action"] == "adopt_default":
-            code = "adoption_unavailable"
-        else:
-            code = "binding_mismatch"
-            with self.registry._connection() as conn:
-                records = self.registry._records(conn)
-                for record in records:
-                    identity = record.identity
-                    if (
-                        identity.profile_id == request["profile_id"]
-                        and identity.installation_id == request["expected_installation_id"]
-                        and identity.lifecycle_id == request["expected_lifecycle_id"]
-                        and record.state != "failed"
-                    ):
-                        code = "profile_not_ready"
-                        break
-        return self.fail(request, code)
+            return "baseline_unavailable"
+        if request["action"] == "adopt_default":
+            return "adoption_unavailable"
+        for record in self.registry._records(conn):
+            identity = record.identity
+            if (
+                identity.profile_id == request["profile_id"]
+                and identity.installation_id == request["expected_installation_id"]
+                and identity.lifecycle_id == request["expected_lifecycle_id"]
+                and record.state != "failed"
+            ):
+                return "profile_not_ready"
+        return "binding_mismatch"
