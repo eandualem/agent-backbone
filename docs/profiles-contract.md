@@ -480,6 +480,12 @@ remains `unknown`; binary/version availability proves none of these authenticati
 outcomes. `authentication_cases` shows field values, not full responses. Unsupported
 schema/flags leave discovery unavailable; never retry unbound.
 
+Bound setup also rechecks after registration/profile locks and database reads,
+before snapshot publication and credential provisioning, and after terminal
+capacity and process-creation waits before sending launch input. A committed
+registration is recorded before later checks can refuse further work. Cleanup of
+an admitted launch still removes temporary secrets and completes session scrubbing.
+
 ## Inspect permissions for one agent registration
 
 List and inspect responses now include the durable `registration_id`; bound reads

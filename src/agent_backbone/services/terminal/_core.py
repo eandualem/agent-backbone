@@ -6,7 +6,7 @@ import asyncio
 import logging
 import uuid
 
-from agent_backbone.base import owned_process
+from agent_backbone.base import check_before_effect, owned_process
 from agent_backbone.services.terminal._server import tmux_command
 
 log = logging.getLogger(__name__)
@@ -34,6 +34,7 @@ async def _run_tmux(
     *args: str,
     capture_stdout: bool = False,
     stdin_data: bytes | None = None,
+    check_effect=None,
 ) -> tuple[int, bytes, bytes]:
     """Run a tmux subprocess with concurrency limiting.
 
@@ -43,6 +44,7 @@ async def _run_tmux(
     """
     command = tmux_command(*args)
     async with _get_semaphore():
+        await check_before_effect(check_effect)
         kwargs: dict = {
             "stdout": asyncio.subprocess.PIPE if capture_stdout else asyncio.subprocess.DEVNULL,
             "stderr": asyncio.subprocess.PIPE,
@@ -51,6 +53,7 @@ async def _run_tmux(
             kwargs["stdin"] = asyncio.subprocess.PIPE
         async with owned_process(asyncio.create_subprocess_exec(*command, **kwargs)) as proc:
             try:
+                await check_before_effect(check_effect)
                 async with asyncio.timeout(10.0):
                     stdout, stderr = await proc.communicate(input=stdin_data)
             except TimeoutError:

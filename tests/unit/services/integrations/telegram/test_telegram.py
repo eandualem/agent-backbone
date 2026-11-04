@@ -1279,20 +1279,27 @@ async def test_shutdown_drains_real_ptb_dispatch_and_fetched_queue(config, monke
         await app.shutdown()
 
 
-async def test_shutdown_stops_polling_started_after_early_admission_close(config, monkeypatch):
+@pytest.mark.parametrize("phase", ["initialize", "polling"])
+async def test_shutdown_stops_polling_started_after_early_admission_close(
+    config, monkeypatch, phase
+):
     bot = _bot(replace(config, telegram_token="123:fake"))
     entered, release = asyncio.Event(), asyncio.Event()
     app = MagicMock(running=False)
     app.updater.running = False
 
     async def initialize():
-        entered.set()
-        await release.wait()
+        if phase == "initialize":
+            entered.set()
+            await release.wait()
 
     async def start_app():
         app.running = True
 
     async def start_polling():
+        if phase == "polling":
+            entered.set()
+            await release.wait()
         app.updater.running = True
 
     async def stop_polling():
@@ -1326,9 +1333,11 @@ async def test_shutdown_stops_polling_started_after_early_admission_close(config
         app.updater.stop.assert_not_awaited()
         release.set()
         await starting
-        assert app.updater.running
+        assert app.updater.running == (phase == "polling")
+        assert app.updater.start_polling.await_count == (phase == "polling")
+        bot.sync_agents.assert_not_awaited()
         await bot.stop()
-        app.updater.stop.assert_awaited_once()
+        assert app.updater.stop.await_count == (phase == "polling")
         app.shutdown.assert_awaited_once()
         assert not app.updater.running and bot._app is None
     finally:

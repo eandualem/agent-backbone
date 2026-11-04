@@ -246,7 +246,7 @@ async def _check(check_effect):
 
 async def _first(request, receipt, store, db, *, check_effect=None):
     await _check(check_effect)
-    await store.refresh()
+    await store.refresh(**({"check_effect": check_effect} if check_effect is not None else {}))
     await _check(check_effect)
     config = store.config
     spec = AgentSpec(
@@ -346,8 +346,27 @@ async def _first(request, receipt, store, db, *, check_effect=None):
         await _check(check_effect)
         path.mkdir(parents=True, exist_ok=True)
         receipt.save(registration_pending=True)
+
+        def registered(created):
+            receipt.save(registration_id=created.registration_id, registration_pending=False)
+            receipt.completed("agent")
+
         try:
-            spec = await store.register(spec, only_new=True)
+            spec = await store.register(
+                spec,
+                only_new=True,
+                **(
+                    {"check_effect": check_effect, "on_registered": registered}
+                    if check_effect is not None
+                    else {}
+                ),
+            )
+        except SetupReceiptError:
+            # Bound registration records its committed identity before any later
+            # effect check. A refusal without that receipt preceded the insert.
+            if check_effect is not None and not receipt.record.get("registration_id"):
+                receipt.save(registration_pending=False)
+            raise
         except AgentRegistrationConflict as exc:
             if exc.registration_id is not None:
                 receipt.save(registration_id=exc.registration_id, registration_pending=False)
@@ -385,7 +404,13 @@ async def _first(request, receipt, store, db, *, check_effect=None):
         operation = uuid4().hex
         receipt.save(launch_operation=operation)
         started = await start_agent(
-            spec, config, db=db, brief_file=brief_path, wait=True, operation_id=operation
+            spec,
+            config,
+            db=db,
+            brief_file=brief_path,
+            wait=True,
+            operation_id=operation,
+            **({"check_effect": check_effect} if check_effect is not None else {}),
         )
         if not started.ok:
             return _answer(

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from agent_backbone.services.terminal._core import (
     _run_tmux,
     capture_pane,
@@ -154,3 +156,58 @@ class TestCapturePaneDelegatesToRunTmux:
             "-20",
             capture_stdout=True,
         )
+
+
+async def test_launch_guard_rechecks_after_waiting_for_process_capacity(monkeypatch):
+    from agent_backbone.services.terminal import _core
+
+    waiting = asyncio.Event()
+
+    class Slots(asyncio.Semaphore):
+        async def acquire(self):
+            waiting.set()
+            return await super().acquire()
+
+    slots = Slots(0)
+    valid = True
+
+    async def check():
+        if not valid:
+            raise ValueError("authority changed")
+
+    execute = AsyncMock()
+    monkeypatch.setattr(_core, "_get_semaphore", lambda: slots)
+    monkeypatch.setattr(_core.asyncio, "create_subprocess_exec", execute)
+    task = asyncio.create_task(_run_tmux("start-server", check_effect=check))
+    try:
+        await asyncio.wait_for(waiting.wait(), 2)
+        valid = False
+        slots.release()
+        with pytest.raises(ValueError, match="authority changed"):
+            await task
+        execute.assert_not_awaited()
+    finally:
+        slots.release()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_launch_guard_refuses_stdin_after_process_creation(monkeypatch):
+    from agent_backbone.services.terminal import _core
+
+    valid = True
+    proc = AsyncMock()
+    proc.returncode = 0
+
+    async def execute(*args, **kwargs):
+        nonlocal valid
+        valid = False
+        return proc
+
+    async def check():
+        if not valid:
+            raise ValueError("authority changed")
+
+    monkeypatch.setattr(_core.asyncio, "create_subprocess_exec", execute)
+    with pytest.raises(ValueError, match="authority changed"):
+        await _run_tmux("source-file", "-", stdin_data=b"new-session\n", check_effect=check)
+    proc.communicate.assert_not_awaited()

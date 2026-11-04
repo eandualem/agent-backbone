@@ -14,6 +14,7 @@ import sys
 import tempfile
 from collections.abc import Sequence
 
+from agent_backbone.base import check_before_effect
 from agent_backbone.services.terminal._core import _run_tmux, exact_target, session_exists
 from agent_backbone.services.terminal._server import tmux_server_socket
 
@@ -107,6 +108,7 @@ async def start_session(
     scrub: Sequence[str] | None = None,
     mouse: bool = False,
     inherit_environment: bool = True,
+    check_effect=None,
 ) -> bool:
     """Start a detached tmux session running ``command`` (or a shell).
 
@@ -141,10 +143,13 @@ async def start_session(
     ``mouse`` enables mouse handling only for this session; False preserves
     the user's setting. Inline programs then scroll through tmux history.
     """
+    await check_before_effect(check_effect)
     if await session_exists(session_name):
         log.info("Session '%s' already exists", session_name)
         return True
 
+    await check_before_effect(check_effect)
+    effect_options = {"check_effect": check_effect} if check_effect is not None else {}
     environment = environment or {}
     if not inherit_environment:
         if not environment or not command or tmux_server_socket() is None:
@@ -154,7 +159,13 @@ async def start_session(
         # A pinned provider must also clear server-only variables that were never
         # present in the daemon. Later panes receive these removals as well.
         rc, raw, _ = await _run_tmux(
-            "start-server", ";", "show-environment", "-g", "-s", capture_stdout=True
+            "start-server",
+            ";",
+            "show-environment",
+            "-g",
+            "-s",
+            capture_stdout=True,
+            **effect_options,
         )
         if rc != 0:
             return False
@@ -177,6 +188,7 @@ async def start_session(
         if statement:
             raise ValueError("Incomplete terminal environment representation")
         scrub = [*(scrub or ()), *inherited]
+    await check_before_effect(check_effect)
     removals = [key for key in dict.fromkeys(scrub or ()) if key not in environment]
 
     args = ["new-session", "-d", "-s", session_name]
@@ -223,8 +235,14 @@ async def start_session(
     # ``source-file`` starts no server of its own, hence ``start-server``.
     line = " ".join(_tmux_quote(arg) for arg in args) + "\n"
     try:
+        await check_before_effect(check_effect)
         rc, _, stderr = await _run_tmux(
-            "start-server", ";", "source-file", "-", stdin_data=line.encode()
+            "start-server",
+            ";",
+            "source-file",
+            "-",
+            stdin_data=line.encode(),
+            **effect_options,
         )
         # tmux can start the session and still not answer in time: a first start
         # that also started the server did, on a Linux host. A refusal stays one.

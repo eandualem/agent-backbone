@@ -1479,6 +1479,13 @@ async def test_bound_setup_body_cannot_replace_http_tuple_or_downgrade(
         for key, value in body.items()
         if key not in {"profile_id", "expected_installation_id", "expected_lifecycle_id"}
     } | {"schema_version": 1, "data_dir": str(provider.reservation.data_dir)}
+    existing = await api_app.state.db.agents.list()
+    response = await api_client.post(
+        "/api/setup/first-agent", headers=headers, json=legacy | {"action": "first_agent"}
+    )
+    assert response.status_code == 409
+    assert await api_app.state.db.agents.list() == existing
+    assert not (provider.reservation.data_dir / "setup-receipts").exists()
     response = await api_client.post("/api/setup/first-agent/cancel", headers=headers, json=legacy)
     assert response.status_code == 409
     assert not (provider.reservation.data_dir / "setup-receipts").exists()
@@ -1627,8 +1634,21 @@ async def test_bound_cancellation_owns_work_after_client_leaves(
 
 
 @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        "success",
+        "register_wait",
+        "register_read",
+        "registered_refresh",
+        "refresh_publish",
+        "launch_probe",
+        "launch_lock",
+        "launch_completed",
+    ],
+)
 async def test_bound_first_agent_http_success_and_replay(
-    api_app, api_client, auth_headers, bound_provider, monkeypatch, runtime, tmp_path
+    api_app, api_client, auth_headers, bound_provider, monkeypatch, runtime, tmp_path, boundary
 ):
     from dataclasses import replace
 
@@ -1659,6 +1679,7 @@ async def test_bound_first_agent_http_success_and_replay(
     selected = RUNTIMES[runtime]
     monkeypatch.setattr(type(selected), "resolve_binary", lambda self: str(tmp_path / "inert-cli"))
     monkeypatch.setattr(type(selected), "setup_error", lambda self: None)
+    monkeypatch.setattr(type(selected), "installed_version", lambda self: "2.1.4")
     monkeypatch.setattr(_environment, "_CONTEXT", None)
     environment = selected.capture_environment(root / "native" / runtime)
     install_native_environments({runtime: environment})
@@ -1673,6 +1694,8 @@ async def test_bound_first_agent_http_success_and_replay(
             "BACKBONE_REGISTRATION_ID": spec.registration_id,
             "BACKBONE_LAUNCH_ID": "fixture-launch",
         }
+        if boundary == "launch_completed":
+            api_app.state.profile_provider = None
         return StartResult(True, ready="ready")
 
     async def exists(name):
@@ -1702,6 +1725,89 @@ async def test_bound_first_agent_http_success_and_replay(
             "brief": {"template": "orchestrator-v1"},
         },
     }
+    if boundary != "success":
+        from contextlib import asynccontextmanager
+
+        from agent_backbone.services.agents import launch as launcher
+        from agent_backbone.services.agents import store as storage
+
+        async def changed_read(original, *args, **kwargs):
+            result = await original(*args, **kwargs)
+            api_app.state.profile_provider = None
+            return result
+
+        @asynccontextmanager
+        async def changed_lock(*args):
+            api_app.state.profile_provider = None
+            yield
+
+        with monkeypatch.context() as change:
+            if boundary.startswith("register"):
+                original_register = store.register
+
+                async def register(*args, **kwargs):
+                    with monkeypatch.context() as inside:
+                        if boundary == "register_wait":
+                            inside.setattr(storage, "profile_lock", changed_lock)
+                        elif boundary == "registered_refresh":
+                            original_refresh = store.refresh
+
+                            async def refresh(**options):
+                                api_app.state.profile_provider = None
+                                return await original_refresh(**options)
+
+                            inside.setattr(store, "refresh", refresh)
+                        else:
+                            original_list = api_app.state.db.agents.list
+                            inside.setattr(
+                                api_app.state.db.agents,
+                                "list",
+                                lambda: changed_read(original_list),
+                            )
+                        return await original_register(*args, **kwargs)
+
+                change.setattr(store, "register", register)
+            elif boundary == "refresh_publish":
+                original_list = api_app.state.db.agents.list
+                change.setattr(api_app.state.db.agents, "list", lambda: changed_read(original_list))
+            elif boundary != "launch_completed":
+                change.setattr(onboarding, "start_agent", launcher.start_agent)
+                change.setattr(launcher, "session_exists", AsyncMock(return_value=False))
+                terminal = AsyncMock(return_value=True)
+                change.setattr(launcher, "start_session", terminal)
+                change.setattr(launcher, "wait_until_ready", AsyncMock(return_value=("ready", [])))
+                if boundary == "launch_probe":
+                    probe = launcher.session_exists
+                    change.setattr(
+                        launcher, "session_exists", lambda name: changed_read(probe, name)
+                    )
+                else:
+                    change.setattr(launcher, "profile_lock", changed_lock)
+            before_config = api_app.state.config
+            response = await api_client.post(
+                "/api/setup/first-agent", json=body, headers={**auth_headers, **headers}
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["code"] == "binding_mismatch", response.text
+            assert state["live"] == (boundary == "launch_completed")
+            if boundary.startswith("launch"):
+                if boundary != "launch_completed":
+                    terminal.assert_not_awaited()
+            elif boundary != "registered_refresh":
+                assert not any(
+                    row["name"] == "guide" for row in await api_app.state.db.agents.list()
+                )
+                if boundary == "refresh_publish":
+                    assert api_app.state.config is before_config
+            with BoundSetupReceipt(root, body) as receipt:
+                assert not receipt.record.get("registration_pending")
+                assert bool(receipt.record.get("registration_id")) == (
+                    boundary.startswith("launch") or boundary == "registered_refresh"
+                )
+                assert receipt.record.get("result", {}).get("status") != "completed"
+        api_app.state.profile_provider = provider
+        if boundary.startswith("launch"):
+            return  # The retained launch operation is not automatically repeated.
     for _ in range(2):
         response = await api_client.post(
             "/api/setup/first-agent", json=body, headers={**auth_headers, **headers}

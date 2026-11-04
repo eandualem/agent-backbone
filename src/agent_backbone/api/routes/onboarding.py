@@ -97,6 +97,7 @@ async def _bound_setup(request, body, config, db, store=None):
                 store is not None
                 and (
                     state.agent_store is not store
+                    or not store.owns_storage(db, config.data_dir)
                     or store.config.data_dir != config.data_dir
                     or store.config.database_url != config.database_url
                 )

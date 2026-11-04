@@ -388,17 +388,23 @@ class TelegramService(Integration):
         app = self.build_app()
         try:
             await app.initialize()
+            if self._stopping:
+                return
             await app.start()
+            if self._stopping:
+                return
             await app.updater.start_polling()
             self._running = True
-            await self.sync_agents()
+            if not self._stopping:
+                await self.sync_agents()
         except BaseException:
             try:
                 await self.stop()
             except BaseException:
                 log.exception("Telegram startup cleanup failed")
             raise
-        log.info("Telegram bot polling started")
+        if not self._stopping:
+            log.info("Telegram bot polling started")
 
     def close_admission(self) -> None:
         """Stop fetching; already fetched updates remain owned until PTB drains."""

@@ -18,6 +18,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from agent_backbone.base import check_before_effect
 from agent_backbone.config import (
     SOURCES,
     SUBSCRIPTION_PRIORITIES,
@@ -169,33 +170,45 @@ class AgentStore:
             self._config = build_config(self._data_dir, settings={}, agents=AgentsConfig())
         return self._config
 
-    async def refresh(self) -> BackboneConfig:
+    def owns_storage(self, db: BackboneDB, data_dir: Path) -> bool:
+        """Whether this store still owns the caller's captured database and root."""
+        return self._db is db and self._data_dir == data_dir
+
+    async def refresh(self, *, check_effect=None) -> BackboneConfig:
         """Re-read settings and agents from the database and publish."""
         async with self._lock:
+            await check_before_effect(check_effect)
             if self._credential_endpoint is not None:
                 try:
                     async with profile_lock(self._data_dir):
-                        registrations = await self._refresh_snapshot()
+                        registrations = await self._refresh_snapshot(check_effect=check_effect)
                         host, port = self._credential_endpoint
                         active_config = replace(
                             self._config,
                             backbone=replace(self._config.backbone, host=host, port=port),
                         )
+                        await check_before_effect(check_effect)
                         _provision_agent_profiles(active_config, registrations)
                 except (OSError, ValueError):
+                    if check_effect is not None:
+                        raise
                     log.warning("Could not provision agent credential profiles", exc_info=True)
-                    await self._refresh_snapshot()
+                    await self._refresh_snapshot(check_effect=check_effect)
             else:
-                await self._refresh_snapshot()
+                await self._refresh_snapshot(check_effect=check_effect)
+        await check_before_effect(check_effect)
         if self._on_change is not None:
             result = self._on_change(self._config)
             if asyncio.iscoroutine(result):
                 await result
         return self._config
 
-    async def _refresh_snapshot(self) -> list[dict]:
-        self._settings = await self._db.settings.all()
+    async def _refresh_snapshot(self, *, check_effect=None) -> list[dict]:
+        settings = await self._db.settings.all()
+        await check_before_effect(check_effect)
         registrations = await self._db.agents.list()
+        await check_before_effect(check_effect)
+        self._settings = settings
         self._agents = agents_from_rows(registrations)
         self._config = build_config(self._data_dir, settings=self._settings, agents=self._agents)
         return registrations
@@ -283,11 +296,25 @@ class AgentStore:
                     return await self.register(current.with_watches(*watches))
 
     @serialized_mutation
-    async def register(self, spec: AgentSpec, *, only_new: bool = False) -> AgentSpec:
+    async def register(
+        self, spec: AgentSpec, *, only_new: bool = False, check_effect=None, on_registered=None
+    ) -> AgentSpec:
         """Insert or update an agent and publish the new snapshot."""
         validate_agent_spec(spec)
-        async with profile_lock(self._data_dir):
-            agents = agents_from_rows(await self._db.agents.list())
+        if on_registered is not None and not only_new:
+            raise ValueError("A registration receipt requires a new-only registration")
+        db, data_dir = self._db, self._data_dir
+
+        async def check():
+            await check_before_effect(check_effect)
+            if not self.owns_storage(db, data_dir):
+                raise ValueError("Agent store ownership changed")
+
+        await check()
+        async with profile_lock(data_dir):
+            await check()
+            agents = agents_from_rows(await db.agents.list())
+            await check()
             if only_new and any(
                 other.name.casefold() == spec.name.casefold()
                 or other.path.resolve() == spec.path.resolve()
@@ -298,7 +325,8 @@ class AgentStore:
             await _refuse_running_inbox_only(
                 spec.name, spec.inbox_only and not (current and current.inbox_only)
             )
-            await self._db.agents.upsert(
+            await check()
+            await db.agents.upsert(
                 spec.name,
                 dir=spec.dir,
                 runtime=spec.runtime,
@@ -311,15 +339,20 @@ class AgentStore:
                 unattended=spec.unattended,
                 inbox_only=spec.inbox_only,
             )
+            if on_registered is not None:
+                committed = agents_from_rows(await db.agents.list()).get(spec.name)
+                if committed is None or not committed.registration_id:
+                    raise RuntimeError("The new agent registration could not be read.")
+                # Receipt of an already committed effect survives a later refusal.
+                on_registered(committed)
             for repo in spec.watches:
-                await self._db.agents.add_watch(spec.name, repo)
+                await check()
+                await db.agents.add_watch(spec.name, repo)
             # Capture our insert before another process can replace this name.
-            inserted = (
-                agents_from_rows(await self._db.agents.list()).get(spec.name) if only_new else None
-            )
+            inserted = agents_from_rows(await db.agents.list()).get(spec.name) if only_new else None
             if only_new and (inserted is None or not inserted.registration_id):
                 raise RuntimeError("The new agent registration could not be read.")
-        await self.refresh()
+        await self.refresh(**({"check_effect": check} if check_effect is not None else {}))
         if only_new:
             current = self._agents.get(spec.name)
             if current != inserted:
