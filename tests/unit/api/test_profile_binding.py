@@ -1645,6 +1645,10 @@ async def test_bound_cancellation_owns_work_after_client_leaves(
         "launch_probe",
         "launch_lock",
         "launch_completed",
+        "greeting_readiness",
+        "greeting_foreground",
+        "greeting_buffer",
+        "greeting_submit",
     ],
 )
 async def test_bound_first_agent_http_success_and_replay(
@@ -1725,6 +1729,66 @@ async def test_bound_first_agent_http_success_and_replay(
             "brief": {"template": "orchestrator-v1"},
         },
     }
+    if boundary.startswith("greeting"):
+        from agent_backbone.base import check_before_effect
+        from agent_backbone.services import runtimes
+        from agent_backbone.services.routing import _delivery
+        from agent_backbone.services.routing.models import SessionIntelligence, SessionProfile
+        from agent_backbone.services.terminal import _core
+
+        body["start_greeting"] = True
+        commands = []
+
+        async def intelligence(*args, **kwargs):
+            if boundary == "greeting_readiness":
+                api_app.state.profile_provider = None
+            return SessionProfile("guide", SessionIntelligence.READY, runtime=runtime)
+
+        async def foreground(*args):
+            if boundary == "greeting_foreground":
+                api_app.state.profile_provider = None
+            return True
+
+        async def tmux(*args, check_effect=None, **kwargs):
+            await check_before_effect(check_effect)
+            commands.append(args[0])
+            if (boundary, args[0]) in {
+                ("greeting_buffer", "load-buffer"),
+                ("greeting_submit", "paste-buffer"),
+            }:
+                api_app.state.profile_provider = None
+            return 0, b"", b""
+
+        monkeypatch.setattr(_delivery, "get_session_intelligence", intelligence)
+        monkeypatch.setattr(_delivery, "prompt_hook_after", AsyncMock(return_value=False))
+        monkeypatch.setattr(runtimes, "capture_pane", AsyncMock(return_value=""))
+        monkeypatch.setattr(type(selected), "accepts_notifications", foreground)
+        monkeypatch.setattr(_core, "session_exists", AsyncMock(return_value=True))
+        monkeypatch.setattr(_core, "_run_tmux", tmux)
+        response = await api_client.post(
+            "/api/setup/first-agent", json=body, headers={**auth_headers, **headers}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["code"] == "binding_mismatch", response.text
+        assert "send-keys" not in commands
+        assert ("paste-buffer" in commands) == (boundary == "greeting_submit")
+        assert ("delete-buffer" in commands) == (boundary == "greeting_buffer")
+        with BoundSetupReceipt(root, body) as receipt:
+            assert receipt.record.get("greeting_operation")
+            assert receipt.record.get("result", {}).get("status") != "completed"
+            held = await api_app.state.db.queue.held_receipt(
+                "guide",
+                onboarding.envelope("setup", onboarding.GREETING),
+                "setup",
+                receipt.record["greeting_operation"],
+                "",
+                None,
+                "direct_message",
+            )
+        assert (held is not None) == (boundary == "greeting_submit")
+        if held:
+            assert held["status"] == "uncertain"
+        return
     if boundary != "success":
         from contextlib import asynccontextmanager
 

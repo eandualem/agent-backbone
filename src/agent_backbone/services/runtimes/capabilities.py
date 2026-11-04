@@ -218,7 +218,8 @@ CAPABILITIES: tuple[Capability, ...] = (
     _row(
         "installer-first-agent",
         "Explicit first-agent setup with durable retry and preflight cancellation receipts",
-        "services/routing/onboarding.py; cli/onboarding.py; Runtime.prepare_setup_hooks",
+        "services/routing/onboarding.py; api/routes/onboarding.py; "
+        "cli/onboarding.py; Runtime.prepare_setup_hooks",
         fallback=(
             "Use the documented agent-start flow; do not retry an uncertain launch "
             "or greeting as a new request."
@@ -226,14 +227,17 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: rt.setup_hooks,
         claude=_ok(
             "tests/unit/services/routing/test_onboarding.py",
+            "Bound HTTP guards: tests/unit/api/test_profile_binding.py; "
             "working-installation live check pending",
         ),
         codex=_ok(
             "tests/unit/services/routing/test_onboarding.py",
+            "Bound HTTP guards: tests/unit/api/test_profile_binding.py; "
             "working-installation live check pending",
         ),
         opencode=_ok(
             "tests/unit/services/routing/test_onboarding.py",
+            "Bound HTTP guards: tests/unit/api/test_profile_binding.py; "
             "working-installation live check pending",
         ),
         gemini=_gap(note="installer hook preparation is not implemented"),

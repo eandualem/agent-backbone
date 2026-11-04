@@ -26,7 +26,7 @@ from functools import wraps
 from typing import TYPE_CHECKING, TypeVar
 from weakref import WeakValueDictionary
 
-from agent_backbone.base import run_thread
+from agent_backbone.base import check_before_effect, run_thread
 from agent_backbone.hooks.backbone_state import (
     claim_context,
     clear_context,
@@ -427,6 +427,7 @@ async def safe_deliver(
     queue_id: int | None = None,
     event_id: int | None = None,
     once: bool = False,
+    check_effect=None,
 ) -> DeliveryReport:
     """Deliver ``message`` to ``session_name`` if the agent can take it, else queue it.
 
@@ -439,6 +440,7 @@ async def safe_deliver(
     ``once``: a success already recorded under ``operation_id`` in the agent's
     current conversation (a queued copy's included) answers ``already_delivered``.
     """
+    await check_before_effect(check_effect)
     kind = delivery_kind
     operation_id = operation_id or uuid.uuid4().hex
     trackable_issue = db is not None and issue_number is not None and target_entity is not None
@@ -501,6 +503,7 @@ async def safe_deliver(
     # 2. Claim
     claim_id: int | None = None
     if kind == "issue" and trackable_issue:
+        await check_before_effect(check_effect)
         claim = await db.deliveries.claim(
             issue_number=issue_number,
             target_entity=target_entity,
@@ -566,6 +569,10 @@ async def safe_deliver(
     ) -> DeliveryReport:
         receipt = _QueueReceipt()
         if queue and requeue:
+            # An uncertain paste already belongs to this operation: preserve its
+            # recovery record even if authority changed after the paste.
+            if not uncertain:
+                await check_before_effect(check_effect)
             receipt = await _enqueue(
                 db,
                 session_name=session_name,
@@ -717,14 +724,21 @@ async def safe_deliver(
             and not requeue
             and await db.signing.is_confirmation(operation_id)
         )
+        await check_before_effect(check_effect)
         if confirmed:
             # Recorded before the paste: an attempt interrupted after it is
             # held as uncertain, never pasted again (``_serialized``).
             await db.signing.attempt(operation_id, begun=True)
+        await check_before_effect(check_effect)
         pasted_at = time.time()
         note_submission(config.state_dir, session_name)
         try:
-            sent = await send_message(session_name, message, runtime_hint=profile.runtime)
+            sent = await send_message(
+                session_name,
+                message,
+                runtime_hint=profile.runtime,
+                **({"check_effect": check_effect} if check_effect is not None else {}),
+            )
             if not sent and confirmed:
                 await db.signing.attempt(operation_id, begun=False)
             return sent

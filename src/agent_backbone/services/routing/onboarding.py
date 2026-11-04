@@ -585,6 +585,7 @@ async def _greet(receipt, spec, config, db, *, check_effect=None):
         delivery_kind="direct_message",
         operation_id=operation,
         once=True,
+        **({"check_effect": check_effect} if check_effect is not None else {}),
     )
     await _check(check_effect)
     if (

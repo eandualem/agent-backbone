@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from importlib import import_module
 
+from agent_backbone.base import check_before_effect
 from agent_backbone.config import RUNTIME_METADATA
 from agent_backbone.services.runtimes import shell
 from agent_backbone.services.runtimes._environment import (
@@ -122,14 +123,19 @@ def install_hint() -> str:
 
 
 async def send_message(
-    session_name: str, message: str, *, runtime_hint: str | None = None
+    session_name: str, message: str, *, runtime_hint: str | None = None, check_effect=None
 ) -> bool | None:
     """Submit to an identified runtime; None means keep this notification as data."""
     pane_content = await capture_pane(session_name, lines=80)
     runtime = await resolve_runtime(session_name, hint=runtime_hint, pane_content=pane_content)
     if not await runtime.accepts_notifications(session_name):
         return None
-    return await runtime.deliver_message(session_name, message)
+    await check_before_effect(check_effect)
+    return await runtime.deliver_message(
+        session_name,
+        message,
+        **({"check_effect": check_effect} if check_effect is not None else {}),
+    )
 
 
 __all__ = [

@@ -211,3 +211,25 @@ async def test_launch_guard_refuses_stdin_after_process_creation(monkeypatch):
     with pytest.raises(ValueError, match="authority changed"):
         await _run_tmux("source-file", "-", stdin_data=b"new-session\n", check_effect=check)
     proc.communicate.assert_not_awaited()
+
+
+async def test_admitted_argument_command_finishes_after_process_creation(monkeypatch):
+    from agent_backbone.services.terminal import _core
+
+    valid = True
+    proc = AsyncMock()
+    proc.returncode = 0
+    proc.communicate.return_value = (b"", b"")
+
+    async def execute(*args, **kwargs):
+        nonlocal valid
+        valid = False
+        return proc
+
+    async def check():
+        if not valid:
+            raise ValueError("authority changed")
+
+    monkeypatch.setattr(_core.asyncio, "create_subprocess_exec", execute)
+    assert await _run_tmux("paste-buffer", check_effect=check) == (0, b"", b"")
+    proc.communicate.assert_awaited_once_with(input=None)

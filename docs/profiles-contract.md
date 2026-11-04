@@ -485,6 +485,10 @@ before snapshot publication and credential provisioning, and after terminal
 capacity and process-creation waits before sending launch input. A committed
 registration is recorded before later checks can refuse further work. Cleanup of
 an admitted launch still removes temporary secrets and completes session scrubbing.
+Greeting delivery carries the same check through readiness, runtime detection,
+queue admission, paste and submit waits. If authority changes after text was
+pasted, retain an uncertain receipt for inspection instead of submitting or
+automatically repeating it; cleanup still removes the operation's paste buffer.
 
 ## Inspect permissions for one agent registration
 
