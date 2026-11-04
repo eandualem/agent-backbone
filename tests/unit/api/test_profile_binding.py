@@ -1904,3 +1904,131 @@ async def test_bound_first_agent_http_success_and_replay(
     with BoundSetupReceipt(root, body) as receipt:
         assert receipt.record["registration_id"] == store.agents.get("guide").registration_id
         assert receipt.record["result"]["status"] == "completed"
+
+
+async def test_schema2_catalog_requires_bound_operator_before_observation(api_client, auth_headers):
+    response = await api_client.get(
+        "/api/runtimes?schema_version=2&check_setup=true", headers=auth_headers
+    )
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": {"code": "binding_mismatch", "message": "Profile binding does not match."}
+    }
+    assert (
+        await api_client.get("/api/runtimes?schema_version=2&check_setup=true")
+    ).status_code == 401
+    assert isinstance((await api_client.get("/api/runtimes", headers=auth_headers)).json(), list)
+    assert (
+        await api_client.get("/api/runtimes?schema_version=3", headers=auth_headers)
+    ).status_code == 422
+
+
+async def test_bound_catalog_missing_native_context_never_probes_host(
+    api_client, api_app, auth_headers, bound_provider, monkeypatch
+):
+    from agent_backbone.services.runtimes import _environment, base
+
+    monkeypatch.setattr(_environment, "_CONTEXT", None)
+    monkeypatch.setattr(base.Runtime, "available", lambda *a: pytest.fail("ambient discovery"))
+    monkeypatch.setattr(base.Runtime, "setup_compatibility", lambda *a: pytest.fail("native probe"))
+    provider, _, headers = bound_provider
+    response = await api_client.get(
+        "/api/runtimes?schema_version=2&check_setup=true", headers={**auth_headers, **headers}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema_version"] == 2
+    assert body["profile_id"] == provider.reservation.identity.profile_id
+    assert body["installation_id"] == provider.reservation.identity.installation_id
+    assert body["lifecycle_id"] == provider.reservation.identity.lifecycle_id
+    assert len(body["items"]) == 7
+    assert all(
+        not item["available"] and not item["setup_compatibility"]["compatible"]
+        for item in body["items"]
+    )
+    assert {item["authentication"] for item in body["items"]} == {"unavailable", "unsupported"}
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_bound_catalog_probes_captured_native_environment(
+    api_client, api_app, auth_headers, bound_provider, monkeypatch, runtime
+):
+    import subprocess
+
+    from agent_backbone.api import runtime_catalog
+    from agent_backbone.services.runtimes import RUNTIMES, _environment, install_native_environments
+
+    provider, _, headers = bound_provider
+    selected = RUNTIMES[runtime]
+    monkeypatch.setattr(_environment, "_CONTEXT", None)
+    monkeypatch.setattr(type(selected), "resolve_binary", lambda *a: "/synthetic/bin/native")
+    environment = selected.capture_environment(provider.reservation.data_dir / "native" / runtime)
+    install_native_environments({runtime: environment})
+    monkeypatch.setattr(runtime_catalog, "RUNTIMES", {runtime: selected})
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "2.2.2", "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    response = await api_client.get(
+        "/api/runtimes?schema_version=2&check_setup=true", headers={**auth_headers, **headers}
+    )
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["id"] == runtime and item["available"] is True
+    assert item["authentication"] == "unknown"
+    assert item["setup_compatibility"]["compatible"] is True
+    assert calls and all(
+        kwargs["env"] == dict(environment) and kwargs["cwd"] == environment.root
+        for _, kwargs in calls
+    )
+    assert all(command == ["/synthetic/bin/native", "--version"] for command, _ in calls)
+
+
+async def test_bound_catalog_rechecks_after_probe_and_retains_worker_on_disconnect(
+    api_client, api_app, auth_headers, bound_provider, monkeypatch
+):
+    import threading
+    from types import SimpleNamespace
+
+    from agent_backbone.api import runtime_catalog
+
+    provider, registry, headers = bound_provider
+    entered, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def observe(environment):
+        assert environment is None
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(10)
+        return {"id": "synthetic"}
+
+    monkeypatch.setattr(
+        runtime_catalog,
+        "RUNTIMES",
+        {"synthetic": SimpleNamespace(environment=lambda: {}, bound_discovery=observe)},
+    )
+    pending = asyncio.create_task(
+        api_client.get(
+            "/api/runtimes?schema_version=2&check_setup=true", headers={**auth_headers, **headers}
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        with pytest.raises(ValueError, match="fence is busy"):
+            registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        task = api_app.state.bound_runtime_catalog[2]
+        api_app.state.profile_provider = None
+        release.set()
+        result = await asyncio.gather(task, return_exceptions=True)
+        assert getattr(result[0], "status_code", None) == 409
+        await api_app.state.api_tasks.stop()
+        registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        await api_app.state.api_tasks.stop()

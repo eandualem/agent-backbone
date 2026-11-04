@@ -561,13 +561,13 @@ class Runtime:
         """How the backbone learns this runtime's state (for ``backbone runtimes``)."""
         return "hooks + terminal" if self.hook_script else "terminal"
 
-    def discovery(self) -> dict:
+    def discovery(self, *, bound_available: bool | None = None) -> dict:
         """Read-only onboarding metadata; no process launch, login or model call."""
         supported = self.unattended_args is not None
         return {
             "id": self.id,
             "display_name": self.display_name,
-            "available": self.available(),
+            "available": self.available() if bound_available is None else bound_available,
             "setup_supported": self.setup_hooks,
             "reports_state": self.reports_state,
             "models": list(self.models),
@@ -579,6 +579,29 @@ class Runtime:
             },
             "authentication": self.authentication,
         }
+
+    def bound_discovery(self, environment: NativeEnvironment | None) -> dict:
+        """Observe only a provider-owned context; missing context never probes the host."""
+        if environment is None:
+            item = self.discovery(bound_available=False)
+            item["setup_supported"] = False
+            item["authentication"] = "unavailable" if self.setup_hooks else "unsupported"
+            item["setup_compatibility"] = {
+                "compatible": False,
+                "reason": "runtime_permission" if self.setup_hooks else "unsupported",
+                "message": "Runtime setup observation requires an owned native environment.",
+                "path": None,
+                "version": None,
+                "version_error": "unavailable",
+            }
+            return item
+        if native_environment(self.id) != environment:
+            raise ValueError("Native runtime context does not match")
+        item = self.discovery()
+        item["setup_compatibility"] = self.setup_compatibility()
+        if native_environment(self.id) != environment:
+            raise ValueError("Native runtime context does not match")
+        return item
 
     def hook_launch_args(
         self, data_dir: Path | str | None, state_dir: Path | str | None

@@ -212,6 +212,13 @@ def cmd_secrets(args: argparse.Namespace) -> int:
 
 def cmd_runtimes(args: argparse.Namespace) -> int:
     """Every runtime, whether its binary is installed, and example model ids."""
+    if any(
+        getattr(args, field, None) is not None
+        for field in ("profile", "expected_installation_id", "expected_lifecycle_id")
+    ):
+        from agent_backbone.cli._profile_catalog import cmd_bound_runtimes
+
+        return cmd_bound_runtimes(args)
     from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
 
     checks = (

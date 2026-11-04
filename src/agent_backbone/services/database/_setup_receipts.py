@@ -222,3 +222,24 @@ class BoundSetupReceipt(SetupReceipt):
             ensure_ascii=True,
         ).encode()
         self.path = self.directory / ("bound-" + hashlib.sha256(key).hexdigest() + ".json")
+
+
+class ProfileSetupConnectionReceipt(BoundSetupReceipt):
+    """Capture transport continuity before dispatch without storing credentials.
+
+    The initial atomic receipt includes both intent fingerprint and connection;
+    a torn or corrupt existing receipt never becomes permission to recapture.
+    The provider's own execution/cancellation journal remains authoritative.
+    """
+
+    def __init__(self, directory: Path, request: dict, connection: dict):
+        super().__init__(directory, request)
+        self.connection = dict(connection)
+
+    def save(self, **updates) -> None:
+        super().save(**updates, connection=self.connection)
+
+    def _read_existing(self) -> None:
+        super()._read_existing()
+        if self.record.get("connection") != self.connection:
+            raise SetupReceiptError("binding_mismatch", "Profile setup connection does not match.")

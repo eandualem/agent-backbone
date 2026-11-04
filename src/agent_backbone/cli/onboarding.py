@@ -26,6 +26,8 @@ from agent_backbone.fs import atomic_create_text as _exclusive_file
 from agent_backbone.models import (
     SETUP_BODY_BYTES,
     SETUP_CANCEL_BODY_BYTES,
+    BoundSetupFirstAgent,
+    BoundSetupRequest,
     SetupCancelFirstAgent,
     SetupFirstAgent,
     SetupInitialize,
@@ -40,6 +42,7 @@ from agent_backbone.templates import core_starter_content
 
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 ADAPTER = TypeAdapter(SetupRequest)
+BOUND_ADAPTER = TypeAdapter(BoundSetupRequest)
 _READINESS_SECONDS = 30.0
 
 
@@ -60,16 +63,20 @@ def add_setup_parser(sub) -> None:
 class Output:
     def __init__(self, request_id):
         self.request_id, self.seq = request_id, 0
+        self.binding = None
+        self.action = None
 
     def emit(self, kind, **data):
         self.seq += 1
         print(
             json.dumps(
                 {
-                    "schema_version": 1,
+                    "schema_version": 2 if self.binding is not None else 1,
                     "request_id": self.request_id,
                     "seq": self.seq,
                     "type": kind,
+                    **(self.binding or {}),
+                    **({"action": self.action} if self.binding is not None else {}),
                     **data,
                 }
             ),
@@ -102,7 +109,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         if args.validate:
             print("--validate requires --file", file=sys.stderr)
             return 2
-        print(json.dumps(ADAPTER.json_schema()))
+        print(json.dumps(TypeAdapter(SetupRequest | BoundSetupRequest).json_schema()))
         return 0
     if not args.jsonl:
         print("--file requires --jsonl", file=sys.stderr)
@@ -117,12 +124,22 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 raw = stream.read(SETUP_CANCEL_BODY_BYTES + 1)
         if len(raw) > SETUP_CANCEL_BODY_BYTES:
             raise ValueError("request too large")
-        data = json.loads(raw, object_pairs_hook=_unique_object)
+        data = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
         if len(raw) > SETUP_BODY_BYTES and (
             not isinstance(data, dict) or data.get("action") != "cancel_first_agent"
         ):
             raise ValueError("request too large")
         if isinstance(data, dict):
+            if type(data.get("schema_version")) is int and data["schema_version"] == 2:
+                output.binding = {
+                    key: data.get(source) if isinstance(data.get(source), str) else None
+                    for key, source in (
+                        ("profile_id", "profile_id"),
+                        ("installation_id", "expected_installation_id"),
+                        ("lifecycle_id", "expected_lifecycle_id"),
+                    )
+                }
+                output.action = data.get("action")
             if isinstance(data.get("request_id"), str) and _REQUEST_ID.fullmatch(
                 data["request_id"]
             ):
@@ -132,7 +149,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 and not args.validate
             ):
                 action = data["action"]
-        request = ADAPTER.validate_python(data)
+        request = (BOUND_ADAPTER if output.binding is not None else ADAPTER).validate_python(data)
     except (OSError, ValueError, ValidationError, RecursionError):
         return output.finish(
             result(
@@ -157,6 +174,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
     output.step("preflight", "running")
     try:
         _operator_environment()
+        if isinstance(request, BoundSetupFirstAgent):
+            return output.finish(asyncio.run(_execute_bound(request, raw, output)))
         _safe_directory(Path(request.data_dir))
         record = asyncio.run(_execute(request, output))
     except SetupReceiptError as exc:
@@ -189,6 +208,33 @@ def cmd_setup(args: argparse.Namespace) -> int:
             "Setup stopped without confirming the result; retry the same request.",
         )
     return output.finish(record)
+
+
+async def _execute_bound(request, raw, output):
+    from agent_backbone.cli._profile_client import Refused, resolve_binding
+    from agent_backbone.cli._profile_setup import PendingSetup
+
+    try:
+        binding = resolve_binding(
+            (request.profile_id, request.expected_installation_id, request.expected_lifecycle_id),
+            setup_request=request.model_dump(),
+        )
+        body = await PendingSetup.capture(binding, raw).execute()
+    except Refused as exc:
+        messages = {
+            "operator_required": "Run setup from a local operator process.",
+            "binding_mismatch": "Profile binding does not match.",
+            "credential_unavailable": "The captured profile credential is unavailable.",
+            "service_unavailable": "The captured profile service is unavailable.",
+            "invalid_request": "Invalid setup request; use --schema.",
+            "outcome_unknown": "No result was confirmed; retain and retry the same request.",
+            "request_conflict": "This request ID already belongs to different input.",
+            "installation_conflict": "The original setup connection receipt is unavailable.",
+        }
+        return result(request.action, exc.code, messages[exc.code])
+    for step in body["completed_steps"]:
+        output.step(step, "completed")
+    return body
 
 
 def _operator_environment():

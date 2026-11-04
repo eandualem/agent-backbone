@@ -219,7 +219,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         "installer-first-agent",
         "Explicit first-agent setup with durable retry and preflight cancellation receipts",
         "services/routing/onboarding.py; api/routes/onboarding.py; "
-        "cli/onboarding.py; Runtime.prepare_setup_hooks",
+        "cli/onboarding.py; cli/_profile_setup.py; cli/_profile_client.py; "
+        "Runtime.prepare_setup_hooks",
         fallback=(
             "Use the documented agent-start flow; do not retry an uncertain launch "
             "or greeting as a new request."
@@ -227,17 +228,20 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: rt.setup_hooks,
         claude=_ok(
             "tests/unit/services/routing/test_onboarding.py",
-            "Bound HTTP guards: tests/unit/api/test_profile_binding.py; "
+            "Bound CLI: tests/unit/test_cli_profile_setup.py; "
+            "HTTP guards: tests/unit/api/test_profile_binding.py; "
             "working-installation live check pending",
         ),
         codex=_ok(
             "tests/unit/services/routing/test_onboarding.py",
-            "Bound HTTP guards: tests/unit/api/test_profile_binding.py; "
+            "Bound CLI: tests/unit/test_cli_profile_setup.py; "
+            "HTTP guards: tests/unit/api/test_profile_binding.py; "
             "working-installation live check pending",
         ),
         opencode=_ok(
             "tests/unit/services/routing/test_onboarding.py",
-            "Bound HTTP guards: tests/unit/api/test_profile_binding.py; "
+            "Bound CLI: tests/unit/test_cli_profile_setup.py; "
+            "HTTP guards: tests/unit/api/test_profile_binding.py; "
             "working-installation live check pending",
         ),
         gemini=_gap(note="installer hook preparation is not implemented"),
@@ -248,16 +252,52 @@ CAPABILITIES: tuple[Capability, ...] = (
     _row(
         "runtime-discovery",
         "Read-only runtime discovery for setup",
-        "services/runtimes/base.py Runtime.discovery; cli/setup.py cmd_runtimes",
+        "services/runtimes/base.py Runtime.discovery; cli/setup.py cmd_runtimes; "
+        "cli/_profile_catalog.py; api/runtime_catalog.py",
         fallback="Binary presence is not login; use the runtime's visible sign-in flow.",
         implemented=lambda rt: callable(rt.discovery),
-        claude=_ok("tests/unit/services/runtimes/test_discovery.py"),
-        codex=_ok("tests/unit/services/runtimes/test_discovery.py"),
-        opencode=_ok("tests/unit/services/runtimes/test_discovery.py"),
-        gemini=_ok("tests/unit/services/runtimes/test_discovery.py"),
-        deepcode=_ok("tests/unit/services/runtimes/test_discovery.py"),
-        aider=_ok("tests/unit/services/runtimes/test_discovery.py"),
-        shell=_ok("tests/unit/services/runtimes/test_discovery.py"),
+        claude=_ok(
+            "tests/unit/services/runtimes/test_discovery.py",
+            "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
+            "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
+            "no activation or account verification",
+        ),
+        codex=_ok(
+            "tests/unit/services/runtimes/test_discovery.py",
+            "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
+            "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
+            "no activation or account verification",
+        ),
+        opencode=_ok(
+            "tests/unit/services/runtimes/test_discovery.py",
+            "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
+            "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
+            "no activation or account verification",
+        ),
+        gemini=_ok(
+            "tests/unit/services/runtimes/test_discovery.py",
+            "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
+            "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
+            "no activation or account verification",
+        ),
+        deepcode=_ok(
+            "tests/unit/services/runtimes/test_discovery.py",
+            "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
+            "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
+            "no activation or account verification",
+        ),
+        aider=_ok(
+            "tests/unit/services/runtimes/test_discovery.py",
+            "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
+            "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
+            "no activation or account verification",
+        ),
+        shell=_ok(
+            "tests/unit/services/runtimes/test_discovery.py",
+            "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
+            "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
+            "no activation or account verification",
+        ),
     ),
     _row(
         "legacy-profile-binding-rejection",

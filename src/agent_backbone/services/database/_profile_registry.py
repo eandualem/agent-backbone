@@ -302,6 +302,39 @@ class ProfileRegistry:
                     return {"schema_version": 1, **record.summary(), "binding": None}
         raise ValueError("Profile reservation was not found")
 
+    def setup_connection_receipt(self, request: dict, connection: dict):
+        """Locate operator setup continuity outside every reserved provider tree."""
+        from agent_backbone.services.database._setup_receipts import ProfileSetupConnectionReceipt
+
+        root = self._operation_directory
+        with self._connection() as conn:
+            records = self._records(conn)
+            if any(self._overlap(record.data_dir, root) for record in records):
+                raise ValueError("Profile setup continuity overlaps provider storage")
+            if not any(
+                record.identity
+                == ProfileIdentity(
+                    request["profile_id"],
+                    request["expected_installation_id"],
+                    request["expected_lifecycle_id"],
+                )
+                and record.state != "failed"
+                for record in records
+            ):
+                raise ValueError("Profile setup identity does not match")
+        for directory in (root, root / "setup-connections"):
+            if directory.resolve() != directory:
+                raise ValueError("Profile setup continuity path is not canonical")
+            directory.mkdir(mode=0o700, exist_ok=True)
+            info = directory.lstat()
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) & 0o077
+            ):
+                raise ValueError("Profile setup continuity must be private")
+        return ProfileSetupConnectionReceipt(root / "setup-connections", request, connection)
+
     def check_reservation(self, identity: ProfileIdentity, data_dir: Path) -> ProfileReservation:
         """Compare external identity/path ownership; does not establish readiness.
 

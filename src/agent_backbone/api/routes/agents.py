@@ -10,6 +10,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from starlette.responses import JSONResponse
 
 from agent_backbone.api.auth import require_operator
 from agent_backbone.api.deps import (
@@ -338,8 +339,17 @@ async def _runtime_setup_checks():
 
 
 @router.get("/runtimes", response_model=list[RuntimeInfo])
-async def list_runtimes(request: Request, check_setup: bool = False):
+async def list_runtimes(
+    request: Request, check_setup: bool = False, schema_version: int = Query(default=1, ge=1, le=2)
+):
     """Supported runtimes and whether their binary is installed."""
+    if schema_version == 2:
+        from agent_backbone.api.runtime_catalog import bound_catalog
+
+        await require_operator(request)
+        if not check_setup:
+            raise HTTPException(status_code=422, detail="Schema 2 requires check_setup=true")
+        return JSONResponse(await bound_catalog(request))
     checks = {}
     if check_setup:
         await require_operator(request)

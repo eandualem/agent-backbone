@@ -109,6 +109,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("runtimes", help="supported runtimes, whether installed, example model ids")
     p.add_argument("--json", action="store_true", help="versioned runtime discovery for setup")
+    p.add_argument("--profile", help="capture this profile for operator runtime discovery")
+    p.add_argument("--expected-installation-id")
+    p.add_argument("--expected-lifecycle-id")
     p.add_argument(
         "--check-setup",
         action="store_true",

@@ -21,8 +21,9 @@ registration-aware permission inspection without changing revision 2 identity or
 lifecycle rules. The apply journal accepts the adoption request shape but refuses it until original
 provider capture is available. Schema-2 first-agent HTTP handling now has an internal captured-provider path,
 including cancellation and per-effect checks. No production startup installs that
-context, and the schema-2 CLI resolver, runtime catalog and permission-context
-inspection remain unimplemented.
+context. The schema-2 CLI resolver and bound runtime catalog are implemented;
+permission-context inspection remains unimplemented. Local resolution refuses
+the current non-ready registry records and never activates them.
 There is no earlier released profile protocol.
 
 Provider-local identity persistence is implemented as an internal database
@@ -34,7 +35,7 @@ hooks, integrations or jobs. Direct CLI database fallback, `init` and setup
 initialization apply the same guard before writing credentials or receipts.
 Any identity record is refused because activation is not implemented. Directory
 ownership is checked separately against the external registry. This does not adopt
-Default, enable bound clients or grant legacy compatibility. Ready activation and
+Default or grant legacy compatibility. Ready activation and
 replacement fencing remain unimplemented; a copied database is not evidence of a
 valid active lifecycle.
 
@@ -433,6 +434,31 @@ Only the exact adopted tuple receives revision 2 legacy eligibility.
 
 ## Set up an agent within a captured profile
 
+The local CLI admits an operator before reading the external registry or the
+selected credential. It captures one atomic ready record, reads its exact private
+dotenv reference without interpolation, and verifies the authenticated identity
+and terminal socket over that record's Unix endpoint. There is no ambient
+credential, proxy, redirect or legacy-provider fallback. Each invocation retains
+the original request bytes and resolved credential; it never refreshes or retries
+the transport automatically. A lost mutation result remains uncertain.
+
+Before the first setup or cancellation dispatch, a private local receipt captures
+the normalized intent fingerprint, endpoint, credential reference and digest, and
+terminal socket. It lives beside the registry in its protected operations directory,
+outside provider data. It stores neither credential bytes nor the request's brief.
+Both actions share one tuple-and-request-ID receipt. Concurrent capture is serialized;
+changed intent returns `request_conflict`, and changed connection metadata returns
+`binding_mismatch`. Existing or corrupt receipts are never replaced to recapture
+an operation. They do not expire; at the existing 1,024-receipt capacity, new IDs
+are refused while recorded IDs remain usable. The provider's execution and
+cancellation journal remains authoritative.
+
+A new CLI process is not permission to refresh a pending operation's connection.
+Digest-only continuity deliberately refuses a rotated credential, even if the
+original credential might still work. This is a conservative availability limit,
+not seamless recovery across rotation. A refusal proves neither cancellation nor
+absence of previous effects; retain the original request and inspect its provider.
+
 `backbone setup --file request.json --jsonl` accepts the agreed schema-2
 `setup.first_agent` shape. It replaces schema-1 `data_dir` authority with
 `profile_id`, `expected_installation_id` and `expected_lifecycle_id`. The remaining
@@ -479,6 +505,16 @@ no usable probe result and `unsupported` means no supported probe. Unknown disco
 remains `unknown`; binary/version availability proves none of these authentication
 outcomes. `authentication_cases` shows field values, not full responses. Unsupported
 schema/flags leave discovery unavailable; never retry unbound.
+
+The bound CLI uses `GET /api/runtimes?schema_version=2&check_setup=true` after
+the identity handshake. This operator-only variant returns the schema-2 envelope;
+omitting `schema_version`, or passing `1`, retains the existing API list shape.
+The provider owns and drains the observation task through executor completion,
+rechecks its captured context before each probe and before publication, and
+retains the operation fence after client cancellation. A runtime without an owned
+native environment has unavailable setup observation, without a host probe.
+Adapters without isolated native support report unsupported authentication.
+Available binaries and compatible versions still leave authentication unknown.
 
 Bound setup also rechecks after registration/profile locks and database reads,
 before snapshot publication and credential provisioning, and after terminal

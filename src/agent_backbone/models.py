@@ -130,7 +130,7 @@ SetupBindingID = Annotated[str, Field(min_length=1, pattern=r"^[\x21-\x7e]+$")]
 class BoundSetupFirstAgent(SetupRequestBase, SetupFirstAgentFields):
     """Bound setup input; the provider owns all data and native root locators.
 
-    Separate from legacy SetupRequest; CLI dispatch remains legacy-only. A
+    Separate from legacy SetupRequest and resolved through local discovery. A
     project directory is a work location, never provider-selection authority.
     """
 

@@ -458,6 +458,14 @@ Supported runtimes with availability; raw tmux session names; a one-shot
 capture of a **registered agent's** screen (404 for any other tmux session —
 the API never reads or types into sessions that are not backbone agents).
 
+`GET /api/runtimes?schema_version=2&check_setup=true` is the operator-only,
+profile-bound runtime catalog. It requires the complete binding headers and an
+internally reconciled provider. It returns the schema-2 identity envelope and
+runtime observations from provider-owned native contexts. Missing context never
+falls back to host discovery. Schema 1 and the omitted-version response retain
+the existing list shape. Profile activation remains unavailable; see the
+[profile contract](profiles-contract.md).
+
 ## Fleet snapshots
 
 The agents running at one moment, each with the conversation it was in, saved
