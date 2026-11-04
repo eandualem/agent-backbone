@@ -955,11 +955,14 @@ operation receipt. Omit `--json` for labeled details.
 
 A create request naming the `empty-v1` baseline reserves new identities and a private
 directory, initializes an empty database and fresh credential, and publishes a ready
-record. Start/stop and Default adoption remain unimplemented. Apply returns durable
-refusal receipts: `baseline_unavailable` for any other baseline, `profile_create_failed`
-or `profile_path_too_long` when creation cannot finish, `adoption_unavailable` for
-adoption, `profile_not_ready` for an exact tuple, or `binding_mismatch` for an unknown,
-stale or invalidated tuple.
+record. Start launches that profile's provider unless its exact identity is already
+answering; stop signals only the process behind that verified endpoint. Default adoption
+remains unimplemented. Apply returns durable refusal receipts: `baseline_unavailable` for
+any other baseline, `profile_create_failed` or `profile_path_too_long` when creation
+cannot finish, `service_start_failed` or `service_stop_failed` when a provider does not
+start or stop in time, `adoption_unavailable` for adoption, `profile_not_ready` for an
+exact tuple that is still being created, or `binding_mismatch` for an unknown, stale or
+invalidated tuple.
 Pending work on the same profile or installation returns `operation_busy`.
 Errors exit nonzero. Replay of a pending request never repeats unknown effects;
 explicit reconciliation is still required after interruption. See the

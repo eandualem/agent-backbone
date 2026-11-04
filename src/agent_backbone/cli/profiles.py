@@ -115,7 +115,10 @@ def _lifecycle(args) -> int:
         if len(body) > 65536:
             raise ValueError("Profile operation request exceeds 65536 bytes")
         request = validate_profile_operation(json.loads(body, object_pairs_hook=_unique_object))
-        operations = ProfileOperations(ProfileRegistry.create(path))
+        from agent_backbone.cli._profile_services import ProviderServices
+
+        registry = ProfileRegistry.create(path)
+        operations = ProfileOperations(registry, services=ProviderServices(registry))
         result = operations.apply(request)
     else:
         operations = ProfileOperations(ProfileRegistry(path))

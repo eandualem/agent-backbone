@@ -8,8 +8,8 @@ another profile affects new work; it cannot retarget an existing request.
 **Implementation status:** this page and its fixtures define the agreed contract.
 Operator list/show discovery and refusal of unreconciled startup are implemented.
 Lifecycle apply/lookup commands retain requests and receipts. Creating the empty
-baseline succeeds and publishes a ready record, which cannot be started yet: start/stop,
-adoption and provider activation remain unimplemented. The identity
+baseline succeeds and publishes a ready record, and start/stop run that profile's
+provider on its private socket. Adoption remains unimplemented. The identity
 endpoint and bound-request checks have an internal reconciliation context, but no
 production startup installs it yet; the contract below is not a procedure for
 activating profiles.
@@ -342,15 +342,23 @@ Create can observe leaves a `failed` tombstone with `profile_create_failed` and
 retains the directory. `profile_path_too_long` refuses, before reserving anything,
 a location whose socket paths would not fit the Unix limit.
 
+Start launches the provider detached, unless that exact identity already answers, and
+succeeds once the authenticated identity check passes. Stop verifies the same identity,
+then signals only the process the kernel reports behind that endpoint, and succeeds
+once connections are refused. Nothing listening is already stopped. It never forces a
+process to exit. The profile's private tmux server and its sessions outlive the
+provider. `service_start_failed` and `service_stop_failed` report a provider that did
+not get there in time; another identity behind the endpoint is never signalled.
+
 Other execution is still unavailable: any other baseline returns
 `baseline_unavailable`, adoption returns `adoption_unavailable`, and start/stop return
-`profile_not_ready` for an exact tuple or `binding_mismatch` for a stale, invalidated
-or unknown tuple. A `failed` reservation is a permanent invalidation tombstone, not
+`profile_not_ready` for a reservation still being created or `binding_mismatch` for a
+stale, invalidated or unknown tuple. A `failed` reservation is a permanent invalidation tombstone, not
 a valid binding awaiting readiness.
 These are durable failed-operation receipts with nonzero exit status. Refusal
 classification and receipt storage commit atomically, so a failure before that commit
-does not leave a pending reservation. They do not
-create provider directories, start/stop services or adopt an installation.
+does not leave a pending reservation. Refusals do not create provider directories,
+start/stop services or adopt an installation.
 An unchanged failed request continues to return that failure;
 new work after prerequisites change requires a new request ID. Receipts have no
 automatic expiry or pruning: the original outcome and changed-input conflict are

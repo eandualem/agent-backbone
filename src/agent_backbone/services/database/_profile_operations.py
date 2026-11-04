@@ -39,6 +39,8 @@ ERRORS = {
     "adoption_unavailable": "Original provider adoption context is unavailable.",
     "profile_create_failed": "Profile could not be created.",
     "profile_path_too_long": "Profile paths exceed the Unix socket length limit.",
+    "service_start_failed": "Profile provider could not be started.",
+    "service_stop_failed": "Profile provider could not be stopped.",
 }
 
 
@@ -115,8 +117,9 @@ class ProfileOperations:
     reconcile the original operation before releasing its pending reservation.
     """
 
-    def __init__(self, registry: ProfileRegistry):
+    def __init__(self, registry: ProfileRegistry, services=None):
         self.registry = registry
+        self.services = services
 
     def lookup(self, request_id: str) -> dict:
         with self.registry._connection() as conn:
@@ -175,8 +178,7 @@ class ProfileOperations:
                 receipt.update(
                     status="failed", error=operation_error("", "operation_busy")["error"]
                 )
-            elif refuse:
-                code = self._refusal(request, conn)
+            elif refuse and (code := self._refusal(request, conn)):
                 receipt.update(status="failed", error=operation_error("", code)["error"])
             conn.execute(
                 "INSERT INTO lifecycle_operations "
@@ -191,7 +193,7 @@ class ProfileOperations:
                     _json(receipt),
                 ),
             )
-        return receipt, not (pending or refuse)
+        return receipt, receipt["status"] == "pending"
 
     def fail(self, request: dict, code: str) -> dict:
         """Finish the exact reserved input with a fixed, non-secret refusal."""
@@ -226,9 +228,31 @@ class ProfileOperations:
         request = validate_profile_operation(request)
         if request["action"] == "create" and request["baseline_version"] == EMPTY_BASELINE:
             return self._create(request)
+        if request["action"] in {"start", "stop"} and self.services is not None:
+            return self._run_service(request)
         # Refusal has no effects to reconcile. Classify and retain its receipt
         # in one transaction so a failed read/write cannot leave a pending lock.
         return self._record(request, refuse=True)[0]
+
+    def _run_service(self, request: dict) -> dict:
+        receipt, owned = self._record(request, refuse=True)
+        if not owned:
+            return receipt
+        action = request["action"]
+        try:
+            reservation = self.registry.ready_reservation(request["profile_id"])
+            getattr(self.services, action)(reservation)
+        except Exception:
+            return self.fail(request, f"service_{action}_failed")
+        with self.registry._connection(write=True) as conn:
+            receipt = self._stored_receipt(conn, request)
+            receipt["status"] = "succeeded"
+            conn.execute(
+                "UPDATE lifecycle_operations SET status = 'succeeded', receipt_json = ? "
+                "WHERE request_id = ?",
+                (_json(receipt), request["request_id"]),
+            )
+        return receipt
 
     def _create(self, request: dict) -> dict:
         """Reserve once, then provision. An interruption stays pending and non-ready."""
@@ -300,7 +324,7 @@ class ProfileOperations:
             ).fetchone()[0]
         )
 
-    def _refusal(self, request, conn) -> str:
+    def _refusal(self, request, conn) -> str | None:
         if request["action"] == "create":
             return "baseline_unavailable"
         if request["action"] == "adopt_default":
@@ -313,5 +337,7 @@ class ProfileOperations:
                 and identity.lifecycle_id == request["expected_lifecycle_id"]
                 and record.state != "failed"
             ):
+                if record.state == "ready" and self.services is not None:
+                    return None
                 return "profile_not_ready"
         return "binding_mismatch"
