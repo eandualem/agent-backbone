@@ -2108,14 +2108,14 @@ async def test_own_agent_credential_needs_no_identity_headers(
     assert response.json() == FIXTURES["http_errors"]["binding_mismatch"]["body"]
 
 
-async def test_only_the_adopted_installation_keeps_unbound_clients(
+async def test_only_the_default_profile_keeps_unbound_clients(
     api_client, auth_headers, api_app, bound_provider
 ):
     provider, _, headers = bound_provider
     response = await api_client.get("/api/reports", headers=auth_headers)
     assert response.json()["detail"]["code"] == "binding_required"
-    adopted = replace(provider, reservation=replace(provider.reservation, kind="legacy_default"))
-    api_app.state.profile_provider = adopted
+    default = replace(provider, reservation=replace(provider.reservation, kind="legacy_default"))
+    api_app.state.profile_provider = default
     with patch("agent_backbone.api.profile_binding.provider_current", AsyncMock(return_value=True)):
         assert (await api_client.get("/api/reports", headers=auth_headers)).status_code == 200
         wrong = {**headers, next(iter(headers)): "another-profile"}

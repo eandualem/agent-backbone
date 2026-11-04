@@ -15,7 +15,6 @@ from agent_backbone.config import PROFILE_REGISTRY_PATH
 from agent_backbone.services.database import (
     ProfileOperations,
     ProfileRegistry,
-    adoption_preview,
     validate_profile_operation,
 )
 
@@ -34,10 +33,6 @@ def add_profiles_parser(sub) -> None:
     operation = commands.add_parser("operation", help="read the original lifecycle receipt")
     operation.add_argument("request_id")
     operation.add_argument("--json", dest="json_output", action="store_true")
-    previewing = commands.add_parser(
-        "adoption-preview", help="check the existing installation before adopting it as Default"
-    )
-    previewing.add_argument("--json", dest="json_output", action="store_true")
     signing = commands.add_parser("sign-in", help="sign a CLI account in inside a running profile")
     signing.add_argument("profile_id")
     signing.add_argument("--runtime", required=True, choices=("claude", "codex", "opencode"))
@@ -81,8 +76,6 @@ def cmd_profiles(args) -> int:
     try:
         if args.profiles_command == "sign-in":
             return _sign_in(args)
-        if args.profiles_command == "adoption-preview":
-            return _adoption_preview(args)
         if args.profiles_command in {"apply", "operation"}:
             return _lifecycle(args)
         registry = ProfileRegistry(Path(PROFILE_REGISTRY_PATH).expanduser())
@@ -120,30 +113,6 @@ def cmd_profiles(args) -> int:
                 ("Kind", result["kind"]),
                 ("Provisioning state", result["state"]),
                 *connection,
-            ],
-        )
-    return 0
-
-
-def _adoption_preview(args) -> int:
-    try:
-        preview = adoption_preview()
-    except ValueError as exc:
-        if not args.json_output:
-            raise
-        error = {"code": "adoption_unavailable", "message": str(exc)}
-        print(json.dumps({"schema_version": 1, "error": error}))
-        return 1
-    if args.json_output:
-        print(json.dumps(preview))
-    else:
-        print_record(
-            "Existing installation",
-            [
-                ("Installation ID", preview["installation_id"]),
-                ("Data directory", preview["data_dir"]),
-                ("Tmux socket", preview["tmux"]["socket_path"]),
-                ("Adoption token", preview["adoption_token"]),
             ],
         )
     return 0

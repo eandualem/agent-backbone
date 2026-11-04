@@ -13,44 +13,6 @@ FIXTURES = json.loads((Path(__file__).parents[2] / "docs/contracts/profiles-v1.j
 IDENTITY = ("profile_id", "installation_id", "lifecycle_id")
 
 
-def test_adoption_replay_and_repeat_preserve_the_original_tuple():
-    adoption = FIXTURES["adoption"]
-    original, repeated = adoption["request"], adoption["repeat_request"]
-    assert original == repeated | {"request_id": original["request_id"]}
-    assert original["request_id"] != repeated["request_id"]
-    assert original["adoption_token"] == adoption["preview"]["adoption_token"]
-    assert adoption["succeeded"]["installation_id"] == original["expected_installation_id"]
-    assert adoption["repeat_succeeded"] == adoption["succeeded"] | {
-        "request_id": repeated["request_id"]
-    }
-    for key in ("pending", "changed"):
-        assert all(adoption[key][field] is None for field in IDENTITY)
-    cases = {case["name"]: case for case in adoption["cases"]}
-    assert cases["identical_body_replay"]["outcome"] == "succeeded"
-    replay = cases["identical_body_replay_changed_token"]
-    assert replay["request"] == "request" and replay["prior"] == "succeeded"
-    assert "request_changes" not in replay
-    assert replay["current_token"] != original["adoption_token"]
-    assert replay["outcome"] == "succeeded" and replay["expected_receipt"] == "succeeded"
-    assert cases["new_request_existing_instance"]["outcome"] == "succeeded"
-    assert cases["changed_body_same_id"]["outcome"] == "request_conflict"
-    assert cases["stale_token_new_request"]["outcome"] == "adoption_changed"
-    first = cases["first_adoption"]
-    assert first["prior"] is None and first["current_token"] == original["adoption_token"]
-    assert first["outcome"] == "succeeded" and first["allocates_identity"] is True
-    assert all(
-        not case["allocates_identity"] for name, case in cases.items() if name != "first_adoption"
-    )
-    for case in cases.values():
-        assert case["outcome"] in {"succeeded", "request_conflict", "adoption_changed"}
-        if receipt_name := case.get("expected_receipt"):
-            receipt = adoption[receipt_name]
-            assert receipt["request_id"] == adoption[case["request"]]["request_id"]
-            assert case["outcome"] == (
-                receipt["error"]["code"] if receipt["error"] else receipt["status"]
-            )
-
-
 def test_bound_setup_preserves_legacy_fields_and_cancellation_body():
     setup = FIXTURES["setup"]
     request = setup["first_agent"]

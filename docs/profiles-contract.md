@@ -9,8 +9,7 @@ another profile affects new work; it cannot retarget an existing request.
 Operator list/show discovery and refusal of unreconciled startup are implemented.
 Lifecycle apply/lookup commands retain requests and receipts. Creating the empty
 baseline succeeds and publishes a ready record, start/stop run that profile's provider,
-agents run inside it on Claude Code, Codex and OpenCode, and the existing installation
-becomes Default when this version starts. Recovery of interrupted operations, replacement and restore
+and agents run inside it on Claude Code, Codex and OpenCode. Recovery of interrupted operations, replacement and restore
 fencing, and integration account proof are not done yet. The identity
 endpoint and bound-request checks have an internal reconciliation context, but no
 production startup installs it yet; the contract below is not a procedure for
@@ -377,8 +376,7 @@ process to exit. The profile's private tmux server and its sessions outlive the
 provider. `service_start_failed` and `service_stop_failed` report a provider that did
 not get there in time; another identity behind the endpoint is never signalled.
 
-Any other baseline returns `baseline_unavailable`, an adoption that cannot read the
-installation returns `adoption_unavailable`, a changed one `adoption_changed`, and
+Any other baseline returns `baseline_unavailable`, and
 start/stop return
 `profile_not_ready` for a reservation still being created or `binding_mismatch` for a
 stale, invalidated or unknown tuple. A `failed` reservation is a permanent invalidation tombstone, not
@@ -440,67 +438,24 @@ bound workspace never downgrades after a failed handshake. Existing setup schema
 stays legacy-only. The following extension defines adoption and bound setup; it
 does not silently convert saved schema-1 requests.
 
-## Default adoption
+## The Default profile
 
-`backbone up` makes the installation at the default data directory Default by itself,
-in the same start, after its database is current. Nothing moves: data, credentials,
-agents, sheets, documents, skills and policies stay where they are. It writes one
-identity row to the database and a registry record, after taking a private database
-backup beside the registry. A refusal (a credential file that isn't private, a Default
-already registered elsewhere, an external database) changes nothing, is printed to the
-service's log, and that start serves as before. The registry commits before the
-database records the identity, and the next start finishes a crash between them. A run
-with another data directory is never adopted automatically, so scratch runs can't claim
-the registry; an explicit `adopt_default` request covers an installation elsewhere.
+`backbone init` and `backbone setup` (`initialize`) create the first profile, named
+Default. It is the installation at its data directory, in the person's own environment:
+their HOME, CLI sign-ins and default tmux server. Other profiles are isolated from it and
+from each other. Creating it again is safe and changes nothing, and only one data directory
+can be Default. `backbone up` serves it, and refuses when no profile exists.
 
-Adoption keeps the installation's configured private socket when it has one, and
-otherwise the installation gains `run/api.sock`. Default serves its identity on both its
-port and its socket, with the same service and tmux server. It
-installs no captured runtime environments, so the installation's agents and CLI
-sign-ins behave as before; schema-2 setup and the bound runtime catalog report those
-runtimes unavailable there, and the app keeps using schema 1 for Default. Start launches
-`backbone up` if nothing answers. Stop signals that process, and a service manager may
-start it again.
+Default serves its identity on both its port and its socket. It installs no captured
+runtime environments, so its agents use the person's CLI sign-ins; schema-2 setup and the
+bound runtime catalog report those runtimes unavailable there, and the app uses schema 1
+for Default. Start launches `backbone up` if nothing answers. Stop signals that process,
+and a service manager may start it again.
 
 A shell on Default uses the host environment without the installation's secrets, and
-sign-in there refuses, because Default keeps its existing CLI sign-ins.
+sign-in there refuses, because Default uses the person's own CLI sign-ins.
 
-`backbone profiles adoption-preview --json` is the agreed read-only operator
-preflight. When it cannot read the installation it reports `adoption_unavailable` in
-JSON with exit status 1; an installation that has run this version once has an identity. It resolves the configured existing installation independently of the
-selected content profile. It never starts, stops, migrates, repairs or writes.
-Unsafe or ambiguous ownership refuses preview rather than choosing an instance.
-The `adoption.preview` fixture contains the existing installation ID, canonical
-data directory, tmux mapping, baseline and an opaque adoption token.
-
-The token fingerprints canonical data/database locators, installation identity,
-credential locator and change evidence, effective service/tmux mapping and recorded
-runtime-environment semantics. It contains no credential bytes and grants no
-additional authority. The provider owns its computation; clients retain it unchanged.
-Submit `adoption.request` through `profiles apply`. The request accepts no arbitrary
-data directory, environment, credential source or account-copy input.
-
-Serialize adoption with lifecycle work on that installation. Validate the current
-token before adoption, including a new request for an already adopted instance.
-Changed metadata returns `adoption_changed`. An identical original request/body
-replays its durable receipt; a changed body under that ID conflicts. A new request
-for the same original instance returns the existing tuple, never a sibling identity.
-An identity-incompatible restore is not repeated adoption. The `adoption.cases`
-records describe these separate scenarios. `outcome` is `succeeded` or a refusal
-code; optional `expected_receipt` names the corresponding receipt fixture. These
-are case metadata, not wire fields. Changed-body reuse is a rejection, not a new
-operation or permission to overwrite the original receipt. Completed exact replay returns its recorded result;
-it performs no new adoption effects.
-
-Reserve the request before effects and allocate profile/lifecycle IDs once,
-preserving the installation ID. Back up touched metadata first and retain that
-receipt locally. Preserve credential bytes, native account roots, baseline edits,
-data and service/tmux mapping in place. Adoption does not restart a service,
-relocate storage or log in/out. Receipt identities may be null before reservation.
-Success means metadata reconciliation, not a verified accepting service. Fence old
-processes, jobs and streams before any replacement accepts bound traffic, then use
-explicit lifecycle operations and an authenticated handshake to establish access.
-Only the exact adopted tuple receives revision 2 legacy eligibility.
+Only the exact Default tuple receives revision 2 legacy eligibility.
 
 ## Set up an agent within a captured profile
 

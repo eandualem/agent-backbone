@@ -959,12 +959,7 @@ operation receipt. Omit `--json` for labeled details.
 A create request naming the `core-v1` baseline reserves new identities, a private
 directory and a loopback port, sets up the database, fresh credential and the starter
 policies and skills a fresh install gets, and publishes a ready record. Start launches that profile's provider unless its exact identity is already
-answering; stop signals only the process behind that verified endpoint. The installation
-at the default data directory becomes the Default profile by itself the first time this
-version starts, with everything left where it is; if it can't, it logs why, serves as
-before and tries again at its next start. An `adopt_default` request does the same for
-an installation elsewhere, using the token from `backbone profiles adoption-preview --json`,
-and returns the existing Default if there is one; nothing restarts. Apply returns durable
+answering; stop signals only the process behind that verified endpoint. Apply returns durable
 refusal receipts: `baseline_unavailable` for
 any other baseline, `profile_create_failed` or `profile_path_too_long` when creation
 cannot finish, `service_start_failed` or `service_stop_failed` when a provider does not

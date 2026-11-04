@@ -143,7 +143,7 @@ def serve_profile(registry_path: Path, profile_id: str) -> None:
     registry = ProfileRegistry(registry_path)
     reservation = registry.ready_reservation(profile_id)
     if reservation.kind != "isolated":
-        raise ValueError("The adopted installation starts with `backbone up`")
+        raise ValueError("The Default profile starts with `backbone up`")
     root = reservation.data_dir
     # Replacing the process environment keeps host tokens out of load_secrets and
     # the tmux server, and the user's tmux.conf unread.
@@ -304,51 +304,28 @@ async def _up_detached(config: BackboneConfig, log_file: Path | None = None) -> 
     return 1
 
 
-async def _adopt_on_start(registry_path: Path, root: Path):
-    """The default installation becomes Default on its own; a refusal serves as before."""
-    from agent_backbone.config import DEFAULT_DATA_DIR
-    from agent_backbone.services.database import adopt_on_start
-
-    if root != Path(DEFAULT_DATA_DIR).expanduser().resolve():
-        return None
-    try:
-        # A first start has no installation identity yet.
-        async with _common.Direct(_common.bootstrap_config()) as direct:
-            await direct.db.signing.audience()
-        return await asyncio.to_thread(adopt_on_start, registry_path, root)
-    except Exception as exc:
-        print(f"Default profile not created, serving as before: {exc}", file=sys.stderr)
-        return None
-
-
-async def _adopted_provider(config: BackboneConfig):
-    """The adopted installation serves as itself; anything else stays legacy."""
+async def _default_provider(config: BackboneConfig):
+    """`up` serves the Default profile; nothing runs without a profile."""
     from agent_backbone.config import PROFILE_REGISTRY_PATH
     from agent_backbone.services.database import (
         ProfileRegistry,
         default_tmux_socket,
         reconcile_profile_provider,
-        record_identity,
     )
     from agent_backbone.services.terminal import pin_tmux_server
 
-    path, root = Path(PROFILE_REGISTRY_PATH).expanduser(), config.data_dir.resolve()
-    registry = ProfileRegistry(path)
-    reservation = registry.adopted_reservation(root)
-    if reservation is None:
-        reservation = await _adopt_on_start(path, root)
-        if reservation is None:
-            return None
-    # Finishes an adoption a crash interrupted; a no-op otherwise.
-    record_identity(reservation.data_dir / SQLITE_FILENAME, reservation.identity)
+    registry = ProfileRegistry(Path(PROFILE_REGISTRY_PATH).expanduser())
+    reservation = registry.default_reservation()
+    if reservation is None or reservation.data_dir != config.data_dir.resolve():
+        raise ValueError(f"No profile at {config.data_dir}: run `backbone init` first")
     socket = reservation.binding.tmux_socket
     if socket != default_tmux_socket():
-        raise ValueError("The adopted installation's tmux server changed since its adoption")
+        raise ValueError("The Default profile's tmux server changed since it was created")
     provider = await reconcile_profile_provider(
         registry, reservation, reservation.data_dir / SQLITE_FILENAME, socket
     )
     # tmux makes this directory itself unless a socket is named, and a restart clears /tmp.
-    socket.parent.mkdir(mode=0o700, exist_ok=True)
+    socket.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     pin_tmux_server(socket)
     return provider
 
@@ -364,7 +341,11 @@ def cmd_up(args: argparse.Namespace) -> int:
     if args.detach:
         return asyncio.run(_up_detached(config, log_file))
     try:
-        provider = asyncio.run(_adopted_provider(config))
+        provider = asyncio.run(_default_provider(config))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    try:
         _run_server(config, reload=args.reload, log_file=log_file, provider=provider)
     except SystemExit as exc:
         if exc.code and log_policy.mode == "off":

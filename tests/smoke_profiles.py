@@ -235,9 +235,11 @@ def main() -> int:
     home = Home(root)
     processes = []
     try:
-        home.cli("init")
         absent = home.cli("profiles", "list", "--json", check=False)
         check("no registry is registry_absent", "registry_absent" in absent.stdout)
+        refused = home.cli("up", check=False)
+        check("nothing runs without a profile", refused.returncode == 1, refused.stderr[-200:])
+        home.cli("init")
         legacy = home.up()
         processes.append(legacy)
         operator = {"Authorization": "Bearer " + home.key(home.data / ".env")}
@@ -245,34 +247,18 @@ def main() -> int:
         check("install answers", tcp.get("/api/agents", headers=operator).status_code == 200)
         listed = json.loads(home.cli("profiles", "list", "--json").stdout)["items"]
         check(
-            "the first start made Default with no command",
+            "a new install is the Default profile",
             [item["kind"] for item in listed] == ["legacy_default"],
         )
 
-        preview = json.loads(home.cli("profiles", "adoption-preview", "--json").stdout)
-        default = home.apply(
-            "adopt",
-            "adopt_default",
-            expected_installation_id=preview["installation_id"],
-            adoption_token=preview["adoption_token"],
-        )
-        check(
-            "adoption kept the installation ID",
-            default["installation_id"] == preview["installation_id"],
-        )
-        check(
-            "an explicit adoption returns the same Default",
-            default["profile_id"] == listed[0]["profile_id"],
-        )
-        check("adoption restarted nothing", legacy.poll() is None)
-
+        default = {"profile_id": listed[0]["profile_id"]}
         legacy.terminate()
         legacy.wait(timeout=60)
         adopted = home.up()
         processes.append(adopted)
         record = home.show(default["profile_id"])
         home.sockets.append(record["binding"]["tmux"]["socket_path"])
-        check("Default is listed as adopted", record["kind"] == "legacy_default")
+        check("Default is listed", record["kind"] == "legacy_default")
         check(
             "unbound clients still work on Default",
             tcp.get("/api/agents", headers=operator).status_code == 200,

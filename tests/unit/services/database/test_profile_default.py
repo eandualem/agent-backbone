@@ -1,0 +1,120 @@
+"""The first profile: a fresh install is the Default profile, in the person's environment."""
+
+import asyncio
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+
+from agent_backbone.cli import main
+from agent_backbone.cli.server import _default_provider
+from agent_backbone.config import DEFAULT_DATA_DIR, PROFILE_REGISTRY_PATH, sqlite_url
+from agent_backbone.services.database import (
+    ProfileIdentity,
+    ProfileRegistry,
+    check_profile_startup,
+    create_default_profile,
+    default_tmux_socket,
+)
+from agent_backbone.services.database import _profile_default as module
+
+
+@pytest.fixture
+def root(tmp_path, monkeypatch):
+    monkeypatch.delenv("BACKBONE_DATA_DIR", raising=False)
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmp_path / "t"))
+    return Path(DEFAULT_DATA_DIR).expanduser()
+
+
+def registry_path():
+    return Path(PROFILE_REGISTRY_PATH).expanduser()
+
+
+def run(*argv):
+    try:
+        return main(list(argv)) or 0
+    except SystemExit as stopped:
+        return stopped.code or 0
+
+
+def init():
+    return run("init")
+
+
+def serve(root):
+    with patch("agent_backbone.services.terminal.pin_tmux_server") as pin:
+        provider = asyncio.run(_default_provider(SimpleNamespace(data_dir=root)))
+    return provider, pin
+
+
+def test_init_creates_the_default_profile_and_up_serves_it(root):
+    assert init() == 0
+    record = ProfileRegistry(registry_path()).default_reservation()
+    assert record.display_name == "Default" and record.data_dir == root.resolve()
+    assert record.kind == "legacy_default" and record.state == "ready"
+    assert record.binding.credential == root.resolve() / ".env"
+    assert record.binding.tmux_socket == default_tmux_socket()
+    provider, pin = serve(root)
+    assert provider.reservation == record
+    assert record.binding.tmux_socket.parent.is_dir()
+    pin.assert_called_once_with(record.binding.tmux_socket)
+
+
+def test_init_again_keeps_the_same_profile(root):
+    init()
+    first = ProfileRegistry(registry_path()).default_reservation()
+    init()
+    assert ProfileRegistry(registry_path()).default_reservation() == first
+
+
+def test_up_refuses_with_no_profile(root):
+    with pytest.raises(ValueError, match="backbone init"):
+        serve(root)
+
+
+def test_a_second_directory_cannot_become_default(root, tmp_path, monkeypatch, capsys):
+    init()
+    other = tmp_path / "other"
+    assert run("init", "--data-dir", str(other)) == 1
+    assert "already at" in capsys.readouterr().out
+    assert ProfileRegistry(registry_path()).default_reservation().data_dir == root.resolve()
+
+
+def test_a_crash_before_the_identity_is_recorded_is_finished_by_running_init_again(
+    root, monkeypatch
+):
+    def crashes(*args):
+        raise ValueError("crash")
+
+    with patch.object(module, "_record_identity", crashes):
+        assert init() == 1
+    asyncio.run(check_profile_startup(sqlite_url(root), root))
+    with pytest.raises(ValueError, match="identity"):
+        serve(root)
+    assert init() == 0
+    assert serve(root)[0].reservation.data_dir == root.resolve()
+
+
+def test_a_database_of_another_installation_refuses(root):
+    init()
+    record = ProfileRegistry(registry_path()).default_reservation()
+    other = ProfileIdentity(record.identity.profile_id, "other", record.identity.lifecycle_id)
+    with pytest.raises(ValueError, match="identity changed"):
+        module._record_identity(root.resolve() / "backbone.db", other)
+
+
+async def test_a_copied_database_elsewhere_does_not_start(root, tmp_path):
+    await asyncio.to_thread(init)
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    (copy / "backbone.db").write_bytes((root / "backbone.db").read_bytes())
+    with pytest.raises(ValueError):
+        await check_profile_startup(sqlite_url(copy), copy)
+
+
+def test_create_needs_an_initialized_installation(root):
+    root.mkdir(parents=True)
+    with pytest.raises(Exception):
+        create_default_profile(registry_path(), root, "manual")
+    assert ProfileRegistry(registry_path()).default_reservation() is None

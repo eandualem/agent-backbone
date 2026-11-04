@@ -94,6 +94,7 @@ def test_a_quoted_home_path_is_expanded_before_logging_starts(tmp_path, monkeypa
     args = argparse.Namespace(detach=False, reload=False, log_file=Path("~/backbone.log"))
     with (
         patch.object(server._common, "load_config", AsyncMock(return_value=make_config(tmp_path))),
+        patch.object(server, "_default_provider", AsyncMock(return_value=None)),
         patch.object(server, "_run_server") as run,
     ):
         assert server.cmd_up(args) == 0
@@ -265,6 +266,7 @@ def test_off_keeps_explicit_server_failure_result_without_log_capture(
     args = argparse.Namespace(detach=False, reload=False, log_file=path)
     with (
         patch.object(server._common, "load_config", AsyncMock(return_value=config)),
+        patch.object(server, "_default_provider", AsyncMock(return_value=None)),
         patch("uvicorn.Server.run", side_effect=SystemExit(exit_code)),
     ):
         with pytest.raises(SystemExit) as result:

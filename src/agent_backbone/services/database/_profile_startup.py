@@ -24,8 +24,9 @@ async def check_profile_startup(database_url: str, data_dir: Path, *, recover: b
     This is a refusal guard, not identity attestation or running-service fencing.
     """
     registry = ProfileRegistry(Path(PROFILE_REGISTRY_PATH).expanduser())
-    if await asyncio.to_thread(registry.adopted_reservation, data_dir.resolve()):
-        return  # Adopted in place; `up` reconciles its identity before serving.
+    default = await asyncio.to_thread(registry.default_reservation)
+    if default is not None and default.data_dir == data_dir.resolve():
+        return  # `up` reconciles its identity before serving.
     await asyncio.to_thread(registry.check_unadopted, data_dir.resolve())
     url = make_url(database_url)
     can_recover = False

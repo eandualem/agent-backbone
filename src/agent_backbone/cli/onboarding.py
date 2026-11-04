@@ -481,7 +481,8 @@ async def _inspect_existing(boot):
 async def _initialize(request: SetupInitialize, output):
     from sqlalchemy.exc import SQLAlchemyError
 
-    from agent_backbone.services.database import check_profile_startup
+    from agent_backbone.config import PROFILE_REGISTRY_PATH
+    from agent_backbone.services.database import check_profile_startup, create_default_profile
 
     data_dir = Path(request.data_dir)
     boot = bootstrap_config(data_dir)
@@ -665,6 +666,18 @@ async def _initialize(request: SetupInitialize, output):
                         await direct.store.set_setting(key, value)
             receipt.completed("starters")
             output.step("starters", "completed")
+        if "profile" not in receipt.record["completed_steps"]:
+            output.step("profile", "running")
+            async with _common.Direct(bootstrap_config(data_dir)) as direct:
+                await direct.db.signing.audience()
+            try:
+                create_default_profile(
+                    Path(PROFILE_REGISTRY_PATH).expanduser(), data_dir, request.starter_profile
+                )
+            except ValueError as exc:
+                raise SetupReceiptError("installation_conflict", str(exc)) from exc
+            receipt.completed("profile")
+            output.step("profile", "completed")
         if request.service == "user" and "service" not in receipt.record["completed_steps"]:
             output.step("service", "running")
             definition = receipt.record["service_definition"]

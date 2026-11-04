@@ -39,7 +39,7 @@ router = APIRouter(
 
 
 def _isolated_provider(request: Request) -> bool:
-    """Schema-1 setup stays available on the adopted installation it always served."""
+    """Schema-1 setup is for the Default profile."""
     provider = getattr(request.state, "profile_provider", None)
     return provider is not None and provider.reservation.kind != "legacy_default"
 

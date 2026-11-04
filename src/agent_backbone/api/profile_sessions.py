@@ -49,14 +49,14 @@ def _identity(request: Request):
     return provider.reservation.identity
 
 
-def _adopted(request: Request) -> bool:
+def _is_default(request: Request) -> bool:
     return request.state.profile_provider.reservation.kind == "legacy_default"
 
 
 async def _ensure(request: Request, session: str, cwd: str, command: list[str], env) -> dict:
     """Return a live session unchanged; never kill or respawn one."""
     identity = _identity(request)
-    # The adopted installation keeps its host environment, without its own secrets.
+    # The Default profile uses the person's environment, without the installation's secrets.
     options = (
         {"environment": dict(env), "inherit_environment": False}
         if env is not None
@@ -85,7 +85,7 @@ async def ensure_shell(request: Request) -> dict:
     body = await _parsed(request, _Shell)
     session = f"shell-{body.shell_id}"
     _identity(request)
-    environment = None if _adopted(request) else RUNTIMES["shell"].environment()
+    environment = None if _is_default(request) else RUNTIMES["shell"].environment()
     home = environment["HOME"] if environment is not None else str(Path.home())
     cwd = body.cwd if body.cwd is not None else home
     # A live session keeps its directory, so its cwd is ignored rather than judged.
@@ -100,7 +100,7 @@ async def sign_in(request: Request) -> dict:
     """Run a CLI's own sign-in in a session the operator attaches to."""
     body = await _parsed(request, _SignIn)
     _identity(request)
-    if _adopted(request):
+    if _is_default(request):
         raise _error(
             422,
             "runtime_unavailable",

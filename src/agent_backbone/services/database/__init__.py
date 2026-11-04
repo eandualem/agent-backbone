@@ -19,15 +19,13 @@ from agent_backbone.services.database._documents_repo import (
     DocumentConflict,
     DocumentRateLimit,
 )
-from agent_backbone.services.database._profile_adoption import (
-    adoption_preview,
+from agent_backbone.services.database._profile_default import (
+    create_default_profile,
     default_tmux_socket,
-    record_identity,
 )
 from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
 from agent_backbone.services.database._profile_operations import (
     ProfileOperations,
-    adopt_on_start,
     validate_profile_operation,
 )
 from agent_backbone.services.database._profile_provider import (
@@ -82,16 +80,14 @@ __all__ = [
     "SetupReceipt",
     "SetupReceiptError",
     "UnknownArtifact",
-    "adopt_on_start",
-    "adoption_preview",
     "build_engine",
     "check_profile_startup",
+    "create_default_profile",
     "default_tmux_socket",
     "diagnostic_details",
     "format_iso",
     "now_iso",
     "parse_iso",
     "reconcile_profile_provider",
-    "record_identity",
     "validate_profile_operation",
 ]

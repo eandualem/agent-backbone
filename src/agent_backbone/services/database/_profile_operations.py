@@ -6,14 +6,8 @@ import os
 import secrets
 import uuid
 from contextlib import suppress
-from pathlib import Path
 
 from agent_backbone.config import SQLITE_FILENAME, sqlite_url
-from agent_backbone.services.database._profile_adoption import (
-    back_up_database,
-    inspect_installation,
-    record_identity,
-)
 from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
 from agent_backbone.services.database._profile_provider import reconcile_profile_provider
 from agent_backbone.services.database._profile_registry import (
@@ -35,7 +29,6 @@ _FIELDS = {
     "create": {"display_name", "baseline_version"},
     "start": {"profile_id", "expected_installation_id", "expected_lifecycle_id"},
     "stop": {"profile_id", "expected_installation_id", "expected_lifecycle_id"},
-    "adopt_default": {"expected_installation_id", "adoption_token"},
 }
 ERRORS = {
     "request_conflict": "Profile operation request does not match its original input.",
@@ -44,12 +37,10 @@ ERRORS = {
     "binding_mismatch": "Profile binding does not match.",
     "profile_not_ready": "Profile is not ready for lifecycle operations.",
     "baseline_unavailable": "Profile baseline is not available.",
-    "adoption_unavailable": "Original provider adoption context is unavailable.",
     "profile_create_failed": "Profile could not be created.",
     "profile_path_too_long": "Profile paths exceed the Unix socket length limit.",
     "service_start_failed": "Profile provider could not be started.",
     "service_stop_failed": "Profile provider could not be stopped.",
-    "adoption_changed": "The existing installation changed after its preview.",
 }
 
 
@@ -127,53 +118,6 @@ async def _provision_profile(
     )
 
 
-def adopt_installation(registry: ProfileRegistry, preview: dict, endpoint: Path) -> ProfileIdentity:
-    """Make the existing installation Default, keeping everything where it is.
-
-    One registry transaction, because a reservation over a live installation's
-    directory without its binding would refuse that installation's next start. The
-    registry commits before the database records the identity: a crash between them
-    is finished by the next start, while the other order would leave an identity no
-    registry explains, which refuses to start.
-    """
-    root = Path(preview["data_dir"])
-    existing = registry.adopted_reservation(root)
-    identity = (
-        existing.identity
-        if existing
-        else ProfileIdentity(secrets.token_hex(6), preview["installation_id"], str(uuid.uuid4()))
-    )
-    if existing is None:
-        binding = ProfileBinding(endpoint, root / ".env", Path(preview["tmux"]["socket_path"]))
-        with registry._connection(write=True) as conn:
-            registry._reserve(
-                conn, ProfileReservation(identity, root, "Default", preview["baseline_version"])
-            )
-            conn.execute("INSERT INTO adopted_profiles VALUES (?)", (identity.profile_id,))
-            registry._publish(conn, identity, root, binding, adopted=True)
-            backups = registry.path.parent / "backups"
-            backups.mkdir(mode=0o700, exist_ok=True)
-            back_up_database(root / SQLITE_FILENAME, backups / f"{identity.profile_id}.db")
-    record_identity(root / SQLITE_FILENAME, identity)
-    return identity
-
-
-def adopt_on_start(registry_path: Path, data_dir: Path) -> ProfileReservation | None:
-    """Default for the installation at the default location, or None if another is Default.
-
-    Only there: a scratch run with its own data directory must never claim the
-    registry. Anything that refuses raises, before or without changing the installation.
-    """
-    preview, endpoint = inspect_installation()
-    if Path(preview["data_dir"]) != data_dir:
-        raise ValueError("The installation's directory changed")
-    registry = ProfileRegistry.create(registry_path)
-    if any(item["kind"] == "legacy_default" for item in registry.list()["items"]):
-        return None
-    adopt_installation(registry, preview, endpoint)
-    return registry.adopted_reservation(data_dir)
-
-
 class ProfileOperations:
     """Reserve before effects; never repeat unknown work after a process crash.
 
@@ -203,13 +147,10 @@ class ProfileOperations:
         request = validate_profile_operation(request)
         body = _json(request)
         action = request["action"]
-        # Create requests reserve distinct identities later; adoption must also
-        # serialize with itself before a profile ID has been allocated.
+        # Create requests reserve distinct identities later.
         scope = (
             "profile:" + request["profile_id"]
             if action in {"start", "stop"}
-            else "adoption:" + request["expected_installation_id"]
-            if action == "adopt_default"
             else "create:" + request["request_id"]
         )
         installation_id = request.get("expected_installation_id")
@@ -296,8 +237,6 @@ class ProfileOperations:
             return self._create(request)
         if request["action"] in {"start", "stop"} and self.services is not None:
             return self._run_service(request)
-        if request["action"] == "adopt_default" and self.services is not None:
-            return self._adopt(request)
         # Refusal has no effects to reconcile. Classify and retain its receipt
         # in one transaction so a failed read/write cannot leave a pending lock.
         return self._record(request, refuse=True)[0]
@@ -321,39 +260,6 @@ class ProfileOperations:
                 (_json(receipt), request["request_id"]),
             )
         return receipt
-
-    def _adopt(self, request: dict) -> dict:
-        """Record the existing installation in place: nothing restarts or moves."""
-        receipt, owned = self.begin(request)
-        if not owned:
-            return receipt
-        try:
-            preview, endpoint = inspect_installation()
-        except (ValueError, OSError):
-            return self.fail(request, "adoption_unavailable")
-        if (
-            preview["installation_id"] != request["expected_installation_id"]
-            or preview["adoption_token"] != request["adoption_token"]
-        ):
-            return self.fail(request, "adoption_changed")
-        try:
-            identity = adopt_installation(self.registry, preview, endpoint)
-            with self.registry._connection(write=True) as conn:
-                receipt = self._stored_receipt(conn, request)
-                receipt.update(
-                    status="succeeded",
-                    profile_id=identity.profile_id,
-                    installation_id=identity.installation_id,
-                    lifecycle_id=identity.lifecycle_id,
-                )
-                conn.execute(
-                    "UPDATE lifecycle_operations SET status = 'succeeded', receipt_json = ? "
-                    "WHERE request_id = ?",
-                    (_json(receipt), request["request_id"]),
-                )
-            return receipt
-        except Exception:
-            return self.fail(request, "adoption_unavailable")
 
     def _create(self, request: dict) -> dict:
         """Reserve once, then provision. An interruption stays pending and non-ready."""
@@ -430,8 +336,6 @@ class ProfileOperations:
     def _refusal(self, request, conn) -> str | None:
         if request["action"] == "create":
             return "baseline_unavailable"
-        if request["action"] == "adopt_default":
-            return "adoption_unavailable"
         for record in self.registry._records(conn):
             identity = record.identity
             if (

@@ -42,7 +42,8 @@ BACKBONE_API_KEY={api_key}
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    from agent_backbone.services.database import check_profile_startup
+    from agent_backbone.config import PROFILE_REGISTRY_PATH
+    from agent_backbone.services.database import check_profile_startup, create_default_profile
     from agent_backbone.services.database.engine import redact_url
 
     config = bootstrap_config(args.data_dir)
@@ -65,11 +66,19 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"{env_path} exists (kept; use --force to regenerate)")
 
     async def _migrate() -> None:
-        async with _common.Direct(config):
-            pass
+        async with _common.Direct(config) as direct:
+            await direct.db.signing.audience()
 
     asyncio.run(_migrate())
     print(f"database ready: {redact_url(config.database_url)}")
+    try:
+        profile = create_default_profile(
+            Path(PROFILE_REGISTRY_PATH).expanduser(), data_dir, "manual"
+        )
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 1
+    print(f"profile ready: {profile.display_name} ({profile.identity.profile_id})")
 
     print("\nNext steps:")
     print("  Choose starting practices: backbone docs team")

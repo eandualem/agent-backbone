@@ -56,7 +56,7 @@ async def binding_error(provider: ProfileProvider | None, values: dict, app) -> 
     if provider is None:
         return BINDING_MISMATCH if values else None
     if not values:
-        # Unbound compatibility belongs only to the exact adopted installation.
+        # Unbound local clients belong only to the Default profile.
         if provider.reservation.kind != "legacy_default":
             return BINDING_REQUIRED
         return None if await provider_current(provider, app) else BINDING_MISMATCH

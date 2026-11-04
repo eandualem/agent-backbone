@@ -163,7 +163,7 @@ async def test_refusals_match_the_shared_fixtures(api_client, auth_headers, nati
 
 
 @pytest.fixture
-def adopted(api_app, native):
+def default_profile(api_app, native):
     provider, headers, _ = native
     api_app.state.profile_provider = replace(
         provider, reservation=replace(provider.reservation, kind="legacy_default")
@@ -174,11 +174,11 @@ def adopted(api_app, native):
 
 @pytest.mark.parametrize("cwd", [None, "/tmp"])
 async def test_default_shell_keeps_the_host_environment_without_secrets(
-    api_client, auth_headers, api_app, adopted, terminal, cwd
+    api_client, auth_headers, api_app, default_profile, terminal, cwd
 ):
     response = await api_client.post(
         "/api/profile/shells",
-        headers={**auth_headers, **adopted},
+        headers={**auth_headers, **default_profile},
         json={"schema_version": 1, "shell_id": "0123456789ab", "cwd": cwd},
     )
     assert response.status_code == 200
@@ -188,12 +188,12 @@ async def test_default_shell_keeps_the_host_environment_without_secrets(
     assert "BACKBONE_API_KEY" in options["scrub"]
 
 
-async def test_default_keeps_its_sign_ins(api_client, auth_headers, adopted, terminal):
+async def test_default_keeps_its_sign_ins(api_client, auth_headers, default_profile, terminal):
     sessions = json.loads(Path("docs/contracts/profiles-v1.json").read_text())["sessions"]
     expected = sessions["sign_in_refusals"]["default_keeps_sign_ins"]
     response = await api_client.post(
         "/api/profile/accounts/sign-in",
-        headers={**auth_headers, **adopted},
+        headers={**auth_headers, **default_profile},
         json={"schema_version": 1, "runtime": "codex"},
     )
     assert (response.status_code, response.json()) == (expected["status"], expected["body"])
