@@ -109,7 +109,7 @@ class ProfileOperations:
             "error": None,
         }
         with self.registry._connection(write=True) as conn:
-            if conn.execute("PRAGMA user_version").fetchone()[0] != 3:
+            if conn.execute("PRAGMA user_version").fetchone()[0] not in {3, 4}:
                 raise ValueError("Profile operations need explicit registry initialization")
             previous = conn.execute(
                 "SELECT request_json, receipt_json FROM lifecycle_operations WHERE request_id = ?",

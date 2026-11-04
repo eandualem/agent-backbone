@@ -17,6 +17,7 @@ import pytest
 from agent_backbone.config import sqlite_url
 from agent_backbone.services.database import (
     BackboneDB,
+    ProfileBinding,
     ProfileIdentity,
     ProfileRegistry,
     ProfileReservation,
@@ -390,7 +391,7 @@ async def test_provider_database_restore_cannot_resurrect_invalidated_reservatio
 @pytest.mark.parametrize(
     "statement",
     [
-        "PRAGMA user_version = 4",
+        "PRAGMA user_version = 5",
         "UPDATE profiles SET profile_id = ''",
         "UPDATE profiles SET data_dir = 'relative'",
         "UPDATE profiles SET baseline_version = ''",
@@ -417,8 +418,8 @@ def test_invalid_metadata_fails_closed_without_repair(registry, reservation, sta
     assert registry.path.read_bytes() == before
 
 
-def test_ready_is_not_a_reservation_state(reservation):
-    with pytest.raises(ValueError, match="state"):
+def test_ready_requires_a_connection_binding(reservation):
+    with pytest.raises(ValueError, match="binding"):
         replace(reservation, state="ready")
 
 
@@ -557,3 +558,110 @@ def test_interrupted_invalidation_requires_explicit_replay_for_journal_recovery(
     registry.invalidate(reservation.identity, reservation.data_dir)
     assert registry.show(reservation.identity.profile_id)["state"] == "failed"
     assert not journal.exists()
+
+
+def _ready_binding(root: Path) -> ProfileBinding:
+    return ProfileBinding(root / "run" / "api.sock", root / ".env", root / "tmux" / "server.sock")
+
+
+def _published(tmp_path, reservation):
+    registry = ProfileRegistry.create(tmp_path / "registry" / "registry.db")
+    registry.reserve(reservation)
+    binding = _ready_binding(reservation.data_dir)
+    return (
+        registry,
+        binding,
+        registry.publish_ready(reservation.identity, reservation.data_dir, binding),
+    )
+
+
+def test_publish_ready_emits_the_agreed_discovery_shape(tmp_path, reservation):
+    registry, binding, published = _published(tmp_path, reservation)
+    root = reservation.data_dir
+    assert published.state == "ready"
+    assert registry.list()["items"][0]["state"] == "ready"
+    assert registry.show("profile-a") == {
+        "schema_version": 1,
+        "profile_id": "profile-a",
+        "display_name": reservation.display_name,
+        "kind": "isolated",
+        "state": "ready",
+        "binding": {
+            "installation_id": "installation-a",
+            "lifecycle_id": "lifecycle-a1",
+            "endpoint": {"kind": "unix", "path": str(root / "run" / "api.sock")},
+            "credential_reference": {
+                "kind": "dotenv",
+                "path": str(root / ".env"),
+                "key": "BACKBONE_API_KEY",
+            },
+            "tmux": {"socket_path": str(root / "tmux" / "server.sock")},
+        },
+    }
+    assert registry.check_reservation(reservation.identity, root) == published
+    assert registry.publish_ready(reservation.identity, root, binding) == published
+
+
+def test_ready_shape_matches_the_shared_fixture_keys(tmp_path, reservation):
+    fixture = json.loads(Path("docs/contracts/profiles-v1.json").read_text())["discovery"]
+    registry, _, _ = _published(tmp_path, reservation)
+    shown = registry.show("profile-a")
+    expected = fixture["show_ready"]
+    assert set(shown) == set(expected)
+    assert set(shown["binding"]) == set(expected["binding"])
+    for key in ("endpoint", "credential_reference", "tmux"):
+        assert set(shown["binding"][key]) == set(expected["binding"][key])
+
+
+def test_ready_refuses_changed_binding_and_paths_outside_the_profile(tmp_path, reservation):
+    registry, binding, _ = _published(tmp_path, reservation)
+    root = reservation.data_dir
+    with pytest.raises(ValueError, match="does not match"):
+        registry.publish_ready(
+            reservation.identity, root, replace(binding, endpoint=root / "run" / "other.sock")
+        )
+    with pytest.raises(ValueError, match="outside its reserved directory"):
+        registry.publish_ready(
+            reservation.identity, root, replace(binding, endpoint=tmp_path / "outside.sock")
+        )
+
+
+def test_invalidated_profile_never_returns_to_ready(tmp_path, reservation):
+    registry, binding, _ = _published(tmp_path, reservation)
+    root = reservation.data_dir
+    registry.invalidate(reservation.identity, root)
+    assert registry.show("profile-a")["state"] == "failed"
+    assert registry.show("profile-a")["binding"] is None
+    with pytest.raises(ValueError, match="invalidated"):
+        registry.publish_ready(reservation.identity, root, binding)
+    with pytest.raises(ValueError, match="invalidated"):
+        registry.check_reservation(reservation.identity, root)
+
+
+def test_ready_still_refuses_legacy_startup_in_its_directory(tmp_path, reservation):
+    registry, _, _ = _published(tmp_path, reservation)
+    with pytest.raises(ValueError, match="reserved profile"):
+        registry.check_unadopted(reservation.data_dir)
+
+
+def test_discovery_reads_an_older_registry_without_upgrading_it(tmp_path, reservation):
+    path = tmp_path / "registry" / "registry.db"
+    ProfileRegistry.create(path).reserve(reservation)
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP TABLE profile_bindings")
+        conn.execute("PRAGMA user_version = 3")
+    registry = ProfileRegistry(path)
+    assert registry.show("profile-a")["state"] == "creating"
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    with pytest.raises(ValueError, match="initialization"):
+        registry.publish_ready(
+            reservation.identity, reservation.data_dir, _ready_binding(reservation.data_dir)
+        )
+    ProfileRegistry.create(path)
+    assert (
+        registry.publish_ready(
+            reservation.identity, reservation.data_dir, _ready_binding(reservation.data_dir)
+        ).state
+        == "ready"
+    )

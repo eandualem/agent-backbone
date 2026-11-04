@@ -14,7 +14,7 @@ import stat
 import tempfile
 import unicodedata
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
@@ -36,12 +36,22 @@ def _resolve(path: Path) -> Path:
 
 
 @dataclass(frozen=True)
+class ProfileBinding:
+    """Provider-owned connection references; a ready record never holds a secret."""
+
+    endpoint: Path
+    credential: Path
+    tmux_socket: Path
+
+
+@dataclass(frozen=True)
 class ProfileReservation:
     identity: ProfileIdentity
     data_dir: Path
     display_name: str
     baseline_version: str
     state: str = "creating"
+    binding: ProfileBinding | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.identity, ProfileIdentity):
@@ -59,8 +69,10 @@ class ProfileReservation:
                 or any(ord(c) < 0x20 or ord(c) == 0x7F for c in value)
             ):
                 raise ValueError("Invalid profile reservation metadata")
-        if self.state not in {"creating", "failed"}:
+        if self.state not in {"creating", "ready", "failed"}:
             raise ValueError("Unsupported profile reservation state")
+        if (self.state == "ready") != (self.binding is not None):
+            raise ValueError("Only a ready profile has a connection binding")
 
     def summary(self) -> dict:
         return {
@@ -68,6 +80,21 @@ class ProfileReservation:
             "display_name": self.display_name,
             "kind": "isolated",
             "state": self.state,
+        }
+
+    def discovery_binding(self) -> dict | None:
+        if self.binding is None:
+            return None
+        return {
+            "installation_id": self.identity.installation_id,
+            "lifecycle_id": self.identity.lifecycle_id,
+            "endpoint": {"kind": "unix", "path": str(self.binding.endpoint)},
+            "credential_reference": {
+                "kind": "dotenv",
+                "path": str(self.binding.credential),
+                "key": "BACKBONE_API_KEY",
+            },
+            "tmux": {"socket_path": str(self.binding.tmux_socket)},
         }
 
 
@@ -92,6 +119,7 @@ class ProfileRegistry:
             registry._validate_for_write()
             registry._initialize_project_claims()
             registry._initialize_operations()
+            registry._initialize_bindings()
             return registry
         fd, temporary = tempfile.mkstemp(prefix=".registry-", dir=registry.path.parent)
         os.close(fd)
@@ -120,6 +148,7 @@ class ProfileRegistry:
         registry._validate_for_write()
         registry._initialize_project_claims()
         registry._initialize_operations()
+        registry._initialize_bindings()
         return registry
 
     def _validate_for_write(self) -> None:
@@ -159,6 +188,18 @@ class ProfileRegistry:
                 )
                 conn.execute("PRAGMA user_version = 3")
 
+    def _initialize_bindings(self) -> None:
+        # A separate table: the profiles state CHECK cannot change without a rebuild,
+        # and publishing one row keeps creating-to-ready atomic.
+        with self._connection(write=True) as conn:
+            if conn.execute("PRAGMA user_version").fetchone()[0] == 3:
+                conn.execute(
+                    "CREATE TABLE profile_bindings ("
+                    "profile_id TEXT PRIMARY KEY NOT NULL, endpoint TEXT NOT NULL, "
+                    "credential TEXT NOT NULL, tmux_socket TEXT NOT NULL)"
+                )
+                conn.execute("PRAGMA user_version = 4")
+
     def _check_parent(self) -> None:
         info = self.path.parent.stat()
         if info.st_uid != os.geteuid() or info.st_mode & 0o022:
@@ -182,6 +223,7 @@ class ProfileRegistry:
                 1,
                 2,
                 3,
+                4,
             }:
                 raise ValueError("Unsupported profile registry schema")
             yield conn
@@ -195,14 +237,25 @@ class ProfileRegistry:
 
     def _records(self, conn) -> list[ProfileReservation]:
         records = []
+        bindings = {}
+        if conn.execute("PRAGMA user_version").fetchone()[0] >= 4:
+            bindings = {
+                row["profile_id"]: ProfileBinding(
+                    Path(row["endpoint"]), Path(row["credential"]), Path(row["tmux_socket"])
+                )
+                for row in conn.execute("SELECT * FROM profile_bindings")
+            }
         for row in conn.execute("SELECT * FROM profiles ORDER BY profile_id"):
             try:
+                # A failed tombstone always wins over a previously published binding.
+                binding = bindings.get(row["profile_id"]) if row["state"] == "creating" else None
                 record = ProfileReservation(
                     ProfileIdentity(row["profile_id"], row["installation_id"], row["lifecycle_id"]),
                     Path(row["data_dir"]),
                     row["display_name"],
                     row["baseline_version"],
-                    row["state"],
+                    "ready" if binding else row["state"],
+                    binding,
                 )
             except (IndexError, TypeError) as exc:
                 raise ValueError("Invalid profile registry metadata") from exc
@@ -299,7 +352,11 @@ class ProfileRegistry:
         with self._connection() as conn:
             for record in self._records(conn):
                 if record.identity.profile_id == profile_id:
-                    return {"schema_version": 1, **record.summary(), "binding": None}
+                    return {
+                        "schema_version": 1,
+                        **record.summary(),
+                        "binding": record.discovery_binding(),
+                    }
         raise ValueError("Profile reservation was not found")
 
     def setup_connection_receipt(self, request: dict, connection: dict):
@@ -346,9 +403,42 @@ class ProfileRegistry:
         self._external(data_dir)
         with self._connection() as conn:
             record = self._matching(conn, identity, data_dir)
-            if record.state != "creating":
+            if record.state == "failed":
                 raise ValueError("Profile lifecycle has been invalidated")
             return record
+
+    def publish_ready(
+        self, identity: ProfileIdentity, data_dir: Path, binding: ProfileBinding
+    ) -> ProfileReservation:
+        """Publish discovery atomically; the caller has reconciled provider metadata.
+
+        An identical replay returns the record, a changed binding is refused and an
+        invalidated lifecycle never returns to ready.
+        """
+        self._external(data_dir)
+        for path in (binding.endpoint, binding.credential, binding.tmux_socket):
+            if not path.is_absolute() or path == data_dir or not path.is_relative_to(data_dir):
+                raise ValueError("Profile binding is outside its reserved directory")
+        with self._connection(write=True) as conn:
+            if conn.execute("PRAGMA user_version").fetchone()[0] != 4:
+                raise ValueError("Profile registry needs explicit binding initialization")
+            record = self._matching(conn, identity, data_dir)
+            if record.state == "failed":
+                raise ValueError("Profile lifecycle has been invalidated")
+            if record.state == "ready":
+                if record.binding != binding:
+                    raise ValueError("Profile binding does not match")
+                return record
+            conn.execute(
+                "INSERT INTO profile_bindings VALUES (?, ?, ?, ?)",
+                (
+                    identity.profile_id,
+                    str(binding.endpoint),
+                    str(binding.credential),
+                    str(binding.tmux_socket),
+                ),
+            )
+            return replace(record, state="ready", binding=binding)
 
     def check_unadopted(self, data_dir: Path) -> None:
         """Refuse legacy startup in any reserved tree, even without local identity.
@@ -384,11 +474,11 @@ class ProfileRegistry:
         if not resources:
             raise ValueError("Project resources must be existing directories")
         with self._connection(write=True) as conn:
-            if conn.execute("PRAGMA user_version").fetchone()[0] not in {2, 3}:
+            if conn.execute("PRAGMA user_version").fetchone()[0] not in {2, 3, 4}:
                 raise ValueError("Profile registry needs explicit project ownership initialization")
             records = self._records(conn)
             owner = self._matching(conn, identity, data_dir)
-            if owner.state != "creating":
+            if owner.state == "failed":
                 raise ValueError("Profile lifecycle has been invalidated")
             claims = self._project_claims(conn, records)
             owned = {path for path, claimant in claims if claimant == identity}

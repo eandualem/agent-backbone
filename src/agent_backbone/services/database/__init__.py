@@ -27,7 +27,11 @@ from agent_backbone.services.database._profile_provider import (
     ProfileProvider,
     reconcile_profile_provider,
 )
-from agent_backbone.services.database._profile_registry import ProfileRegistry, ProfileReservation
+from agent_backbone.services.database._profile_registry import (
+    ProfileBinding,
+    ProfileRegistry,
+    ProfileReservation,
+)
 from agent_backbone.services.database._profile_startup import check_profile_startup
 from agent_backbone.services.database._reports_repo import (
     ReportConflict,
@@ -58,6 +62,7 @@ __all__ = [
     "DocumentConflict",
     "DocumentRateLimit",
     "Limits",
+    "ProfileBinding",
     "ProfileIdentity",
     "ProfileOperations",
     "ProfileProvider",

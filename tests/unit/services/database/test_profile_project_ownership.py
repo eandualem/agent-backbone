@@ -157,6 +157,7 @@ def test_old_registry_needs_explicit_initialization_not_discovery(profiles, tmp_
     with sqlite3.connect(registry.path) as conn:
         conn.execute("DROP TABLE project_claims")
         conn.execute("DROP TABLE lifecycle_operations")
+        conn.execute("DROP TABLE profile_bindings")
         conn.execute("PRAGMA user_version = 1")
     before = registry.path.read_bytes()
     assert registry.show(a.identity.profile_id)["binding"] is None
