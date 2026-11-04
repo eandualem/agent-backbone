@@ -804,3 +804,46 @@ async def test_bound_cancellation_blocks_delayed_original_before_native_checks(s
     )
     assert original["code"] == "request_cancelled"
     assert not Path(body.agent.directory).exists() and not state["live"]
+
+
+async def test_bound_setup_records_registration_before_next_effect_check(scenario, db, monkeypatch):
+    from agent_backbone.models import BoundSetupFirstAgent
+    from agent_backbone.services.database import BoundSetupReceipt, SetupReceiptError
+
+    legacy, store, state = scenario
+    data = legacy.model_dump(exclude={"data_dir"}) | {
+        "schema_version": 2,
+        "profile_id": "profile-a",
+        "expected_installation_id": "installation-a",
+        "expected_lifecycle_id": "lifecycle-a",
+    }
+    body = BoundSetupFirstAgent.model_validate(data)
+    valid = True
+    original = store.register
+
+    async def register(*args, **kwargs):
+        nonlocal valid
+        result = await original(*args, **kwargs)
+        valid = False
+        return result
+
+    async def check():
+        if not valid:
+            raise SetupReceiptError("binding_mismatch", "Profile binding does not match.")
+
+    monkeypatch.setattr(store, "register", register)
+    refused = await onboarding.first_agent(body, store.config, store, db, check_effect=check)
+    assert refused["code"] == "binding_mismatch"
+    registration = store.agents.get(body.agent.name).registration_id
+    with BoundSetupReceipt(store.config.data_dir, data) as receipt:
+        assert receipt.record["registration_id"] == registration
+        assert not receipt.record["registration_pending"]
+        assert "agent" in receipt.record["completed_steps"]
+    assert not state["live"]
+    onboarding.start_agent.assert_not_awaited()
+    valid = True
+    resumed = await onboarding.first_agent(body, store.config, store, db, check_effect=check)
+    assert resumed["code"] == "agent_ready"
+    assert store.agents.get(body.agent.name).registration_id == registration
+    onboarding.start_agent.assert_awaited_once()
+    onboarding.safe_deliver.assert_awaited_once()

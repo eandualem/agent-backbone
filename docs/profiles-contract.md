@@ -133,7 +133,9 @@ and database; integration, source, session-feed and lifecycle-hook suppliers rem
 polling tasks see authorization and configuration changes. External Telegram handlers and independently retained discovery workers now acquire
 the captured provider guard. The live configuration supplier refuses provider or
 storage replacement while continuing to observe authorization revocations. Shutdown
-closes integration admission before draining callbacks and retained discovery work;
+stops fetching new Telegram updates, drains the already fetched queue with live
+authorization, then closes callback admission and drains retained discovery work.
+Each callback owns a finite task separate from PTB's persistent dispatch loop;
 cleanup does not require a still-valid identity. Native integration account and
 destination acceptance is still required before activation. Provider worker threads
 retain their callers through actual worker exit,

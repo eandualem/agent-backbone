@@ -1426,6 +1426,7 @@ async def test_external_integration_callback_retains_provider_until_shutdown_dra
         assert effects == [provider.reservation.data_dir]
         registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
         bot._stopping = False
+        bot._updates_closed = False
         with pytest.raises(ValueError):
             await invoke(None, None)
         assert len(effects) == 1
@@ -1623,3 +1624,91 @@ async def test_bound_cancellation_owns_work_after_client_leaves(
         release.set()
         await asyncio.gather(request, return_exceptions=True)
         await api_app.state.api_tasks.stop()
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_bound_first_agent_http_success_and_replay(
+    api_app, api_client, auth_headers, bound_provider, monkeypatch, runtime, tmp_path
+):
+    from dataclasses import replace
+
+    from agent_backbone.services.agents import AgentState, AgentStore, StartResult, StateSnapshot
+    from agent_backbone.services.database import BoundSetupReceipt
+    from agent_backbone.services.routing import onboarding
+    from agent_backbone.services.runtimes import RUNTIMES, _environment, install_native_environments
+    from agent_backbone.templates import core_starter_content
+
+    provider, _, headers = bound_provider
+    identity = provider.reservation.identity
+    root = provider.reservation.data_dir
+    profile, files = core_starter_content()
+    for relative, text in files.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    key = api_app.state.config.api_key
+
+    def publish(config):
+        api_app.state.config = replace(config, api_key=key)
+
+    store = AgentStore(api_app.state.db, root, on_change=publish)
+    await store.start()
+    await store.set_setting("agents.shared_policy", profile["policies"])
+    await store.set_setting("skills.store", str(root / "skills"))
+    api_app.state.agent_store = store
+    selected = RUNTIMES[runtime]
+    monkeypatch.setattr(type(selected), "resolve_binary", lambda self: str(tmp_path / "inert-cli"))
+    monkeypatch.setattr(type(selected), "setup_error", lambda self: None)
+    monkeypatch.setattr(_environment, "_CONTEXT", None)
+    environment = selected.capture_environment(root / "native" / runtime)
+    install_native_environments({runtime: environment})
+    state = {"live": False, "env": {}}
+
+    async def launch(spec, config, **kwargs):
+        assert selected.environment() == environment
+        assert config.data_dir == root and not config.launch.pre_trust
+        state["live"] = True
+        state["env"] = {
+            "BACKBONE_OPERATION_ID": kwargs["operation_id"],
+            "BACKBONE_REGISTRATION_ID": spec.registration_id,
+            "BACKBONE_LAUNCH_ID": "fixture-launch",
+        }
+        return StartResult(True, ready="ready")
+
+    async def exists(name):
+        return state["live"]
+
+    async def variable(name, key):
+        return state["env"].get(key)
+
+    monkeypatch.setattr(onboarding, "start_agent", AsyncMock(side_effect=launch))
+    monkeypatch.setattr(onboarding, "detect_repo", AsyncMock(return_value=""))
+    monkeypatch.setattr(onboarding, "session_exists", exists)
+    monkeypatch.setattr(onboarding, "query_environment_var", variable)
+    monkeypatch.setattr(
+        onboarding, "agent_state", AsyncMock(return_value=StateSnapshot(AgentState.IDLE))
+    )
+    body = FIXTURES["setup"]["first_agent"] | {
+        "profile_id": identity.profile_id,
+        "expected_installation_id": identity.installation_id,
+        "expected_lifecycle_id": identity.lifecycle_id,
+        "hooks": [runtime],
+        "agent": {
+            "name": "guide",
+            "directory": str(tmp_path / "project"),
+            "create_directory": True,
+            "runtime": runtime,
+            "model": None,
+            "brief": {"template": "orchestrator-v1"},
+        },
+    }
+    for _ in range(2):
+        response = await api_client.post(
+            "/api/setup/first-agent", json=body, headers={**auth_headers, **headers}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["code"] == "agent_ready", response.text
+    onboarding.start_agent.assert_awaited_once()
+    with BoundSetupReceipt(root, body) as receipt:
+        assert receipt.record["registration_id"] == store.agents.get("guide").registration_id
+        assert receipt.record["result"]["status"] == "completed"

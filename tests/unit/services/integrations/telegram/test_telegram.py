@@ -1106,7 +1106,7 @@ async def test_shutdown_retains_topic_task_until_cancellation_cleanup_finishes(c
             stopping.cancel()
             await asyncio.sleep(0)
             assert not stopping.done()
-        app.stop.assert_not_awaited()
+        app.bot.shutdown.assert_not_awaited()
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await stopping
@@ -1118,7 +1118,7 @@ async def test_shutdown_retains_topic_task_until_cancellation_cleanup_finishes(c
 
 
 @pytest.mark.parametrize("change", ["shutdown", "allowlist", "account"])
-async def test_registered_callback_checks_revocation_and_shutdown_after_admission(config, change):
+async def test_registered_callback_keeps_live_auth_during_shutdown(config, change):
     from contextlib import asynccontextmanager
 
     waiting, release = asyncio.Event(), asyncio.Event()
@@ -1149,7 +1149,10 @@ async def test_registered_callback_checks_revocation_and_shutdown_after_admissio
             current = replace(current, telegram=TelegramConfig(allowed_chat_ids=()))
         release.set()
         await task
-        update.message.reply_text.assert_not_awaited()
+        if change == "shutdown":
+            update.message.reply_text.assert_awaited_once()
+        else:
+            update.message.reply_text.assert_not_awaited()
         assert not bot._callbacks
     finally:
         release.set()
@@ -1193,3 +1196,82 @@ async def test_discovery_worker_acquires_its_own_admission(config):
     finally:
         release.set()
         await bot.stop()
+
+
+async def test_shutdown_drains_real_ptb_dispatch_and_fetched_queue(config, monkeypatch):
+    from telegram import Update
+
+    bot = _bot(replace(config, telegram_token="123:fake"))
+    entered, release = asyncio.Event(), asyncio.Event()
+    effects = []
+
+    async def callback(update, context):
+        if update.update_id == 1:
+            entered.set()
+            await release.wait()
+        effects.append(update.update_id)
+
+    monkeypatch.setattr(bot, "cmd_help", callback)
+    # Exercise PTB's real persistent fetcher, with inert HTTP transports only.
+    requests = [
+        MagicMock(
+            spec=BaseRequest,
+            initialize=AsyncMock(),
+            shutdown=AsyncMock(),
+            post=AsyncMock(
+                return_value={
+                    "id": 123,
+                    "is_bot": True,
+                    "first_name": "Fixture",
+                    "username": "fixture_bot",
+                }
+            ),
+            read_timeout=1,
+        )
+        for _ in range(2)
+    ]
+    from telegram.ext import _applicationbuilder
+
+    transports = iter(requests)
+    monkeypatch.setattr(_applicationbuilder, "HTTPXRequest", lambda **kwargs: next(transports))
+    app = bot.build_app()
+    await app.initialize()
+    await app.start()
+    stopping = None
+    try:
+        for number in (1, 2):
+            await app.update_queue.put(
+                Update.de_json(
+                    {
+                        "update_id": number,
+                        "message": {
+                            "message_id": number,
+                            "date": 0,
+                            "chat": {"id": ALLOWED_CHAT, "type": "private"},
+                            "from": {"id": 4242, "is_bot": False, "first_name": "Fixture"},
+                            "text": "/help",
+                            "entities": [{"type": "bot_command", "offset": 0, "length": 5}],
+                        },
+                    },
+                    app.bot,
+                )
+            )
+        await asyncio.wait_for(entered.wait(), 3)
+        bot.close_admission()
+        stopping = asyncio.create_task(bot.stop())
+        await asyncio.sleep(0)
+        assert not stopping.done()
+        release.set()
+        await asyncio.wait_for(asyncio.shield(stopping), 3)
+        assert effects == [1, 2]
+        assert not bot._callbacks and bot._app is None
+        for request in requests:
+            request.shutdown.assert_awaited_once()
+    finally:
+        release.set()
+        # Also lets the old deadlocking implementation finish on a regression.
+        if app.running:
+            await app.stop()
+        if stopping is not None:
+            await asyncio.gather(stopping, return_exceptions=True)
+        await app.shutdown()

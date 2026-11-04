@@ -368,9 +368,11 @@ async def _first(request, receipt, store, db, *, check_effect=None):
             return _answer(
                 receipt, "agent_conflict", "An agent already owns this name or directory."
             )
-        await _check(check_effect)
+        # Preserve the committed identity before a later admission/native check
+        # can fail. This records the original effect; it does not authorize another.
         receipt.save(registration_id=spec.registration_id, registration_pending=False)
         receipt.completed("agent")
+        await _check(check_effect)
         config = store.config
     # Turn off workspace pre-trust for this explicit interactive first launch.
     # Other launch settings and each adapter's sandbox/dialog behavior remain intact.

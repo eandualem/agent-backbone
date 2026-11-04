@@ -141,6 +141,8 @@ class TelegramService(Integration):
         self._discovery = load_discovery(self.config.telegram_topic_discovery_path)
         self._background: set[asyncio.Task] = set()
         self._callbacks: set[asyncio.Task] = set()
+        self._polling_stop: asyncio.Task | None = None
+        self._updates_closed = False
         self._stopping = False
         self._stop_lock = asyncio.Lock()
         self._sync_lock = asyncio.Lock()
@@ -204,22 +206,27 @@ class TelegramService(Integration):
         async with self._sync_lock:
             await sync_topics(self)
 
-    def _admitted(self, callback):
-        """Retain external work through cleanup and recheck after guard acquisition."""
+    def _admitted(self, callback, *, updates=True):
+        """Own each callback, independently of PTB's long-lived dispatch task."""
         token = self.config.telegram_token
+
+        def closed():
+            return self._updates_closed if updates else self._stopping
+
+        async def invoke(*args, **kwargs):
+            async with self._operation():
+                if not closed() and self.config.telegram_token == token:
+                    return await callback(*args, **kwargs)
 
         @wraps(callback)
         async def run(*args, **kwargs):
-            if self._stopping or self.config.telegram_token != token:
+            if closed() or self.config.telegram_token != token:
                 return
-            task = asyncio.current_task()
+            task = asyncio.create_task(invoke(*args, **kwargs))
             self._callbacks.add(task)
-            try:
-                async with self._operation():
-                    if not self._stopping and self.config.telegram_token == token:
-                        return await callback(*args, **kwargs)
-            finally:
-                self._callbacks.discard(task)
+            task.add_done_callback(self._callbacks.discard)
+            # The polling task must not abandon effects when it is cancelled.
+            return await complete_before_cancel(task)
 
         return run
 
@@ -231,7 +238,7 @@ class TelegramService(Integration):
         allow-listed chats teach anything: a stranger's group must never
         become "the" group and receive agent topics.
         """
-        if self._stopping:
+        if self._updates_closed:
             return
         chat = getattr(update, "effective_chat", None)
         if chat is None or not self._is_authorized(chat.id):
@@ -240,8 +247,15 @@ class TelegramService(Integration):
         changed = process_message_for_discovery(
             update, self.config, self._discovery, self.config.telegram_topic_discovery_path
         )
-        if changed and not knew_group and self._effective_group_chat_id() is not None:
-            task = asyncio.get_running_loop().create_task(self._admitted(self.sync_agents)())
+        if (
+            changed
+            and not knew_group
+            and not self._stopping
+            and self._effective_group_chat_id() is not None
+        ):
+            task = asyncio.get_running_loop().create_task(
+                self._admitted(self.sync_agents, updates=False)()
+            )
             self._background.add(task)
             task.add_done_callback(self._background.discard)
 
@@ -360,6 +374,8 @@ class TelegramService(Integration):
 
     async def start(self) -> None:
         self._stopping = False
+        self._updates_closed = False
+        self._polling_stop = None
         if not self.enabled:
             log.info("Telegram bot disabled (TELEGRAM_TOKEN not set)")
             return
@@ -384,43 +400,60 @@ class TelegramService(Integration):
             raise
         log.info("Telegram bot polling started")
 
+    def close_admission(self) -> None:
+        """Stop fetching; already fetched updates remain owned until PTB drains."""
+        self._stopping = True
+        app = self._app
+        if app is None:
+            self._updates_closed = True
+        elif self._polling_stop is None:
+
+            async def stop_polling():
+                if app.updater.running:
+                    await app.updater.stop()
+
+            self._polling_stop = asyncio.create_task(stop_polling())
+
     async def stop(self) -> None:
         self.close_admission()
         async with self._stop_lock:
             await complete_before_cancel(self._stop())
 
     async def _stop(self) -> None:
-        tasks = tuple(self._background)
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        await asyncio.gather(*tuple(self._callbacks), return_exceptions=True)
         app = self._app
-        if app is None:
-            return
         failure: BaseException | None = None
         try:
-            # Application.shutdown skips cleanup when getMe failed during initialize.
-            # Bot.shutdown still closes its initialized requests and is idempotent.
-            for needed, cleanup in (
-                (app.updater.running, app.updater.stop),
-                (app.running, app.stop),
-                (True, app.shutdown),
-                (True, app.bot.shutdown),
-            ):
-                if needed:
+            if self._polling_stop is not None:
+                try:
+                    await self._polling_stop
+                except BaseException as exc:
+                    failure = exc
+            # PTB owns its fetched queue. Drain it before closing callback
+            # admission; rejecting it earlier would acknowledge unread input.
+            if app is not None and app.running:
+                try:
+                    await app.stop()
+                except BaseException as exc:
+                    failure = failure or exc
+            self._updates_closed = True
+            tasks = tuple(self._background)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*tuple(self._callbacks), return_exceptions=True)
+            if app is not None:
+                # Bot.shutdown also closes requests when initialize/getMe failed.
+                for cleanup in (app.shutdown, app.bot.shutdown):
                     try:
                         await cleanup()
                     except BaseException as exc:
-                        # A failed phase must not prevent the remaining resources
-                        # from closing, including when shutdown was cancelled.
-                        if failure is None:
-                            failure = exc
+                        failure = failure or exc
             if failure is not None:
                 raise failure
         finally:
             self._running = False
             self._app = None
+            self._polling_stop = None
 
     @staticmethod
     async def _on_handler_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
