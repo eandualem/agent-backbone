@@ -72,7 +72,10 @@ coverage boundaries: [Token usage](token-usage.md).
 
 Known agents plus any other live tmux session (except the backbone's own),
 with live state. Cached for 5 s, including an empty result. Offline agents keep
-saved issue metadata without attempting a terminal capture.
+saved issue metadata without attempting a terminal capture. Each row includes
+`registration_id`, the durable lowercase UUID hex identity of its registration,
+or null for an unregistered session. It is distinct from a runtime session ID.
+Bound list reads reject a cached row whose registration has changed.
 
 ```json
 {"items": [{
@@ -302,7 +305,11 @@ rather than allow); `deny` is the answer that keeps things as they are.
 
 ### `GET /api/agents/{name}/inspect`
 
-Everything the backbone knows about one agent, with the evidence:
+Everything the backbone knows about one agent, with the evidence. The response
+includes `registration_id`. After selecting an agent, pass that value as
+`expected_registration_id` on refreshes. Malformed values return 422; a changed
+registration returns 409 `registration_changed` before replacement data is returned.
+Bound inspection also rechecks registration after deferred reads.
 
 ```json
 {"name": "app", "known": true, "online": true, "dir": "…", "runtime": "claude",

@@ -71,3 +71,9 @@ async def owned_process(spawn, *, process_group=False):
             if cancelled is not None:
                 raise cancelled from None
             raise
+
+
+async def check_before_effect(check):
+    """Revalidate a caller's captured authority at a deferred effect boundary."""
+    if check is not None:
+        await check()

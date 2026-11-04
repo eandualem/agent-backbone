@@ -53,8 +53,8 @@ async def test_integration_polling_keeps_live_config_after_guarded_start(config,
             if poller is not None:
                 await poller
 
-    def integrations(supplier, db):
-        return Integrations([Probe(supplier, db)])
+    def integrations(supplier, db, *, operation):
+        return Integrations([Probe(supplier, db, operation=operation)], operation=operation)
 
     with (
         patch("agent_backbone.api.app.LifecycleManager") as lifecycle,

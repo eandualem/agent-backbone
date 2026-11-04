@@ -19,7 +19,10 @@ The agreed design revision is **2**; JSON `schema_version: 1` is the first wire
 version. Extension revision **1** adds Default adoption, setup schema 2 and
 registration-aware permission inspection without changing revision 2 identity or
 lifecycle rules. The apply journal accepts the adoption request shape but refuses it until original
-provider capture is available. Other extension operations remain unimplemented.
+provider capture is available. Schema-2 first-agent HTTP handling now has an internal captured-provider path,
+including cancellation and per-effect checks. No production startup installs that
+context, and the schema-2 CLI resolver, runtime catalog and permission-context
+inspection remain unimplemented.
 There is no earlier released profile protocol.
 
 Provider-local identity persistence is implemented as an internal database
@@ -92,8 +95,7 @@ waiting for a slot do not enter the executor queue; cancellation retains an
 occupied slot until its worker finishes. This includes admission and subsequent
 registry checks, so cancelled requests cannot accumulate unbounded registry work.
 The lock covers the ASGI call lifetime. Work that outlives that call, including
-detached tasks or threads, needs its own captured operation guard. Periodic callbacks retain their own guards; detached integration work still
-requires complete admission fencing before activation. Connected Socket.IO event handlers
+detached tasks or threads, needs its own captured operation guard. Periodic callbacks and detached integration work retain their own guards. Connected Socket.IO event handlers
 retain the captured provider fence through handler completion or cancellation
 cleanup. Emissions acquire a separate fence before recipient validation and keep
 it in a tracked task until Socket.IO's packet-send tasks finish. Caller cancellation
@@ -115,7 +117,12 @@ an automatic in-process upgrade restart. Delayed validation notices and runtime
 setup checks capture their originating configuration, database and provider. Before
 starting, they acquire a separate operation guard and recheck the captured context;
 work whose reservation retires before that check is refused without side effects.
-The guard is retained through execution. Client cancellation does not cancel setup
+The guard is retained through execution. Bound first-agent setup captures the
+request body and full identity, namespaces receipts by that tuple and request ID,
+and validates provider and native ownership before effects and after deferred
+probes. Cancellation shares the original normalized receipt and prevents a delayed
+original request, including when no native environment is available. Schema-1 setup
+cannot execute against an internally bound provider. Client cancellation does not cancel setup
 workers, and cancellation of the owned batch waits for its executor functions to
 exit before releasing the reservation. Shutdown closes admission and drains these API tasks, including every
 setup worker, before stopping integrations or storage; cancelling the shutdown
@@ -123,15 +130,20 @@ caller leaves the work owned for a later drain. Periodic job callbacks and diagn
 writes now acquire the captured provider guard in application wiring; the scheduler
 remains independent of profile services. Job callbacks retain their entry configuration
 and database; integration, source, session-feed and lifecycle-hook suppliers remain live so persistent
-polling tasks see authorization and configuration changes. Complete integration and
-source operation fencing is still required before activation. Provider worker threads
+polling tasks see authorization and configuration changes. External Telegram handlers and independently retained discovery workers now acquire
+the captured provider guard. The live configuration supplier refuses provider or
+storage replacement while continuing to observe authorization revocations. Shutdown
+stops fetching new Telegram updates, drains the already fetched queue with live
+authorization, then closes callback admission and drains retained discovery work.
+Each callback owns a finite task separate from PTB's persistent dispatch loop;
+cleanup does not require a still-valid identity. Native integration account and
+destination acceptance is still required before activation. Provider worker threads
 retain their callers through actual worker exit,
 including repeated cancellation. Native command creation and cleanup retain the
 child handle through reaping; Git cleanup also covers its process group. Telegram
 shutdown closes topic-discovery admission and drains its retained topic tasks before
 closing the client. Integration-registry shutdown retains both background drainage
-and component stops through repeated caller cancellation. Integration-wide admission and native account acceptance remain
-prerequisites before activation. Session-feed
+and component stops through repeated caller cancellation. Native account acceptance remains a prerequisite before activation. Session-feed
 history writes retain their own captured provider guard through transaction
 cleanup, including after a snapshot times out or is cancelled. They recheck the
 feed's database, configuration and terminal context before writing; a retired or
@@ -468,7 +480,25 @@ remains `unknown`; binary/version availability proves none of these authenticati
 outcomes. `authentication_cases` shows field values, not full responses. Unsupported
 schema/flags leave discovery unavailable; never retry unbound.
 
+Bound setup also rechecks after registration/profile locks and database reads,
+before snapshot publication and credential provisioning, and after terminal
+capacity and process-creation waits before sending launch input. A committed
+registration is recorded before later checks can refuse further work. Cleanup of
+an admitted launch still removes temporary secrets and completes session scrubbing.
+Greeting delivery carries the same check through readiness, runtime detection,
+queue admission, paste and submit waits. If authority changes after text was
+pasted, retain an uncertain receipt for inspection instead of submitting or
+automatically repeating it; cleanup still removes the operation's paste buffer.
+A proven guard refusal before paste or queue admission clears only that greeting
+attempt, so the same request can retry once its original authority is valid.
+
 ## Inspect permissions for one agent registration
+
+List and inspect responses now include the durable `registration_id`; bound reads
+recheck it before returning, and inspect accepts `expected_registration_id`. A
+cached row or deferred inspect for a replaced registration returns the fixed
+`registration_changed` error. The runtime-context permission endpoint below is
+still unimplemented.
 
 Authenticated bound `/api/agents` items and `/api/agents/{name}/inspect` expose
 `registration_id` from the durable registration (`AgentSpec.registration_id`, stored

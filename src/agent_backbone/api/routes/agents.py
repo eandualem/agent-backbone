@@ -141,9 +141,15 @@ async def rename_agent(
 
 
 @router.get("/agents", response_model=ListEnvelope[EnrichedAgent])
-async def list_agents(feed: SessionFeed = Depends(get_feed)):
+async def list_agents(
+    request: Request, feed: SessionFeed = Depends(get_feed), db: BackboneDB = Depends(get_db)
+):
     """Known agents (plus other live tmux sessions) with live state."""
     agents = await feed.snapshot()
+    if getattr(request.state, "profile_provider", None) is not None:
+        current = {row["name"]: row["report_identity"] for row in await db.agents.list()}
+        if any(current.get(agent.name) != agent.registration_id for agent in agents):
+            raise _registration_changed()
     return ListEnvelope(items=agents, total=len(agents))
 
 
@@ -205,14 +211,33 @@ def get_agent_instructions(name: str, config: BackboneConfig = Depends(get_confi
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _registration_changed():
+    return HTTPException(
+        status_code=409,
+        detail={"code": "registration_changed", "message": "Agent registration does not match."},
+    )
+
+
 @router.get("/agents/{name}/inspect", response_model=AgentInspectResponse)
 async def inspect_agent(
     name: str,
+    request: Request,
+    expected_registration_id: str | None = Query(default=None, pattern=r"^[a-f0-9]{32}$"),
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
 ):
     """Everything the backbone knows about an agent, with the evidence behind it."""
+    spec = config.agents.get(name)
+    if expected_registration_id is not None and (
+        spec is None or spec.registration_id != expected_registration_id
+    ):
+        raise _registration_changed()
     spec = registered_agent_or_404(config, name)
+    bound = getattr(request.state, "profile_provider", None) is not None
+    if (bound or expected_registration_id is not None) and not await db.agents.registration_matches(
+        name, spec.registration_id
+    ):
+        raise _registration_changed()
     # An inbox-only agent has no session: one with its name is not its own.
     online = not (spec is not None and spec.inbox_only) and await session_exists(name)
     profile = await get_session_intelligence(name, config)
@@ -244,7 +269,12 @@ async def inspect_agent(
         agent_profile_readiness(config, registration) if registration else "unavailable"
     )
 
+    if (bound or expected_registration_id is not None) and not await db.agents.registration_matches(
+        name, spec.registration_id
+    ):
+        raise _registration_changed()
     return AgentInspectResponse(
+        registration_id=spec.registration_id,
         credential_profile=credential_profile,
         name=name,
         known=spec is not None,

@@ -26,7 +26,7 @@ from functools import wraps
 from typing import TYPE_CHECKING, TypeVar
 from weakref import WeakValueDictionary
 
-from agent_backbone.base import run_thread
+from agent_backbone.base import check_before_effect, run_thread
 from agent_backbone.hooks.backbone_state import (
     claim_context,
     clear_context,
@@ -59,6 +59,18 @@ _BYPASSABLE = frozenset({SessionIntelligence.HUMAN_TYPING, SessionIntelligence.S
 """Blocking conditions ``priority`` may push through. Busy and waiting never are:
 a high-priority subscription batch reaches a *working* agent only as hook
 context (``offer_context``), never as a paste."""
+
+
+class DeliveryRefused(Exception):
+    """An effect guard refused before a paste or queue admission was attempted.
+
+    Runtime guards after a paste become SubmissionUnconfirmed instead. Callers
+    may retry this refusal; they must retain every other ambiguous attempt.
+    """
+
+    def __init__(self, cause: Exception):
+        super().__init__("Delivery refused before submission")
+        self.cause = cause
 
 
 @dataclass(frozen=True)
@@ -427,6 +439,7 @@ async def safe_deliver(
     queue_id: int | None = None,
     event_id: int | None = None,
     once: bool = False,
+    check_effect=None,
 ) -> DeliveryReport:
     """Deliver ``message`` to ``session_name`` if the agent can take it, else queue it.
 
@@ -439,6 +452,16 @@ async def safe_deliver(
     ``once``: a success already recorded under ``operation_id`` in the agent's
     current conversation (a queued copy's included) answers ``already_delivered``.
     """
+
+    async def check_unsubmitted():
+        try:
+            await check_before_effect(check_effect)
+        except Exception as exc:
+            raise DeliveryRefused(exc) from exc
+
+    guard = check_unsubmitted if check_effect is not None else None
+    await check_before_effect(guard)
+    paste_attempted = False
     kind = delivery_kind
     operation_id = operation_id or uuid.uuid4().hex
     trackable_issue = db is not None and issue_number is not None and target_entity is not None
@@ -501,6 +524,7 @@ async def safe_deliver(
     # 2. Claim
     claim_id: int | None = None
     if kind == "issue" and trackable_issue:
+        await check_before_effect(guard)
         claim = await db.deliveries.claim(
             issue_number=issue_number,
             target_entity=target_entity,
@@ -566,6 +590,10 @@ async def safe_deliver(
     ) -> DeliveryReport:
         receipt = _QueueReceipt()
         if queue and requeue:
+            # An uncertain paste already belongs to this operation: preserve its
+            # recovery record even if authority changed after the paste.
+            if not uncertain:
+                await check_before_effect(check_effect if paste_attempted else guard)
             receipt = await _enqueue(
                 db,
                 session_name=session_name,
@@ -710,24 +738,36 @@ async def safe_deliver(
     uncertain = False
 
     async def submit() -> bool | None:
-        nonlocal uncertain
+        nonlocal uncertain, paste_attempted
         confirmed = (
             db is not None
             and queue_id is not None
             and not requeue
             and await db.signing.is_confirmation(operation_id)
         )
+        await check_before_effect(guard)
         if confirmed:
             # Recorded before the paste: an attempt interrupted after it is
             # held as uncertain, never pasted again (``_serialized``).
             await db.signing.attempt(operation_id, begun=True)
+        await check_before_effect(guard)
         pasted_at = time.time()
         note_submission(config.state_dir, session_name)
         try:
-            sent = await send_message(session_name, message, runtime_hint=profile.runtime)
+            paste_attempted = True
+            sent = await send_message(
+                session_name,
+                message,
+                runtime_hint=profile.runtime,
+                **({"check_effect": guard} if guard is not None else {}),
+            )
+            if sent is None:
+                paste_attempted = False  # Runtime refused notification before pasting.
             if not sent and confirmed:
                 await db.signing.attempt(operation_id, begun=False)
             return sent
+        except DeliveryRefused:
+            raise  # A known pre-effect refusal is not an uncertain submission.
         except SubmissionUnconfirmed as exc:
             # Only a runtime whose hook sees UserPromptSubmit can send a receipt. One
             # not identified before the paste may be (send_message looks again): it waits.

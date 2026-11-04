@@ -26,6 +26,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
 
+from agent_backbone.base import check_before_effect
 from agent_backbone.hooks import install as hooks
 from agent_backbone.services.runtimes._environment import (
     NativeEnvironment,
@@ -1268,16 +1269,18 @@ class Runtime:
                     return True
         return False
 
-    async def deliver_message(self, session_name: str, message: str) -> bool:
+    async def deliver_message(self, session_name: str, message: str, *, check_effect=None) -> bool:
         """Paste a message and submit it according to runtime-specific rules."""
-        if not await paste_message(session_name, message):
+        options = {"check_effect": check_effect} if check_effect is not None else {}
+        await check_before_effect(check_effect)
+        if not await paste_message(session_name, message, **options):
             return False
 
         if self.paste_settle_seconds > 0:
             await asyncio.sleep(self.paste_settle_seconds)
 
         try:
-            state = await self._submit(session_name)
+            state = await self._submit(session_name, **options)
         except Exception as exc:
             raise SubmissionUnconfirmed("Could not confirm pasted text") from exc
 
@@ -1297,10 +1300,12 @@ class Runtime:
         )
         raise SubmissionUnconfirmed(f"Pasted text has state {state}")
 
-    async def _submit(self, session_name: str) -> str:
+    async def _submit(self, session_name: str, *, check_effect=None) -> str:
         """Submit once, then observe; repeating Enter can interrupt an active turn."""
         state = "submitted"
-        if not await press_submit(session_name):
+        if not await press_submit(
+            session_name, **({"check_effect": check_effect} if check_effect is not None else {})
+        ):
             return "failed"
         for _attempt in range(self.submission_checks):
             await asyncio.sleep(_SUBMIT_RECHECK_DELAY_SECONDS)

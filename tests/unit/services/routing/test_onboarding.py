@@ -735,3 +735,115 @@ async def test_cancellation_refuses_wrong_installation_without_receipt(scenario)
         "code"
     ] == "installation_conflict"
     assert not (store.config.data_dir / "setup-receipts").exists()
+
+
+async def test_bound_setup_replays_and_cannot_retarget_after_probe(scenario, db, monkeypatch):
+    from agent_backbone.models import BoundSetupFirstAgent
+    from agent_backbone.services.database import BoundSetupReceipt, SetupReceiptError
+
+    legacy, store, state = scenario
+    data = legacy.model_dump(exclude={"data_dir"}) | {
+        "schema_version": 2,
+        "profile_id": "profile-a",
+        "expected_installation_id": "installation-a",
+        "expected_lifecycle_id": "lifecycle-a",
+    }
+    body = BoundSetupFirstAgent.model_validate(data)
+    valid = True
+
+    async def check():
+        if not valid:
+            raise SetupReceiptError("binding_mismatch", "Profile binding does not match.")
+
+    def delayed_probe():
+        nonlocal valid
+        valid = False
+
+    monkeypatch.setattr(
+        type(RUNTIMES[body.agent.runtime]), "setup_error", lambda self: delayed_probe()
+    )
+    refused = await onboarding.first_agent(body, store.config, store, db, check_effect=check)
+    assert refused["code"] == "binding_mismatch"
+    assert not Path(body.agent.directory).exists() and not state["live"]
+    assert store.agents.get(body.agent.name) is None
+    with BoundSetupReceipt(store.config.data_dir, data) as receipt:
+        assert receipt.record["completed_steps"] == []
+    valid = True
+    monkeypatch.setattr(type(RUNTIMES[body.agent.runtime]), "setup_error", lambda self: None)
+    first = await onboarding.first_agent(body, store.config, store, db, check_effect=check)
+    assert first["code"] == "agent_ready"
+    replay = await onboarding.first_agent(body, store.config, store, db, check_effect=check)
+    assert replay["code"] == "agent_ready"
+    onboarding.start_agent.assert_awaited_once()
+    onboarding.safe_deliver.assert_awaited_once()
+
+
+async def test_bound_cancellation_blocks_delayed_original_before_native_checks(scenario, db):
+    from agent_backbone.models import BoundSetupCancelFirstAgent
+    from agent_backbone.services.database import SetupReceiptError
+
+    legacy, store, state = scenario
+    data = legacy.model_dump(exclude={"data_dir"}) | {
+        "schema_version": 2,
+        "action": "cancel_first_agent",
+        "profile_id": "profile-a",
+        "expected_installation_id": "installation-a",
+        "expected_lifecycle_id": "lifecycle-a",
+    }
+    body = BoundSetupCancelFirstAgent.model_validate(data)
+    check = AsyncMock()
+    cancelled = await onboarding.cancel_first_agent(body, store.config, check_effect=check)
+    assert cancelled["code"] == "request_cancelled"
+    original = await onboarding.first_agent(
+        body.original(),
+        store.config,
+        store,
+        db,
+        check_admission=check,
+        check_effect=AsyncMock(side_effect=SetupReceiptError("runtime_permission", "Unavailable")),
+    )
+    assert original["code"] == "request_cancelled"
+    assert not Path(body.agent.directory).exists() and not state["live"]
+
+
+async def test_bound_setup_records_registration_before_next_effect_check(scenario, db, monkeypatch):
+    from agent_backbone.models import BoundSetupFirstAgent
+    from agent_backbone.services.database import BoundSetupReceipt, SetupReceiptError
+
+    legacy, store, state = scenario
+    data = legacy.model_dump(exclude={"data_dir"}) | {
+        "schema_version": 2,
+        "profile_id": "profile-a",
+        "expected_installation_id": "installation-a",
+        "expected_lifecycle_id": "lifecycle-a",
+    }
+    body = BoundSetupFirstAgent.model_validate(data)
+    valid = True
+    original = store.register
+
+    async def register(*args, **kwargs):
+        nonlocal valid
+        result = await original(*args, **kwargs)
+        valid = False
+        return result
+
+    async def check():
+        if not valid:
+            raise SetupReceiptError("binding_mismatch", "Profile binding does not match.")
+
+    monkeypatch.setattr(store, "register", register)
+    refused = await onboarding.first_agent(body, store.config, store, db, check_effect=check)
+    assert refused["code"] == "binding_mismatch"
+    registration = store.agents.get(body.agent.name).registration_id
+    with BoundSetupReceipt(store.config.data_dir, data) as receipt:
+        assert receipt.record["registration_id"] == registration
+        assert not receipt.record["registration_pending"]
+        assert "agent" in receipt.record["completed_steps"]
+    assert not state["live"]
+    onboarding.start_agent.assert_not_awaited()
+    valid = True
+    resumed = await onboarding.first_agent(body, store.config, store, db, check_effect=check)
+    assert resumed["code"] == "agent_ready"
+    assert store.agents.get(body.agent.name).registration_id == registration
+    onboarding.start_agent.assert_awaited_once()
+    onboarding.safe_deliver.assert_awaited_once()

@@ -6,7 +6,7 @@ import asyncio
 import logging
 import uuid
 
-from agent_backbone.base import owned_process
+from agent_backbone.base import check_before_effect, owned_process
 from agent_backbone.services.terminal._server import tmux_command
 
 log = logging.getLogger(__name__)
@@ -34,6 +34,7 @@ async def _run_tmux(
     *args: str,
     capture_stdout: bool = False,
     stdin_data: bytes | None = None,
+    check_effect=None,
 ) -> tuple[int, bytes, bytes]:
     """Run a tmux subprocess with concurrency limiting.
 
@@ -43,6 +44,7 @@ async def _run_tmux(
     """
     command = tmux_command(*args)
     async with _get_semaphore():
+        await check_before_effect(check_effect)
         kwargs: dict = {
             "stdout": asyncio.subprocess.PIPE if capture_stdout else asyncio.subprocess.DEVNULL,
             "stderr": asyncio.subprocess.PIPE,
@@ -51,6 +53,10 @@ async def _run_tmux(
             kwargs["stdin"] = asyncio.subprocess.PIPE
         async with owned_process(asyncio.create_subprocess_exec(*command, **kwargs)) as proc:
             try:
+                # Argument-based commands were admitted at spawn. Only stdin
+                # commands still have an effect to authorize after creation.
+                if stdin_data is not None:
+                    await check_before_effect(check_effect)
                 async with asyncio.timeout(10.0):
                     stdout, stderr = await proc.communicate(input=stdin_data)
             except TimeoutError:
@@ -79,9 +85,15 @@ async def session_exists(session_name: str) -> bool:
     return rc == 0
 
 
-async def press_submit(session_name: str) -> bool:
+async def press_submit(session_name: str, *, check_effect=None) -> bool:
     """Send Enter to submit the currently buffered prompt input."""
-    rc, _, stderr = await _run_tmux("send-keys", "-t", exact_target(session_name), "Enter")
+    rc, _, stderr = await _run_tmux(
+        "send-keys",
+        "-t",
+        exact_target(session_name),
+        "Enter",
+        **({"check_effect": check_effect} if check_effect is not None else {}),
+    )
     if rc != 0:
         log.error("tmux send-keys Enter failed for '%s': %s", session_name, stderr.decode())
         return False
@@ -97,32 +109,43 @@ async def press_escape(session_name: str) -> bool:
     return True
 
 
-async def paste_message(session_name: str, message: str) -> bool:
-    """Paste a message into the tmux session input buffer."""
+async def paste_message(session_name: str, message: str, *, check_effect=None) -> bool:
+    """Paste through the admission guard; always remove our private buffer."""
     if not await session_exists(session_name):
         log.warning("tmux session '%s' not found — notification dropped", session_name)
         return False
-
-    # A named buffer per paste: the unnamed buffer is server-global, so two
-    # deliveries to different sessions could load A, load B, paste A's target
-    # with B's body.
+    await check_before_effect(check_effect)
+    options = {"check_effect": check_effect} if check_effect is not None else {}
+    # A named buffer per paste prevents concurrent deliveries mixing text.
     buffer = f"backbone-{uuid.uuid4().hex}"
-    rc, _, stderr = await _run_tmux("load-buffer", "-b", buffer, "-", stdin_data=message.encode())
-    if rc != 0:
-        log.error("tmux load-buffer failed for '%s': %s", session_name, stderr.decode())
-        return False
-
-    # -p uses bracketed paste when the pane's program enabled it (Claude Code,
-    # zsh, …): a multi-line message then arrives as ONE paste instead of each
-    # newline acting as Enter and shredding the message line by line.
-    rc, _, stderr = await _run_tmux(
-        "paste-buffer", "-p", "-b", buffer, "-t", exact_target(session_name), "-d"
-    )
-    if rc != 0:
-        log.error("tmux paste-buffer failed for '%s': %s", session_name, stderr.decode())
-        await _run_tmux("delete-buffer", "-b", buffer)
-        return False
-    return True
+    pasted = False
+    try:
+        rc, _, stderr = await _run_tmux(
+            "load-buffer", "-b", buffer, "-", stdin_data=message.encode(), **options
+        )
+        if rc != 0:
+            log.error("tmux load-buffer failed for '%s': %s", session_name, stderr.decode())
+            return False
+        # Bracketed paste keeps multiline input together. Recheck authority
+        # after loading and waiting for capacity, before the paste subprocess.
+        rc, _, stderr = await _run_tmux(
+            "paste-buffer",
+            "-p",
+            "-b",
+            buffer,
+            "-t",
+            exact_target(session_name),
+            "-d",
+            **options,
+        )
+        pasted = rc == 0
+        if not pasted:
+            log.error("tmux paste-buffer failed for '%s': %s", session_name, stderr.decode())
+        return pasted
+    finally:
+        if not pasted:
+            # Cleanup of an owned buffer must survive an admission refusal.
+            await _run_tmux("delete-buffer", "-b", buffer)
 
 
 async def send_keys(session_name: str, keys: str) -> bool:

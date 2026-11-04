@@ -218,7 +218,8 @@ CAPABILITIES: tuple[Capability, ...] = (
     _row(
         "installer-first-agent",
         "Explicit first-agent setup with durable retry and preflight cancellation receipts",
-        "services/routing/onboarding.py; cli/onboarding.py; Runtime.prepare_setup_hooks",
+        "services/routing/onboarding.py; api/routes/onboarding.py; "
+        "cli/onboarding.py; Runtime.prepare_setup_hooks",
         fallback=(
             "Use the documented agent-start flow; do not retry an uncertain launch "
             "or greeting as a new request."
@@ -226,14 +227,17 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: rt.setup_hooks,
         claude=_ok(
             "tests/unit/services/routing/test_onboarding.py",
+            "Bound HTTP guards: tests/unit/api/test_profile_binding.py; "
             "working-installation live check pending",
         ),
         codex=_ok(
             "tests/unit/services/routing/test_onboarding.py",
+            "Bound HTTP guards: tests/unit/api/test_profile_binding.py; "
             "working-installation live check pending",
         ),
         opencode=_ok(
             "tests/unit/services/routing/test_onboarding.py",
+            "Bound HTTP guards: tests/unit/api/test_profile_binding.py; "
             "working-installation live check pending",
         ),
         gemini=_gap(note="installer hook preparation is not implemented"),
@@ -260,6 +264,20 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Reject profile-bound traffic on unadopted providers",
         "api/profile_binding.py; api/socketio_server.py",
         fallback="Keep bound work pinned; do not retry without its profile identity.",
+        implemented=lambda rt: True,
+        claude=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        codex=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        opencode=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        gemini=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        deepcode=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        aider=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        shell=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+    ),
+    _row(
+        "registration-aware-inspection",
+        "Agent registration IDs and stale-registration refusal on inspection",
+        "api/routes/agents.py; services/agents/queries.py",
+        fallback="Select the agent again after its registration changes.",
         implemented=lambda rt: True,
         claude=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
         codex=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),

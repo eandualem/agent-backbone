@@ -10,6 +10,7 @@ below are the surface the API, the jobs and the integrations use.
 
 from agent_backbone.services.routing._create_notify import create_and_notify
 from agent_backbone.services.routing._delivery import (
+    DeliveryRefused,
     DeliveryReport,
     checkpoint_inbox,
     is_acknowledged,
@@ -56,6 +57,7 @@ from agent_backbone.services.routing._validity import (
 
 __all__ = [
     "STEER_TTL_SECONDS",
+    "DeliveryRefused",
     "DeliveryReport",
     "IssueClosedHook",
     "SteerReport",

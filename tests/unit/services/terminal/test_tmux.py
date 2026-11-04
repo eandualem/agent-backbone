@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -799,3 +799,44 @@ def test_complete_environment_loader_preserves_only_pane_metadata(tmp_path, term
         f"TERM={term or 'screen'}",
     }
     assert not env_file.exists()
+
+
+@pytest.mark.parametrize("boundary", ["session_probe", "environment_probe"])
+async def test_start_guard_refuses_before_launch_file_after_terminal_reads(
+    tmp_path, monkeypatch, boundary
+):
+    from agent_backbone.services.terminal import _sessions
+
+    valid = True
+
+    async def check():
+        if not valid:
+            raise ValueError("authority changed")
+
+    async def exists(name):
+        nonlocal valid
+        if boundary == "session_probe":
+            valid = False
+        return False
+
+    async def run(*args, **kwargs):
+        nonlocal valid
+        assert "show-environment" in args
+        valid = False
+        return 0, b"", b""
+
+    monkeypatch.setattr(_sessions, "session_exists", exists)
+    monkeypatch.setattr(_sessions, "_run_tmux", AsyncMock(side_effect=run))
+    monkeypatch.setattr(_sessions, "tmux_server_socket", lambda: str(tmp_path / "tmux.sock"))
+    create_file = MagicMock()
+    monkeypatch.setattr(_sessions.tempfile, "mkstemp", create_file)
+    with pytest.raises(ValueError, match="authority changed"):
+        await start_session(
+            "guide",
+            command=["inert-cli"],
+            environment={"TMPDIR": str(tmp_path)},
+            inherit_environment=False,
+            check_effect=check,
+        )
+    create_file.assert_not_called()
+    assert _sessions._run_tmux.await_count == (boundary == "environment_probe")
