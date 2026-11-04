@@ -352,7 +352,7 @@ async def test_failed_start_closes_partial_application(config, stage, error, cle
     app.bot.shutdown = AsyncMock()
     app.running = True
     app.updater.running = stage == "sync"
-    app.updater.stop = AsyncMock()
+    app.updater.stop = AsyncMock(side_effect=lambda: setattr(app.updater, "running", False))
     app.updater.start_polling = AsyncMock(side_effect=failure if stage == "polling" else None)
     bot.sync_agents = AsyncMock(side_effect=failure if stage == "sync" else None)
     bot._app = app
@@ -383,6 +383,8 @@ async def test_stop_attempts_remaining_cleanup_then_raises_first_failure(config,
 
     async def cleanup(name):
         calls.append(name)
+        if name == "updater":
+            app.updater.running = False  # PTB clears running before awaiting cleanup.
         if name == phase:
             raise failure
         if name == "bot":
@@ -1275,3 +1277,60 @@ async def test_shutdown_drains_real_ptb_dispatch_and_fetched_queue(config, monke
         if stopping is not None:
             await asyncio.gather(stopping, return_exceptions=True)
         await app.shutdown()
+
+
+async def test_shutdown_stops_polling_started_after_early_admission_close(config, monkeypatch):
+    bot = _bot(replace(config, telegram_token="123:fake"))
+    entered, release = asyncio.Event(), asyncio.Event()
+    app = MagicMock(running=False)
+    app.updater.running = False
+
+    async def initialize():
+        entered.set()
+        await release.wait()
+
+    async def start_app():
+        app.running = True
+
+    async def start_polling():
+        app.updater.running = True
+
+    async def stop_polling():
+        app.updater.running = False
+
+    async def stop_app():
+        app.running = False
+
+    async def shutdown():
+        assert not app.updater.running
+
+    app.initialize = AsyncMock(side_effect=initialize)
+    app.start = AsyncMock(side_effect=start_app)
+    app.updater.start_polling = AsyncMock(side_effect=start_polling)
+    app.updater.stop = AsyncMock(side_effect=stop_polling)
+    app.stop = AsyncMock(side_effect=stop_app)
+    app.shutdown = AsyncMock(side_effect=shutdown)
+    app.bot.shutdown = AsyncMock()
+
+    def build():
+        bot._app = app
+        return app
+
+    monkeypatch.setattr(bot, "build_app", build)
+    monkeypatch.setattr(bot, "sync_agents", AsyncMock())
+    starting = asyncio.create_task(bot.start())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        bot.close_admission()
+        await bot._polling_stop
+        app.updater.stop.assert_not_awaited()
+        release.set()
+        await starting
+        assert app.updater.running
+        await bot.stop()
+        app.updater.stop.assert_awaited_once()
+        app.shutdown.assert_awaited_once()
+        assert not app.updater.running and bot._app is None
+    finally:
+        release.set()
+        await asyncio.gather(starting, return_exceptions=True)

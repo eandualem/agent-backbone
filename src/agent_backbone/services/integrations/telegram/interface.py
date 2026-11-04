@@ -428,6 +428,13 @@ class TelegramService(Integration):
                     await self._polling_stop
                 except BaseException as exc:
                     failure = exc
+            # Startup may have reached polling after close_admission's first
+            # stop task found an inactive updater. Final cleanup must recheck.
+            if app is not None and app.updater.running:
+                try:
+                    await app.updater.stop()
+                except BaseException as exc:
+                    failure = failure or exc
             # PTB owns its fetched queue. Drain it before closing callback
             # admission; rejecting it earlier would acknowledge unread input.
             if app is not None and app.running:

@@ -217,3 +217,31 @@ async def test_registry_cancellation_drains_background_then_stops_components():
         release_background.set()
         release_stop.set()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_reconcile_does_not_start_or_sync_after_admission_closes():
+    import asyncio
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    component = _Fake()
+    component._running = True
+    component.start = AsyncMock()
+
+    async def stop_component():
+        entered.set()
+        await release.wait()
+        component._running = False
+
+    component.stop = AsyncMock(side_effect=stop_component)
+    registry = Integrations([component])
+    task = asyncio.create_task(registry.reconcile())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        registry.close_admission()
+        release.set()
+        await task
+        component.start.assert_not_awaited()
+        assert component.synced == 0
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)

@@ -122,13 +122,14 @@ class Integrations:
                         not integration.can_start or self._startup_keys.get(integration.name) != key
                     ):
                         await integration.stop()
-                    if integration.can_start and not integration.running:
+                    if not self._stopping and integration.can_start and not integration.running:
                         await integration.start()
                         if integration.running:
                             self._startup_keys[integration.name] = key
                 except Exception:
                     log.exception("%s lifecycle reconciliation failed", integration.name)
-            await self.sync_agents()
+            if not self._stopping:
+                await self.sync_agents()
 
     def close_admission(self) -> None:
         """Close callbacks before shutdown begins draining producers."""
