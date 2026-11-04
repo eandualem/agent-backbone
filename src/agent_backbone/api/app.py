@@ -508,6 +508,16 @@ def create_app(config: BackboneConfig | None = None):
     app.add_middleware(SignedSenderMiddleware)
     app.add_middleware(ProfileBindingMiddleware)
     app.add_api_route("/api/profile", profile_identity, methods=["GET"])
+    from agent_backbone.api.auth import require_operator
+    from agent_backbone.api.profile_sessions import ensure_shell, sign_in
+
+    for path, handler in (("shells", ensure_shell), ("accounts/sign-in", sign_in)):
+        app.add_api_route(
+            f"/api/profile/{path}",
+            handler,
+            methods=["POST"],
+            dependencies=[Depends(require_operator)],
+        )
 
     cors_origins = list(config.backbone.cors_origins)
     if cors_origins:

@@ -142,6 +142,8 @@ def serve_profile(registry_path: Path, profile_id: str) -> None:
 
     registry = ProfileRegistry(registry_path)
     reservation = registry.ready_reservation(profile_id)
+    if reservation.kind != "isolated":
+        raise ValueError("The adopted installation starts with `backbone up`")
     root = reservation.data_dir
     # Replacing the process environment keeps host tokens out of load_secrets and
     # the tmux server, and the user's tmux.conf unread.
@@ -176,7 +178,7 @@ def _run_server(
     from agent_backbone.api.local_transport import LocalPeerProtocol, private_listener
 
     logging_config = log_config(config, log_file)
-    if reload and config.backbone.socket_path:
+    if reload and (config.backbone.socket_path or provider):
         raise ValueError("the private socket requires backbone up without --reload")
     if reload:
         # The reloader imports the factory in a child instead of passing config.
@@ -302,6 +304,30 @@ async def _up_detached(config: BackboneConfig, log_file: Path | None = None) -> 
     return 1
 
 
+async def _adopted_provider(config: BackboneConfig):
+    """The adopted installation serves as itself; anything else stays legacy."""
+    from agent_backbone.config import PROFILE_REGISTRY_PATH
+    from agent_backbone.services.database import (
+        ProfileRegistry,
+        default_tmux_socket,
+        reconcile_profile_provider,
+    )
+    from agent_backbone.services.terminal import pin_tmux_server
+
+    registry = ProfileRegistry(Path(PROFILE_REGISTRY_PATH).expanduser())
+    reservation = registry.adopted_reservation(config.data_dir.resolve())
+    if reservation is None:
+        return None
+    socket = reservation.binding.tmux_socket
+    if socket != default_tmux_socket():
+        raise ValueError("The adopted installation's tmux server changed since its adoption")
+    provider = await reconcile_profile_provider(
+        registry, reservation, reservation.data_dir / SQLITE_FILENAME, socket
+    )
+    pin_tmux_server(socket)
+    return provider
+
+
 def cmd_up(args: argparse.Namespace) -> int:
     config = asyncio.run(_common.load_config())
     # A quoted `~/…` reaches us unexpanded; a detached run starts elsewhere.
@@ -313,7 +339,8 @@ def cmd_up(args: argparse.Namespace) -> int:
     if args.detach:
         return asyncio.run(_up_detached(config, log_file))
     try:
-        _run_server(config, reload=args.reload, log_file=log_file)
+        provider = asyncio.run(_adopted_provider(config))
+        _run_server(config, reload=args.reload, log_file=log_file, provider=provider)
     except SystemExit as exc:
         if exc.code and log_policy.mode == "off":
             print(

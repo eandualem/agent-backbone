@@ -65,6 +65,7 @@ class ProfileReservation:
     baseline_version: str
     state: str = "creating"
     binding: ProfileBinding | None = None
+    kind: str = "isolated"
 
     def __post_init__(self) -> None:
         if not isinstance(self.identity, ProfileIdentity):
@@ -91,7 +92,7 @@ class ProfileReservation:
         return {
             "profile_id": self.identity.profile_id,
             "display_name": self.display_name,
-            "kind": "isolated",
+            "kind": self.kind,
             "state": self.state,
         }
 
@@ -211,6 +212,7 @@ class ProfileRegistry:
                     "profile_id TEXT PRIMARY KEY NOT NULL, endpoint TEXT NOT NULL, "
                     "credential TEXT NOT NULL, tmux_socket TEXT NOT NULL)"
                 )
+                conn.execute("CREATE TABLE adopted_profiles (profile_id TEXT PRIMARY KEY NOT NULL)")
                 conn.execute(
                     "CREATE TABLE profile_ports ("
                     "port INTEGER PRIMARY KEY NOT NULL, profile_id TEXT UNIQUE NOT NULL)"
@@ -255,7 +257,9 @@ class ProfileRegistry:
     def _records(self, conn) -> list[ProfileReservation]:
         records = []
         bindings = {}
+        adopted = set()
         if conn.execute("PRAGMA user_version").fetchone()[0] >= 4:
+            adopted = {row["profile_id"] for row in conn.execute("SELECT * FROM adopted_profiles")}
             bindings = {
                 row["profile_id"]: ProfileBinding(
                     Path(row["endpoint"]), Path(row["credential"]), Path(row["tmux_socket"])
@@ -273,6 +277,7 @@ class ProfileRegistry:
                     row["baseline_version"],
                     "ready" if binding else row["state"],
                     binding,
+                    "legacy_default" if row["profile_id"] in adopted else "isolated",
                 )
             except (IndexError, TypeError) as exc:
                 raise ValueError("Invalid profile registry metadata") from exc
@@ -447,9 +452,27 @@ class ProfileRegistry:
                 return port
         raise ValueError("No loopback port is available for a new profile")
 
-    def _publish(self, conn, identity, data_dir, binding) -> ProfileReservation:
+    def adopted_reservation(self, data_dir: Path) -> ProfileReservation | None:
+        """The ready adopted installation at exactly this directory, if there is one."""
+        try:
+            self.path.lstat()
+        except FileNotFoundError:
+            return None
+        with self._connection() as conn:
+            for record in self._records(conn):
+                if (
+                    record.kind == "legacy_default"
+                    and record.state == "ready"
+                    and record.data_dir == data_dir
+                ):
+                    return record
+        return None
+
+    def _publish(self, conn, identity, data_dir, binding, *, adopted=False) -> ProfileReservation:
         self._external(data_dir)
-        for path in (binding.endpoint, binding.credential, binding.tmux_socket):
+        # An adopted installation keeps the tmux server it already uses.
+        owned = (binding.endpoint, binding.credential)
+        for path in owned if adopted else (*owned, binding.tmux_socket):
             if not path.is_absolute() or path == data_dir or not path.is_relative_to(data_dir):
                 raise ValueError("Profile binding is outside its reserved directory")
         if conn.execute("PRAGMA user_version").fetchone()[0] != 4:

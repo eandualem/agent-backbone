@@ -43,6 +43,20 @@
       "kind": "isolated",
       "state": "creating",
       "binding": null
+    },
+    "registry_absent": {
+      "schema_version": 1,
+      "error": {
+        "code": "registry_absent",
+        "message": "No profiles exist yet."
+      }
+    },
+    "registry_unavailable": {
+      "schema_version": 1,
+      "error": {
+        "code": "registry_unavailable",
+        "message": "Registry error."
+      }
     }
   },
   "identity": {
@@ -1014,6 +1028,116 @@
         "error": {
           "code": "unavailable",
           "message": "Runtime permission metadata is unavailable."
+        }
+      }
+    }
+  },
+  "sessions": {
+    "shell_request": {
+      "schema_version": 1,
+      "shell_id": "0123456789ab",
+      "cwd": "/example/project"
+    },
+    "shell_request_home": {
+      "schema_version": 1,
+      "shell_id": "0123456789ab",
+      "cwd": null
+    },
+    "shell_response": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "shell_id": "0123456789ab",
+      "session": "shell-0123456789ab",
+      "created": true
+    },
+    "shell_refusals": {
+      "invalid_cwd": {
+        "status": 422,
+        "body": {
+          "detail": {
+            "code": "invalid_cwd",
+            "message": "The directory must be an absolute existing path."
+          }
+        }
+      },
+      "shell_unavailable": {
+        "status": 503,
+        "body": {
+          "detail": {
+            "code": "shell_unavailable",
+            "message": "The terminal session could not be started."
+          }
+        }
+      }
+    },
+    "sign_in_request": {
+      "schema_version": 1,
+      "runtime": "codex"
+    },
+    "sign_in_response": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "runtime": "codex",
+      "session": "sign-in-codex",
+      "created": true
+    },
+    "shell_reused": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "shell_id": "0123456789ab",
+      "session": "shell-0123456789ab",
+      "created": false
+    },
+    "sign_in_reused": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "runtime": "codex",
+      "session": "sign-in-codex",
+      "created": false
+    },
+    "sign_in_refusals": {
+      "runtime_unavailable": {
+        "status": 422,
+        "body": {
+          "detail": {
+            "code": "runtime_unavailable",
+            "message": "This runtime cannot be signed in here."
+          }
+        }
+      },
+      "runtime_not_installed": {
+        "status": 422,
+        "body": {
+          "detail": {
+            "code": "runtime_unavailable",
+            "message": "This runtime is not installed."
+          }
+        }
+      },
+      "shell_unavailable": {
+        "status": 503,
+        "body": {
+          "detail": {
+            "code": "shell_unavailable",
+            "message": "The terminal session could not be started."
+          }
+        }
+      }
+    },
+    "invalid_request": {
+      "status": 422,
+      "body": {
+        "detail": {
+          "code": "invalid_request",
+          "message": "The request is not valid."
         }
       }
     }

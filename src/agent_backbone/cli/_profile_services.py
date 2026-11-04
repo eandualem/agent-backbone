@@ -58,6 +58,8 @@ class ProviderServices:
         if _answers(binding):
             return
         root = reservation.data_dir
+        adopted = reservation.kind == "legacy_default"
+        (root / "state").mkdir(mode=0o700, exist_ok=True)
         log = os.open(
             root / "state" / "provider.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600
         )
@@ -69,14 +71,23 @@ class ProviderServices:
                     "-B",
                     "-m",
                     "agent_backbone.cli",
-                    "profiles",
-                    "serve",
-                    "--registry",
-                    str(self.registry.path),
-                    reservation.identity.profile_id,
+                    *(
+                        ["up"]
+                        if adopted
+                        else [
+                            "profiles",
+                            "serve",
+                            "--registry",
+                            str(self.registry.path),
+                            reservation.identity.profile_id,
+                        ]
+                    ),
                 ],
-                env={k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL") if k in os.environ},
-                cwd=root / "home",
+                # The adopted installation keeps the environment it has always had.
+                env={**os.environ, "BACKBONE_DATA_DIR": str(root)}
+                if adopted
+                else {k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL") if k in os.environ},
+                cwd=root if adopted else root / "home",
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=log,

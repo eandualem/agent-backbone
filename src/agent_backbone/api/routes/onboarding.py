@@ -38,6 +38,12 @@ router = APIRouter(
 )
 
 
+def _isolated_provider(request: Request) -> bool:
+    """Schema-1 setup stays available on the adopted installation it always served."""
+    provider = getattr(request.state, "profile_provider", None)
+    return provider is not None and provider.reservation.kind != "legacy_default"
+
+
 @router.get("/identity", operation_id="setup_identity")
 async def identity(config=Depends(get_config)):
     return {"schema_version": 1, "data_dir": str(config.data_dir.resolve())}
@@ -53,7 +59,7 @@ async def create_first_agent(
 ):
     if isinstance(body, BoundSetupFirstAgent):
         return await _bound_setup(request, body, config, db, store)
-    if getattr(request.state, "profile_provider", None) is not None:
+    if _isolated_provider(request):
         raise HTTPException(status_code=409, detail=BINDING_MISMATCH)
     return await first_agent(body, config, store, db)
 
@@ -66,7 +72,7 @@ async def cancel_first_agent_request(
 ):
     if isinstance(body, BoundSetupFirstAgent):
         return await _bound_setup(request, body, config, db)
-    if getattr(request.state, "profile_provider", None) is not None:
+    if _isolated_provider(request):
         raise HTTPException(status_code=409, detail=BINDING_MISMATCH)
     return await cancel_first_agent(body, config)
 

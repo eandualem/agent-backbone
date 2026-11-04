@@ -921,6 +921,9 @@ appends a revision; a stale base is refused. Use `create --schema`, and see
 
 ## `backbone profiles`
 
+`backbone profiles sign-in PROFILE_ID --runtime claude|codex|opencode` runs that CLI's
+own sign-in inside a running profile and attaches you to it.
+
 From a local operator terminal, inspect profile reservations without starting a
 provider:
 
@@ -956,11 +959,14 @@ operation receipt. Omit `--json` for labeled details.
 A create request naming the `core-v1` baseline reserves new identities, a private
 directory and a loopback port, sets up the database, fresh credential and the starter
 policies and skills a fresh install gets, and publishes a ready record. Start launches that profile's provider unless its exact identity is already
-answering; stop signals only the process behind that verified endpoint. Default adoption
-remains unimplemented. Apply returns durable refusal receipts: `baseline_unavailable` for
+answering; stop signals only the process behind that verified endpoint. An `adopt_default`
+request records the existing installation in place, using the token from
+`backbone profiles adoption-preview --json`; nothing restarts. Apply returns durable
+refusal receipts: `baseline_unavailable` for
 any other baseline, `profile_create_failed` or `profile_path_too_long` when creation
 cannot finish, `service_start_failed` or `service_stop_failed` when a provider does not
-start or stop in time, `adoption_unavailable` for adoption, `profile_not_ready` for an
+start or stop in time, `adoption_unavailable` or `adoption_changed` for adoption,
+`profile_not_ready` for an
 exact tuple that is still being created, or `binding_mismatch` for an unknown, stale or
 invalidated tuple.
 Pending work on the same profile or installation returns `operation_busy`.

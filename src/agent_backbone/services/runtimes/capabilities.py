@@ -328,6 +328,40 @@ CAPABILITIES: tuple[Capability, ...] = (
         shell=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
     ),
     _row(
+        "profile-isolated-agents",
+        "Agents run inside an isolated profile with their own native environment",
+        "cli/server.py; services/runtimes/_environment.py",
+        fallback="Use Default for this runtime.",
+        implemented=lambda rt: True,
+        claude=_ok("tests/unit/test_cli_profile_services.py", "Shared boundary; no model calls"),
+        codex=_ok("tests/unit/test_cli_profile_services.py", "Shared boundary; no model calls"),
+        opencode=_ok("tests/unit/test_cli_profile_services.py", "Shared boundary; no model calls"),
+        gemini=_gap(note="Refused in isolated profiles until someone needs it."),
+        deepcode=_gap(note="Refused in isolated profiles until someone needs it."),
+        aider=_gap(note="Refused in isolated profiles until someone needs it."),
+        shell=_ok("tests/unit/test_cli_profile_services.py", "Shared boundary; no model calls"),
+    ),
+    _row(
+        "profile-cli-sign-in",
+        "Sign a CLI account in inside an isolated profile",
+        "api/profile_sessions.py; cli/profiles.py",
+        fallback="Use Default for this runtime.",
+        implemented=lambda rt: rt.id != "shell",
+        claude=_ok(
+            "tests/unit/api/test_profile_sessions.py", "Sign-in itself is checked on a real account"
+        ),
+        codex=_ok(
+            "tests/unit/api/test_profile_sessions.py", "Sign-in itself is checked on a real account"
+        ),
+        opencode=_ok(
+            "tests/unit/api/test_profile_sessions.py", "Sign-in itself is checked on a real account"
+        ),
+        gemini=_gap(note="Refused in isolated profiles until someone needs it."),
+        deepcode=_gap(note="Refused in isolated profiles until someone needs it."),
+        aider=_gap(note="Refused in isolated profiles until someone needs it."),
+        shell=_na("A plain shell has no account to sign in."),
+    ),
+    _row(
         "profile-reservation-boundary",
         "Operator-only profile discovery, lifecycle refusal receipts and reserved startup refusal",
         "cli/profiles.py; services/database/_profile_startup.py; api/app.py; "

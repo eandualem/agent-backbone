@@ -8,8 +8,10 @@ another profile affects new work; it cannot retarget an existing request.
 **Implementation status:** this page and its fixtures define the agreed contract.
 Operator list/show discovery and refusal of unreconciled startup are implemented.
 Lifecycle apply/lookup commands retain requests and receipts. Creating the empty
-baseline succeeds and publishes a ready record, and start/stop run that profile's
-provider on its private socket. Adoption remains unimplemented. The identity
+baseline succeeds and publishes a ready record, start/stop run that profile's provider,
+agents run inside it on Claude Code, Codex and OpenCode, and the existing installation
+can be adopted as Default. Recovery of interrupted operations, replacement and restore
+fencing, and integration account proof are not done yet. The identity
 endpoint and bound-request checks have an internal reconciliation context, but no
 production startup installs it yet; the contract below is not a procedure for
 activating profiles.
@@ -243,7 +245,9 @@ An unsupported schema or older provider's 404 is an explicit compatibility failu
 local operator control-plane operations, separate from any provider's content API.
 Agent-facing tools cannot use them as a gateway to discover sibling fleets.
 Listing is read-only: it does not adopt, start, migrate or repair providers. An
-unavailable registry is an error, not an empty successful list.
+unavailable registry is an error, not an empty successful list. With `--json`, list,
+show and operation report it on stdout with exit status 1: `registry_absent` before
+any profile exists, `registry_unavailable` for anything else.
 
 Run these commands from a local operator terminal. Recognized managed-agent
 environment markers and agent credentials are refused before registry access.
@@ -256,7 +260,7 @@ The commands read
 `~/.local/share/agent-backbone-profiles/registry.db`, outside provider data trees;
 `BACKBONE_DATA_DIR` does not select the control-plane registry. No provider secret,
 configuration, API or database is loaded. Human output labels provisioning state;
-`--json` returns the exact list/show shape. A missing registry returns a nonzero exit and an error on stderr. Lifecycle
+`--json` returns the exact list/show shape. Lifecycle
 `apply` explicitly initializes or upgrades the external registry; discovery and
 `operation` lookup never initialize or recover it.
 
@@ -301,6 +305,28 @@ environment overlays or credential bytes appear in discovery JSON.
 The provider owns runtime environments, path permissions and service identities.
 The client retains existing tmux server/pane/window checks: a socket path alone
 does not establish that a terminal survived server replacement.
+
+## Open terminal sessions
+
+`POST /api/profile/shells` ensures a shell on the profile's private tmux server for a
+bound operator: `{"schema_version":1,"shell_id":"<12 lowercase hex>","cwd":<absolute
+path or null>}`. A null `cwd` starts in the profile's own HOME. The response names the
+session. The same `shell_id` always means the same session: a live one is returned
+unchanged with `created: false` and its `cwd` ignored, and it is never killed or
+respawned. A bad directory returns `invalid_cwd`, a terminal failure
+`shell_unavailable`. The session gets only the locale and search path from the host,
+with its roots inside the profile.
+
+`POST /api/profile/accounts/sign-in` with `{"schema_version":1,"runtime":"codex"}` runs
+that CLI's own sign-in in a session on the same server, using that runtime's private
+environment in this profile. Attach to the returned session to complete it. Claude Code,
+Codex and OpenCode are supported. Backbone never sees the credentials; the CLI stores
+them in its own files inside the profile. A repeat request while that session is live
+returns it unchanged with `created: false`. The session stays open after the CLI exits
+until someone presses Enter, so its result can be read; after that a repeat starts a new
+one. `runtime_unavailable` refuses another runtime or one that is not installed. The
+`sessions` group in the shared fixtures has these bodies.
+`backbone profiles sign-in PROFILE_ID --runtime codex` does both from a terminal.
 
 ## Keep work pinned
 
@@ -351,8 +377,9 @@ process to exit. The profile's private tmux server and its sessions outlive the
 provider. `service_start_failed` and `service_stop_failed` report a provider that did
 not get there in time; another identity behind the endpoint is never signalled.
 
-Other execution is still unavailable: any other baseline returns
-`baseline_unavailable`, adoption returns `adoption_unavailable`, and start/stop return
+Any other baseline returns `baseline_unavailable`, an adoption that cannot read the
+installation returns `adoption_unavailable`, a changed one `adoption_changed`, and
+start/stop return
 `profile_not_ready` for a reservation still being created or `binding_mismatch` for a
 stale, invalidated or unknown tuple. A `failed` reservation is a permanent invalidation tombstone, not
 a valid binding awaiting readiness.
@@ -414,6 +441,17 @@ stays legacy-only. The following extension defines adoption and bound setup; it
 does not silently convert saved schema-1 requests.
 
 ## Adopt Default explicitly
+
+Adoption is implemented. It keeps the installation's configured private socket when
+it has one, and otherwise the installation gains `run/api.sock` at its next start. It
+needs the installation to have already run this version once, because that creates the
+identity table, and to have an installation ID. A later `backbone up` serves the adopted
+identity on both its port and its socket, with the same service and tmux server. It
+installs no captured runtime environments, so the installation's agents and CLI
+sign-ins behave as before; schema-2 setup and the bound runtime catalog report those
+runtimes unavailable there, and the app keeps using schema 1 for Default. Start launches
+`backbone up` if nothing answers. Stop signals that process, and a service manager may
+start it again.
 
 `backbone profiles adoption-preview --json` is the agreed read-only operator
 preflight. It resolves the configured existing installation independently of the

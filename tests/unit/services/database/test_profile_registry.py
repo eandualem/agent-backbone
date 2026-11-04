@@ -649,6 +649,8 @@ def test_discovery_reads_an_older_registry_without_upgrading_it(tmp_path, reserv
     ProfileRegistry.create(path).reserve(reservation)
     with sqlite3.connect(path) as conn:
         conn.execute("DROP TABLE profile_bindings")
+        conn.execute("DROP TABLE profile_ports")
+        conn.execute("DROP TABLE adopted_profiles")
         conn.execute("PRAGMA user_version = 3")
     registry = ProfileRegistry(path)
     assert registry.show("profile-a")["state"] == "creating"

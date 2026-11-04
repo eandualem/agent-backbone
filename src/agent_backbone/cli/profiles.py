@@ -1,9 +1,13 @@
 """Local profile discovery and lifecycle receipts, independent of provider APIs."""
 
+import asyncio
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
+
+import httpx
 
 from agent_backbone.cli._common import is_agent_client
 from agent_backbone.cli.presentation import print_record, print_table
@@ -11,6 +15,7 @@ from agent_backbone.config import PROFILE_REGISTRY_PATH
 from agent_backbone.services.database import (
     ProfileOperations,
     ProfileRegistry,
+    adoption_preview,
     validate_profile_operation,
 )
 
@@ -19,16 +24,23 @@ def add_profiles_parser(sub) -> None:
     parser = sub.add_parser("profiles", help="operator-only local profile management")
     commands = parser.add_subparsers(dest="profiles_command", required=True)
     listing = commands.add_parser("list", help="list reserved profiles without starting them")
-    listing.add_argument("--json", action="store_true")
+    listing.add_argument("--json", dest="json_output", action="store_true")
     showing = commands.add_parser("show", help="show one atomic discovery record")
     showing.add_argument("profile_id")
-    showing.add_argument("--json", action="store_true")
+    showing.add_argument("--json", dest="json_output", action="store_true")
     apply = commands.add_parser("apply", help="apply a durable local lifecycle request")
     apply.add_argument("--file", required=True)
-    apply.add_argument("--json", action="store_true")
+    apply.add_argument("--json", dest="json_output", action="store_true")
     operation = commands.add_parser("operation", help="read the original lifecycle receipt")
     operation.add_argument("request_id")
-    operation.add_argument("--json", action="store_true")
+    operation.add_argument("--json", dest="json_output", action="store_true")
+    previewing = commands.add_parser(
+        "adoption-preview", help="check the existing installation before adopting it as Default"
+    )
+    previewing.add_argument("--json", dest="json_output", action="store_true")
+    signing = commands.add_parser("sign-in", help="sign a CLI account in inside a running profile")
+    signing.add_argument("profile_id")
+    signing.add_argument("--runtime", required=True, choices=("claude", "codex", "opencode"))
     # Internal: the local control plane launches this for a ready profile.
     serve = commands.add_parser("serve")
     serve.add_argument("--registry", required=True, type=Path)
@@ -53,7 +65,24 @@ def cmd_profiles(args) -> int:
 
         serve_profile(args.registry, args.profile_id)
         return 0
+    path = Path(PROFILE_REGISTRY_PATH).expanduser()
+    if args.profiles_command in {"list", "show", "operation"} and args.json_output:
+        # The first-run answer an app branches on, separate from a broken registry.
+        code = None if path.exists() else "registry_absent"
+        try:
+            if code is None:
+                ProfileRegistry(path).list()
+        except (ValueError, OSError, RecursionError):
+            code = "registry_unavailable"
+        if code:
+            message = "No profiles exist yet." if code == "registry_absent" else "Registry error."
+            print(json.dumps({"schema_version": 1, "error": {"code": code, "message": message}}))
+            return 1
     try:
+        if args.profiles_command == "sign-in":
+            return _sign_in(args)
+        if args.profiles_command == "adoption-preview":
+            return _adoption_preview(args)
         if args.profiles_command in {"apply", "operation"}:
             return _lifecycle(args)
         registry = ProfileRegistry(Path(PROFILE_REGISTRY_PATH).expanduser())
@@ -63,7 +92,7 @@ def cmd_profiles(args) -> int:
     except (ValueError, OSError, RecursionError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    if args.json:
+    if args.json_output:
         print(json.dumps(result))
     elif args.profiles_command == "list":
         print_table(
@@ -96,6 +125,57 @@ def cmd_profiles(args) -> int:
     return 0
 
 
+def _adoption_preview(args) -> int:
+    preview = adoption_preview()
+    if args.json_output:
+        print(json.dumps(preview))
+    else:
+        print_record(
+            "Existing installation",
+            [
+                ("Installation ID", preview["installation_id"]),
+                ("Data directory", preview["data_dir"]),
+                ("Tmux socket", preview["tmux"]["socket_path"]),
+                ("Adoption token", preview["adoption_token"]),
+            ],
+        )
+    return 0
+
+
+def _sign_in(args) -> int:
+    """Open the CLI's own sign-in on the profile's server; credentials stay in that CLI."""
+    from agent_backbone.cli._profile_client import Refused, resolve_binding
+
+    record = ProfileRegistry(Path(PROFILE_REGISTRY_PATH).expanduser()).show(args.profile_id)
+    if not record["binding"]:
+        raise ValueError("Profile is not ready")
+    try:
+        binding = resolve_binding(
+            (
+                args.profile_id,
+                record["binding"]["installation_id"],
+                record["binding"]["lifecycle_id"],
+            )
+        )
+        asyncio.run(binding.handshake())
+    except Refused as exc:
+        raise ValueError(f"The profile is not reachable: {exc.code}. Start it first.") from None
+    transport = httpx.HTTPTransport(uds=binding.endpoint, retries=0)
+    with httpx.Client(transport=transport, trust_env=False, timeout=30) as client:
+        response = client.post(
+            "http://bound-provider/api/profile/accounts/sign-in",
+            headers=binding.headers(),
+            json={"schema_version": 1, "runtime": args.runtime},
+        )
+    if response.status_code != 200:
+        raise ValueError(f"Sign-in could not start: {response.status_code}")
+    tmux = shutil.which("tmux")
+    if tmux is None:
+        raise ValueError("tmux is not available")
+    os.execv(tmux, ["tmux", "-S", binding.tmux_socket, "attach", "-t", response.json()["session"]])
+    return 0
+
+
 def _unique_object(pairs):
     value = {}
     for key, item in pairs:
@@ -123,7 +203,7 @@ def _lifecycle(args) -> int:
     else:
         operations = ProfileOperations(ProfileRegistry(path))
         result = operations.lookup(args.request_id)
-    if args.json:
+    if args.json_output:
         print(json.dumps(result))
     else:
         print_record(

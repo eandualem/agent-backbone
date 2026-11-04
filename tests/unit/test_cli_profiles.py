@@ -43,18 +43,6 @@ def test_discovery_is_local_atomic_and_read_only(tmp_path, capsys):
     assert not record.data_dir.exists()
 
 
-@pytest.mark.parametrize("command", [["list"], ["show", "unknown"]])
-def test_missing_registry_is_error_not_empty_success(command, capsys):
-    path = Path(PROFILE_REGISTRY_PATH).expanduser()
-    with pytest.raises(SystemExit) as result:
-        main(["profiles", *command, "--json"])
-    assert result.value.code == 1
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "unavailable" in captured.err
-    assert not path.parent.exists()
-
-
 @pytest.mark.parametrize(
     "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
 )
@@ -193,8 +181,7 @@ async def test_explicit_apply_recovers_hot_journal_and_replays_original_receipt(
         with pytest.raises(SystemExit) as result:
             main(["profiles", *args, "--json"])
         assert result.value.code == 1
-        captured = capsys.readouterr()
-        assert not captured.out and "unavailable" in captured.err
+        assert json.loads(capsys.readouterr().out)["error"]["code"] == "registry_unavailable"
         assert (registry.path.read_bytes(), journal.read_bytes()) == before
     provider = tmp_path / "legacy"
     url = f"sqlite+aiosqlite:///{provider / 'backbone.db'}"
@@ -210,3 +197,24 @@ async def test_explicit_apply_recovers_hot_journal_and_replays_original_receipt(
     assert operations.lookup(request["request_id"]) == expected
     await check_profile_startup(url, provider)
     assert not provider.exists()
+
+
+@pytest.mark.parametrize("args", [["list"], ["show", "profile-a"], ["operation", "op-a"]])
+def test_absent_registry_is_a_structured_json_error(args, capsys):
+    fixtures = json.loads(Path("docs/contracts/profiles-v1.json").read_text())
+    with pytest.raises(SystemExit) as result:
+        main(["profiles", *args, "--json"])
+    assert result.value.code == 1
+    assert json.loads(capsys.readouterr().out) == fixtures["discovery"]["registry_absent"]
+    assert not Path(PROFILE_REGISTRY_PATH).expanduser().parent.exists()
+
+
+def test_broken_registry_is_a_different_error(capsys):
+    path = Path(PROFILE_REGISTRY_PATH).expanduser()
+    path.parent.mkdir(mode=0o700, parents=True)
+    path.write_text("not a database")
+    path.chmod(0o600)
+    with pytest.raises(SystemExit) as result:
+        main(["profiles", "list", "--json"])
+    assert result.value.code == 1
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "registry_unavailable"

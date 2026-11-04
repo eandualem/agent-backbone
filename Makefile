@@ -60,10 +60,11 @@ test: ## Run all tests (SQLite in-memory, no services needed)
 test-file: ## Run a single test file (FILE=tests/unit/test_foo.py)
 	uv run pytest $(FILE) -v
 
-smoke: ## Check real tmux paste, keys, capture and display in a disposable session
+smoke: ## Check real tmux use and the profile flow in disposable sessions
 	uv run python tests/smoke_tmux.py
 	uv run python tests/smoke_tmux.py --pinned
 	uv run python tests/smoke_tmux.py --isolated
+	uv run python tests/smoke_profiles.py
 
 cov: ## Run tests with coverage
 	uv run pytest --cov=src --cov-report=term-missing

@@ -6,8 +6,14 @@ import os
 import secrets
 import uuid
 from contextlib import suppress
+from pathlib import Path
 
 from agent_backbone.config import SQLITE_FILENAME, sqlite_url
+from agent_backbone.services.database._profile_adoption import (
+    back_up_database,
+    inspect_installation,
+    record_identity,
+)
 from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
 from agent_backbone.services.database._profile_provider import reconcile_profile_provider
 from agent_backbone.services.database._profile_registry import (
@@ -43,6 +49,7 @@ ERRORS = {
     "profile_path_too_long": "Profile paths exceed the Unix socket length limit.",
     "service_start_failed": "Profile provider could not be started.",
     "service_stop_failed": "Profile provider could not be stopped.",
+    "adoption_changed": "The existing installation changed after its preview.",
 }
 
 
@@ -242,6 +249,8 @@ class ProfileOperations:
             return self._create(request)
         if request["action"] in {"start", "stop"} and self.services is not None:
             return self._run_service(request)
+        if request["action"] == "adopt_default" and self.services is not None:
+            return self._adopt(request)
         # Refusal has no effects to reconcile. Classify and retain its receipt
         # in one transaction so a failed read/write cannot leave a pending lock.
         return self._record(request, refuse=True)[0]
@@ -265,6 +274,67 @@ class ProfileOperations:
                 (_json(receipt), request["request_id"]),
             )
         return receipt
+
+    def _adopt(self, request: dict) -> dict:
+        """Record the existing installation in place: nothing restarts or moves.
+
+        One registry transaction, because a reservation over a live installation's
+        directory without its binding would refuse that installation's next start.
+        """
+        receipt, owned = self.begin(request)
+        if not owned:
+            return receipt
+        try:
+            preview, endpoint = inspect_installation()
+        except (ValueError, OSError):
+            return self.fail(request, "adoption_unavailable")
+        if (
+            preview["installation_id"] != request["expected_installation_id"]
+            or preview["adoption_token"] != request["adoption_token"]
+        ):
+            return self.fail(request, "adoption_changed")
+        root = Path(preview["data_dir"])
+        try:
+            existing = self.registry.adopted_reservation(root)
+            identity = (
+                existing.identity
+                if existing
+                else ProfileIdentity(
+                    secrets.token_hex(6), preview["installation_id"], str(uuid.uuid4())
+                )
+            )
+            with self.registry._connection(write=True) as conn:
+                if existing is None:
+                    binding = ProfileBinding(
+                        endpoint,
+                        root / ".env",
+                        Path(preview["tmux"]["socket_path"]),
+                    )
+                    self.registry._reserve(
+                        conn,
+                        ProfileReservation(identity, root, "Default", preview["baseline_version"]),
+                    )
+                    conn.execute("INSERT INTO adopted_profiles VALUES (?)", (identity.profile_id,))
+                    self.registry._publish(conn, identity, root, binding, adopted=True)
+                    backups = self.registry.path.parent / "backups"
+                    backups.mkdir(mode=0o700, exist_ok=True)
+                    back_up_database(root / SQLITE_FILENAME, backups / f"{identity.profile_id}.db")
+                    record_identity(root / SQLITE_FILENAME, identity)
+                receipt = self._stored_receipt(conn, request)
+                receipt.update(
+                    status="succeeded",
+                    profile_id=identity.profile_id,
+                    installation_id=identity.installation_id,
+                    lifecycle_id=identity.lifecycle_id,
+                )
+                conn.execute(
+                    "UPDATE lifecycle_operations SET status = 'succeeded', receipt_json = ? "
+                    "WHERE request_id = ?",
+                    (_json(receipt), request["request_id"]),
+                )
+            return receipt
+        except Exception:
+            return self.fail(request, "adoption_unavailable")
 
     def _create(self, request: dict) -> dict:
         """Reserve once, then provision. An interruption stays pending and non-ready."""

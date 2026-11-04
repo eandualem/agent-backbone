@@ -90,7 +90,9 @@ class ProfileProvider:
         root = self.reservation.data_dir
         if self.database_path == self.socket_path:
             raise ValueError("Provider database and terminal socket must be distinct")
-        for path in (self.database_path, self.socket_path):
+        # An adopted installation keeps the tmux server it already uses.
+        adopted = self.reservation.kind == "legacy_default"
+        for path in (self.database_path,) if adopted else (self.database_path, self.socket_path):
             if (
                 not path.is_absolute()
                 or path.resolve() != path

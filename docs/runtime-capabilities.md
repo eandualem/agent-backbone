@@ -36,7 +36,6 @@ versions for the CLIs installed on your machine and notes where the installed
 version differs.
 
 <!-- capability-table:begin -->
-
 | Capability | `claude` | `codex` | `gemini` | `opencode` | `deepcode` | `aider` | `shell` |
 |---|---|---|---|---|---|---|---|
 | Owned Python launch helpers preserve the engine inventory | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -44,6 +43,8 @@ version differs.
 | Read-only runtime discovery for setup | ✅ Bound catalog: tests/unit/test_cli_profile_catalog.py and tests/unit/api/test_profile_binding.py; missing native context is unavailable; no activation or account verification | ✅ Bound catalog: tests/unit/test_cli_profile_catalog.py and tests/unit/api/test_profile_binding.py; missing native context is unavailable; no activation or account verification | ✅ Bound catalog: tests/unit/test_cli_profile_catalog.py and tests/unit/api/test_profile_binding.py; missing native context is unavailable; no activation or account verification | ✅ Bound catalog: tests/unit/test_cli_profile_catalog.py and tests/unit/api/test_profile_binding.py; missing native context is unavailable; no activation or account verification | ✅ Bound catalog: tests/unit/test_cli_profile_catalog.py and tests/unit/api/test_profile_binding.py; missing native context is unavailable; no activation or account verification | ✅ Bound catalog: tests/unit/test_cli_profile_catalog.py and tests/unit/api/test_profile_binding.py; missing native context is unavailable; no activation or account verification | ✅ Bound catalog: tests/unit/test_cli_profile_catalog.py and tests/unit/api/test_profile_binding.py; missing native context is unavailable; no activation or account verification |
 | Reject profile-bound traffic on unadopted providers | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | Agent registration IDs and stale-registration refusal on inspection | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
+| Agents run inside an isolated profile with their own native environment | ✅ Shared boundary; no model calls | ✅ Shared boundary; no model calls | ❌ Refused in isolated profiles until someone needs it. | ✅ Shared boundary; no model calls | ❌ Refused in isolated profiles until someone needs it. | ❌ Refused in isolated profiles until someone needs it. | ✅ Shared boundary; no model calls |
+| Sign a CLI account in inside an isolated profile | ✅ Sign-in itself is checked on a real account | ✅ Sign-in itself is checked on a real account | ❌ Refused in isolated profiles until someone needs it. | ✅ Sign-in itself is checked on a real account | ❌ Refused in isolated profiles until someone needs it. | ❌ Refused in isolated profiles until someone needs it. | n/a |
 | Operator-only profile discovery, lifecycle refusal receipts and reserved startup refusal | ✅ Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls | ✅ Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls | ✅ Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls | ✅ Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls | ✅ Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls | ✅ Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls | ✅ Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls |
 | Current agent-authored checklists with conditional updates and contextual feedback | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | GitHub acknowledgements bound to registration and successful publication | ✅ (2.1.310) Registration-bound payload tests; live check pending normal restart. | ✅ (0.160.0) Registration-bound payload tests; live check pending normal restart. | ✅ (0.46.0) Registration-bound payload tests; live check pending normal restart. | ✅ (2.1.4) Registration-bound plugin tests; live check pending normal restart. | ❌ no publication receipt hook | ❌ no publication receipt hook | n/a |
@@ -110,6 +111,8 @@ version differs.
 | Read-only runtime discovery for setup | Binary presence is not login; use the runtime's visible sign-in flow. |
 | Reject profile-bound traffic on unadopted providers | Keep bound work pinned; do not retry without its profile identity. |
 | Agent registration IDs and stale-registration refusal on inspection | Select the agent again after its registration changes. |
+| Agents run inside an isolated profile with their own native environment | Use Default for this runtime. |
+| Sign a CLI account in inside an isolated profile | Use Default for this runtime. |
 | Operator-only profile discovery, lifecycle refusal receipts and reserved startup refusal | Reserved providers cannot start; profile activation is not implemented. |
 | Current agent-authored checklists with conditional updates and contextual feedback | Keep the current checklist locally until the provider is available. |
 | GitHub acknowledgements bound to registration and successful publication | Unbound receipts cannot acknowledge work; restart older sessions normally. |
@@ -168,7 +171,6 @@ version differs.
 | New inbox messages hinted on Socket.IO (`inbox:pending`) | Read the inbox (`POST /api/messages/inbox`) on a timer. |
 | Escalations reach an inbox-only target's inbox | Set `escalation.target` to an agent with a terminal session. |
 | Deep review run from and for this runtime | Run the review with Claude Code or Codex as the reviewer. |
-
 <!-- capability-table:end -->
 
 ## Notes
