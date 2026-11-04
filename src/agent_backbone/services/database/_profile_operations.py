@@ -127,6 +127,53 @@ async def _provision_profile(
     )
 
 
+def adopt_installation(registry: ProfileRegistry, preview: dict, endpoint: Path) -> ProfileIdentity:
+    """Make the existing installation Default, keeping everything where it is.
+
+    One registry transaction, because a reservation over a live installation's
+    directory without its binding would refuse that installation's next start. The
+    registry commits before the database records the identity: a crash between them
+    is finished by the next start, while the other order would leave an identity no
+    registry explains, which refuses to start.
+    """
+    root = Path(preview["data_dir"])
+    existing = registry.adopted_reservation(root)
+    identity = (
+        existing.identity
+        if existing
+        else ProfileIdentity(secrets.token_hex(6), preview["installation_id"], str(uuid.uuid4()))
+    )
+    if existing is None:
+        binding = ProfileBinding(endpoint, root / ".env", Path(preview["tmux"]["socket_path"]))
+        with registry._connection(write=True) as conn:
+            registry._reserve(
+                conn, ProfileReservation(identity, root, "Default", preview["baseline_version"])
+            )
+            conn.execute("INSERT INTO adopted_profiles VALUES (?)", (identity.profile_id,))
+            registry._publish(conn, identity, root, binding, adopted=True)
+            backups = registry.path.parent / "backups"
+            backups.mkdir(mode=0o700, exist_ok=True)
+            back_up_database(root / SQLITE_FILENAME, backups / f"{identity.profile_id}.db")
+    record_identity(root / SQLITE_FILENAME, identity)
+    return identity
+
+
+def adopt_on_start(registry_path: Path, data_dir: Path) -> ProfileReservation | None:
+    """Default for the installation at the default location, or None if another is Default.
+
+    Only there: a scratch run with its own data directory must never claim the
+    registry. Anything that refuses raises, before or without changing the installation.
+    """
+    preview, endpoint = inspect_installation()
+    if Path(preview["data_dir"]) != data_dir:
+        raise ValueError("The installation's directory changed")
+    registry = ProfileRegistry.create(registry_path)
+    if any(item["kind"] == "legacy_default" for item in registry.list()["items"]):
+        return None
+    adopt_installation(registry, preview, endpoint)
+    return registry.adopted_reservation(data_dir)
+
+
 class ProfileOperations:
     """Reserve before effects; never repeat unknown work after a process crash.
 
@@ -276,11 +323,7 @@ class ProfileOperations:
         return receipt
 
     def _adopt(self, request: dict) -> dict:
-        """Record the existing installation in place: nothing restarts or moves.
-
-        One registry transaction, because a reservation over a live installation's
-        directory without its binding would refuse that installation's next start.
-        """
+        """Record the existing installation in place: nothing restarts or moves."""
         receipt, owned = self.begin(request)
         if not owned:
             return receipt
@@ -293,33 +336,9 @@ class ProfileOperations:
             or preview["adoption_token"] != request["adoption_token"]
         ):
             return self.fail(request, "adoption_changed")
-        root = Path(preview["data_dir"])
         try:
-            existing = self.registry.adopted_reservation(root)
-            identity = (
-                existing.identity
-                if existing
-                else ProfileIdentity(
-                    secrets.token_hex(6), preview["installation_id"], str(uuid.uuid4())
-                )
-            )
+            identity = adopt_installation(self.registry, preview, endpoint)
             with self.registry._connection(write=True) as conn:
-                if existing is None:
-                    binding = ProfileBinding(
-                        endpoint,
-                        root / ".env",
-                        Path(preview["tmux"]["socket_path"]),
-                    )
-                    self.registry._reserve(
-                        conn,
-                        ProfileReservation(identity, root, "Default", preview["baseline_version"]),
-                    )
-                    conn.execute("INSERT INTO adopted_profiles VALUES (?)", (identity.profile_id,))
-                    self.registry._publish(conn, identity, root, binding, adopted=True)
-                    backups = self.registry.path.parent / "backups"
-                    backups.mkdir(mode=0o700, exist_ok=True)
-                    back_up_database(root / SQLITE_FILENAME, backups / f"{identity.profile_id}.db")
-                    record_identity(root / SQLITE_FILENAME, identity)
                 receipt = self._stored_receipt(conn, request)
                 receipt.update(
                     status="succeeded",

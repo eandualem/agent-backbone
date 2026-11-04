@@ -10,7 +10,7 @@ Operator list/show discovery and refusal of unreconciled startup are implemented
 Lifecycle apply/lookup commands retain requests and receipts. Creating the empty
 baseline succeeds and publishes a ready record, start/stop run that profile's provider,
 agents run inside it on Claude Code, Codex and OpenCode, and the existing installation
-can be adopted as Default. Recovery of interrupted operations, replacement and restore
+becomes Default when this version starts. Recovery of interrupted operations, replacement and restore
 fencing, and integration account proof are not done yet. The identity
 endpoint and bound-request checks have an internal reconciliation context, but no
 production startup installs it yet; the contract below is not a procedure for
@@ -440,13 +440,22 @@ bound workspace never downgrades after a failed handshake. Existing setup schema
 stays legacy-only. The following extension defines adoption and bound setup; it
 does not silently convert saved schema-1 requests.
 
-## Adopt Default explicitly
+## Default adoption
 
-Adoption is implemented. It keeps the installation's configured private socket when
-it has one, and otherwise the installation gains `run/api.sock` at its next start. It
-needs the installation to have already run this version once, because that creates the
-identity table, and to have an installation ID. A later `backbone up` serves the adopted
-identity on both its port and its socket, with the same service and tmux server. It
+`backbone up` makes the installation at the default data directory Default by itself,
+in the same start, after its database is current. Nothing moves: data, credentials,
+agents, sheets, documents, skills and policies stay where they are. It writes one
+identity row to the database and a registry record, after taking a private database
+backup beside the registry. A refusal (a credential file that isn't private, a Default
+already registered elsewhere, an external database) changes nothing, is printed to the
+service's log, and that start serves as before. The registry commits before the
+database records the identity, and the next start finishes a crash between them. A run
+with another data directory is never adopted automatically, so scratch runs can't claim
+the registry; an explicit `adopt_default` request covers an installation elsewhere.
+
+Adoption keeps the installation's configured private socket when it has one, and
+otherwise the installation gains `run/api.sock`. Default serves its identity on both its
+port and its socket, with the same service and tmux server. It
 installs no captured runtime environments, so the installation's agents and CLI
 sign-ins behave as before; schema-2 setup and the bound runtime catalog report those
 runtimes unavailable there, and the app keeps using schema 1 for Default. Start launches

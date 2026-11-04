@@ -629,7 +629,9 @@ store entry with its tags, validity, the agents it reaches and the
 their snapshots at `/api/{skills|policies}/{artifact_id}/versions`.
 `POST /api/skills` `{path, name?, tags, replace?, actor}` **moves** a skill
 directory into the store and tags it (422 when the directory is not a skill or
-the name is taken without `replace`; 400 when `skills.store` is empty).
+the name is taken without `replace`; 400 when `skills.store` is empty). With
+`mode: "copy"` it copies from any absolute folder instead and leaves that folder
+in place (see [skills](skills.md)).
 `PUT /api/skills/{name}/tags` `{tags, actor}` replaces its tags (404 for an
 unknown skill). Both relink every running agent at once and return the skill
 with `relinked`, one evidence line per running agent whose links were brought

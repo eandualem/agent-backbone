@@ -34,13 +34,12 @@ class Home:
         for name in ("claude", "codex", "opencode"):
             (self.bin / name).write_text(INERT)
             (self.bin / name).chmod(0o755)
-        self.data = root / "default"
+        self.data = root / ".local/share/agent-backbone"
         tmux = Path(shutil.which("tmux")).parent
         self.env = {
             "PATH": f"{self.bin}:{tmux}:/usr/bin:/bin",
             "HOME": str(root),
             "TMUX_TMPDIR": str(root),
-            "BACKBONE_DATA_DIR": str(self.data),
             "BACKBONE_PORT": str(PORT),
         }
         self.sockets: list[str] = []
@@ -137,14 +136,17 @@ class Home:
                         "create_directory": False,
                         "runtime": "codex",
                         "model": None,
-                        "brief": {"text": "Smoke"},
+                        "brief": {"template": "orchestrator-v1"},
                     },
                     "start_greeting": False,
                 }
             )
         )
         # The stand-in shows no real prompt, so readiness times out after launch.
-        self.cli("setup", "--file", str(request), "--jsonl", check=False)
+        lines = self.cli("setup", "--file", str(request), "--jsonl", check=False).stdout
+        check(
+            "first-agent setup accepts the starter", "starter_conflict" not in lines, lines[-300:]
+        )
         env = {}
         for line in (directory / "runtime.env").read_text().splitlines():
             if "=" in line:
@@ -178,20 +180,74 @@ def check(label, condition, detail=""):
         raise SystemExit(1)
 
 
+def fresh_install() -> tuple[list[str], object]:
+    """A fresh installer run; a new profile must offer the same first agent."""
+    root = Path(tempfile.mkdtemp(prefix="bbf", dir="/tmp")).resolve()
+    home = Home(root)
+    process = None
+    try:
+
+        def setup(request_id, action, **fields):
+            path = root / f"{request_id}.json"
+            common = {"schema_version": 1, "request_id": request_id, "action": action}
+            path.write_text(json.dumps({**common, "data_dir": str(home.data), **fields}))
+            return home.cli("setup", "--file", str(path), "--jsonl", check=False).stdout
+
+        ready = setup("install", "initialize", service="none", starter_profile="core-v1")
+        check("fresh setup initializes", '"status": "completed"' in ready, ready[-300:])
+        process = home.up()
+        listed = json.loads(home.cli("profiles", "list", "--json").stdout)["items"]
+        check("a fresh install is Default too", [i["kind"] for i in listed] == ["legacy_default"])
+        project = root / "guide"
+        project.mkdir()
+        lines = setup(
+            "guide",
+            "first_agent",
+            hooks=["codex"],
+            agent={
+                "name": "guide",
+                "directory": str(project),
+                "create_directory": False,
+                "runtime": "codex",
+                "model": None,
+                "brief": {"template": "orchestrator-v1"},
+            },
+            start_greeting=False,
+        )
+        check("fresh install's first agent starts", "starter_conflict" not in lines, lines[-200:])
+        operator = {"Authorization": "Bearer " + home.key(home.data / ".env")}
+        policy = httpx.get(
+            f"http://127.0.0.1:{PORT}/api/config/agents.shared_policy",
+            headers=operator,
+            trust_env=False,
+            timeout=30,
+        ).json()["value"]
+        return sorted(p.name for p in (project / ".agents/skills").iterdir()), policy
+    finally:
+        home.cleanup([process] if process else [])
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main() -> int:
+    fresh_skills, fresh_policy = fresh_install()
     # Under /tmp: a pytest or scratch path can exceed the Unix socket length limit.
     root = Path(tempfile.mkdtemp(prefix="bbp", dir="/tmp")).resolve()
     home = Home(root)
     processes = []
     try:
         home.cli("init")
+        absent = home.cli("profiles", "list", "--json", check=False)
+        check("no registry is registry_absent", "registry_absent" in absent.stdout)
         legacy = home.up()
         processes.append(legacy)
         operator = {"Authorization": "Bearer " + home.key(home.data / ".env")}
         tcp = httpx.Client(base_url=f"http://127.0.0.1:{PORT}", trust_env=False, timeout=30)
-        check("legacy install answers", tcp.get("/api/agents", headers=operator).status_code == 200)
-        absent = home.cli("profiles", "list", "--json", check=False)
-        check("no registry is registry_absent", "registry_absent" in absent.stdout)
+        check("install answers", tcp.get("/api/agents", headers=operator).status_code == 200)
+        listed = json.loads(home.cli("profiles", "list", "--json").stdout)["items"]
+        check(
+            "the first start made Default with no command",
+            [item["kind"] for item in listed] == ["legacy_default"],
+        )
 
         preview = json.loads(home.cli("profiles", "adoption-preview", "--json").stdout)
         default = home.apply(
@@ -203,6 +259,10 @@ def main() -> int:
         check(
             "adoption kept the installation ID",
             default["installation_id"] == preview["installation_id"],
+        )
+        check(
+            "an explicit adoption returns the same Default",
+            default["profile_id"] == listed[0]["profile_id"],
         )
         check("adoption restarted nothing", legacy.poll() is None)
 
@@ -268,6 +328,40 @@ def main() -> int:
         )
 
         env_a = home.first_agent(records["A"], "worker", root / "project-a")
+        linked = root / "project-a" / ".agents" / "skills" / "backbone-documents"
+        check("the first agent received the starter skills", linked.exists(), str(linked))
+        skills = sorted(p.name for p in linked.parent.iterdir())
+        check("same skills as a fresh install", skills == fresh_skills, f"{skills} {fresh_skills}")
+        policy = a[0].get("/api/config/agents.shared_policy", headers=a[1]).json()["value"]
+        check("same policies as a fresh install", policy == fresh_policy, str(policy))
+        folder = root / "my-skill"
+        folder.mkdir()
+        (folder / "SKILL.md").write_text("---\nname: my-skill\ndescription: mine\n---\n# Mine\n")
+        copied = a[0].post(
+            "/api/skills", headers=a[1], json={"path": str(folder), "tags": ["all"], "mode": "copy"}
+        )
+        check(
+            "a skill copies in from any folder and stays there",
+            copied.status_code == 200 and (folder / "SKILL.md").exists(),
+            copied.text[:200],
+        )
+        (folder / "link").symlink_to(home.data / ".env")
+        linked_copy = a[0].post(
+            "/api/skills",
+            headers=a[1],
+            json={"path": str(folder), "name": "other", "mode": "copy"},
+        )
+        check("a skill folder with a link is refused", linked_copy.status_code == 422)
+        document = a[0].post(
+            "/api/documents",
+            headers=a[1],
+            json={"author": "operator", "request_id": "mine", "title": "Mine", "html": "<p>x</p>"},
+        )
+        check(
+            "a person publishes a document as operator",
+            document.status_code == 201 and document.json()["record"]["agent_name"] is None,
+            document.text[:200],
+        )
         env_b = home.first_agent(records["B"], "worker", root / "project-b")
         socket_a, socket_b = (records[n]["binding"]["tmux"]["socket_path"] for n in "AB")
         check(

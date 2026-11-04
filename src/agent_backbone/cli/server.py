@@ -304,6 +304,23 @@ async def _up_detached(config: BackboneConfig, log_file: Path | None = None) -> 
     return 1
 
 
+async def _adopt_on_start(registry_path: Path, root: Path):
+    """The default installation becomes Default on its own; a refusal serves as before."""
+    from agent_backbone.config import DEFAULT_DATA_DIR
+    from agent_backbone.services.database import adopt_on_start
+
+    if root != Path(DEFAULT_DATA_DIR).expanduser().resolve():
+        return None
+    try:
+        # A first start has no installation identity yet.
+        async with _common.Direct(_common.bootstrap_config()) as direct:
+            await direct.db.signing.audience()
+        return await asyncio.to_thread(adopt_on_start, registry_path, root)
+    except Exception as exc:
+        print(f"Default profile not created, serving as before: {exc}", file=sys.stderr)
+        return None
+
+
 async def _adopted_provider(config: BackboneConfig):
     """The adopted installation serves as itself; anything else stays legacy."""
     from agent_backbone.config import PROFILE_REGISTRY_PATH
@@ -311,19 +328,27 @@ async def _adopted_provider(config: BackboneConfig):
         ProfileRegistry,
         default_tmux_socket,
         reconcile_profile_provider,
+        record_identity,
     )
     from agent_backbone.services.terminal import pin_tmux_server
 
-    registry = ProfileRegistry(Path(PROFILE_REGISTRY_PATH).expanduser())
-    reservation = registry.adopted_reservation(config.data_dir.resolve())
+    path, root = Path(PROFILE_REGISTRY_PATH).expanduser(), config.data_dir.resolve()
+    registry = ProfileRegistry(path)
+    reservation = registry.adopted_reservation(root)
     if reservation is None:
-        return None
+        reservation = await _adopt_on_start(path, root)
+        if reservation is None:
+            return None
+    # Finishes an adoption a crash interrupted; a no-op otherwise.
+    record_identity(reservation.data_dir / SQLITE_FILENAME, reservation.identity)
     socket = reservation.binding.tmux_socket
     if socket != default_tmux_socket():
         raise ValueError("The adopted installation's tmux server changed since its adoption")
     provider = await reconcile_profile_provider(
         registry, reservation, reservation.data_dir / SQLITE_FILENAME, socket
     )
+    # tmux makes this directory itself unless a socket is named, and a restart clears /tmp.
+    socket.parent.mkdir(mode=0o700, exist_ok=True)
     pin_tmux_server(socket)
     return provider
 

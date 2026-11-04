@@ -4,11 +4,12 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agent_backbone.config import PROFILE_REGISTRY_PATH, sqlite_url
+from agent_backbone.config import PROFILE_REGISTRY_PATH, SQLITE_FILENAME, sqlite_url
 from agent_backbone.services.database import (
     BackboneDB,
     ProfileIdentity,
@@ -160,11 +161,34 @@ def test_failure_leaves_the_installation_startable(installation, monkeypatch):
     def fails(*args):
         raise ValueError("private detail")
 
-    monkeypatch.setattr(module, "record_identity", fails)
+    monkeypatch.setattr(module, "back_up_database", fails)
     ops = operations()
     assert ops.apply(request(adoption_preview()))["error"]["code"] == "adoption_unavailable"
     assert ops.registry.list()["items"] == []
     asyncio.run(check_profile_startup(sqlite_url(root), root))
+
+
+def test_an_interrupted_identity_record_still_starts_and_is_finished(installation, monkeypatch):
+    from agent_backbone.services.database import _profile_operations as module
+
+    root, _ = installation
+    original = module.record_identity
+
+    def fails(*args):
+        raise ValueError("interrupted")
+
+    monkeypatch.setattr(module, "record_identity", fails)
+    ops = operations()
+    assert ops.apply(request(adoption_preview()))["error"]["code"] == "adoption_unavailable"
+    asyncio.run(check_profile_startup(sqlite_url(root), root))
+    monkeypatch.setattr(module, "record_identity", original)
+    assert ops.apply(request(adoption_preview(), "adopt-2"))["status"] == "succeeded"
+    reservation = ops.registry.adopted_reservation(root)
+    asyncio.run(
+        reconcile_profile_provider(
+            ops.registry, reservation, root / SQLITE_FILENAME, reservation.binding.tmux_socket
+        )
+    )
 
 
 def test_adopted_installation_starts_and_a_copy_elsewhere_does_not(installation, tmp_path):
@@ -209,3 +233,97 @@ def test_preview_cli_reports_a_coded_error_without_an_installation(tmp_path, mon
         main(["profiles", "adoption-preview", "--json"])
     assert result.value.code == 1
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "adoption_unavailable"
+
+
+@pytest.fixture
+def default_installation(tmp_path, monkeypatch):
+    """A real upgrade: the default location, with data and no registry yet."""
+    from agent_backbone.config import DEFAULT_DATA_DIR
+
+    monkeypatch.delenv("BACKBONE_DATA_DIR", raising=False)
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmp_path / "t"))
+    root = Path(DEFAULT_DATA_DIR).expanduser().resolve()
+    root.mkdir(mode=0o700, parents=True)
+    (root / ".env").write_text("BACKBONE_API_KEY=operator-key\n")
+    (root / ".env").chmod(0o600)
+
+    async def prepare():
+        async with BackboneDB.connect(sqlite_url(root)) as db:
+            await db.agents.upsert(
+                "worker",
+                dir=str(root),
+                runtime="codex",
+                model=None,
+                repo="",
+                tags=[],
+                env={},
+                description="",
+                unattended=False,
+            )
+            return await db.signing.audience()
+
+    return root, asyncio.run(prepare())
+
+
+def start(root):
+    from agent_backbone.cli.server import _adopted_provider
+
+    with patch("agent_backbone.services.terminal.pin_tmux_server"):
+        return asyncio.run(_adopted_provider(SimpleNamespace(data_dir=root)))
+
+
+def test_first_start_makes_the_installation_default_and_keeps_it(default_installation):
+    root, installation_id = default_installation
+    before = sorted(p.name for p in root.iterdir())
+    provider = start(root)
+    reservation = provider.reservation
+    assert reservation.kind == "legacy_default" and reservation.data_dir == root
+    assert reservation.identity.installation_id == installation_id
+    assert reservation.binding.credential == root / ".env"
+    assert reservation.binding.tmux_socket.parent.is_dir()
+    assert sorted(p.name for p in root.iterdir()) == before
+    assert start(root).reservation.identity == reservation.identity
+    registry = ProfileRegistry(Path(PROFILE_REGISTRY_PATH).expanduser())
+    assert [item["kind"] for item in registry.list()["items"]] == ["legacy_default"]
+    backup = registry.path.parent / "backups" / f"{reservation.identity.profile_id}.db"
+    assert backup.stat().st_mode & 0o077 == 0
+
+    async def agents():
+        async with BackboneDB.connect(sqlite_url(root)) as db:
+            return [row["name"] for row in await db.agents.list()]
+
+    assert asyncio.run(agents()) == ["worker"]
+
+
+def test_a_scratch_data_directory_never_claims_the_registry(installation):
+    root, _ = installation
+    assert start(root) is None
+    assert not Path(PROFILE_REGISTRY_PATH).expanduser().exists()
+
+
+def test_a_refusal_keeps_serving_as_before(default_installation, capsys):
+    root, _ = default_installation
+    (root / ".env").chmod(0o644)
+    assert start(root) is None
+    assert "serving as before" in capsys.readouterr().err
+    asyncio.run(check_profile_startup(sqlite_url(root), root))
+    (root / ".env").chmod(0o600)
+    assert start(root).reservation.data_dir == root
+
+
+def test_a_crash_before_the_identity_is_recorded_finishes_on_the_next_start(
+    default_installation, monkeypatch
+):
+    from agent_backbone.services.database import _profile_operations as module
+
+    root, _ = default_installation
+    original = module.record_identity
+
+    def crashes(*args):
+        raise ValueError("crash")
+
+    monkeypatch.setattr(module, "record_identity", crashes)
+    assert start(root) is None
+    monkeypatch.setattr(module, "record_identity", original)
+    asyncio.run(check_profile_startup(sqlite_url(root), root))
+    assert start(root).reservation.data_dir == root

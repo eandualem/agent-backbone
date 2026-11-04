@@ -94,14 +94,25 @@ def back_up_database(database: Path, target: Path) -> None:
     copy = sqlite3.connect(target)
     try:
         source.backup(copy)
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
     finally:
         copy.close()
         source.close()
 
 
 def record_identity(database: Path, identity: ProfileIdentity) -> None:
+    """Idempotent, so a start can finish an adoption a crash interrupted."""
     connection = sqlite3.connect(database, timeout=30)
     try:
+        recorded = connection.execute(
+            "SELECT profile_id, installation_id, lifecycle_id FROM profile_identity"
+        ).fetchone()
+        if recorded == (identity.profile_id, identity.installation_id, identity.lifecycle_id):
+            return
+        if recorded is not None:
+            raise ValueError("The installation's identity changed")
         with connection:
             cursor = connection.execute(
                 "INSERT INTO profile_identity"

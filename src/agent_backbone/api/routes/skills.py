@@ -24,12 +24,14 @@ from agent_backbone.api.models import (
 )
 from agent_backbone.api.observed import observe_all, observe_name, observe_one
 from agent_backbone.api.routes.conversations import observed_version, versions
+from agent_backbone.base import run_thread
 from agent_backbone.services.agents import skills_preview
 from agent_backbone.services.agents.operations import relink_skills
 from agent_backbone.skills import (
     NAME_RE,
     add_skill,
     commit_store,
+    copy_skill,
     is_git_repository,
     parse_skill,
     read_store,
@@ -121,27 +123,40 @@ async def _changed(skill, config, db, failure: str | None) -> SkillChangeView:
 
 @router.post("/skills", response_model=SkillChangeView, dependencies=[Depends(require_operator)])
 async def add_to_store(body: SkillAddRequest, config=Depends(get_config), db=Depends(get_db)):
-    """Move a skill directory into the store and tag it (a move, never a copy)."""
+    """Tag a skill into the store: moved from an agent's directory, or copied from any folder."""
     store = _store_or_400(config)
     async with store_lock(config.data_dir, store):
-        # Checked once the lock is held, right before the move: the path may
-        # have changed while this request waited.
-        root = _registered_source_root(config, body.path)
-        if root is None:
-            raise HTTPException(
-                status_code=422,
-                detail="the skill must live inside a registered agent's directory; "
-                "run `backbone skills add --local` from the terminal for other paths",
-            )
+        root = None
+        if body.mode == "move":
+            # Checked once the lock is held, right before the move: the path may
+            # have changed while this request waited.
+            root = _registered_source_root(config, body.path)
+            if root is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="the skill must live inside a registered agent's directory; "
+                    "run `backbone skills add --local` from the terminal for other paths",
+                )
         try:
-            skill = add_skill(
-                store,
-                body.path,
-                name=body.name,
-                tags=tuple(body.tags),
-                replace=body.replace,
-                source_root=root,
-            )
+            if body.mode == "copy":
+                skill = await run_thread(
+                    copy_skill,
+                    store,
+                    body.path,
+                    work_dir=config.data_dir,
+                    name=body.name,
+                    tags=tuple(body.tags),
+                    replace=body.replace,
+                )
+            else:
+                skill = add_skill(
+                    store,
+                    body.path,
+                    name=body.name,
+                    tags=tuple(body.tags),
+                    replace=body.replace,
+                    source_root=root,
+                )
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         failure = await commit_store(

@@ -690,12 +690,14 @@ class SkillChangeView(SkillView):
 
 
 class SkillAddRequest(BaseModel):
-    """Move a skill directory into the store."""
+    """Move a skill directory into the store, or copy one in with ``mode: copy``."""
 
     path: str
     name: str | None = None
     tags: list[str] = Field(default_factory=list)
     replace: bool = False
+    mode: Literal["move", "copy"] = "move"
+    """``copy`` takes any absolute folder and leaves it in place; it never follows a link."""
     actor: str = "unknown"
     """Who is adding it, for the store's commit history."""
 

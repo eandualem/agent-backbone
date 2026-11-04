@@ -14,6 +14,7 @@ from agent_backbone.services.database._conversations_repo import (
 from agent_backbone.services.database._current_plans_repo import CurrentPlanError
 from agent_backbone.services.database._diagnostics_repo import diagnostic_details
 from agent_backbone.services.database._documents_repo import (
+    OPERATOR_AUTHOR,
     DocumentCapacity,
     DocumentConflict,
     DocumentRateLimit,
@@ -21,10 +22,12 @@ from agent_backbone.services.database._documents_repo import (
 from agent_backbone.services.database._profile_adoption import (
     adoption_preview,
     default_tmux_socket,
+    record_identity,
 )
 from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
 from agent_backbone.services.database._profile_operations import (
     ProfileOperations,
+    adopt_on_start,
     validate_profile_operation,
 )
 from agent_backbone.services.database._profile_provider import (
@@ -56,6 +59,7 @@ from agent_backbone.services.database.engine import build_engine
 __all__ = [
     "CONVERSATION_KINDS",
     "CONVERSATION_TEXT_CHARACTERS",
+    "OPERATOR_AUTHOR",
     "RECEIPT_RETENTION_DAYS",
     "BackboneDB",
     "Base",
@@ -78,6 +82,7 @@ __all__ = [
     "SetupReceipt",
     "SetupReceiptError",
     "UnknownArtifact",
+    "adopt_on_start",
     "adoption_preview",
     "build_engine",
     "check_profile_startup",
@@ -87,5 +92,6 @@ __all__ = [
     "now_iso",
     "parse_iso",
     "reconcile_profile_provider",
+    "record_identity",
     "validate_profile_operation",
 ]
