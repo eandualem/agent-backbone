@@ -32,7 +32,7 @@ from agent_backbone.services.agents import (
     validate_agent_spec,
 )
 from agent_backbone.services.database import BoundSetupReceipt, SetupReceipt, SetupReceiptError
-from agent_backbone.services.routing import envelope, safe_deliver
+from agent_backbone.services.routing import DeliveryRefused, envelope, safe_deliver
 from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.terminal import query_environment_var, session_exists
 from agent_backbone.skills import read_store, select_skills
@@ -574,19 +574,25 @@ async def _greet(receipt, spec, config, db, *, check_effect=None):
         return False
     operation = uuid4().hex
     receipt.save(greeting_operation=operation)
-    report = await safe_deliver(
-        spec.name,
-        message,
-        config,
-        db=db,
-        source="setup",
-        sender="setup",
-        source_key=operation,
-        delivery_kind="direct_message",
-        operation_id=operation,
-        once=True,
-        **({"check_effect": check_effect} if check_effect is not None else {}),
-    )
+    try:
+        report = await safe_deliver(
+            spec.name,
+            message,
+            config,
+            db=db,
+            source="setup",
+            sender="setup",
+            source_key=operation,
+            delivery_kind="direct_message",
+            operation_id=operation,
+            once=True,
+            **({"check_effect": check_effect} if check_effect is not None else {}),
+        )
+    except DeliveryRefused as exc:
+        # This invocation has proof that neither a paste nor queue admission
+        # was attempted. Preserve all other failures as potentially submitted.
+        receipt.save(greeting_operation=None)
+        raise exc.cause from exc
     await _check(check_effect)
     if (
         not report.unconfirmed

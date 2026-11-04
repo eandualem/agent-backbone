@@ -1647,8 +1647,10 @@ async def test_bound_cancellation_owns_work_after_client_leaves(
         "launch_completed",
         "greeting_readiness",
         "greeting_foreground",
+        "greeting_queue",
         "greeting_buffer",
         "greeting_submit",
+        "greeting_ambiguous_paste",
     ],
 )
 async def test_bound_first_agent_http_success_and_replay(
@@ -1745,9 +1747,9 @@ async def test_bound_first_agent_http_success_and_replay(
             return SessionProfile("guide", SessionIntelligence.READY, runtime=runtime)
 
         async def foreground(*args):
-            if boundary == "greeting_foreground":
+            if boundary in {"greeting_foreground", "greeting_queue"}:
                 api_app.state.profile_provider = None
-            return True
+            return boundary != "greeting_queue"
 
         async def tmux(*args, check_effect=None, **kwargs):
             await check_before_effect(check_effect)
@@ -1755,9 +1757,11 @@ async def test_bound_first_agent_http_success_and_replay(
             if (boundary, args[0]) in {
                 ("greeting_buffer", "load-buffer"),
                 ("greeting_submit", "paste-buffer"),
+                ("greeting_ambiguous_paste", "paste-buffer"),
             }:
                 api_app.state.profile_provider = None
-            return 0, b"", b""
+            code = int(boundary == "greeting_ambiguous_paste" and args[0] == "paste-buffer")
+            return code, b"", b""
 
         monkeypatch.setattr(_delivery, "get_session_intelligence", intelligence)
         monkeypatch.setattr(_delivery, "prompt_hook_after", AsyncMock(return_value=False))
@@ -1771,16 +1775,19 @@ async def test_bound_first_agent_http_success_and_replay(
         assert response.status_code == 200, response.text
         assert response.json()["code"] == "binding_mismatch", response.text
         assert "send-keys" not in commands
-        assert ("paste-buffer" in commands) == (boundary == "greeting_submit")
-        assert ("delete-buffer" in commands) == (boundary == "greeting_buffer")
+        possibly_pasted = boundary in {"greeting_submit", "greeting_ambiguous_paste"}
+        assert ("paste-buffer" in commands) == possibly_pasted
+        assert ("delete-buffer" in commands) == (
+            boundary in {"greeting_buffer", "greeting_ambiguous_paste"}
+        )
         with BoundSetupReceipt(root, body) as receipt:
-            assert receipt.record.get("greeting_operation")
+            assert bool(receipt.record.get("greeting_operation")) == possibly_pasted
             assert receipt.record.get("result", {}).get("status") != "completed"
             held = await api_app.state.db.queue.held_receipt(
                 "guide",
                 onboarding.envelope("setup", onboarding.GREETING),
                 "setup",
-                receipt.record["greeting_operation"],
+                receipt.record.get("greeting_operation"),
                 "",
                 None,
                 "direct_message",
@@ -1788,6 +1795,21 @@ async def test_bound_first_agent_http_success_and_replay(
         assert (held is not None) == (boundary == "greeting_submit")
         if held:
             assert held["status"] == "uncertain"
+        # Restore exactly the captured provider, not another selection. A known
+        # pre-effect refusal can retry; a possibly pasted greeting cannot.
+        api_app.state.profile_provider = provider
+        was_pasted = possibly_pasted
+        boundary = "greeting_retry"
+        previous_commands = list(commands)
+        response = await api_client.post(
+            "/api/setup/first-agent", json=body, headers={**auth_headers, **headers}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["code"] == ("outcome_unknown" if was_pasted else "agent_ready")
+        if was_pasted:
+            assert commands == previous_commands
+        else:
+            assert commands.count("paste-buffer") == commands.count("send-keys") == 1
         return
     if boundary != "success":
         from contextlib import asynccontextmanager

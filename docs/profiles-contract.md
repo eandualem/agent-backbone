@@ -489,6 +489,8 @@ Greeting delivery carries the same check through readiness, runtime detection,
 queue admission, paste and submit waits. If authority changes after text was
 pasted, retain an uncertain receipt for inspection instead of submitting or
 automatically repeating it; cleanup still removes the operation's paste buffer.
+A proven guard refusal before paste or queue admission clears only that greeting
+attempt, so the same request can retry once its original authority is valid.
 
 ## Inspect permissions for one agent registration
 
