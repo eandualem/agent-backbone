@@ -3,7 +3,7 @@
 import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -59,7 +59,10 @@ async def test_integration_polling_keeps_live_config_after_guarded_start(config,
     with (
         patch("agent_backbone.api.app.LifecycleManager") as lifecycle,
         patch("agent_backbone.services.database.check_profile_startup", new=AsyncMock()),
-        patch("agent_backbone.services.database.BackboneDB"),
+        patch(
+            "agent_backbone.services.database.BackboneDB",
+            return_value=MagicMock(signing=MagicMock(audience=AsyncMock())),
+        ),
         patch("agent_backbone.services.agents.AgentStore") as store,
         patch("agent_backbone.hooks.install.install_hook_files"),
         patch("agent_backbone.api.socketio_server.configure_pty_manager"),

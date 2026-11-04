@@ -126,7 +126,14 @@ def cmd_profiles(args) -> int:
 
 
 def _adoption_preview(args) -> int:
-    preview = adoption_preview()
+    try:
+        preview = adoption_preview()
+    except ValueError as exc:
+        if not args.json_output:
+            raise
+        error = {"code": "adoption_unavailable", "message": str(exc)}
+        print(json.dumps({"schema_version": 1, "error": error}))
+        return 1
     if args.json_output:
         print(json.dumps(preview))
     else:

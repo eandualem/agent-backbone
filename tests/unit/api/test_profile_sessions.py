@@ -1,6 +1,7 @@
 """Operator sessions on a bound provider: shells and CLI sign-in."""
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -159,6 +160,44 @@ async def test_refusals_match_the_shared_fixtures(api_client, auth_headers, nati
     ):
         response = await api_client.post(f"/api/profile/{path}", headers=bound, json=body)
         assert (response.status_code, response.json()) == (expected["status"], expected["body"])
+
+
+@pytest.fixture
+def adopted(api_app, native):
+    provider, headers, _ = native
+    api_app.state.profile_provider = replace(
+        provider, reservation=replace(provider.reservation, kind="legacy_default")
+    )
+    with patch("agent_backbone.api.profile_binding.provider_current", AsyncMock(return_value=True)):
+        yield headers
+
+
+@pytest.mark.parametrize("cwd", [None, "/tmp"])
+async def test_default_shell_keeps_the_host_environment_without_secrets(
+    api_client, auth_headers, api_app, adopted, terminal, cwd
+):
+    response = await api_client.post(
+        "/api/profile/shells",
+        headers={**auth_headers, **adopted},
+        json={"schema_version": 1, "shell_id": "0123456789ab", "cwd": cwd},
+    )
+    assert response.status_code == 200
+    options = terminal.call_args.kwargs
+    assert options["working_dir"] == (cwd or str(Path.home()))
+    assert "environment" not in options and "inherit_environment" not in options
+    assert "BACKBONE_API_KEY" in options["scrub"]
+
+
+async def test_default_keeps_its_sign_ins(api_client, auth_headers, adopted, terminal):
+    sessions = json.loads(Path("docs/contracts/profiles-v1.json").read_text())["sessions"]
+    expected = sessions["sign_in_refusals"]["default_keeps_sign_ins"]
+    response = await api_client.post(
+        "/api/profile/accounts/sign-in",
+        headers={**auth_headers, **adopted},
+        json={"schema_version": 1, "runtime": "codex"},
+    )
+    assert (response.status_code, response.json()) == (expected["status"], expected["body"])
+    terminal.assert_not_called()
 
 
 async def test_legacy_provider_has_no_sessions(api_client, auth_headers):

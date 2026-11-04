@@ -372,6 +372,8 @@ async def lifespan(app: FastAPI):
     app.state.db = BackboneDB(boot.database_url)
     lifecycle.register("database", app.state.db)
     await lifecycle.start_all()
+    # A running installation always has an identity, so it can always be adopted.
+    await app.state.db.signing.audience()
 
     configure_pty_manager(data_dir)
 

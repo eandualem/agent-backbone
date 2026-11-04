@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from agent_backbone.config import session_secret_keys
 from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.terminal import session_exists, start_session
 
@@ -48,17 +49,26 @@ def _identity(request: Request):
     return provider.reservation.identity
 
 
+def _adopted(request: Request) -> bool:
+    return request.state.profile_provider.reservation.kind == "legacy_default"
+
+
 async def _ensure(request: Request, session: str, cwd: str, command: list[str], env) -> dict:
     """Return a live session unchanged; never kill or respawn one."""
     identity = _identity(request)
+    # The adopted installation keeps its host environment, without its own secrets.
+    options = (
+        {"environment": dict(env), "inherit_environment": False}
+        if env is not None
+        else {"scrub": session_secret_keys(request.app.state.config.data_dir)}
+    )
     async with _lock:
         created = not await session_exists(session)
         if created and not await start_session(
             session,
             working_dir=cwd,
             command=command,
-            environment=dict(env),
-            inherit_environment=False,
+            **options,
         ):
             raise _error(503, "shell_unavailable", "The terminal session could not be started.")
     return {
@@ -75,8 +85,9 @@ async def ensure_shell(request: Request) -> dict:
     body = await _parsed(request, _Shell)
     session = f"shell-{body.shell_id}"
     _identity(request)
-    environment = RUNTIMES["shell"].environment()
-    cwd = body.cwd if body.cwd is not None else environment["HOME"]
+    environment = None if _adopted(request) else RUNTIMES["shell"].environment()
+    home = environment["HOME"] if environment is not None else str(Path.home())
+    cwd = body.cwd if body.cwd is not None else home
     # A live session keeps its directory, so its cwd is ignored rather than judged.
     if not await session_exists(session) and not (Path(cwd).is_absolute() and Path(cwd).is_dir()):
         raise _error(422, "invalid_cwd", "The directory must be an absolute existing path.")
@@ -89,6 +100,12 @@ async def sign_in(request: Request) -> dict:
     """Run a CLI's own sign-in in a session the operator attaches to."""
     body = await _parsed(request, _SignIn)
     _identity(request)
+    if _adopted(request):
+        raise _error(
+            422,
+            "runtime_unavailable",
+            "Default keeps its existing CLI sign-ins; manage them with the CLI in a terminal.",
+        )
     if body.runtime not in _SIGN_IN_RUNTIMES:
         raise _error(422, "runtime_unavailable", "This runtime cannot be signed in here.")
     try:

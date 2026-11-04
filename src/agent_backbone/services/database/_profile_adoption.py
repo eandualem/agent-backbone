@@ -29,10 +29,16 @@ def inspect_installation() -> tuple[dict, Path]:
         raise ValueError("Adoption supports the installation's own database only")
     root = resolve_data_dir().resolve()
     database, credential = root / SQLITE_FILENAME, root / ".env"
-    info = credential.lstat()
+    try:
+        info = credential.lstat()
+    except OSError as exc:
+        raise ValueError("The installation has no credential file") from exc
     if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) & 0o077:
         raise ValueError("The installation's credential file must be private")
-    connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)
+    try:
+        connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        raise ValueError("The installation's database cannot be read") from exc
     try:
         installation = connection.execute("SELECT audience FROM signing_install").fetchone()
         port = connection.execute(

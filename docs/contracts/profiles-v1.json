@@ -528,6 +528,16 @@
         "code": "adoption_changed",
         "message": "Default adoption metadata changed."
       }
+    },
+    "preview_unavailable": {
+      "exit_code": 1,
+      "body": {
+        "schema_version": 1,
+        "error": {
+          "code": "adoption_unavailable",
+          "message": "The installation has no identity yet"
+        }
+      }
     }
   },
   "setup": {
@@ -1128,6 +1138,15 @@
           "detail": {
             "code": "shell_unavailable",
             "message": "The terminal session could not be started."
+          }
+        }
+      },
+      "default_keeps_sign_ins": {
+        "status": 422,
+        "body": {
+          "detail": {
+            "code": "runtime_unavailable",
+            "message": "Default keeps its existing CLI sign-ins; manage them with the CLI in a terminal."
           }
         }
       }

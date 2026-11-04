@@ -190,11 +190,6 @@ def main() -> int:
         operator = {"Authorization": "Bearer " + home.key(home.data / ".env")}
         tcp = httpx.Client(base_url=f"http://127.0.0.1:{PORT}", trust_env=False, timeout=30)
         check("legacy install answers", tcp.get("/api/agents", headers=operator).status_code == 200)
-        # A real installation has one by now; a brand new one creates it on first use.
-        check(
-            "installation has an identity",
-            tcp.get("/api/signing/audience", headers=operator).status_code == 200,
-        )
         absent = home.cli("profiles", "list", "--json", check=False)
         check("no registry is registry_absent", "registry_absent" in absent.stdout)
 
@@ -228,6 +223,17 @@ def main() -> int:
             client.get("/api/profile", headers=headers).json()["profile_id"]
             == default["profile_id"],
         )
+
+        for cwd in (None, str(root)):
+            default_shell = {"schema_version": 1, "shell_id": "0123456789ab", "cwd": cwd}
+            opened = client.post("/api/profile/shells", headers=headers, json=default_shell)
+            check("Default opens a shell", opened.status_code == 200, str(opened.status_code))
+        signing = client.post(
+            "/api/profile/accounts/sign-in",
+            headers=headers,
+            json={"schema_version": 1, "runtime": "codex"},
+        )
+        check("Default keeps its CLI sign-ins", signing.status_code == 422)
 
         created, records = {}, {}
         for name in ("A", "B"):

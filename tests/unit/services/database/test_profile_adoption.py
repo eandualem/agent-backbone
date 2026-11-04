@@ -199,3 +199,13 @@ def test_preview_cli_json(installation, capsys):
         main(["profiles", "adoption-preview", "--json"])
     assert result.value.code == 0
     assert json.loads(capsys.readouterr().out) == adoption_preview()
+
+
+def test_preview_cli_reports_a_coded_error_without_an_installation(tmp_path, monkeypatch, capsys):
+    from agent_backbone.cli import main
+
+    monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path / "missing"))
+    with pytest.raises(SystemExit) as result:
+        main(["profiles", "adoption-preview", "--json"])
+    assert result.value.code == 1
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "adoption_unavailable"

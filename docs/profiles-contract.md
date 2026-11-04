@@ -453,8 +453,12 @@ runtimes unavailable there, and the app keeps using schema 1 for Default. Start 
 `backbone up` if nothing answers. Stop signals that process, and a service manager may
 start it again.
 
+A shell on Default uses the host environment without the installation's secrets, and
+sign-in there refuses, because Default keeps its existing CLI sign-ins.
+
 `backbone profiles adoption-preview --json` is the agreed read-only operator
-preflight. It resolves the configured existing installation independently of the
+preflight. When it cannot read the installation it reports `adoption_unavailable` in
+JSON with exit status 1; an installation that has run this version once has an identity. It resolves the configured existing installation independently of the
 selected content profile. It never starts, stops, migrates, repairs or writes.
 Unsafe or ambiguous ownership refuses preview rather than choosing an instance.
 The `adoption.preview` fixture contains the existing installation ID, canonical
