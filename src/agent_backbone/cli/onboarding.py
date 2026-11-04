@@ -124,7 +124,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 raw = stream.read(SETUP_CANCEL_BODY_BYTES + 1)
         if len(raw) > SETUP_CANCEL_BODY_BYTES:
             raise ValueError("request too large")
-        data = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
+        data = json.loads(raw, object_pairs_hook=_unique_object)
+        if (
+            isinstance(data, dict)
+            and type(data.get("schema_version")) is int
+            and data["schema_version"] == 2
+        ):
+            data = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
         if len(raw) > SETUP_BODY_BYTES and (
             not isinstance(data, dict) or data.get("action") != "cancel_first_agent"
         ):

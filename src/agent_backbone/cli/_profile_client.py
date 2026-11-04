@@ -8,7 +8,7 @@ import io
 import json
 import os
 import stat
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 
 import httpx
@@ -67,6 +67,7 @@ class Binding:
     tmux_socket: str
     credential_reference: tuple[str, str, str]
     credential: str = field(repr=False)
+    registry_path: str | None = field(default=None, repr=False)
 
     @classmethod
     def capture(cls, record, expected, resolve_credential):
@@ -148,6 +149,33 @@ class Binding:
             ),
             "Authorization": "Bearer " + self.credential,
         }
+
+    def setup_connection(self, request, *, capture=False):
+        """Compare before handshake; capture only after it succeeds, before POST."""
+        if self.registry_path is None:
+            return
+        from agent_backbone.services.database import ProfileRegistry, SetupReceiptError
+
+        connection = {
+            "endpoint": self.endpoint,
+            "tmux_socket": self.tmux_socket,
+            "credential_reference": list(self.credential_reference),
+            "credential_sha256": hashlib.sha256(self.credential.encode()).hexdigest(),
+        }
+        try:
+            receipt = ProfileRegistry(Path(self.registry_path)).setup_connection_receipt(
+                request, connection
+            )
+            if capture:
+                with receipt:
+                    pass
+            elif receipt.path.exists() or receipt.path.is_symlink():
+                with receipt.inspect_existing():
+                    pass
+        except SetupReceiptError as exc:
+            raise Refused(exc.code) from None
+        except (OSError, ValueError, RecursionError):
+            raise Refused("binding_mismatch") from None
 
     def verify_identity(self, body):
         if (
@@ -324,17 +352,6 @@ def resolve_binding(expected, *, setup_request=None):
         raise Refused("service_unavailable") from None
     binding = Binding.capture(record, expected, resolve_dotenv_reference)
     if setup_request is not None:
-        connection = {
-            "endpoint": binding.endpoint,
-            "tmux_socket": binding.tmux_socket,
-            "credential_reference": list(binding.credential_reference),
-            "credential_sha256": hashlib.sha256(binding.credential.encode()).hexdigest(),
-        }
-        try:
-            with registry.setup_connection_receipt(setup_request, connection):
-                pass  # Atomic capture/compare finishes before any HTTP dispatch.
-        except SetupReceiptError as exc:
-            raise Refused(exc.code) from None
-        except (OSError, ValueError, RecursionError):
-            raise Refused("binding_mismatch") from None
+        binding = replace(binding, registry_path=str(registry.path))
+        binding.setup_connection(setup_request)
     return binding

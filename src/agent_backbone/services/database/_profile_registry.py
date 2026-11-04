@@ -322,7 +322,9 @@ class ProfileRegistry:
                 for record in records
             ):
                 raise ValueError("Profile setup identity does not match")
-        for directory in (root, root / "setup-connections"):
+        connections = root / "setup-connections"
+        profile = connections / hashlib.sha256(request["profile_id"].encode()).hexdigest()
+        for directory in (root, connections, profile):
             if directory.resolve() != directory:
                 raise ValueError("Profile setup continuity path is not canonical")
             directory.mkdir(mode=0o700, exist_ok=True)
@@ -333,7 +335,7 @@ class ProfileRegistry:
                 or stat.S_IMODE(info.st_mode) & 0o077
             ):
                 raise ValueError("Profile setup continuity must be private")
-        return ProfileSetupConnectionReceipt(root / "setup-connections", request, connection)
+        return ProfileSetupConnectionReceipt(profile, request, connection)
 
     def check_reservation(self, identity: ProfileIdentity, data_dir: Path) -> ProfileReservation:
         """Compare external identity/path ownership; does not establish readiness.

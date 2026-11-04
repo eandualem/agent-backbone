@@ -442,15 +442,19 @@ credential, proxy, redirect or legacy-provider fallback. Each invocation retains
 the original request bytes and resolved credential; it never refreshes or retries
 the transport automatically. A lost mutation result remains uncertain.
 
-Before the first setup or cancellation dispatch, a private local receipt captures
-the normalized intent fingerprint, endpoint, credential reference and digest, and
+After a successful handshake and before the first setup or cancellation POST, a
+private local receipt captures the normalized intent fingerprint, endpoint,
+credential reference and digest, and
 terminal socket. It lives beside the registry in its protected operations directory,
 outside provider data. It stores neither credential bytes nor the request's brief.
 Both actions share one tuple-and-request-ID receipt. Concurrent capture is serialized;
 changed intent returns `request_conflict`, and changed connection metadata returns
 `binding_mismatch`. Existing or corrupt receipts are never replaced to recapture
-an operation. They do not expire; at the existing 1,024-receipt capacity, new IDs
-are refused while recorded IDs remain usable. The provider's execution and
+an operation. An existing capture is checked before the handshake and again before
+the POST; a failed initial handshake does not pin a never-dispatched connection.
+Each profile has its own capture lock and capacity. Receipts do not expire; at the
+existing 1,024-receipt capacity per profile, new IDs are refused while recorded IDs
+remain usable. The provider's execution and
 cancellation journal remains authoritative.
 
 A new CLI process is not permission to refresh a pending operation's connection.

@@ -334,8 +334,11 @@ def test_new_invocation_cannot_rebind_original_setup(fixtures, local_connection,
     request = copy.deepcopy(fixtures["setup"]["first_agent"])
     expected = ("profile-a", "installation-a", "lifecycle-a1")
     first = resolve_binding(expected, setup_request=request)
+    first.setup_connection(request, capture=True)
     files = list(
-        registry.path.parent.glob("registry.db.operations/setup-connections/setup-receipts/*.json")
+        registry.path.parent.glob(
+            "registry.db.operations/setup-connections/*/setup-receipts/*.json"
+        )
     )
     assert len(files) == 1
     original = files[0].read_bytes()
@@ -387,11 +390,12 @@ def test_cancel_first_claims_same_connection_and_conflicting_capture_is_busy(
     expected = ("profile-a", "installation-a", "lifecycle-a1")
     cancellation = {**original, "action": "cancel_first_agent"}
     bound = resolve_binding(expected, setup_request=cancellation)
+    bound.setup_connection(cancellation, capture=True)
     assert resolve_binding(expected, setup_request=original) == bound
     connection = json.loads(
         next(
             registry.path.parent.glob(
-                "registry.db.operations/setup-connections/setup-receipts/*.json"
+                "registry.db.operations/setup-connections/*/setup-receipts/*.json"
             )
         ).read_text()
     )["connection"]
@@ -411,13 +415,16 @@ def test_unknown_dispatch_keeps_connection_for_next_process(
     registry, _, credential = local_connection
     calls = []
 
+    async def handshake(self):
+        pass
+
     async def uncertain(self):
         calls.append(self)
         assert (
             len(
                 list(
                     registry.path.parent.glob(
-                        "registry.db.operations/setup-connections/setup-receipts/*.json"
+                        "registry.db.operations/setup-connections/*/setup-receipts/*.json"
                     )
                 )
             )
@@ -425,7 +432,8 @@ def test_unknown_dispatch_keeps_connection_for_next_process(
         )
         raise Refused("outcome_unknown", uncertain=True)
 
-    monkeypatch.setattr(PendingSetup, "execute", uncertain)
+    monkeypatch.setattr(Binding, "handshake", handshake)
+    monkeypatch.setattr(PendingSetup, "_post", uncertain)
     request = fixtures["setup"]["first_agent"]
     code, events, _ = invoke_bound(tmp_path, capsys, request)
     assert code == 3 and events[-1]["code"] == "outcome_unknown"
@@ -433,3 +441,139 @@ def test_unknown_dispatch_keeps_connection_for_next_process(
     code, events, _ = invoke_bound(tmp_path, capsys, request)
     assert code == 3 and events[-1]["code"] == "binding_mismatch"
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("change", ["credential", "endpoint", "tmux"])
+def test_refused_initial_handshake_does_not_pin_an_unverified_connection(
+    fixtures, local_connection, tmp_path, capsys, monkeypatch, change
+):
+    registry, ready, credential = local_connection
+    observations = []
+
+    async def handshake(self):
+        observations.append(self)
+        if len(observations) == 1:
+            raise Refused("operator_required" if change == "credential" else "binding_mismatch")
+
+    async def post(self):
+        assert len(list(registry.path.parent.glob("**/setup-receipts/*.json"))) == 1
+        return {
+            "action": self.action,
+            "status": "completed",
+            "code": "test_completed",
+            "message": "Synthetic result.",
+            "retry": "none",
+            "completed_steps": [],
+            "data": {},
+        }
+
+    monkeypatch.setattr(Binding, "handshake", handshake)
+    monkeypatch.setattr(PendingSetup, "_post", post)
+    request = fixtures["setup"]["first_agent"]
+    code, events, _ = invoke_bound(tmp_path, capsys, request)
+    assert code == 3 and events[-1]["code"] in {"operator_required", "binding_mismatch"}
+    assert not list(registry.path.parent.glob("**/setup-receipts/*.json"))
+    if change == "credential":
+        credential.write_text("BACKBONE_API_KEY=synthetic-corrected-credential\n")
+    elif change == "endpoint":
+        ready["binding"]["endpoint"]["path"] += ".corrected"
+    else:
+        ready["binding"]["tmux"]["socket_path"] += ".corrected"
+    code, events, _ = invoke_bound(tmp_path, capsys, request)
+    assert code == 0 and events[-1]["code"] == "test_completed"
+    assert len(observations) == 2
+
+
+def test_connection_capacity_and_capture_lock_are_independent_per_profile(
+    fixtures, local_connection, monkeypatch
+):
+    from agent_backbone.services.database import (
+        ProfileIdentity,
+        ProfileReservation,
+        SetupReceiptError,
+        _setup_receipts,
+    )
+
+    registry, _, credential = local_connection
+    registry.reserve(
+        ProfileReservation(
+            ProfileIdentity("profile-b", "installation-b", "lifecycle-b1"),
+            credential.parent.with_name("provider-b"),
+            "Other",
+            "baseline-v1",
+        )
+    )
+    monkeypatch.setattr(_setup_receipts, "SETUP_RECEIPTS", 1)
+    first = fixtures["setup"]["first_agent"]
+    second = {
+        **first,
+        "profile_id": "profile-b",
+        "expected_installation_id": "installation-b",
+        "expected_lifecycle_id": "lifecycle-b1",
+    }
+    connection = {"synthetic": "connection"}
+    with registry.setup_connection_receipt(first, connection):
+        with registry.setup_connection_receipt(second, connection):
+            pass  # Both the quota and lock belong to their own profile.
+    with pytest.raises(SetupReceiptError) as failure:
+        with registry.setup_connection_receipt({**first, "request_id": "new-id"}, connection):
+            pass
+    assert failure.value.code == "installation_conflict"
+    with registry.setup_connection_receipt(first, connection):
+        pass  # The original ID remains usable at capacity.
+
+
+async def test_concurrent_verified_connections_compare_again_before_post(
+    fixtures, local_connection, monkeypatch
+):
+    from agent_backbone.cli._profile_client import resolve_binding
+
+    _, _, credential = local_connection
+    request = fixtures["setup"]["first_agent"]
+    expected = ("profile-a", "installation-a", "lifecycle-a1")
+    first = resolve_binding(expected, setup_request=request)
+    credential.write_text("BACKBONE_API_KEY=synthetic-concurrent-credential\n")
+    second = resolve_binding(expected, setup_request=request)
+    posts = []
+
+    async def handshake(self):
+        await asyncio.sleep(0)
+
+    async def post(self):
+        posts.append(self.binding)
+        await asyncio.sleep(0)
+        raise Refused("outcome_unknown", uncertain=True)
+
+    monkeypatch.setattr(Binding, "handshake", handshake)
+    monkeypatch.setattr(PendingSetup, "_post", post)
+    raw = json.dumps(request).encode()
+    results = await asyncio.gather(
+        PendingSetup.capture(first, raw).execute(),
+        PendingSetup.capture(second, raw).execute(),
+        return_exceptions=True,
+    )
+    assert [item.code for item in results] == ["outcome_unknown", "binding_mismatch"]
+    assert posts == [first]
+
+
+@pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16", "utf-32"])
+def test_schema1_preserves_existing_json_encoding_acceptance(tmp_path, capsys, encoding):
+    from agent_backbone.cli import build_parser
+
+    source = tmp_path / "legacy.json"
+    source.write_bytes(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "request_id": "legacy-encoding",
+                "action": "initialize",
+                "service": "none",
+                "starter_profile": "core-v1",
+                "data_dir": str(tmp_path / "provider"),
+            }
+        ).encode(encoding)
+    )
+    args = build_parser().parse_args(["setup", "--file", str(source), "--jsonl", "--validate"])
+    assert args.func(args) == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert events[-1]["schema_version"] == 1 and events[-1]["code"] == "validated"

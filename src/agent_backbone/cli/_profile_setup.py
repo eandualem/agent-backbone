@@ -58,6 +58,7 @@ class PendingSetup:
     async def execute(self):
         """No automatic replay or refreshed connection after an uncertain effect."""
         await self.binding.handshake()
+        self.binding.setup_connection(json.loads(self.body), capture=True)
         try:
             async with asyncio.timeout(SETUP_SECONDS):
                 return await self._post()

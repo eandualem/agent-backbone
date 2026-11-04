@@ -230,19 +230,19 @@ CAPABILITIES: tuple[Capability, ...] = (
             "tests/unit/services/routing/test_onboarding.py",
             "Bound CLI: tests/unit/test_cli_profile_setup.py; "
             "HTTP guards: tests/unit/api/test_profile_binding.py; "
-            "working-installation live check pending",
+            "production ready activation unavailable; working-installation live check pending",
         ),
         codex=_ok(
             "tests/unit/services/routing/test_onboarding.py",
             "Bound CLI: tests/unit/test_cli_profile_setup.py; "
             "HTTP guards: tests/unit/api/test_profile_binding.py; "
-            "working-installation live check pending",
+            "production ready activation unavailable; working-installation live check pending",
         ),
         opencode=_ok(
             "tests/unit/services/routing/test_onboarding.py",
             "Bound CLI: tests/unit/test_cli_profile_setup.py; "
             "HTTP guards: tests/unit/api/test_profile_binding.py; "
-            "working-installation live check pending",
+            "production ready activation unavailable; working-installation live check pending",
         ),
         gemini=_gap(note="installer hook preparation is not implemented"),
         deepcode=_gap(note="installer hook preparation is not implemented"),
