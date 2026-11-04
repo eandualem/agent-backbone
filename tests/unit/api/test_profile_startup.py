@@ -379,3 +379,19 @@ def test_own_fresh_setup_retry_recovers_only_identical_request(
         assert code == 0 and result["code"] == "initialized"
         assert not journal.exists()
         assert config.env_path.read_text() == "BACKBONE_API_KEY=preserved-test-key\n"
+
+
+async def test_lifespan_with_a_provider_checks_it_instead_of_refusing(config):
+    app = create_app(config)
+    inner = getattr(app, "other_asgi_app", app)
+    provider = AsyncMock()
+    provider.check.side_effect = ValueError("stale")
+    inner.state.profile_provider = provider
+    with (
+        patch("agent_backbone.services.database.check_profile_startup") as guard,
+        pytest.raises(ValueError, match="stale"),
+    ):
+        async with lifespan(inner):
+            pass
+    guard.assert_not_called()
+    provider.check.assert_awaited_once()

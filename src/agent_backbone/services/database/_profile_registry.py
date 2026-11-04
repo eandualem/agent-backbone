@@ -446,6 +446,13 @@ class ProfileRegistry:
         )
         return replace(record, state="ready", binding=binding)
 
+    def ready_reservation(self, profile_id: str) -> ProfileReservation:
+        with self._connection() as conn:
+            for record in self._records(conn):
+                if record.identity.profile_id == profile_id and record.state == "ready":
+                    return record
+        raise ValueError("Profile is not ready")
+
     def check_unadopted(self, data_dir: Path) -> None:
         """Refuse legacy startup in any reserved tree, even without local identity.
 

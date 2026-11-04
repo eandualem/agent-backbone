@@ -17,6 +17,7 @@ from agent_backbone.cli.presentation import note, print_table
 from agent_backbone.config import (
     SETTINGS_DEFAULTS,
     SETTINGS_HELP,
+    SQLITE_FILENAME,
     BackboneConfig,
     validate_setting,
 )
@@ -111,7 +112,44 @@ def _reload_app():
     return create_app(replace(config, backbone=replace(config.backbone, host=host)))
 
 
-def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | None = None) -> None:
+def serve_profile(registry_path: Path, profile_id: str) -> None:
+    """Run one ready profile's provider: its private socket only, nothing ambient."""
+    from agent_backbone.config import AgentsConfig, build_config
+    from agent_backbone.services.agents import install_project_ownership
+    from agent_backbone.services.database import ProfileRegistry, reconcile_profile_provider
+    from agent_backbone.services.runtimes import RUNTIMES, install_native_environments
+    from agent_backbone.services.terminal import pin_tmux_server
+
+    registry = ProfileRegistry(registry_path)
+    reservation = registry.ready_reservation(profile_id)
+    root = reservation.data_dir
+    # Only the shell has a captured environment: every model runtime is refused
+    # until the account work. Replacing the process environment keeps host tokens
+    # out of load_secrets and the tmux server, and the user's tmux.conf unread.
+    environment = RUNTIMES["shell"].capture_environment(root)
+    os.environ.clear()
+    os.environ.update(environment, BACKBONE_DATA_DIR=str(root))
+
+    async def reconcile():
+        provider = await reconcile_profile_provider(
+            registry, reservation, root / SQLITE_FILENAME, reservation.binding.tmux_socket
+        )
+        pin_tmux_server(provider.socket_path)
+        install_native_environments({"shell": environment})
+        await install_project_ownership(provider)
+        return provider
+
+    provider = asyncio.run(reconcile())
+    config = build_config(root, settings={}, agents=AgentsConfig())
+    _run_server(config, provider=provider)
+
+
+def _run_server(
+    config: BackboneConfig,
+    reload: bool = False,
+    log_file: Path | None = None,
+    provider=None,
+) -> None:
     import uvicorn
 
     from agent_backbone.api.local_transport import LocalPeerProtocol, private_listener
@@ -158,7 +196,7 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
             log_level="info",
             log_config=logging_config,
             workers=1,
-            http=LocalPeerProtocol if config.backbone.socket_path else "auto",
+            http=LocalPeerProtocol if config.backbone.socket_path or provider else "auto",
         )
     )
     inner = getattr(app, "other_asgi_app", app)
@@ -166,7 +204,12 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
     # signals after shutdown, which would kill us before the exec below.
     inner.state.request_shutdown = lambda: setattr(server, "should_exit", True)
     try:
-        if config.backbone.socket_path:
+        if provider is not None:
+            inner.state.profile_provider = provider
+            endpoint = str(provider.reservation.binding.endpoint)
+            with private_listener(config.data_dir, endpoint) as local:
+                server.run(sockets=[local])
+        elif config.backbone.socket_path:
             with private_listener(config.data_dir, config.backbone.socket_path) as local:
                 tcp = server.config.bind_socket()
                 try:

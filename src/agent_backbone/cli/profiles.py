@@ -29,6 +29,10 @@ def add_profiles_parser(sub) -> None:
     operation = commands.add_parser("operation", help="read the original lifecycle receipt")
     operation.add_argument("request_id")
     operation.add_argument("--json", action="store_true")
+    # Internal: the local control plane launches this for a ready profile.
+    serve = commands.add_parser("serve")
+    serve.add_argument("--registry", required=True, type=Path)
+    serve.add_argument("profile_id")
     parser.set_defaults(func=cmd_profiles)
 
 
@@ -44,6 +48,11 @@ def cmd_profiles(args) -> int:
     ):
         print("Profile commands require a local operator context.", file=sys.stderr)
         return 1
+    if args.profiles_command == "serve":
+        from agent_backbone.cli.server import serve_profile
+
+        serve_profile(args.registry, args.profile_id)
+        return 0
     try:
         if args.profiles_command in {"apply", "operation"}:
             return _lifecycle(args)

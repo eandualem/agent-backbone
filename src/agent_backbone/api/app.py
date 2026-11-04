@@ -356,7 +356,11 @@ async def lifespan(app: FastAPI):
 
     boot: BackboneConfig = getattr(app.state, "config", None) or bootstrap_config()
     data_dir = boot.data_dir
-    await check_profile_startup(boot.database_url, data_dir)
+    provider = getattr(app.state, "profile_provider", None)
+    if provider is None:
+        await check_profile_startup(boot.database_url, data_dir)
+    else:
+        await provider.check()
     data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     data_dir.chmod(0o700)
     app.state.config = boot
