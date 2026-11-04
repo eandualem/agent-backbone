@@ -21,9 +21,10 @@ SETUP_RECEIPT_BYTES = 65_536
 
 
 class SetupReceiptError(ValueError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, reason: str | None = None):
         super().__init__(message)
         self.code = code
+        self.reason = reason
 
 
 class SetupReceipt:
@@ -70,6 +71,7 @@ class SetupReceipt:
                     raise SetupReceiptError(
                         "installation_conflict",
                         "Setup receipt capacity reached; existing IDs remain usable.",
+                        reason="receipt_capacity",
                     )
                 self.record = {
                     "schema_version": 1,

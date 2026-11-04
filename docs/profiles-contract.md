@@ -454,7 +454,8 @@ an operation. An existing capture is checked before the handshake and again befo
 the POST; a failed initial handshake does not pin a never-dispatched connection.
 Each profile has its own capture lock and capacity. Receipts do not expire; at the
 existing 1,024-receipt capacity per profile, new IDs are refused while recorded IDs
-remain usable. The provider's execution and
+remain usable. Capacity refusal explains that limit with `retry: "none"`; repeating
+or replacing a new ID cannot free space. The provider's execution and
 cancellation journal remains authoritative.
 
 A new CLI process is not permission to refresh a pending operation's connection.

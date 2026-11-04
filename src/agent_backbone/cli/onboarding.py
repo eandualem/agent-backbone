@@ -125,16 +125,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
         if len(raw) > SETUP_CANCEL_BODY_BYTES:
             raise ValueError("request too large")
         data = json.loads(raw, object_pairs_hook=_unique_object)
-        if (
-            isinstance(data, dict)
-            and type(data.get("schema_version")) is int
-            and data["schema_version"] == 2
-        ):
-            data = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
-        if len(raw) > SETUP_BODY_BYTES and (
-            not isinstance(data, dict) or data.get("action") != "cancel_first_agent"
-        ):
-            raise ValueError("request too large")
         if isinstance(data, dict):
             if type(data.get("schema_version")) is int and data["schema_version"] == 2:
                 output.binding = {
@@ -155,6 +145,14 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 and not args.validate
             ):
                 action = data["action"]
+        # Capture recognizable schema-2 identity before validation can refuse the
+        # encoding or the stricter first-agent body limit.
+        if output.binding is not None:
+            data = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
+        if len(raw) > SETUP_BODY_BYTES and (
+            not isinstance(data, dict) or data.get("action") != "cancel_first_agent"
+        ):
+            raise ValueError("request too large")
         request = (BOUND_ADAPTER if output.binding is not None else ADAPTER).validate_python(data)
     except (OSError, ValueError, ValidationError, RecursionError):
         return output.finish(
@@ -227,6 +225,13 @@ async def _execute_bound(request, raw, output):
         )
         body = await PendingSetup.capture(binding, raw).execute()
     except Refused as exc:
+        if exc.reason == "receipt_capacity":
+            return result(
+                request.action,
+                exc.code,
+                "Profile setup receipt capacity reached; existing request IDs remain usable.",
+                retry="none",
+            )
         messages = {
             "operator_required": "Run setup from a local operator process.",
             "binding_mismatch": "Profile binding does not match.",

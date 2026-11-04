@@ -577,3 +577,67 @@ def test_schema1_preserves_existing_json_encoding_acceptance(tmp_path, capsys, e
     assert args.func(args) == 0
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert events[-1]["schema_version"] == 1 and events[-1]["code"] == "validated"
+
+
+@pytest.mark.parametrize("malformed", ["oversize_first", "utf-8-sig", "utf-16", "utf-32"])
+def test_early_bound_validation_refusal_retains_known_identity(
+    fixtures, tmp_path, capsys, monkeypatch, malformed
+):
+    from agent_backbone.cli import build_parser
+    from agent_backbone.models import SETUP_BODY_BYTES, SETUP_CANCEL_BODY_BYTES
+    from agent_backbone.services.database import ProfileRegistry
+
+    monkeypatch.setattr(ProfileRegistry, "show", lambda *a: pytest.fail("registry read"))
+    request = fixtures["setup"]["first_agent"]
+    raw = json.dumps(request).encode("utf-8" if malformed == "oversize_first" else malformed)
+    if malformed == "oversize_first":
+        raw += b" " * (SETUP_BODY_BYTES + 1 - len(raw))
+    assert len(raw) <= SETUP_CANCEL_BODY_BYTES
+    source = tmp_path / "invalid-bound.json"
+    source.write_bytes(raw)
+    args = build_parser().parse_args(["setup", "--file", str(source), "--jsonl"])
+    assert args.func(args) == 2
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert len(events) == 1
+    assert events[0]["schema_version"] == 2
+    assert events[0]["request_id"] == request["request_id"]
+    assert events[0]["action"] == request["action"]
+    assert events[0]["profile_id"] == request["profile_id"]
+    assert events[0]["installation_id"] == request["expected_installation_id"]
+    assert events[0]["lifecycle_id"] == request["expected_lifecycle_id"]
+    assert events[0]["code"] == "invalid_request"
+
+
+def test_bound_capacity_refusal_explains_permanent_limit_without_advising_retry(
+    fixtures, local_connection, tmp_path, capsys, monkeypatch
+):
+    posts = []
+    monkeypatch.setattr("agent_backbone.services.database._setup_receipts.SETUP_RECEIPTS", 1)
+
+    async def handshake(self):
+        pass
+
+    async def post(self):
+        posts.append(self.request_id)
+        return {
+            "action": self.action,
+            "status": "completed",
+            "code": "test_completed",
+            "message": "Synthetic result.",
+            "retry": "none",
+            "completed_steps": [],
+            "data": {},
+        }
+
+    monkeypatch.setattr(Binding, "handshake", handshake)
+    monkeypatch.setattr(PendingSetup, "_post", post)
+    original = fixtures["setup"]["first_agent"]
+    assert invoke_bound(tmp_path, capsys, original)[0] == 0
+    code, events, _ = invoke_bound(tmp_path, capsys, {**original, "request_id": "excess-id"})
+    assert code == 3
+    assert events[-1]["code"] == "installation_conflict"
+    assert events[-1]["retry"] == "none"
+    assert "capacity reached" in events[-1]["message"]
+    assert "existing request IDs remain usable" in events[-1]["message"]
+    assert posts == [original["request_id"]]
+    assert invoke_bound(tmp_path, capsys, original)[0] == 0

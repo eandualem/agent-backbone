@@ -21,9 +21,10 @@ HANDSHAKE_SECONDS = 10
 
 
 class Refused(ValueError):
-    def __init__(self, code, *, uncertain=False):
+    def __init__(self, code, *, uncertain=False, reason=None):
         self.code = code
         self.uncertain = uncertain
+        self.reason = reason
         super().__init__("Bound request could not be completed.")
 
 
@@ -173,7 +174,7 @@ class Binding:
                 with receipt.inspect_existing():
                     pass
         except SetupReceiptError as exc:
-            raise Refused(exc.code) from None
+            raise Refused(exc.code, reason=exc.reason) from None
         except (OSError, ValueError, RecursionError):
             raise Refused("binding_mismatch") from None
 
