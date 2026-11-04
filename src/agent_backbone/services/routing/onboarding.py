@@ -17,6 +17,7 @@ from agent_backbone.fs import AtomicCreateUnsupported, atomic_create_text
 from agent_backbone.git import detect_repo
 from agent_backbone.models import (
     SUCCESS_OUTCOMES,
+    BoundSetupFirstAgent,
     SetupCancelFirstAgent,
     SetupFirstAgent,
     SetupTemplateBrief,
@@ -30,7 +31,7 @@ from agent_backbone.services.agents import (
     start_agent,
     validate_agent_spec,
 )
-from agent_backbone.services.database import SetupReceipt, SetupReceiptError
+from agent_backbone.services.database import BoundSetupReceipt, SetupReceipt, SetupReceiptError
 from agent_backbone.services.routing import envelope, safe_deliver
 from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.terminal import query_environment_var, session_exists
@@ -125,14 +126,27 @@ def _matches_registration(current, spec, registration):
     )
 
 
-async def first_agent(request: SetupFirstAgent, config, store, db):
+async def first_agent(
+    request: SetupFirstAgent | BoundSetupFirstAgent,
+    config,
+    store,
+    db,
+    *,
+    check_effect=None,
+    check_admission=None,
+):
     """Run once or reconcile the same explicit request; API authentication is upstream."""
-    if Path(request.data_dir) != config.data_dir.resolve():
+    bound = isinstance(request, BoundSetupFirstAgent)
+    if bound and check_effect is None:
+        raise ValueError("Bound setup requires provider effect checks")
+    if not bound and Path(request.data_dir) != config.data_dir.resolve():
         return setup_result(
             "first_agent", "installation_conflict", "This service owns a different data directory."
         )
     try:
-        with SetupReceipt(config.data_dir, request.model_dump()) as receipt:
+        await _check(check_admission or check_effect)
+        receipt_type = BoundSetupReceipt if bound else SetupReceipt
+        with receipt_type(config.data_dir, request.model_dump()) as receipt:
             if receipt.cancelled:
                 return setup_result(
                     "first_agent",
@@ -141,9 +155,11 @@ async def first_agent(request: SetupFirstAgent, config, store, db):
                     status="failed",
                     retry="new_request",
                 )
+            await _check(check_effect)
             receipt.save(agent_name=request.agent.name)
             async with lifecycle_lock(request.agent.name):
-                return await _first(request, receipt, store, db)
+                await _check(check_effect)
+                return await _first(request, receipt, store, db, check_effect=check_effect)
     except SetupReceiptError as exc:
         return setup_result("first_agent", exc.code, str(exc))
     except AtomicCreateUnsupported:
@@ -164,7 +180,7 @@ async def first_agent(request: SetupFirstAgent, config, store, db):
         )
 
 
-async def cancel_first_agent(request: SetupCancelFirstAgent, config):
+async def cancel_first_agent(request: SetupCancelFirstAgent, config, *, check_effect=None):
     """Atomically retire an input before effects, including a not-yet-sent input.
 
     First-agent holds this same nonblocking file lock through all effects. A
@@ -172,12 +188,17 @@ async def cancel_first_agent(request: SetupCancelFirstAgent, config):
     No runtime probing, replay, agent deletion or terminal stop is involved.
     """
     action = request.action
-    if Path(request.data_dir) != config.data_dir.resolve():
+    bound = isinstance(request, BoundSetupFirstAgent)
+    if bound and check_effect is None:
+        raise ValueError("Bound setup requires provider effect checks")
+    if not bound and Path(request.data_dir) != config.data_dir.resolve():
         return setup_result(
             action, "installation_conflict", "This service owns a different data directory."
         )
     try:
-        with SetupReceipt(config.data_dir, request.original().model_dump()) as receipt:
+        await _check(check_effect)
+        receipt_type = BoundSetupReceipt if bound else SetupReceipt
+        with receipt_type(config.data_dir, request.original().model_dump()) as receipt:
             if not receipt.cancelled:
                 # Preflight can only write these fields. Fail closed for any
                 # later or unfamiliar evidence, even an incomplete step.
@@ -218,8 +239,15 @@ async def cancel_first_agent(request: SetupCancelFirstAgent, config):
         )
 
 
-async def _first(request, receipt, store, db):
+async def _check(check_effect):
+    if check_effect is not None:
+        await check_effect()
+
+
+async def _first(request, receipt, store, db, *, check_effect=None):
+    await _check(check_effect)
     await store.refresh()
+    await _check(check_effect)
     config = store.config
     spec = AgentSpec(
         name=request.agent.name,
@@ -228,8 +256,9 @@ async def _first(request, receipt, store, db):
         model=request.agent.model,
         repo=await detect_repo(Path(request.agent.directory)),
     )
+    await _check(check_effect)
     if receipt.record.get("result", {}).get("status") == "completed":
-        return await _completed_replay(receipt, config, store)
+        return await _completed_replay(receipt, config, store, check_effect=check_effect)
     try:
         validate_agent_spec(spec)
     except ValueError:
@@ -248,6 +277,7 @@ async def _first(request, receipt, store, db):
             "use its documented agent-start flow.",
             retry="new_request",
         )
+    await _check(check_effect)
     selected = RUNTIMES[spec.runtime]
     if not selected.available():
         return _answer(
@@ -260,6 +290,7 @@ async def _first(request, receipt, store, db):
         for key in ("registration_id", "registration_pending", "launch_operation")
     ) and (error := await run_thread(selected.setup_error)):
         return _answer(receipt, "runtime_permission", error)
+    await _check(check_effect)
     path = spec.path
     if path.resolve() != path or (path.exists() and not path.is_dir()):
         return _answer(
@@ -302,13 +333,17 @@ async def _first(request, receipt, store, db):
             )
     if not path.is_dir() and not request.agent.create_directory:
         return _answer(receipt, "agent_conflict", "The selected agent directory does not exist.")
+    await _check(check_effect)
     receipt.completed("preflight")
     if "hooks" not in receipt.record["completed_steps"]:
         for rt in runtimes:
+            await _check(check_effect)
             rt.prepare_setup_hooks(config.data_dir, config.state_dir)
         receipt.completed("hooks")
+    await _check(check_effect)
     brief_path = _brief_file(receipt, brief)
     if not registration:
+        await _check(check_effect)
         path.mkdir(parents=True, exist_ok=True)
         receipt.save(registration_pending=True)
         try:
@@ -333,6 +368,7 @@ async def _first(request, receipt, store, db):
             return _answer(
                 receipt, "agent_conflict", "An agent already owns this name or directory."
             )
+        await _check(check_effect)
         receipt.save(registration_id=spec.registration_id, registration_pending=False)
         receipt.completed("agent")
         config = store.config
@@ -343,6 +379,7 @@ async def _first(request, receipt, store, db):
     if operation is None:
         if await session_exists(spec.name):
             return _answer(receipt, "agent_conflict", "An existing terminal was preserved.")
+        await _check(check_effect)
         operation = uuid4().hex
         receipt.save(launch_operation=operation)
         started = await start_agent(
@@ -355,6 +392,7 @@ async def _first(request, receipt, store, db):
                 "The launch did not complete; it will not be repeated automatically.",
                 ready="exited",
             )
+        await _check(check_effect)
         await store.touch_started(spec.name)
     # A lost launch response is reconciled from the exact operation and registration,
     # never from the presence of a same-name terminal alone.
@@ -375,6 +413,7 @@ async def _first(request, receipt, store, db):
         or (receipt.record.get("launch_id") not in (None, launch))
     ):
         return _answer(receipt, "agent_conflict", "The terminal does not match this setup launch.")
+    await _check(check_effect)
     receipt.save(launch_id=launch)
     receipt.completed("launch")
     snapshot = await agent_state(config, spec.name)
@@ -401,6 +440,7 @@ async def _first(request, receipt, store, db):
             ready="timeout",
             evidence=evidence,
         )
+    await _check(check_effect)
     receipt.completed("ready")
     if request.start_greeting and receipt.record.get("greeting_delivery_id") is None:
         # Other CLI processes do not share lifecycle_lock. Keep the profile
@@ -415,7 +455,8 @@ async def _first(request, receipt, store, db):
             ):
                 if await query_environment_var(spec.name, key) != receipt.record.get(field):
                     return _answer(receipt, "agent_conflict", "The greeting launch changed.")
-            accepted = await _greet(receipt, spec, config, db)
+            await _check(check_effect)
+            accepted = await _greet(receipt, spec, config, db, check_effect=check_effect)
         if not accepted:
             return _answer(
                 receipt,
@@ -424,6 +465,7 @@ async def _first(request, receipt, store, db):
                 ready="ready",
                 evidence=evidence,
             )
+        await _check(check_effect)
         receipt.completed("greeting")
     final = _answer(
         receipt,
@@ -433,11 +475,13 @@ async def _first(request, receipt, store, db):
         completed=True,
         evidence=evidence,
     )
+    await _check(check_effect)
     receipt.save(result=final)
     return final
 
 
-async def _completed_replay(receipt, config, store):
+async def _completed_replay(receipt, config, store, *, check_effect=None):
+    await _check(check_effect)
     name = receipt.record["agent_name"]
     current = store.agents.get(name)
     if current is None or current.registration_id != receipt.record.get("registration_id"):
@@ -467,6 +511,7 @@ async def _completed_replay(receipt, config, store):
                 retry="none",
             )
     snapshot = await agent_state(config, name)
+    await _check(check_effect)
     return dict(
         receipt.record["result"],
         data={
@@ -476,7 +521,8 @@ async def _completed_replay(receipt, config, store):
     )
 
 
-async def _greet(receipt, spec, config, db):
+async def _greet(receipt, spec, config, db, *, check_effect=None):
+    await _check(check_effect)
     operation = receipt.record.get("greeting_operation")
     message = envelope("setup", GREETING)
     if operation:
@@ -484,6 +530,7 @@ async def _greet(receipt, spec, config, db):
         held = await db.queue.held_receipt(
             spec.name, message, "setup", operation, "", None, "direct_message"
         )
+        await _check(check_effect)
         # A queued uncertain delivery is not confirmation. Keep it for inspection.
         delivered = next((row for row in rows if row["outcome"] in SUCCESS_OUTCOMES), None)
         if delivered:
@@ -512,6 +559,7 @@ async def _greet(receipt, spec, config, db):
         operation_id=operation,
         once=True,
     )
+    await _check(check_effect)
     if (
         not report.unconfirmed
         and report.delivery_id is not None

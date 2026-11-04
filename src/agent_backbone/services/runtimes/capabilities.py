@@ -270,6 +270,20 @@ CAPABILITIES: tuple[Capability, ...] = (
         shell=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
     ),
     _row(
+        "registration-aware-inspection",
+        "Agent registration IDs and stale-registration refusal on inspection",
+        "api/routes/agents.py; services/agents/queries.py",
+        fallback="Select the agent again after its registration changes.",
+        implemented=lambda rt: True,
+        claude=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        codex=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        opencode=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        gemini=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        deepcode=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        aider=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        shell=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+    ),
+    _row(
         "profile-reservation-boundary",
         "Operator-only profile discovery, lifecycle refusal receipts and reserved startup refusal",
         "cli/profiles.py; services/database/_profile_startup.py; api/app.py; "

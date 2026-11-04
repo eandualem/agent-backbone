@@ -221,6 +221,7 @@ class AgentInspectResponse(BaseModel):
     """Provisioning evidence only; never the credential or proof of a successful request."""
 
     name: str
+    registration_id: str | None = None
     known: bool = True
     online: bool = False
     dir: str = ""

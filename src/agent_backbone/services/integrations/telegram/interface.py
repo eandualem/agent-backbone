@@ -17,6 +17,8 @@ import asyncio
 import logging
 from collections import OrderedDict
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
+from functools import wraps
 from typing import TYPE_CHECKING
 
 import httpx
@@ -131,11 +133,14 @@ class TelegramService(Integration):
         self,
         config: BackboneConfig | Callable[[], BackboneConfig],
         db: BackboneDB | None = None,
+        *,
+        operation: Callable[[], AbstractAsyncContextManager] | None = None,
     ) -> None:
-        super().__init__(config, db=db)
+        super().__init__(config, db=db, operation=operation)
         self._app: Application | None = None
         self._discovery = load_discovery(self.config.telegram_topic_discovery_path)
         self._background: set[asyncio.Task] = set()
+        self._callbacks: set[asyncio.Task] = set()
         self._stopping = False
         self._stop_lock = asyncio.Lock()
         self._sync_lock = asyncio.Lock()
@@ -199,6 +204,25 @@ class TelegramService(Integration):
         async with self._sync_lock:
             await sync_topics(self)
 
+    def _admitted(self, callback):
+        """Retain external work through cleanup and recheck after guard acquisition."""
+        token = self.config.telegram_token
+
+        @wraps(callback)
+        async def run(*args, **kwargs):
+            if self._stopping or self.config.telegram_token != token:
+                return
+            task = asyncio.current_task()
+            self._callbacks.add(task)
+            try:
+                async with self._operation():
+                    if not self._stopping and self.config.telegram_token == token:
+                        return await callback(*args, **kwargs)
+            finally:
+                self._callbacks.discard(task)
+
+        return run
+
     def _discover(self, update: Update) -> None:
         """Learn the group id / topic names from any message; sync topics on news.
 
@@ -217,7 +241,7 @@ class TelegramService(Integration):
             update, self.config, self._discovery, self.config.telegram_topic_discovery_path
         )
         if changed and not knew_group and self._effective_group_chat_id() is not None:
-            task = asyncio.get_running_loop().create_task(self.sync_agents())
+            task = asyncio.get_running_loop().create_task(self._admitted(self.sync_agents)())
             self._background.add(task)
             task.add_done_callback(self._background.discard)
 
@@ -361,7 +385,7 @@ class TelegramService(Integration):
         log.info("Telegram bot polling started")
 
     async def stop(self) -> None:
-        self._stopping = True
+        self.close_admission()
         async with self._stop_lock:
             await complete_before_cancel(self._stop())
 
@@ -370,6 +394,7 @@ class TelegramService(Integration):
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*tuple(self._callbacks), return_exceptions=True)
         app = self._app
         if app is None:
             return
@@ -432,24 +457,26 @@ class TelegramService(Integration):
             .build()
         )
         self._app.add_error_handler(self._on_handler_error)
-        self._app.add_handler(CommandHandler("help", self.cmd_help))
-        self._app.add_handler(CommandHandler("status", self.cmd_status))
-        self._app.add_handler(CommandHandler("queue", self.cmd_queue))
-        self._app.add_handler(CommandHandler("start", self.cmd_start_agent))
-        self._app.add_handler(CommandHandler("stop", self.cmd_stop_agent))
-        self._app.add_handler(CommandHandler("tell", self.cmd_tell))
-        self._app.add_handler(CommandHandler("digest", self.cmd_digest))
-        self._app.add_handler(CommandHandler("updates", self.cmd_updates))
-        self._app.add_handler(CommandHandler("identify", self.cmd_identify))
-        self._app.add_handler(CommandHandler("viewplan", self.cmd_viewplan))
-        self._app.add_handler(CommandHandler("approve", self.cmd_approve))
-        self._app.add_handler(CommandHandler("approve_key", self.cmd_approve_key))
-        self._app.add_handler(CommandHandler("approve_owner", self.cmd_approve_owner))
-        self._app.add_handler(CallbackQueryHandler(self.on_callback))
+        self._app.add_handler(CommandHandler("help", self._admitted(self.cmd_help)))
+        self._app.add_handler(CommandHandler("status", self._admitted(self.cmd_status)))
+        self._app.add_handler(CommandHandler("queue", self._admitted(self.cmd_queue)))
+        self._app.add_handler(CommandHandler("start", self._admitted(self.cmd_start_agent)))
+        self._app.add_handler(CommandHandler("stop", self._admitted(self.cmd_stop_agent)))
+        self._app.add_handler(CommandHandler("tell", self._admitted(self.cmd_tell)))
+        self._app.add_handler(CommandHandler("digest", self._admitted(self.cmd_digest)))
+        self._app.add_handler(CommandHandler("updates", self._admitted(self.cmd_updates)))
+        self._app.add_handler(CommandHandler("identify", self._admitted(self.cmd_identify)))
+        self._app.add_handler(CommandHandler("viewplan", self._admitted(self.cmd_viewplan)))
+        self._app.add_handler(CommandHandler("approve", self._admitted(self.cmd_approve)))
+        self._app.add_handler(CommandHandler("approve_key", self._admitted(self.cmd_approve_key)))
+        self._app.add_handler(
+            CommandHandler("approve_owner", self._admitted(self.cmd_approve_owner))
+        )
+        self._app.add_handler(CallbackQueryHandler(self._admitted(self.on_callback)))
         self._app.add_handler(
             MessageHandler(
                 filters.TEXT & ~filters.COMMAND & filters.IS_TOPIC_MESSAGE,
-                self.handle_topic_message,
+                self._admitted(self.handle_topic_message),
             )
         )
         # Plain text in the group's General topic (no thread): learn the
@@ -460,7 +487,7 @@ class TelegramService(Integration):
                 & ~filters.COMMAND
                 & ~filters.IS_TOPIC_MESSAGE
                 & filters.ChatType.GROUPS,
-                self.handle_general_message,
+                self._admitted(self.handle_general_message),
             )
         )
         return self._app

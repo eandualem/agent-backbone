@@ -43,6 +43,7 @@ version differs.
 | Explicit first-agent setup with durable retry and preflight cancellation receipts | ✅ working-installation live check pending | ✅ working-installation live check pending | ❌ installer hook preparation is not implemented | ✅ working-installation live check pending | ❌ installer hook preparation is not implemented | ❌ installer hook preparation is not implemented | n/a |
 | Read-only runtime discovery for setup | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Reject profile-bound traffic on unadopted providers | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
+| Agent registration IDs and stale-registration refusal on inspection | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | Operator-only profile discovery, lifecycle refusal receipts and reserved startup refusal | ✅ Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls | ✅ Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls | ✅ Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls | ✅ Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls | ✅ Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls | ✅ Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls | ✅ Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls |
 | Current agent-authored checklists with conditional updates and contextual feedback | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime | ✅ checked at the API, the same for every runtime |
 | GitHub acknowledgements bound to registration and successful publication | ✅ (2.1.310) Registration-bound payload tests; live check pending normal restart. | ✅ (0.160.0) Registration-bound payload tests; live check pending normal restart. | ✅ (0.46.0) Registration-bound payload tests; live check pending normal restart. | ✅ (2.1.4) Registration-bound plugin tests; live check pending normal restart. | ❌ no publication receipt hook | ❌ no publication receipt hook | n/a |
@@ -108,6 +109,7 @@ version differs.
 | Explicit first-agent setup with durable retry and preflight cancellation receipts | Use the documented agent-start flow; do not retry an uncertain launch or greeting as a new request. |
 | Read-only runtime discovery for setup | Binary presence is not login; use the runtime's visible sign-in flow. |
 | Reject profile-bound traffic on unadopted providers | Keep bound work pinned; do not retry without its profile identity. |
+| Agent registration IDs and stale-registration refusal on inspection | Select the agent again after its registration changes. |
 | Operator-only profile discovery, lifecycle refusal receipts and reserved startup refusal | Reserved providers cannot start; profile activation is not implemented. |
 | Current agent-authored checklists with conditional updates and contextual feedback | Keep the current checklist locally until the provider is available. |
 | GitHub acknowledgements bound to registration and successful publication | Unbound receipts cannot acknowledge work; restart older sessions normally. |
@@ -166,7 +168,6 @@ version differs.
 | New inbox messages hinted on Socket.IO (`inbox:pending`) | Read the inbox (`POST /api/messages/inbox`) on a timer. |
 | Escalations reach an inbox-only target's inbox | Set `escalation.target` to an agent with a terminal session. |
 | Deep review run from and for this runtime | Run the review with Claude Code or Codex as the reviewer. |
-
 <!-- capability-table:end -->
 
 ## Notes

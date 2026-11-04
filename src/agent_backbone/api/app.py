@@ -32,6 +32,40 @@ STARTED_AT = time.time()
 """When this process started: /health reports it so a restart is observable."""
 
 
+def _integration_context(app):
+    """Pin provider/storage ownership while authorization remains live."""
+    from agent_backbone.api.profile_binding import provider_context_current
+
+    state = app.state
+    provider = getattr(state, "profile_provider", None)
+    db = state.db
+    data_dir, database_url = state.config.data_dir, state.config.database_url
+
+    def config():
+        current = state.config
+        if (
+            getattr(state, "profile_provider", None) is not provider
+            or state.db is not db
+            or current.data_dir != data_dir
+            or current.database_url != database_url
+        ):
+            raise ValueError("Integration provider context does not match")
+        return current
+
+    @asynccontextmanager
+    async def operation():
+        async with AsyncExitStack() as operations:
+            config()
+            if provider is not None:
+                await operations.enter_async_context(provider.operation())
+                if not await provider_context_current(provider, config(), db):
+                    raise ValueError("Integration provider context does not match")
+            config()
+            yield
+
+    return config, operation
+
+
 async def hint_inboxes(config, db, feed) -> None:
     """The monitor tick's inbox hints: rows written outside a tell (expiry
     notices, escalations to an inbox-only agent) reach their hint here."""
@@ -391,7 +425,10 @@ async def lifespan(app: FastAPI):
     )
     # Persistent polling tasks must keep reading live authorization settings;
     # they can outlive the scheduler callback that starts them.
-    app.state.integrations = build_integrations(lambda: app.state.config, db=app.state.db)
+    integration_config, integration_operation = _integration_context(app)
+    app.state.integrations = build_integrations(
+        integration_config, db=app.state.db, operation=integration_operation
+    )
     lifecycle.register("integrations", app.state.integrations)
     lifecycle.register("api-tasks", app.state.api_tasks)
     app.state.sources = build_sources(lambda: app.state.config)
@@ -434,6 +471,7 @@ async def lifespan(app: FastAPI):
         )
         yield
     finally:
+        app.state.integrations.close_admission()
         app.state.api_tasks.close_admission()
         sio = getattr(app.state, "sio", None)
         if sio is not None:

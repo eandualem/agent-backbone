@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
 from importlib import import_module
 from typing import TYPE_CHECKING
@@ -26,8 +27,8 @@ class IntegrationDescriptor:
     service: str
     notifier: str
 
-    def build(self, config, db):
-        return getattr(import_module(self.module), self.service)(config, db=db)
+    def build(self, config, db, operation=None):
+        return getattr(import_module(self.module), self.service)(config, db=db, operation=operation)
 
     async def notify(self, config, text, agent, actions):
         send = getattr(import_module(self.module), self.notifier)
@@ -45,21 +46,27 @@ DESCRIPTORS = (
 
 
 def build_integrations(
-    config: Callable[[], BackboneConfig], db: BackboneDB | None = None
+    config: Callable[[], BackboneConfig],
+    db: BackboneDB | None = None,
+    *,
+    operation: Callable[[], AbstractAsyncContextManager] | None = None,
 ) -> Integrations:
     """Every integration the backbone ships, whether configured or not.
 
     Unconfigured ones stay inert (``enabled`` False, ``start`` a no-op) so
     health and status can still list them.
     """
-    return Integrations([descriptor.build(config, db) for descriptor in DESCRIPTORS])
+    return Integrations(
+        [descriptor.build(config, db, operation) for descriptor in DESCRIPTORS], operation=operation
+    )
 
 
 class Integrations:
     """Ordered collection with fan-out helpers. Iterable; ``get`` by name."""
 
-    def __init__(self, items: list[Integration]) -> None:
+    def __init__(self, items: list[Integration], *, operation=None) -> None:
         self._items = list(items)
+        self._operation = operation or nullcontext
         self._background: set[asyncio.Task] = set()
         self._lifecycle_lock = asyncio.Lock()
         self._stopping = False
@@ -105,7 +112,7 @@ class Integrations:
 
     async def reconcile(self) -> None:
         """Serialize enable/disable transitions without restarting running services."""
-        async with self._lifecycle_lock:
+        async with self._lifecycle_lock, self._operation():
             if self._stopping:
                 return
             for integration in self._items:
@@ -123,8 +130,14 @@ class Integrations:
                     log.exception("%s lifecycle reconciliation failed", integration.name)
             await self.sync_agents()
 
-    async def stop(self) -> None:
+    def close_admission(self) -> None:
+        """Close callbacks before shutdown begins draining producers."""
         self._stopping = True
+        for integration in self._items:
+            integration.close_admission()
+
+    async def stop(self) -> None:
+        self.close_admission()
         await complete_before_cancel(self._stop())
 
     async def _stop(self) -> None:

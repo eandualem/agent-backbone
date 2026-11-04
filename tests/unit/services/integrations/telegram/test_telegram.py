@@ -1115,3 +1115,81 @@ async def test_shutdown_retains_topic_task_until_cancellation_cleanup_finishes(c
     finally:
         release.set()
         await asyncio.gather(stopping, task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("change", ["shutdown", "allowlist", "account"])
+async def test_registered_callback_checks_revocation_and_shutdown_after_admission(config, change):
+    from contextlib import asynccontextmanager
+
+    waiting, release = asyncio.Event(), asyncio.Event()
+
+    @asynccontextmanager
+    async def operation():
+        waiting.set()
+        await release.wait()
+        yield
+
+    current = replace(
+        config,
+        telegram_token="inert-token",
+        telegram=TelegramConfig(allowed_chat_ids=(ALLOWED_CHAT,), allowed_user_ids=(4242,)),
+    )
+    bot = TelegramService(lambda: current, operation=operation)
+    app = bot.build_app()
+    callback = app.handlers[0][0].callback
+    update = _update("/help")
+    task = asyncio.create_task(callback(update, _context([])))
+    try:
+        await waiting.wait()
+        if change == "shutdown":
+            bot.close_admission()
+        elif change == "account":
+            current = replace(current, telegram_token="different-token")
+        else:
+            current = replace(current, telegram=TelegramConfig(allowed_chat_ids=()))
+        release.set()
+        await task
+        update.message.reply_text.assert_not_awaited()
+        assert not bot._callbacks
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_discovery_worker_acquires_its_own_admission(config):
+    from contextlib import asynccontextmanager
+
+    acquired, release = asyncio.Event(), asyncio.Event()
+    active = False
+
+    @asynccontextmanager
+    async def operation():
+        nonlocal active
+        acquired.set()
+        await release.wait()
+        active = True
+        try:
+            yield
+        finally:
+            active = False
+
+    bot = _bot(config)
+    bot._operation = operation
+    effects = []
+
+    async def sync():
+        assert active
+        effects.append("sync")
+
+    bot.sync_agents = sync
+    update = _update("hello")
+    bot._discover(update)
+    try:
+        await asyncio.wait_for(acquired.wait(), 2)
+        assert not effects
+        release.set()
+        await asyncio.gather(*tuple(bot._background))
+        assert effects == ["sync"] and not active
+    finally:
+        release.set()
+        await bot.stop()

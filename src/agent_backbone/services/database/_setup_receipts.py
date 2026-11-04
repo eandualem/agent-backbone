@@ -193,3 +193,32 @@ class SetupReceipt:
         if self._lock is not None:
             os.close(self._lock)
             self._lock = None
+
+
+class BoundSetupReceipt(SetupReceipt):
+    """Normalize cancellation and key setup by the entire captured identity tuple.
+
+    The caller must validate provider authority before constructing this receipt
+    and retain its provider guard until all effects and worker cleanup finish.
+    """
+
+    def __init__(self, data_dir: Path, request: dict):
+        from pydantic import TypeAdapter
+
+        from agent_backbone.models import BoundSetupCancelFirstAgent, BoundSetupRequest
+
+        parsed = TypeAdapter(BoundSetupRequest).validate_python(request)
+        if isinstance(parsed, BoundSetupCancelFirstAgent):
+            parsed = parsed.original()
+        super().__init__(data_dir, parsed.model_dump())
+        key = json.dumps(
+            [
+                parsed.profile_id,
+                parsed.expected_installation_id,
+                parsed.expected_lifecycle_id,
+                parsed.request_id,
+            ],
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode()
+        self.path = self.directory / ("bound-" + hashlib.sha256(key).hexdigest() + ".json")
