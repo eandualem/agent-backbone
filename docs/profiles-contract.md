@@ -184,7 +184,7 @@ isolation.
 [Shared fixtures](contracts/profiles-v1.json) contain discovery records, identity,
 HTTP headers, Socket.IO identity/error fields, lifecycle requests/receipts,
 unknown-operation lookup, binding cases and extension examples described below. All identifiers and paths are synthetic.
-`baseline-example-v1` is a fixture value, not an available baseline; `empty-v1` is the shipped one. The file's top-level groups and binding cases
+`baseline-example-v1` is a fixture value, not an available baseline; `core-v1` is the shipped one. The file's top-level groups and binding cases
 are a test container, not a new API response. Consumers can pin this file to a
 commit and run its cases against their own implementation.
 
@@ -332,12 +332,13 @@ installation identity. An interrupted pending operation stays pending across
 reopen and exact replay, without repeating effects or automatically releasing its
 reservation. Its outcome needs explicit reconciliation.
 
-Create with the `empty-v1` baseline, the one shipped version, has effects. It
-allocates the profile, installation and lifecycle IDs once, together with the
-reservation; creates a private directory beside the registry; writes a generated
-`BACKBONE_API_KEY`; initializes an empty database holding the identity; reconciles
-them; and publishes `ready` in the transaction that completes the receipt. It copies
-nothing from Default. An interruption stays pending and non-ready. A failure that
+Create with the `core-v1` baseline, the one shipped version, has effects. It
+allocates the profile, installation and lifecycle IDs and a loopback port once,
+together with the reservation; creates a private directory beside the registry; writes
+a generated `BACKBONE_API_KEY`; installs the starter policies and skills a fresh
+install gets; initializes a database holding the identity and those assignments;
+reconciles them; and publishes `ready` in the transaction that completes the receipt.
+It copies nothing from Default. An interruption stays pending and non-ready. A failure that
 Create can observe leaves a `failed` tombstone with `profile_create_failed` and
 retains the directory. `profile_path_too_long` refuses, before reserving anything,
 a location whose socket paths would not fit the Unix limit.

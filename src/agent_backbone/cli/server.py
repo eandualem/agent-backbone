@@ -112,35 +112,56 @@ def _reload_app():
     return create_app(replace(config, backbone=replace(config.backbone, host=host)))
 
 
+def _native_environments(root: Path) -> dict:
+    """Capture each required runtime under its own root. Every other adapter is refused,
+    and so is a runtime that is not installed: nothing falls back to the host's."""
+    from agent_backbone.services.runtimes import RUNTIMES
+
+    captured = {}
+    for runtime in ("shell", "claude", "codex", "opencode"):
+        try:
+            environment = RUNTIMES[runtime].capture_environment(root / "native" / runtime)
+        except ValueError:
+            continue
+        environment.create_directories()
+        captured[runtime] = environment
+    return captured
+
+
 def serve_profile(registry_path: Path, profile_id: str) -> None:
-    """Run one ready profile's provider: its private socket only, nothing ambient."""
-    from agent_backbone.config import AgentsConfig, build_config
+    """Run one ready profile's provider with nothing ambient."""
+    from agent_backbone.config import AgentsConfig, build_config, sqlite_url
     from agent_backbone.services.agents import install_project_ownership
-    from agent_backbone.services.database import ProfileRegistry, reconcile_profile_provider
+    from agent_backbone.services.database import (
+        BackboneDB,
+        ProfileRegistry,
+        reconcile_profile_provider,
+    )
     from agent_backbone.services.runtimes import RUNTIMES, install_native_environments
     from agent_backbone.services.terminal import pin_tmux_server
 
     registry = ProfileRegistry(registry_path)
     reservation = registry.ready_reservation(profile_id)
     root = reservation.data_dir
-    # Only the shell has a captured environment: every model runtime is refused
-    # until the account work. Replacing the process environment keeps host tokens
-    # out of load_secrets and the tmux server, and the user's tmux.conf unread.
-    environment = RUNTIMES["shell"].capture_environment(root)
+    # Replacing the process environment keeps host tokens out of load_secrets and
+    # the tmux server, and the user's tmux.conf unread.
+    process_environment = RUNTIMES["shell"].capture_environment(root)
+    native = _native_environments(root)
     os.environ.clear()
-    os.environ.update(environment, BACKBONE_DATA_DIR=str(root))
+    os.environ.update(process_environment, BACKBONE_DATA_DIR=str(root))
 
     async def reconcile():
         provider = await reconcile_profile_provider(
             registry, reservation, root / SQLITE_FILENAME, reservation.binding.tmux_socket
         )
         pin_tmux_server(provider.socket_path)
-        install_native_environments({"shell": environment})
+        install_native_environments(native)
         await install_project_ownership(provider)
-        return provider
+        async with BackboneDB.connect(sqlite_url(root)) as db:
+            return provider, await db.settings.all()
 
-    provider = asyncio.run(reconcile())
-    config = build_config(root, settings={}, agents=AgentsConfig())
+    provider, settings = asyncio.run(reconcile())
+    config = build_config(root, settings=settings, agents=AgentsConfig())
     _run_server(config, provider=provider)
 
 
@@ -203,14 +224,12 @@ def _run_server(
     # An internal upgrade must not send SIGTERM: Uvicorn replays captured
     # signals after shutdown, which would kill us before the exec below.
     inner.state.request_shutdown = lambda: setattr(server, "should_exit", True)
+    if provider is not None:
+        inner.state.profile_provider = provider
+    endpoint = provider.reservation.binding.endpoint if provider else config.backbone.socket_path
     try:
-        if provider is not None:
-            inner.state.profile_provider = provider
-            endpoint = str(provider.reservation.binding.endpoint)
-            with private_listener(config.data_dir, endpoint) as local:
-                server.run(sockets=[local])
-        elif config.backbone.socket_path:
-            with private_listener(config.data_dir, config.backbone.socket_path) as local:
+        if endpoint:
+            with private_listener(config.data_dir, str(endpoint)) as local:
                 tcp = server.config.bind_socket()
                 try:
                     # Uvicorn marks prebound sockets inheritable for worker

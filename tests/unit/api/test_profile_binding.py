@@ -2088,3 +2088,20 @@ async def test_legacy_provider_capacity_keeps_its_existing_retry_classification(
     assert result["code"] == "installation_conflict"
     assert result["retry"] == "same_request"
     assert "capacity reached" in result["message"]
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_own_agent_credential_needs_no_identity_headers(
+    api_client, api_app, bound_provider, runtime
+):
+    provider, registry, _ = bound_provider
+    spec = await api_app.state.agent_store.update("ike", runtime=runtime)
+    key = agent_api_key(api_app.state.config.api_key, spec.registration_id)
+    agent = {"Authorization": f"Bearer {key}"}
+    assert (await api_client.get("/api/reports", headers=agent)).status_code == 200
+    forged = {"Authorization": "Bearer " + agent_api_key("another-provider", spec.registration_id)}
+    assert (await api_client.get("/api/reports", headers=forged)).status_code in {401, 403}
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    response = await api_client.get("/api/reports", headers=agent)
+    assert response.status_code == 409
+    assert response.json() == FIXTURES["http_errors"]["binding_mismatch"]["body"]

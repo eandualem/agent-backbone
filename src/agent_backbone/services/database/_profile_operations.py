@@ -16,9 +16,11 @@ from agent_backbone.services.database._profile_registry import (
     ProfileReservation,
 )
 from agent_backbone.services.database.backbone_db import BackboneDB
+from agent_backbone.templates import core_starter_content
 
-EMPTY_BASELINE = "empty-v1"
-"""The one shipped baseline: an initialized database and fresh secrets, no content."""
+BASELINE = "core-v1"
+"""The one shipped baseline, what a fresh install starts from: the starter policies
+and skills, fresh secrets and no agents, accounts or integrations."""
 _PROFILE_ROOTS = ("home", "config", "data", "state", "cache", "run", "tmp", "tmux")
 _UNIX_SOCKET_PATH_LIMIT = 104
 """The smaller of the macOS and Linux sun_path sizes, including the terminator."""
@@ -82,8 +84,11 @@ def operation_error(request_id: str, code: str) -> dict:
     }
 
 
-async def _provision_empty_profile(
-    registry: ProfileRegistry, reservation: ProfileReservation, binding: ProfileBinding
+async def _provision_profile(
+    registry: ProfileRegistry,
+    reservation: ProfileReservation,
+    binding: ProfileBinding,
+    port: int,
 ) -> None:
     """Create and reconcile the provider's storage. Run once: nothing here is replayed."""
     root = reservation.data_dir
@@ -96,11 +101,18 @@ async def _provision_empty_profile(
         credential.write(f"BACKBONE_API_KEY={secrets.token_urlsafe(32)}\n")
         credential.flush()
         os.fsync(descriptor)
+    starter, files = core_starter_content()
+    for relative, content in files.items():
+        (root / relative).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (root / relative).write_text(content)
     db = BackboneDB(sqlite_url(root))
     await db.start()
     try:
         await db.signing.audience(reservation.identity.installation_id)
         await db.profile_identity.reserve(reservation.identity)
+        await db.settings.set("backbone.port", port)
+        await db.settings.set("agents.shared_policy", starter["policies"])
+        await db.settings.set("skills.store", str(root / "skills"))
     finally:
         await db.stop()
     await reconcile_profile_provider(
@@ -221,12 +233,12 @@ class ProfileOperations:
     def apply(self, request: dict) -> dict:
         """Execute what is available and durably refuse the rest.
 
-        Only creation of the empty baseline has effects. No other baseline is
+        Only creating the shipped baseline, starting and stopping have effects. No other baseline is
         shipped and no activation or original-provider capture is installed yet.
         These are durable failures, never success-shaped mocks.
         """
         request = validate_profile_operation(request)
-        if request["action"] == "create" and request["baseline_version"] == EMPTY_BASELINE:
+        if request["action"] == "create" and request["baseline_version"] == BASELINE:
             return self._create(request)
         if request["action"] in {"start", "stop"} and self.services is not None:
             return self._run_service(request)
@@ -274,9 +286,9 @@ class ProfileOperations:
         )
         reserved = False
         try:
-            self._reserve_create(request, reservation)
+            port = self._reserve_create(request, reservation)
             reserved = True
-            asyncio.run(_provision_empty_profile(self.registry, reservation, binding))
+            asyncio.run(_provision_profile(self.registry, reservation, binding, port))
             return self._publish_create(request, reservation, binding)
         except Exception:
             if reserved:
@@ -284,10 +296,11 @@ class ProfileOperations:
                     self.registry.invalidate(identity, root)
             return self.fail(request, "profile_create_failed")
 
-    def _reserve_create(self, request: dict, reservation: ProfileReservation) -> None:
+    def _reserve_create(self, request: dict, reservation: ProfileReservation) -> int:
         identity = reservation.identity
         with self.registry._connection(write=True) as conn:
             self.registry._reserve(conn, reservation)
+            port = self.registry._allocate_port(conn, identity.profile_id)
             receipt = self._stored_receipt(conn, request)
             receipt.update(
                 profile_id=identity.profile_id,
@@ -299,6 +312,7 @@ class ProfileOperations:
                 "WHERE request_id = ?",
                 (identity.installation_id, _json(receipt), request["request_id"]),
             )
+        return port
 
     def _publish_create(
         self, request: dict, reservation: ProfileReservation, binding: ProfileBinding

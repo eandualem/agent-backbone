@@ -8,7 +8,7 @@ from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 
 from agent_backbone.api.auth import require_api_key
-from agent_backbone.config import BackboneConfig
+from agent_backbone.config import BackboneConfig, agent_credential
 from agent_backbone.services.database import BackboneDB, ProfileProvider
 from agent_backbone.services.terminal import tmux_server_socket
 
@@ -103,6 +103,11 @@ class ProfileBindingMiddleware:
         if prefix and path.startswith(prefix + "/"):
             path = path[len(prefix) :]
         exempt = not values and (scope["method"], path) in UNBOUND_ROUTES
+        # An agent credential derives from this provider's key and authenticates
+        # nowhere else, so an agent's own CLI needs no identity headers.
+        agent = not values and agent_credential(
+            headers.get("authorization", "").removeprefix("Bearer ")
+        )
         if not exempt:
             try:
                 await require_api_key(Request(scope))
@@ -118,7 +123,7 @@ class ProfileBindingMiddleware:
                 return await JSONResponse({"detail": BINDING_MISMATCH}, status_code=409)(
                     scope, receive, send
                 )
-            if exempt:
+            if exempt or agent:
                 # Preserve the route's authentication. Hold its fence through the
                 # entire response, just as for authenticated bound content.
                 error = None if await provider_current(provider, scope["app"]) else BINDING_MISMATCH

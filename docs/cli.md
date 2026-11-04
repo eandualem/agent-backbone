@@ -953,9 +953,9 @@ the original receipt; different input under the same ID returns `request_conflic
 An unknown request returns the lookup error `operation_not_found`, not a fabricated
 operation receipt. Omit `--json` for labeled details.
 
-A create request naming the `empty-v1` baseline reserves new identities and a private
-directory, initializes an empty database and fresh credential, and publishes a ready
-record. Start launches that profile's provider unless its exact identity is already
+A create request naming the `core-v1` baseline reserves new identities, a private
+directory and a loopback port, sets up the database, fresh credential and the starter
+policies and skills a fresh install gets, and publishes a ready record. Start launches that profile's provider unless its exact identity is already
 answering; stop signals only the process behind that verified endpoint. Default adoption
 remains unimplemented. Apply returns durable refusal receipts: `baseline_unavailable` for
 any other baseline, `profile_create_failed` or `profile_path_too_long` when creation

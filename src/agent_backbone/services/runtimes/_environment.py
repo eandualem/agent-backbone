@@ -71,6 +71,11 @@ class NativeEnvironment(Mapping[str, str]):
             raise ValueError("Native path escapes the captured runtime environment")
         return path
 
+    def create_directories(self) -> None:
+        """Make the private native roots a captured runtime needs before first use."""
+        for key in _PATH_KEYS | self.path_keys:
+            Path(self[key]).mkdir(mode=0o700, parents=True, exist_ok=True)
+
     def overlay(self, values: Mapping[str, str]) -> NativeEnvironment:
         self.check()
         for key, value in values.items():

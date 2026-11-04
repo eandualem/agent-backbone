@@ -1,4 +1,4 @@
-"""Creating the empty baseline: reserve once, provision, then publish ready."""
+"""Creating the shipped baseline: reserve once, provision, then publish ready."""
 
 import asyncio
 import json
@@ -27,7 +27,7 @@ def request(request_id="create-a", display_name="Work"):
         "request_id": request_id,
         "action": "create",
         "display_name": display_name,
-        "baseline_version": "empty-v1",
+        "baseline_version": "core-v1",
     }
 
 
@@ -97,7 +97,7 @@ def test_interruption_stays_pending_and_never_repeats_effects(operations, monkey
         calls.append(args)
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(module, "_provision_empty_profile", interrupted)
+    monkeypatch.setattr(module, "_provision_profile", interrupted)
     with pytest.raises(KeyboardInterrupt):
         operations.apply(request())
     receipt = operations.lookup("create-a")
@@ -113,7 +113,7 @@ def test_failed_provisioning_leaves_a_tombstone(operations, monkeypatch):
     async def fails(*args):
         raise ValueError("private detail")
 
-    monkeypatch.setattr(module, "_provision_empty_profile", fails)
+    monkeypatch.setattr(module, "_provision_profile", fails)
     receipt = operations.apply(request())
     assert receipt["status"] == "failed"
     assert receipt["error"] == {
@@ -158,3 +158,57 @@ def test_cli_creates_a_profile_the_bound_client_can_resolve(
     output = capsys.readouterr().out
     for label in ("ready", "Endpoint", "Credential file", "Tmux socket"):
         assert label in output
+
+
+def test_each_profile_keeps_its_own_loopback_port(operations):
+    def stored_port(receipt):
+        record = operations.registry.show(receipt["profile_id"])
+        root = Path(record["binding"]["credential_reference"]["path"]).parent
+
+        async def read():
+            db = BackboneDB(f"sqlite+aiosqlite:///{root / 'backbone.db'}")
+            await db.start()
+            try:
+                return (await db.settings.all())["backbone.port"]
+            finally:
+                await db.stop()
+
+        return asyncio.run(read())
+
+    first, second = (stored_port(operations.apply(request(name))) for name in ("a", "b"))
+    assert first != second
+    assert 7120 not in {first, second}
+
+
+def test_a_port_in_use_is_skipped(operations, monkeypatch):
+    from agent_backbone.services.database import _profile_registry as registry_module
+
+    busy = registry_module.PROFILE_PORTS[0]
+    free = registry_module._port_is_free
+    monkeypatch.setattr(registry_module, "_port_is_free", lambda port: port != busy and free(port))
+    with operations.registry._connection(write=True) as conn:
+        assert operations.registry._allocate_port(conn, "profile-a") != busy
+
+
+def test_a_new_profile_starts_like_a_fresh_install_and_copies_nothing(operations):
+    from agent_backbone.templates import core_starter_content
+
+    receipt = operations.apply(request())
+    binding = operations.registry.show(receipt["profile_id"])["binding"]
+    root = Path(binding["credential_reference"]["path"]).parent
+    starter, files = core_starter_content()
+    for relative, content in files.items():
+        assert (root / relative).read_text() == content
+
+    async def read():
+        db = BackboneDB(f"sqlite+aiosqlite:///{root / 'backbone.db'}")
+        await db.start()
+        try:
+            return await db.settings.all(), await db.agents.list()
+        finally:
+            await db.stop()
+
+    settings, agents = asyncio.run(read())
+    assert settings["agents.shared_policy"] == starter["policies"]
+    assert settings["skills.store"] == str(root / "skills")
+    assert agents == []

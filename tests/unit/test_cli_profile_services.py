@@ -26,7 +26,7 @@ def created():
                 "request_id": "create-a",
                 "action": "create",
                 "display_name": "A",
-                "baseline_version": "empty-v1",
+                "baseline_version": "core-v1",
             }
         )
         yield registry, receipt
@@ -171,3 +171,30 @@ def test_without_services_a_ready_profile_stays_refused(created):
     registry, receipt = created
     result = ProfileOperations(registry).apply(lifecycle(receipt))
     assert result["error"]["code"] == "profile_not_ready"
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+def test_each_required_runtime_gets_its_own_private_roots(tmp_path, monkeypatch, runtime):
+    from agent_backbone.cli.server import _native_environments
+    from agent_backbone.services.runtimes import RUNTIMES
+
+    root = tmp_path.resolve()
+    monkeypatch.setenv("CODEX_HOME", "/host/codex")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/host/claude")
+    monkeypatch.setattr(type(RUNTIMES[runtime]), "resolve_binary", lambda self: "/bin/true")
+    captured = _native_environments(root)
+    assert captured[runtime].root == root / "native" / runtime
+    home = Path(captured[runtime]["HOME"])
+    assert home.is_dir() and home.is_relative_to(root / "native" / runtime)
+    assert not any(value.startswith("/host") for value in captured[runtime].values())
+    assert captured["shell"].root == root / "native" / "shell"
+
+
+def test_other_adapters_and_missing_binaries_get_no_environment(tmp_path, monkeypatch):
+    from agent_backbone.cli.server import _native_environments
+    from agent_backbone.services.runtimes import RUNTIMES
+
+    monkeypatch.setattr(type(RUNTIMES["codex"]), "resolve_binary", lambda self: None)
+    captured = _native_environments(tmp_path.resolve())
+    assert "codex" not in captured
+    assert not {"gemini", "deepcode", "aider"} & captured.keys()

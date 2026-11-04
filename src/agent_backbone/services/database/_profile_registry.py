@@ -9,6 +9,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import os
+import socket
 import sqlite3
 import stat
 import tempfile
@@ -18,6 +19,18 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
+
+PROFILE_PORTS = range(7121, 8121)
+"""Loopback ports for isolated providers; the default installation uses 7120."""
+
+
+def _port_is_free(port: int) -> bool:
+    with socket.socket() as probe:
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
 
 
 def _resolve(path: Path) -> Path:
@@ -197,6 +210,10 @@ class ProfileRegistry:
                     "CREATE TABLE profile_bindings ("
                     "profile_id TEXT PRIMARY KEY NOT NULL, endpoint TEXT NOT NULL, "
                     "credential TEXT NOT NULL, tmux_socket TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "CREATE TABLE profile_ports ("
+                    "port INTEGER PRIMARY KEY NOT NULL, profile_id TEXT UNIQUE NOT NULL)"
                 )
                 conn.execute("PRAGMA user_version = 4")
 
@@ -420,6 +437,15 @@ class ProfileRegistry:
         """
         with self._connection(write=True) as conn:
             return self._publish(conn, identity, data_dir, binding)
+
+    def _allocate_port(self, conn, profile_id: str) -> int:
+        """Keep one loopback port per profile; a tombstone retains its port."""
+        used = {row["port"] for row in conn.execute("SELECT port FROM profile_ports")}
+        for port in PROFILE_PORTS:
+            if port not in used and _port_is_free(port):
+                conn.execute("INSERT INTO profile_ports VALUES (?, ?)", (port, profile_id))
+                return port
+        raise ValueError("No loopback port is available for a new profile")
 
     def _publish(self, conn, identity, data_dir, binding) -> ProfileReservation:
         self._external(data_dir)
