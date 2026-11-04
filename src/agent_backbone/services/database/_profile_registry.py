@@ -1,7 +1,7 @@
 """External profile reservations, independent of provider database restoration.
 
-This internal store has no activation operation. Discovery can only describe
-non-ready reservations; a successful guard check never authorizes serving work.
+Discovery describes what is recorded; a successful guard check never authorizes
+serving work.
 """
 
 from __future__ import annotations
@@ -300,47 +300,50 @@ class ProfileRegistry:
 
     def reserve(self, reservation: ProfileReservation) -> ProfileReservation:
         """Reserve once, retaining failed tombstones and rejecting conflicting replay."""
+        with self._connection(write=True) as conn:
+            return self._reserve(conn, reservation)
+
+    def _reserve(self, conn, reservation: ProfileReservation) -> ProfileReservation:
         if reservation.state != "creating":
             raise ValueError("New profile reservations must be creating")
         self._external(reservation.data_dir)
         if self._overlap(reservation.data_dir, self._operation_directory):
             raise ValueError("Profile registry fence must be outside the provider data directory")
-        with self._connection(write=True) as conn:
-            records = self._records(conn)
-            for stored in records:
-                if stored.identity.profile_id == reservation.identity.profile_id:
-                    if (
-                        stored.identity != reservation.identity
-                        or stored.data_dir != reservation.data_dir
-                        or stored.display_name != reservation.display_name
-                        or stored.baseline_version != reservation.baseline_version
-                    ):
-                        raise ValueError("Profile reservation does not match")
-                    if stored.state == "failed":
-                        raise ValueError("Profile lifecycle has been invalidated")
-                    return stored
+        records = self._records(conn)
+        for stored in records:
+            if stored.identity.profile_id == reservation.identity.profile_id:
                 if (
-                    stored.identity.installation_id == reservation.identity.installation_id
-                    or self._overlap(stored.data_dir, reservation.data_dir)
+                    stored.identity != reservation.identity
+                    or stored.data_dir != reservation.data_dir
+                    or stored.display_name != reservation.display_name
+                    or stored.baseline_version != reservation.baseline_version
                 ):
-                    raise ValueError("Profile reservation conflicts with an existing reservation")
-            if any(
-                self._project_overlap(reservation.data_dir, path)
-                for path, _ in self._project_claims(conn, records)
+                    raise ValueError("Profile reservation does not match")
+                if stored.state == "failed":
+                    raise ValueError("Profile lifecycle has been invalidated")
+                return stored
+            if (
+                stored.identity.installation_id == reservation.identity.installation_id
+                or self._overlap(stored.data_dir, reservation.data_dir)
             ):
-                raise ValueError("Profile directory conflicts with an existing project claim")
-            conn.execute(
-                "INSERT INTO profiles VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    reservation.identity.profile_id,
-                    reservation.identity.installation_id,
-                    reservation.identity.lifecycle_id,
-                    str(reservation.data_dir),
-                    reservation.display_name,
-                    reservation.baseline_version,
-                    reservation.state,
-                ),
-            )
+                raise ValueError("Profile reservation conflicts with an existing reservation")
+        if any(
+            self._project_overlap(reservation.data_dir, path)
+            for path, _ in self._project_claims(conn, records)
+        ):
+            raise ValueError("Profile directory conflicts with an existing project claim")
+        conn.execute(
+            "INSERT INTO profiles VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                reservation.identity.profile_id,
+                reservation.identity.installation_id,
+                reservation.identity.lifecycle_id,
+                str(reservation.data_dir),
+                reservation.display_name,
+                reservation.baseline_version,
+                reservation.state,
+            ),
+        )
         return reservation
 
     def list(self) -> dict:
@@ -415,30 +418,33 @@ class ProfileRegistry:
         An identical replay returns the record, a changed binding is refused and an
         invalidated lifecycle never returns to ready.
         """
+        with self._connection(write=True) as conn:
+            return self._publish(conn, identity, data_dir, binding)
+
+    def _publish(self, conn, identity, data_dir, binding) -> ProfileReservation:
         self._external(data_dir)
         for path in (binding.endpoint, binding.credential, binding.tmux_socket):
             if not path.is_absolute() or path == data_dir or not path.is_relative_to(data_dir):
                 raise ValueError("Profile binding is outside its reserved directory")
-        with self._connection(write=True) as conn:
-            if conn.execute("PRAGMA user_version").fetchone()[0] != 4:
-                raise ValueError("Profile registry needs explicit binding initialization")
-            record = self._matching(conn, identity, data_dir)
-            if record.state == "failed":
-                raise ValueError("Profile lifecycle has been invalidated")
-            if record.state == "ready":
-                if record.binding != binding:
-                    raise ValueError("Profile binding does not match")
-                return record
-            conn.execute(
-                "INSERT INTO profile_bindings VALUES (?, ?, ?, ?)",
-                (
-                    identity.profile_id,
-                    str(binding.endpoint),
-                    str(binding.credential),
-                    str(binding.tmux_socket),
-                ),
-            )
-            return replace(record, state="ready", binding=binding)
+        if conn.execute("PRAGMA user_version").fetchone()[0] != 4:
+            raise ValueError("Profile registry needs explicit binding initialization")
+        record = self._matching(conn, identity, data_dir)
+        if record.state == "failed":
+            raise ValueError("Profile lifecycle has been invalidated")
+        if record.state == "ready":
+            if record.binding != binding:
+                raise ValueError("Profile binding does not match")
+            return record
+        conn.execute(
+            "INSERT INTO profile_bindings VALUES (?, ?, ?, ?)",
+            (
+                identity.profile_id,
+                str(binding.endpoint),
+                str(binding.credential),
+                str(binding.tmux_socket),
+            ),
+        )
+        return replace(record, state="ready", binding=binding)
 
     def check_unadopted(self, data_dir: Path) -> None:
         """Refuse legacy startup in any reserved tree, even without local identity.

@@ -1,8 +1,27 @@
 """Durable local lifecycle intent, independent of the provider being operated on."""
 
+import asyncio
 import json
+import os
+import secrets
+import uuid
+from contextlib import suppress
 
-from agent_backbone.services.database._profile_registry import ProfileRegistry
+from agent_backbone.config import SQLITE_FILENAME, sqlite_url
+from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
+from agent_backbone.services.database._profile_provider import reconcile_profile_provider
+from agent_backbone.services.database._profile_registry import (
+    ProfileBinding,
+    ProfileRegistry,
+    ProfileReservation,
+)
+from agent_backbone.services.database.backbone_db import BackboneDB
+
+EMPTY_BASELINE = "empty-v1"
+"""The one shipped baseline: an initialized database and fresh secrets, no content."""
+_PROFILE_ROOTS = ("home", "config", "data", "state", "cache", "run", "tmp", "tmux")
+_UNIX_SOCKET_PATH_LIMIT = 104
+"""The smaller of the macOS and Linux sun_path sizes, including the terminator."""
 
 _FIELDS = {
     "create": {"display_name", "baseline_version"},
@@ -18,6 +37,8 @@ ERRORS = {
     "profile_not_ready": "Profile is not ready for lifecycle operations.",
     "baseline_unavailable": "Profile baseline is not available.",
     "adoption_unavailable": "Original provider adoption context is unavailable.",
+    "profile_create_failed": "Profile could not be created.",
+    "profile_path_too_long": "Profile paths exceed the Unix socket length limit.",
 }
 
 
@@ -57,6 +78,32 @@ def operation_error(request_id: str, code: str) -> dict:
         "request_id": request_id,
         "error": {"code": code, "message": ERRORS[code]},
     }
+
+
+async def _provision_empty_profile(
+    registry: ProfileRegistry, reservation: ProfileReservation, binding: ProfileBinding
+) -> None:
+    """Create and reconcile the provider's storage. Run once: nothing here is replayed."""
+    root = reservation.data_dir
+    root.parent.mkdir(mode=0o700, exist_ok=True)
+    root.mkdir(mode=0o700)
+    for name in _PROFILE_ROOTS:
+        (root / name).mkdir(mode=0o700)
+    descriptor = os.open(binding.credential, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w") as credential:
+        credential.write(f"BACKBONE_API_KEY={secrets.token_urlsafe(32)}\n")
+        credential.flush()
+        os.fsync(descriptor)
+    db = BackboneDB(sqlite_url(root))
+    await db.start()
+    try:
+        await db.signing.audience(reservation.identity.installation_id)
+        await db.profile_identity.reserve(reservation.identity)
+    finally:
+        await db.stop()
+    await reconcile_profile_provider(
+        registry, reservation, root / SQLITE_FILENAME, binding.tmux_socket
+    )
 
 
 class ProfileOperations:
@@ -170,14 +217,88 @@ class ProfileOperations:
             return receipt
 
     def apply(self, request: dict) -> dict:
-        """Retain attempts and refuse effects until their prerequisites are available.
+        """Execute what is available and durably refuse the rest.
 
-        No baseline is shipped and no activation or original-provider capture is
-        installed yet. These are durable failures, never success-shaped mocks.
+        Only creation of the empty baseline has effects. No other baseline is
+        shipped and no activation or original-provider capture is installed yet.
+        These are durable failures, never success-shaped mocks.
         """
+        request = validate_profile_operation(request)
+        if request["action"] == "create" and request["baseline_version"] == EMPTY_BASELINE:
+            return self._create(request)
         # Refusal has no effects to reconcile. Classify and retain its receipt
         # in one transaction so a failed read/write cannot leave a pending lock.
         return self._record(request, refuse=True)[0]
+
+    def _create(self, request: dict) -> dict:
+        """Reserve once, then provision. An interruption stays pending and non-ready."""
+        receipt, owned = self.begin(request)
+        if not owned:
+            return receipt
+        identity = ProfileIdentity(secrets.token_hex(6), str(uuid.uuid4()), str(uuid.uuid4()))
+        root = self.registry.path.parent / "p" / identity.profile_id
+        binding = ProfileBinding(
+            root / "run" / "api.sock", root / ".env", root / "tmux" / "server.sock"
+        )
+        if any(
+            len(os.fsencode(path)) >= _UNIX_SOCKET_PATH_LIMIT
+            for path in (binding.endpoint, binding.tmux_socket)
+        ):
+            return self.fail(request, "profile_path_too_long")
+        reservation = ProfileReservation(
+            identity, root, request["display_name"], request["baseline_version"]
+        )
+        reserved = False
+        try:
+            self._reserve_create(request, reservation)
+            reserved = True
+            asyncio.run(_provision_empty_profile(self.registry, reservation, binding))
+            return self._publish_create(request, reservation, binding)
+        except Exception:
+            if reserved:
+                with suppress(ValueError):
+                    self.registry.invalidate(identity, root)
+            return self.fail(request, "profile_create_failed")
+
+    def _reserve_create(self, request: dict, reservation: ProfileReservation) -> None:
+        identity = reservation.identity
+        with self.registry._connection(write=True) as conn:
+            self.registry._reserve(conn, reservation)
+            receipt = self._stored_receipt(conn, request)
+            receipt.update(
+                profile_id=identity.profile_id,
+                installation_id=identity.installation_id,
+                lifecycle_id=identity.lifecycle_id,
+            )
+            conn.execute(
+                "UPDATE lifecycle_operations SET installation_id = ?, receipt_json = ? "
+                "WHERE request_id = ?",
+                (identity.installation_id, _json(receipt), request["request_id"]),
+            )
+
+    def _publish_create(
+        self, request: dict, reservation: ProfileReservation, binding: ProfileBinding
+    ) -> dict:
+        # One transaction: a ready profile never has a pending creation receipt.
+        with self.registry._connection(write=True) as conn:
+            self.registry._publish(conn, reservation.identity, reservation.data_dir, binding)
+            receipt = self._stored_receipt(conn, request)
+            receipt["status"] = "succeeded"
+            conn.execute(
+                "UPDATE lifecycle_operations SET status = 'succeeded', receipt_json = ? "
+                "WHERE request_id = ?",
+                (_json(receipt), request["request_id"]),
+            )
+            return receipt
+
+    @staticmethod
+    def _stored_receipt(conn, request: dict) -> dict:
+        return json.loads(
+            conn.execute(
+                "SELECT receipt_json FROM lifecycle_operations WHERE request_id = ?",
+                (request["request_id"],),
+            ).fetchone()[0]
+        )
 
     def _refusal(self, request, conn) -> str:
         if request["action"] == "create":

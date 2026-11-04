@@ -64,6 +64,16 @@ def cmd_profiles(args) -> int:
             empty="No profiles are reserved.",
         )
     else:
+        binding = result["binding"]
+        connection = (
+            [
+                ("Endpoint", binding["endpoint"]["path"]),
+                ("Credential file", binding["credential_reference"]["path"]),
+                ("Tmux socket", binding["tmux"]["socket_path"]),
+            ]
+            if binding
+            else [("Binding", "Unavailable: profile is not ready")]
+        )
         print_record(
             "Profile",
             [
@@ -71,7 +81,7 @@ def cmd_profiles(args) -> int:
                 ("Name", result["display_name"]),
                 ("Kind", result["kind"]),
                 ("Provisioning state", result["state"]),
-                ("Binding", "Unavailable: profile is not ready"),
+                *connection,
             ],
         )
     return 0

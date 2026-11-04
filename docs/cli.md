@@ -953,10 +953,13 @@ the original receipt; different input under the same ID returns `request_conflic
 An unknown request returns the lookup error `operation_not_found`, not a fabricated
 operation receipt. Omit `--json` for labeled details.
 
-Successful create/start/stop, Default adoption and ready activation remain
-unimplemented. Apply returns durable refusal receipts: `baseline_unavailable` for
-create, `adoption_unavailable` for adoption, `profile_not_ready` for an exact creating
-reservation, or `binding_mismatch` for an unknown, stale or invalidated tuple.
+A create request naming the `empty-v1` baseline reserves new identities and a private
+directory, initializes an empty database and fresh credential, and publishes a ready
+record. Start/stop and Default adoption remain unimplemented. Apply returns durable
+refusal receipts: `baseline_unavailable` for any other baseline, `profile_create_failed`
+or `profile_path_too_long` when creation cannot finish, `adoption_unavailable` for
+adoption, `profile_not_ready` for an exact tuple, or `binding_mismatch` for an unknown,
+stale or invalidated tuple.
 Pending work on the same profile or installation returns `operation_busy`.
 Errors exit nonzero. Replay of a pending request never repeats unknown effects;
 explicit reconciliation is still required after interruption. See the

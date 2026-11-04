@@ -7,8 +7,9 @@ another profile affects new work; it cannot retarget an existing request.
 
 **Implementation status:** this page and its fixtures define the agreed contract.
 Operator list/show discovery and refusal of unreconciled startup are implemented.
-Lifecycle apply/lookup commands retain requests and refusal receipts. Successful
-creation, start/stop, adoption and ready activation remain unimplemented. The identity
+Lifecycle apply/lookup commands retain requests and receipts. Creating the empty
+baseline succeeds and publishes a ready record, which cannot be started yet: start/stop,
+adoption and provider activation remain unimplemented. The identity
 endpoint and bound-request checks have an internal reconciliation context, but no
 production startup installs it yet; the contract below is not a procedure for
 activating profiles.
@@ -183,7 +184,7 @@ isolation.
 [Shared fixtures](contracts/profiles-v1.json) contain discovery records, identity,
 HTTP headers, Socket.IO identity/error fields, lifecycle requests/receipts,
 unknown-operation lookup, binding cases and extension examples described below. All identifiers and paths are synthetic.
-`baseline-example-v1` is a fixture value, not an available baseline. The file's top-level groups and binding cases
+`baseline-example-v1` is a fixture value, not an available baseline; `empty-v1` is the shipped one. The file's top-level groups and binding cases
 are a test container, not a new API response. Consumers can pin this file to a
 commit and run its cases against their own implementation.
 
@@ -255,8 +256,7 @@ The commands read
 `~/.local/share/agent-backbone-profiles/registry.db`, outside provider data trees;
 `BACKBONE_DATA_DIR` does not select the control-plane registry. No provider secret,
 configuration, API or database is loaded. Human output labels provisioning state;
-`--json` returns the exact list/show shape. The current registry supports only
-`creating` and `failed` records, with null bindings. A missing registry returns a nonzero exit and an error on stderr. Lifecycle
+`--json` returns the exact list/show shape. A missing registry returns a nonzero exit and an error on stderr. Lifecycle
 `apply` explicitly initializes or upgrades the external registry; discovery and
 `operation` lookup never initialize or recover it.
 
@@ -332,16 +332,26 @@ installation identity. An interrupted pending operation stays pending across
 reopen and exact replay, without repeating effects or automatically releasing its
 reservation. Its outcome needs explicit reconciliation.
 
-Execution is still unavailable: create returns `baseline_unavailable`, adoption
-returns `adoption_unavailable`, and start/stop return `profile_not_ready` for an
-exact `creating` reservation or `binding_mismatch` for a stale, invalidated or
-unknown tuple. A `failed` reservation is a permanent invalidation tombstone, not
+Create with the `empty-v1` baseline, the one shipped version, has effects. It
+allocates the profile, installation and lifecycle IDs once, together with the
+reservation; creates a private directory beside the registry; writes a generated
+`BACKBONE_API_KEY`; initializes an empty database holding the identity; reconciles
+them; and publishes `ready` in the transaction that completes the receipt. It copies
+nothing from Default. An interruption stays pending and non-ready. A failure that
+Create can observe leaves a `failed` tombstone with `profile_create_failed` and
+retains the directory. `profile_path_too_long` refuses, before reserving anything,
+a location whose socket paths would not fit the Unix limit.
+
+Other execution is still unavailable: any other baseline returns
+`baseline_unavailable`, adoption returns `adoption_unavailable`, and start/stop return
+`profile_not_ready` for an exact tuple or `binding_mismatch` for a stale, invalidated
+or unknown tuple. A `failed` reservation is a permanent invalidation tombstone, not
 a valid binding awaiting readiness.
 These are durable failed-operation receipts with nonzero exit status. Refusal
 classification and receipt storage commit atomically, so a failure before that commit
 does not leave a pending reservation. They do not
-create provider directories, start/stop services, adopt an installation or publish
-ready discovery. An unchanged failed request continues to return that failure;
+create provider directories, start/stop services or adopt an installation.
+An unchanged failed request continues to return that failure;
 new work after prerequisites change requires a new request ID. Receipts have no
 automatic expiry or pruning: the original outcome and changed-input conflict are
 retained without a replay window. Any future compaction or storage quota needs an
