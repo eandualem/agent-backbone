@@ -161,7 +161,12 @@ async def first_agent(
                 await _check(check_effect)
                 return await _first(request, receipt, store, db, check_effect=check_effect)
     except SetupReceiptError as exc:
-        return setup_result("first_agent", exc.code, str(exc))
+        return setup_result(
+            "first_agent",
+            exc.code,
+            str(exc),
+            retry="none" if bound and exc.reason == "receipt_capacity" else None,
+        )
     except AtomicCreateUnsupported:
         return setup_result(
             "first_agent",
@@ -227,7 +232,12 @@ async def cancel_first_agent(request: SetupCancelFirstAgent, config, *, check_ef
                 data={"cancelled_request_id": request.request_id, "can_start_new_request": True},
             )
     except SetupReceiptError as exc:
-        return setup_result(action, exc.code, str(exc))
+        return setup_result(
+            action,
+            exc.code,
+            str(exc),
+            retry="none" if bound and exc.reason == "receipt_capacity" else None,
+        )
     except Exception as exc:
         log.error(
             "Setup cancellation failed request=%s error=%s", request.request_id, type(exc).__name__

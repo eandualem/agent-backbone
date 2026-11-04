@@ -641,3 +641,30 @@ def test_bound_capacity_refusal_explains_permanent_limit_without_advising_retry(
     assert "existing request IDs remain usable" in events[-1]["message"]
     assert posts == [original["request_id"]]
     assert invoke_bound(tmp_path, capsys, original)[0] == 0
+
+
+@pytest.mark.parametrize("action", ["initialize", "first_agent"])
+@pytest.mark.parametrize("validate", [False, True])
+def test_legacy_oversize_failure_keeps_original_unknown_envelope(
+    tmp_path, capsys, action, validate
+):
+    from agent_backbone.cli import build_parser
+    from agent_backbone.models import SETUP_BODY_BYTES, SETUP_CANCEL_BODY_BYTES
+
+    raw = json.dumps(
+        {"schema_version": 1, "request_id": "oversized-legacy", "action": action}
+    ).encode()
+    raw += b" " * (SETUP_BODY_BYTES + 1 - len(raw))
+    assert len(raw) <= SETUP_CANCEL_BODY_BYTES
+    source = tmp_path / "legacy-large.json"
+    source.write_bytes(raw)
+    args = build_parser().parse_args(
+        ["setup", "--file", str(source), "--jsonl"] + (["--validate"] if validate else [])
+    )
+    assert args.func(args) == 2
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert len(events) == 1
+    assert events[0]["schema_version"] == 1
+    assert events[0]["request_id"] == "unknown"
+    assert events[0]["action"] == "validate"
+    assert events[0]["code"] == "invalid_request"

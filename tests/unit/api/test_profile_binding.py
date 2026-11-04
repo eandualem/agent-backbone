@@ -2032,3 +2032,59 @@ async def test_bound_catalog_rechecks_after_probe_and_retains_worker_on_disconne
         release.set()
         await asyncio.gather(pending, return_exceptions=True)
         await api_app.state.api_tasks.stop()
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+@pytest.mark.parametrize("action", ["first_agent", "cancel_first_agent"])
+async def test_bound_provider_capacity_never_advises_retry(
+    api_app, api_client, auth_headers, bound_provider, monkeypatch, runtime, action
+):
+    from agent_backbone.services.agents import AgentStore
+
+    provider, _, headers = bound_provider
+    identity = provider.reservation.identity
+    store = AgentStore(api_app.state.db, provider.reservation.data_dir)
+    await store.start()
+    monkeypatch.setattr(api_app.state, "agent_store", store)
+    monkeypatch.setattr("agent_backbone.services.database._setup_receipts.SETUP_RECEIPTS", 0)
+    body = FIXTURES["setup"][action] | {
+        "profile_id": identity.profile_id,
+        "expected_installation_id": identity.installation_id,
+        "expected_lifecycle_id": identity.lifecycle_id,
+        "hooks": [runtime],
+        "agent": {**FIXTURES["setup"][action]["agent"], "runtime": runtime},
+    }
+    response = await api_client.post(
+        "/api/setup/first-agent" + ("/cancel" if action == "cancel_first_agent" else ""),
+        headers={**auth_headers, **headers},
+        json=body,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["action"] == action
+    assert result["code"] == "installation_conflict"
+    assert result["retry"] == "none"
+    assert "capacity reached" in result["message"]
+    assert not list((provider.reservation.data_dir / "setup-receipts").glob("*.json"))
+
+
+@pytest.mark.parametrize("action", ["first_agent", "cancel_first_agent"])
+async def test_legacy_provider_capacity_keeps_its_existing_retry_classification(
+    api_client, config, auth_headers, monkeypatch, action
+):
+    monkeypatch.setattr("agent_backbone.services.database._setup_receipts.SETUP_RECEIPTS", 0)
+    body = {
+        key: value
+        for key, value in FIXTURES["setup"][action].items()
+        if key not in {"profile_id", "expected_installation_id", "expected_lifecycle_id"}
+    } | {"schema_version": 1, "data_dir": str(config.data_dir.resolve())}
+    response = await api_client.post(
+        "/api/setup/first-agent" + ("/cancel" if action == "cancel_first_agent" else ""),
+        headers=auth_headers,
+        json=body,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["code"] == "installation_conflict"
+    assert result["retry"] == "same_request"
+    assert "capacity reached" in result["message"]

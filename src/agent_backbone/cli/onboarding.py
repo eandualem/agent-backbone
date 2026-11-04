@@ -125,8 +125,18 @@ def cmd_setup(args: argparse.Namespace) -> int:
         if len(raw) > SETUP_CANCEL_BODY_BYTES:
             raise ValueError("request too large")
         data = json.loads(raw, object_pairs_hook=_unique_object)
+        bound_input = (
+            isinstance(data, dict)
+            and type(data.get("schema_version")) is int
+            and data["schema_version"] == 2
+        )
+        too_large = len(raw) > SETUP_BODY_BYTES and (
+            not isinstance(data, dict) or data.get("action") != "cancel_first_agent"
+        )
+        if too_large and not bound_input:
+            raise ValueError("request too large")
         if isinstance(data, dict):
-            if type(data.get("schema_version")) is int and data["schema_version"] == 2:
+            if bound_input:
                 output.binding = {
                     key: data.get(source) if isinstance(data.get(source), str) else None
                     for key, source in (
@@ -149,9 +159,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         # encoding or the stricter first-agent body limit.
         if output.binding is not None:
             data = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
-        if len(raw) > SETUP_BODY_BYTES and (
-            not isinstance(data, dict) or data.get("action") != "cancel_first_agent"
-        ):
+        if too_large:
             raise ValueError("request too large")
         request = (BOUND_ADAPTER if output.binding is not None else ADAPTER).validate_python(data)
     except (OSError, ValueError, ValidationError, RecursionError):
