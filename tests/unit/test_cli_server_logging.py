@@ -102,6 +102,31 @@ def test_a_quoted_home_path_is_expanded_before_logging_starts(tmp_path, monkeypa
     assert run.call_args.kwargs["log_file"] == (tmp_path / "backbone.log").resolve()
 
 
+def test_up_clears_a_blocked_signal_mask_from_its_caller(tmp_path, monkeypatch):
+    import argparse
+    import signal
+    from unittest.mock import AsyncMock, patch
+
+    from agent_backbone.cli import server
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    args = argparse.Namespace(detach=False, log_file=None)
+    original = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+    try:
+        with (
+            patch.object(
+                server._common, "load_config", AsyncMock(return_value=make_config(tmp_path))
+            ),
+            patch("agent_backbone.services.database.default_profile_at", return_value=(None, None)),
+            patch.object(server, "_default_provider", AsyncMock(return_value=None)),
+            patch.object(server, "_run_server"),
+        ):
+            assert server.cmd_up(args) == 0
+        assert signal.SIGTERM not in signal.pthread_sigmask(signal.SIG_BLOCK, ())
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, original)
+
+
 @pytest.mark.parametrize("detach", [False, True])
 def test_up_refuses_before_creating_anything(tmp_path, monkeypatch, capsys, detach):
     import argparse

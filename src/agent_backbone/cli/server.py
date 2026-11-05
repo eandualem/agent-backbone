@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -121,8 +122,15 @@ def _native_environments(root: Path) -> dict:
     return captured
 
 
+def _clear_inherited_signal_mask() -> None:
+    """Blocked signals survive exec. A caller with SIGTERM blocked would leave a service
+    that can never be stopped, and hand the same mask to everything it starts."""
+    signal.pthread_sigmask(signal.SIG_SETMASK, ())
+
+
 def serve_profile(registry_path: Path, profile_id: str) -> None:
     """Run one ready profile's provider with nothing ambient."""
+    _clear_inherited_signal_mask()
     from agent_backbone.config import AgentsConfig, build_config, sqlite_url
     from agent_backbone.services.agents import install_project_ownership
     from agent_backbone.services.database import (
@@ -293,6 +301,7 @@ async def _default_provider(registry, reservation):
 def cmd_up(args: argparse.Namespace) -> int:
     from agent_backbone.services.database import default_profile_at
 
+    _clear_inherited_signal_mask()
     # A quoted `~/…` reaches us unexpanded; a detached run starts elsewhere.
     log_file = args.log_file.expanduser().resolve() if args.log_file else None
     try:

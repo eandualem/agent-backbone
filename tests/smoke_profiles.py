@@ -479,7 +479,12 @@ def main() -> int:
         check("stopped A refuses", refused)
         check("B unaffected", b[0].get("/api/profile", headers=b[1]).status_code == 200)
         check("Default unaffected", tcp.get("/api/agents", headers=operator).status_code == 200)
-        home.lifecycle("start-A-again", "start", created["A"])
+        # A caller's blocked signals reach the provider; stop-A-end proves it still stops.
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+        try:
+            home.lifecycle("start-A-again", "start", created["A"])
+        finally:
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
         clients["A"] = home.bound(home.show(created["A"]["profile_id"]))
         identity = clients["A"][0].get("/api/profile", headers=clients["A"][1]).json()
         check(
