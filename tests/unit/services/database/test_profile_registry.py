@@ -154,8 +154,8 @@ def test_unreserved_provider_cannot_start_in_fence_directory(registry, reservati
     directory = registry.path.with_name(registry.path.name + ".operations")
     with registry.operation(reservation.identity, reservation.data_dir):
         with pytest.raises(ValueError, match="fence must be outside"):
-            registry.check_unadopted(Path(str(directory) + suffix))
-    registry.check_unadopted(reservation.data_dir.with_name("legacy"))
+            registry.check_unreserved(Path(str(directory) + suffix))
+    registry.check_unreserved(reservation.data_dir.with_name("legacy"))
 
 
 def test_concurrent_invalidation_reports_fence_contention(registry, reservation):
@@ -641,29 +641,4 @@ def test_invalidated_profile_never_returns_to_ready(tmp_path, reservation):
 def test_ready_still_refuses_legacy_startup_in_its_directory(tmp_path, reservation):
     registry, _, _ = _published(tmp_path, reservation)
     with pytest.raises(ValueError, match="reserved profile"):
-        registry.check_unadopted(reservation.data_dir)
-
-
-def test_discovery_reads_an_older_registry_without_upgrading_it(tmp_path, reservation):
-    path = tmp_path / "registry" / "registry.db"
-    ProfileRegistry.create(path).reserve(reservation)
-    with sqlite3.connect(path) as conn:
-        conn.execute("DROP TABLE profile_bindings")
-        conn.execute("DROP TABLE profile_ports")
-        conn.execute("DROP TABLE default_profiles")
-        conn.execute("PRAGMA user_version = 3")
-    registry = ProfileRegistry(path)
-    assert registry.show("profile-a")["state"] == "creating"
-    with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
-    with pytest.raises(ValueError, match="initialization"):
-        registry.publish_ready(
-            reservation.identity, reservation.data_dir, _ready_binding(reservation.data_dir)
-        )
-    ProfileRegistry.create(path)
-    assert (
-        registry.publish_ready(
-            reservation.identity, reservation.data_dir, _ready_binding(reservation.data_dir)
-        ).state
-        == "ready"
-    )
+        registry.check_unreserved(reservation.data_dir)

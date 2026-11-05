@@ -2,19 +2,18 @@
 
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from agent_backbone.cli import main
 from agent_backbone.cli.server import _default_provider
-from agent_backbone.config import DEFAULT_DATA_DIR, PROFILE_REGISTRY_PATH, sqlite_url
+from agent_backbone.config import DEFAULT_DATA_DIR, PROFILE_REGISTRY_PATH
 from agent_backbone.services.database import (
     ProfileIdentity,
     ProfileRegistry,
-    check_profile_startup,
     create_default_profile,
+    default_profile_at,
     default_tmux_socket,
 )
 from agent_backbone.services.database import _profile_default as module
@@ -44,7 +43,7 @@ def init():
 
 def serve(root):
     with patch("agent_backbone.services.terminal.pin_tmux_server") as pin:
-        provider = asyncio.run(_default_provider(SimpleNamespace(data_dir=root)))
+        provider = asyncio.run(_default_provider(*default_profile_at(root.resolve())))
     return provider, pin
 
 
@@ -89,7 +88,7 @@ def test_a_crash_before_the_identity_is_recorded_is_finished_by_running_init_aga
 
     with patch.object(module, "_record_identity", crashes):
         assert init() == 1
-    asyncio.run(check_profile_startup(sqlite_url(root), root))
+    default_profile_at(root.resolve())
     with pytest.raises(ValueError, match="identity"):
         serve(root)
     assert init() == 0
@@ -110,7 +109,7 @@ async def test_a_copied_database_elsewhere_does_not_start(root, tmp_path):
     copy.mkdir()
     (copy / "backbone.db").write_bytes((root / "backbone.db").read_bytes())
     with pytest.raises(ValueError):
-        await check_profile_startup(sqlite_url(copy), copy)
+        default_profile_at(copy.resolve())
 
 
 def test_create_needs_an_initialized_installation(root):

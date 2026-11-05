@@ -21,9 +21,8 @@ HANDSHAKE_SECONDS = 10
 
 
 class Refused(ValueError):
-    def __init__(self, code, *, uncertain=False, reason=None):
+    def __init__(self, code, *, reason=None):
         self.code = code
-        self.uncertain = uncertain
         self.reason = reason
         super().__init__("Bound request could not be completed.")
 

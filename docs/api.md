@@ -912,14 +912,11 @@ for the response fields, signed publication, byte limits, retries and retention.
 
 ### Private local transport
 
-For a local client that must authenticate the provider before sending its API
-key, configure `backbone.socket_path` to an absolute socket path inside the
-Backbone data directory. Its parent must belong to the service account and have
-mode 0700. On the next explicitly requested server start, Backbone binds a 0600
-Unix socket alongside its existing TCP listener. No socket is enabled by default.
+Every profile also listens on a 0600 Unix socket at `run/api.sock` in its data directory,
+alongside its TCP port, so a local client can authenticate the provider before sending its
+API key. Find the path in the profile's binding (`backbone profiles show ID --json`).
 
-Give the same absolute path to the client as `BACKBONE_SOCKET_PATH`. Before
-sending HTTP or bearer credentials, the client must verify the private parent,
+Before sending HTTP or bearer credentials, the client must verify the private parent,
 socket type, 0600 mode and ownership, then check the connected peer UID against
 its effective UID. The provider similarly rejects Unix peers with a different
 UID before HTTP parsing. HTTP routes, request bodies, response framing and API

@@ -58,7 +58,6 @@ async def test_integration_polling_keeps_live_config_after_guarded_start(config,
 
     with (
         patch("agent_backbone.api.app.LifecycleManager") as lifecycle,
-        patch("agent_backbone.services.database.check_profile_startup", new=AsyncMock()),
         patch(
             "agent_backbone.services.database.BackboneDB",
             return_value=MagicMock(signing=MagicMock(audience=AsyncMock())),

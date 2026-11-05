@@ -45,16 +45,6 @@ class PendingSetup:
             raise Refused("binding_mismatch")
         return cls(binding, body, request.request_id, request.action)
 
-    def cancellation(self):
-        """Change only the action; retain the original body values and binding."""
-        if self.action == "cancel_first_agent":
-            return self
-        body = json.loads(self.body)
-        body["action"] = "cancel_first_agent"
-        return PendingSetup.capture(
-            self.binding, json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()
-        )
-
     async def execute(self):
         """No automatic replay or refreshed connection after an uncertain effect."""
         await self.binding.handshake()
@@ -65,7 +55,7 @@ class PendingSetup:
         except (httpx.HTTPError, OSError, TimeoutError, ValueError, RecursionError) as error:
             if isinstance(error, Refused):
                 raise
-            raise Refused("outcome_unknown", uncertain=True) from None
+            raise Refused("outcome_unknown") from None
 
     async def _post(self):
         from agent_backbone.models import SetupResult
@@ -92,12 +82,12 @@ class PendingSetup:
             if response.status_code in (401, 403):
                 raise Refused("operator_required")
             if response.headers.get("content-encoding", "identity") != "identity":
-                raise Refused("outcome_unknown", uncertain=True)
+                raise Refused("outcome_unknown")
             raw = bytearray()
             async for chunk in response.aiter_raw(chunk_size=4096):
                 raw.extend(chunk)
                 if len(raw) > MAX_RESPONSE:
-                    raise Refused("outcome_unknown", uncertain=True)
+                    raise Refused("outcome_unknown")
             result = json.loads(raw, object_pairs_hook=_object)
             if (
                 response.status_code == 409
@@ -107,8 +97,8 @@ class PendingSetup:
             ):
                 raise Refused("binding_mismatch")
             if response.status_code != 200:
-                raise Refused("outcome_unknown", uncertain=True)
+                raise Refused("outcome_unknown")
         result = SetupResult.model_validate(result).model_dump()
         if result["action"] != self.action:
-            raise Refused("outcome_unknown", uncertain=True)
+            raise Refused("outcome_unknown")
         return result

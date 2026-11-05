@@ -37,7 +37,10 @@ from agent_backbone.services.database._profile_registry import (
     ProfileRegistry,
     ProfileReservation,
 )
-from agent_backbone.services.database._profile_startup import check_profile_startup
+from agent_backbone.services.database._profile_startup import (
+    check_new_default,
+    default_profile_at,
+)
 from agent_backbone.services.database._reports_repo import (
     ReportConflict,
     ReportForbidden,
@@ -81,8 +84,9 @@ __all__ = [
     "SetupReceiptError",
     "UnknownArtifact",
     "build_engine",
-    "check_profile_startup",
+    "check_new_default",
     "create_default_profile",
+    "default_profile_at",
     "default_tmux_socket",
     "diagnostic_details",
     "format_iso",

@@ -24,7 +24,7 @@ def default_tmux_socket() -> Path:
 
 
 def create_default_profile(
-    registry_path: Path, data_dir: Path, baseline: str, *, endpoint: Path | None = None
+    registry_path: Path, data_dir: Path, baseline: str
 ) -> ProfileReservation:
     """Record this initialized installation as the Default profile. Safe to repeat.
 
@@ -47,9 +47,7 @@ def create_default_profile(
         if installation_id is None:
             raise ValueError("The installation has no identity yet")
         identity = ProfileIdentity(token_hex(6), installation_id[0], str(uuid4()))
-        binding = ProfileBinding(
-            endpoint or root / "run" / "api.sock", root / ".env", default_tmux_socket()
-        )
+        binding = ProfileBinding(root / "run" / "api.sock", root / ".env", default_tmux_socket())
         with registry._connection(write=True) as conn:
             registry._reserve(
                 conn, ProfileReservation(identity, root, DEFAULT_DISPLAY_NAME, baseline)

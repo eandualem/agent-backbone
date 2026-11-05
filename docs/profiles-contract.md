@@ -230,23 +230,14 @@ configuration, API or database is loaded. Human output labels provisioning state
 `apply` explicitly initializes or upgrades the external registry; discovery and
 `operation` lookup never initialize or recover it.
 
-Before opening mutable storage, both daemon startup and direct CLI fallback check
-that the canonical provider directory and configured SQLite database path
-do not overlap any reservation, including failed reservations. This prevents a
-pre-identity database restore from starting unbound in a reserved tree. With no registry
-no profile exists, so `up` refuses and `init` or setup creates it. An unreadable or invalid
-registry blocks startup because directory ownership cannot be checked, and `up` never
-repairs it. A reserved database cannot start from another directory. This check does not fence an already running provider or
-establish account isolation.
+The CLI opens a database directly only for the Default profile at that directory, and only
+when no provider answers. With no profile it refuses and creates nothing. `init` and
+`setup` (`initialize`) are the exception, because they create Default: they first refuse a
+directory inside any reservation, including a failed one, and any directory other than an
+existing Default's. An unreadable or invalid registry blocks all of these, because
+ownership cannot be checked, and they never repair it. An isolated profile's database is
+opened only by its own provider.
 
-Ordinary legacy startup retains SQLite crash recovery: after confirming that
-neither location overlaps a reservation, a hot rollback journal may be recovered
-by reopening the existing database read-write and inspecting identity again.
-This does not create a database or migrate its schema. Other read errors never
-trigger writable fallback. Explicit read-only database URLs and existing-installation
-setup inspection stay read-only; a recovery requirement is an error. An unfinished
-fresh setup may recover its own local database only after validating the exact
-recorded request and unchanged credentials under the existing receipt lock.
 Registry discovery and reservation checks never recover journals implicitly.
 
 List returns `schema_version` and `items`. Each item has `profile_id`,

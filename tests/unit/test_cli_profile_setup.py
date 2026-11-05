@@ -25,20 +25,6 @@ def binding(fixtures):
     )
 
 
-def test_capture_and_cancel_preserve_original_values_and_connection(fixtures, binding):
-    request = copy.deepcopy(fixtures["setup"]["first_agent"])
-    original = json.dumps(request, indent=2).encode()
-    pending = PendingSetup.capture(binding, original)
-    request["agent"]["brief"]["text"] = "new selection must not change pending input"
-    cancelled = pending.cancellation()
-    assert pending.body == original
-    assert json.loads(cancelled.body) == fixtures["setup"]["cancel_first_agent"]
-    assert cancelled.binding is pending.binding is binding
-    assert cancelled.request_id == pending.request_id
-    assert cancelled.cancellation() is cancelled
-    assert "Project work" not in repr(pending)
-
-
 @pytest.mark.parametrize(
     "change,code",
     [
@@ -142,10 +128,8 @@ async def test_private_uds_setup_is_once_and_unknown_stays_uncertain(fixtures, c
             else:
                 with pytest.raises(Refused) as error:
                     await pending.execute()
-                if case in {"mismatch", "unauthorized"}:
-                    assert not error.value.uncertain
-                else:
-                    assert error.value.code == "outcome_unknown" and error.value.uncertain
+                if case not in {"mismatch", "unauthorized"}:
+                    assert error.value.code == "outcome_unknown"
             await asyncio.wait_for(closed.wait(), 2)
         assert requests == [pending.body]
 
@@ -165,7 +149,9 @@ def test_unicode_cancellation_retains_values_without_exceeding_action_allowance(
     raw = json.dumps(request, ensure_ascii=False).encode()
     raw += b" " * (SETUP_BODY_BYTES - len(raw))
     pending = PendingSetup.capture(binding, raw)
-    cancelled = pending.cancellation()
+    body = {**json.loads(pending.body), "action": "cancel_first_agent"}
+    encoded = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()
+    cancelled = PendingSetup.capture(binding, encoded)
     assert len(cancelled.body) <= SETUP_CANCEL_BODY_BYTES
     assert json.loads(cancelled.body) == {**request, "action": "cancel_first_agent"}
 
@@ -430,7 +416,7 @@ def test_unknown_dispatch_keeps_connection_for_next_process(
             )
             == 1
         )
-        raise Refused("outcome_unknown", uncertain=True)
+        raise Refused("outcome_unknown")
 
     monkeypatch.setattr(Binding, "handshake", handshake)
     monkeypatch.setattr(PendingSetup, "_post", uncertain)
@@ -542,7 +528,7 @@ async def test_concurrent_verified_connections_compare_again_before_post(
     async def post(self):
         posts.append(self.binding)
         await asyncio.sleep(0)
-        raise Refused("outcome_unknown", uncertain=True)
+        raise Refused("outcome_unknown")
 
     monkeypatch.setattr(Binding, "handshake", handshake)
     monkeypatch.setattr(PendingSetup, "_post", post)

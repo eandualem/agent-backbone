@@ -205,7 +205,6 @@ async def test_real_private_unix_handshake(selected, fixtures, case, monkeypatch
                     "disconnect": "service_unavailable",
                 }.get(case, "binding_mismatch")
                 assert error.value.code == expected_code
-                assert not error.value.uncertain
             await asyncio.wait_for(finished.wait(), 2)
         assert len(requests) == 1
         assert b"GET /api/profile HTTP/1.1" in requests[0]

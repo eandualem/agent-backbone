@@ -1034,7 +1034,6 @@ def test_init_and_onboarding_refuse_reservations_before_writes(
     tmp_path, capsys, existing, offline, monkeypatch
 ):
     from agent_backbone.config import PROFILE_REGISTRY_PATH
-    from agent_backbone.services import database
     from agent_backbone.services.database import (
         ProfileIdentity,
         ProfileRegistry,
@@ -1060,15 +1059,10 @@ def test_init_and_onboarding_refuse_reservations_before_writes(
             conn.execute("CREATE TABLE agents (name TEXT)")
     before = {p.name: p.read_bytes() for p in directory.iterdir()} if existing else None
     args = build_parser().parse_args(["init", "--data-dir", str(directory), "--force"])
-    with pytest.raises(ValueError, match="reserved profile"):
-        args.func(args)
-    capsys.readouterr()
-    preflight = AsyncMock(wraps=database.check_profile_startup)
-    monkeypatch.setattr(database, "check_profile_startup", preflight)
+    assert args.func(args) == 1
+    assert "reserved profile" in capsys.readouterr().out
     code, result = invoke(tmp_path, capsys, body)
     assert code == 3 and result["code"] == "installation_conflict"
-    preflight.assert_awaited_once()
-    assert preflight.await_args.args[1] == directory
     if existing:
         assert {p.name: p.read_bytes() for p in directory.iterdir()} == before
     else:

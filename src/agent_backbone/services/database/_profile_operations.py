@@ -133,8 +133,6 @@ class ProfileOperations:
 
     def lookup(self, request_id: str) -> dict:
         with self.registry._connection() as conn:
-            if conn.execute("PRAGMA user_version").fetchone()[0] < 3:
-                return operation_error(request_id, "operation_not_found")
             row = conn.execute(
                 "SELECT receipt_json FROM lifecycle_operations WHERE request_id = ?", (request_id,)
             ).fetchone()
@@ -166,8 +164,6 @@ class ProfileOperations:
             "error": None,
         }
         with self.registry._connection(write=True) as conn:
-            if conn.execute("PRAGMA user_version").fetchone()[0] not in {3, 4}:
-                raise ValueError("Profile operations need explicit registry initialization")
             previous = conn.execute(
                 "SELECT request_json, receipt_json FROM lifecycle_operations WHERE request_id = ?",
                 (request["request_id"],),

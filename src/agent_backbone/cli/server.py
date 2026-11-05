@@ -25,6 +25,10 @@ from agent_backbone.config import (
 
 log = logging.getLogger(__name__)
 
+SHUTDOWN_DRAIN_SECONDS = 10
+"""An in-flight request, such as an agent start waiting for readiness, must not hold a
+stop or upgrade open. Sessions in tmux are unaffected."""
+
 
 class UTCFormatter(DiagnosticFormatter):
     """``2026-10-13T12:50:01.123Z``: every log line can be placed in time."""
@@ -177,7 +181,8 @@ def _run_server(
             log_level="info",
             log_config=logging_config,
             workers=1,
-            http=LocalPeerProtocol if config.backbone.socket_path or provider else "auto",
+            timeout_graceful_shutdown=SHUTDOWN_DRAIN_SECONDS,
+            http=LocalPeerProtocol if provider else "auto",
         )
     )
     inner = getattr(app, "other_asgi_app", app)
@@ -186,7 +191,7 @@ def _run_server(
     inner.state.request_shutdown = lambda: setattr(server, "should_exit", True)
     if provider is not None:
         inner.state.profile_provider = provider
-    endpoint = provider.reservation.binding.endpoint if provider else config.backbone.socket_path
+    endpoint = provider.reservation.binding.endpoint if provider else None
     try:
         if endpoint:
             with private_listener(config.data_dir, str(endpoint)) as local:
@@ -270,24 +275,11 @@ async def _up_detached(config: BackboneConfig, log_file: Path | None = None) -> 
     return 1
 
 
-def _default_reservation(data_dir: Path):
-    """The Default profile at this directory; nothing runs without a profile."""
-    from agent_backbone.config import PROFILE_REGISTRY_PATH
-    from agent_backbone.services.database import ProfileRegistry
-
-    registry = ProfileRegistry(Path(PROFILE_REGISTRY_PATH).expanduser())
-    reservation = registry.default_reservation()
-    if reservation is None or reservation.data_dir != data_dir:
-        raise ValueError(f"No profile at {data_dir}: run `backbone init` first")
-    return registry, reservation
-
-
-async def _default_provider(config: BackboneConfig):
+async def _default_provider(registry, reservation):
     """`up` serves the Default profile on the tmux server recorded when it was created."""
     from agent_backbone.services.database import reconcile_profile_provider
     from agent_backbone.services.terminal import pin_tmux_server
 
-    registry, reservation = _default_reservation(config.data_dir)
     socket = reservation.binding.tmux_socket
     provider = await reconcile_profile_provider(
         registry, reservation, reservation.data_dir / SQLITE_FILENAME, socket
@@ -299,15 +291,17 @@ async def _default_provider(config: BackboneConfig):
 
 
 def cmd_up(args: argparse.Namespace) -> int:
+    from agent_backbone.services.database import default_profile_at
+
     # A quoted `~/…` reaches us unexpanded; a detached run starts elsewhere.
     log_file = args.log_file.expanduser().resolve() if args.log_file else None
     try:
         # Before anything can create a database or report a detached start.
-        _default_reservation(resolve_data_dir())
+        registry, reservation = default_profile_at(resolve_data_dir())
         config = asyncio.run(_common.load_config())
         if args.detach:
             return asyncio.run(_up_detached(config, log_file))
-        provider = asyncio.run(_default_provider(config))
+        provider = asyncio.run(_default_provider(registry, reservation))
         _run_server(config, log_file=log_file, provider=provider)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

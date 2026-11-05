@@ -479,10 +479,8 @@ async def _inspect_existing(boot):
 
 
 async def _initialize(request: SetupInitialize, output):
-    from sqlalchemy.exc import SQLAlchemyError
-
     from agent_backbone.config import PROFILE_REGISTRY_PATH
-    from agent_backbone.services.database import check_profile_startup, create_default_profile
+    from agent_backbone.services.database import check_new_default, create_default_profile
 
     data_dir = Path(request.data_dir)
     boot = bootstrap_config(data_dir)
@@ -495,34 +493,20 @@ async def _initialize(request: SetupInitialize, output):
     recorded_request = receipt.path.is_file() and not receipt.path.is_symlink()
     if existing and not recorded_request:
         await _inspect_existing(boot)
-    # A recorded, unfinished fresh install may recover its own database. Other
-    # setup inspections stay read-only. Validate request and credential ownership
-    # under the existing receipt lock, without creating or changing receipts.
-    try:
-        if recorded_request:
-            with receipt.inspect_existing() as record:
-                if record.get("fresh") and boot.database_url != sqlite_url(data_dir):
-                    raise SetupReceiptError(
-                        "installation_conflict",
-                        "Fresh setup retries require their own local database.",
-                    )
-                if boot.database_url != sqlite_url(data_dir):
-                    await _inspect_existing(boot)
-                recover = (
-                    record.get("fresh") is True
-                    and record.get("database_started") is True
-                    and record.get("result", {}).get("status") != "completed"
-                    and not receipt.cancelled
-                    and boot.database_url == sqlite_url(data_dir)
-                    and boot.env_path.is_file()
-                    and hashlib.sha256(boot.env_path.read_bytes()).hexdigest()
-                    == record.get("credential_digest")
+    # Validate request and credential ownership under the existing receipt lock,
+    # without creating or changing receipts.
+    if recorded_request:
+        with receipt.inspect_existing() as record:
+            if record.get("fresh") and boot.database_url != sqlite_url(data_dir):
+                raise SetupReceiptError(
+                    "installation_conflict",
+                    "Fresh setup retries require their own local database.",
                 )
-                await check_profile_startup(boot.database_url, data_dir, recover=recover)
-        else:
-            await check_profile_startup(boot.database_url, data_dir, recover=False)
-    except SQLAlchemyError as exc:
-        raise ValueError("Provider identity metadata is unavailable") from exc
+            if boot.database_url != sqlite_url(data_dir):
+                await _inspect_existing(boot)
+            check_new_default(data_dir)
+    else:
+        check_new_default(data_dir)
     if (
         not existing
         and data_dir.exists()
@@ -637,7 +621,7 @@ async def _initialize(request: SetupInitialize, output):
                 )
             receipt.save(database_started=True)
             config = bootstrap_config(data_dir)
-            async with _common.Direct(config) as direct:
+            async with _common.Direct(config, bootstrap=True) as direct:
                 if "backbone.port" not in await direct.db.settings.all():
                     await direct.store.set_setting("backbone.port", config.backbone.port)
             receipt.completed("data")
@@ -652,7 +636,7 @@ async def _initialize(request: SetupInitialize, output):
                         "starter_conflict", "A starter path redirects outside the installation."
                     )
                 _owned_file(receipt, target, text)
-            async with _common.Direct(bootstrap_config(data_dir)) as direct:
+            async with _common.Direct(bootstrap_config(data_dir), bootstrap=True) as direct:
                 for key, value in {
                     "agents.shared_policy": profile["policies"],
                     "skills.store": str(data_dir / "skills"),
@@ -668,7 +652,7 @@ async def _initialize(request: SetupInitialize, output):
             output.step("starters", "completed")
         if "profile" not in receipt.record["completed_steps"]:
             output.step("profile", "running")
-            async with _common.Direct(bootstrap_config(data_dir)) as direct:
+            async with _common.Direct(bootstrap_config(data_dir), bootstrap=True) as direct:
                 await direct.db.signing.audience()
             try:
                 create_default_profile(

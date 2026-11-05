@@ -43,7 +43,7 @@ BACKBONE_API_KEY={api_key}
 
 def cmd_init(args: argparse.Namespace) -> int:
     from agent_backbone.config import PROFILE_REGISTRY_PATH, sqlite_url
-    from agent_backbone.services.database import check_profile_startup, create_default_profile
+    from agent_backbone.services.database import check_new_default, create_default_profile
     from agent_backbone.services.database.engine import redact_url
 
     config = bootstrap_config(args.data_dir)
@@ -51,7 +51,11 @@ def cmd_init(args: argparse.Namespace) -> int:
     if config.database_url != sqlite_url(data_dir):
         print("error: a profile uses its own SQLite database; unset BACKBONE_DATABASE_URL")
         return 1
-    asyncio.run(check_profile_startup(config.database_url, data_dir))
+    try:
+        check_new_default(data_dir)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 1
     data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     data_dir.chmod(0o700)
     (data_dir / "state").mkdir(exist_ok=True)
@@ -69,7 +73,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"{env_path} exists (kept; use --force to regenerate)")
 
     async def _migrate() -> None:
-        async with _common.Direct(config) as direct:
+        async with _common.Direct(config, bootstrap=True) as direct:
             await direct.db.signing.audience()
 
     asyncio.run(_migrate())

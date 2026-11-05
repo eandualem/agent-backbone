@@ -168,8 +168,9 @@ def is_agent_client(key: str) -> bool:
 class Direct:
     """Direct database access for when the backbone is not running."""
 
-    def __init__(self, config: BackboneConfig) -> None:
+    def __init__(self, config: BackboneConfig, *, bootstrap: bool = False) -> None:
         self._boot = config
+        self._bootstrap = bootstrap
         self.db = None
         self.store = None
         self.config = config
@@ -180,9 +181,9 @@ class Direct:
                 "Agent credentials require the running API; direct database fallback is disabled"
             )
         from agent_backbone.services.agents import AgentStore
-        from agent_backbone.services.database import BackboneDB, check_profile_startup
+        from agent_backbone.services.database import BackboneDB
 
-        await check_profile_startup(self._boot.database_url, self._boot.data_dir)
+        await self._check_profile()
         self.db = BackboneDB(self._boot.database_url)
         await self.db.start()
         self.store = AgentStore(self.db, self._boot.data_dir)
@@ -191,6 +192,13 @@ class Direct:
 
     async def __aexit__(self, *exc: Any) -> None:
         await self.db.stop()
+
+    async def _check_profile(self) -> None:
+        """Only `init` and setup, which create the first profile, run without one."""
+        from agent_backbone.services.database import check_new_default, default_profile_at
+
+        check = check_new_default if self._bootstrap else default_profile_at
+        await asyncio.to_thread(check, self._boot.data_dir)
 
 
 def print_json(data: Any) -> None:

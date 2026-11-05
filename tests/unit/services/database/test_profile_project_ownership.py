@@ -3,7 +3,6 @@
 import json
 import os
 import shutil
-import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from functools import partial
@@ -149,25 +148,6 @@ def test_aliases_nested_paths_and_failed_lifecycles_keep_claims(profiles, tmp_pa
         registry.claim_projects(a.identity, a.data_dir, (repo,))
     with pytest.raises(ValueError, match="another profile"):
         ProfileRegistry(registry.path).claim_projects(b.identity, b.data_dir, (repo,))
-
-
-def test_old_registry_needs_explicit_initialization_not_discovery(profiles, tmp_path):
-    registry, (a, _) = profiles
-    repo = make_repo(tmp_path / "project")
-    with sqlite3.connect(registry.path) as conn:
-        conn.execute("DROP TABLE project_claims")
-        conn.execute("DROP TABLE lifecycle_operations")
-        conn.execute("DROP TABLE profile_bindings")
-        conn.execute("DROP TABLE profile_ports")
-        conn.execute("DROP TABLE default_profiles")
-        conn.execute("PRAGMA user_version = 1")
-    before = registry.path.read_bytes()
-    assert registry.show(a.identity.profile_id)["binding"] is None
-    assert registry.path.read_bytes() == before
-    with pytest.raises(ValueError, match="initialization"):
-        registry.claim_projects(a.identity, a.data_dir, (repo,))
-    ProfileRegistry.create(registry.path).claim_projects(a.identity, a.data_dir, (repo,))
-    assert registry.check_reservation(a.identity, a.data_dir) == a
 
 
 def test_new_profile_directory_cannot_take_an_existing_project_claim(profiles, tmp_path):

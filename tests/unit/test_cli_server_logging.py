@@ -94,7 +94,7 @@ def test_a_quoted_home_path_is_expanded_before_logging_starts(tmp_path, monkeypa
     args = argparse.Namespace(detach=False, log_file=Path("~/backbone.log"))
     with (
         patch.object(server._common, "load_config", AsyncMock(return_value=make_config(tmp_path))),
-        patch.object(server, "_default_reservation"),
+        patch("agent_backbone.services.database.default_profile_at", return_value=(None, None)),
         patch.object(server, "_default_provider", AsyncMock(return_value=None)),
         patch.object(server, "_run_server") as run,
     ):
@@ -125,7 +125,7 @@ def test_up_reports_a_server_refusal_without_a_traceback(tmp_path, capsys):
     from agent_backbone.cli import server
 
     with (
-        patch.object(server, "_default_reservation"),
+        patch("agent_backbone.services.database.default_profile_at", return_value=(None, None)),
         patch.object(server._common, "load_config", AsyncMock(return_value=make_config(tmp_path))),
         patch.object(server, "_default_provider", AsyncMock(return_value=None)),
         patch.object(server, "_run_server", side_effect=ValueError("socket already in use")),
@@ -144,11 +144,10 @@ async def test_default_pins_the_recorded_tmux_server(tmp_path, monkeypatch):
     reservation = SimpleNamespace(data_dir=tmp_path, binding=SimpleNamespace(tmux_socket=recorded))
     monkeypatch.setenv("TMUX_TMPDIR", str(tmp_path / "elsewhere"))
     with (
-        patch.object(server, "_default_reservation", return_value=(None, reservation)),
         patch("agent_backbone.services.database.reconcile_profile_provider", AsyncMock()),
         patch("agent_backbone.services.terminal.pin_tmux_server") as pin,
     ):
-        await server._default_provider(make_config(tmp_path))
+        await server._default_provider(None, reservation)
     pin.assert_called_once_with(recorded)
 
 
@@ -276,7 +275,7 @@ def test_off_keeps_explicit_server_failure_result_without_log_capture(
     args = argparse.Namespace(detach=False, log_file=path)
     with (
         patch.object(server._common, "load_config", AsyncMock(return_value=config)),
-        patch.object(server, "_default_reservation"),
+        patch("agent_backbone.services.database.default_profile_at", return_value=(None, None)),
         patch.object(server, "_default_provider", AsyncMock(return_value=None)),
         patch("uvicorn.Server.run", side_effect=SystemExit(exit_code)),
     ):

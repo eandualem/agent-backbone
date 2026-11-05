@@ -21,6 +21,7 @@ from pathlib import Path
 from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
 
 PROFILE_PORTS = range(7121, 8121)
+SCHEMA_VERSION = 4
 """Loopback ports for isolated providers; the default installation uses 7120."""
 
 
@@ -131,9 +132,6 @@ class ProfileRegistry:
         registry._check_parent()
         if registry.path.exists():
             registry._validate_for_write()
-            registry._initialize_project_claims()
-            registry._initialize_operations()
-            registry._initialize_bindings()
             return registry
         fd, temporary = tempfile.mkstemp(prefix=".registry-", dir=registry.path.parent)
         os.close(fd)
@@ -147,44 +145,11 @@ class ProfileRegistry:
                     "baseline_version TEXT NOT NULL, state TEXT NOT NULL "
                     "CHECK (state IN ('creating', 'failed')))"
                 )
-                conn.execute("PRAGMA user_version = 1")
-            # Publish only a complete database, without replacing a concurrent
-            # creator's file. A crash before publication leaves no partial target.
-            with suppress(FileExistsError):
-                os.link(temporary, registry.path)
-            parent = os.open(registry.path.parent, os.O_RDONLY)
-            try:
-                os.fsync(parent)
-            finally:
-                os.close(parent)
-        finally:
-            Path(temporary).unlink(missing_ok=True)
-        registry._validate_for_write()
-        registry._initialize_project_claims()
-        registry._initialize_operations()
-        registry._initialize_bindings()
-        return registry
-
-    def _validate_for_write(self) -> None:
-        # Explicit initialization/apply may recover an interrupted SQLite write.
-        # A read-only validation first would strand a hot rollback journal.
-        with self._connection(write=True) as conn:
-            self._records(conn)
-
-    def _initialize_project_claims(self) -> None:
-        """Explicitly upgrade reservations; discovery never changes the schema."""
-        with self._connection(write=True) as conn:
-            if conn.execute("PRAGMA user_version").fetchone()[0] == 1:
                 conn.execute(
                     "CREATE TABLE project_claims ("
                     "path TEXT PRIMARY KEY NOT NULL, profile_id TEXT NOT NULL, "
                     "installation_id TEXT NOT NULL, lifecycle_id TEXT NOT NULL)"
                 )
-                conn.execute("PRAGMA user_version = 2")
-
-    def _initialize_operations(self) -> None:
-        with self._connection(write=True) as conn:
-            if conn.execute("PRAGMA user_version").fetchone()[0] == 2:
                 conn.execute(
                     "CREATE TABLE lifecycle_operations ("
                     "request_id TEXT PRIMARY KEY NOT NULL, request_json TEXT NOT NULL, "
@@ -200,13 +165,6 @@ class ProfileRegistry:
                     "CREATE UNIQUE INDEX lifecycle_installation_pending "
                     "ON lifecycle_operations(installation_id) WHERE status = 'pending'"
                 )
-                conn.execute("PRAGMA user_version = 3")
-
-    def _initialize_bindings(self) -> None:
-        # A separate table: the profiles state CHECK cannot change without a rebuild,
-        # and publishing one row keeps creating-to-ready atomic.
-        with self._connection(write=True) as conn:
-            if conn.execute("PRAGMA user_version").fetchone()[0] == 3:
                 conn.execute(
                     "CREATE TABLE profile_bindings ("
                     "profile_id TEXT PRIMARY KEY NOT NULL, endpoint TEXT NOT NULL, "
@@ -217,7 +175,26 @@ class ProfileRegistry:
                     "CREATE TABLE profile_ports ("
                     "port INTEGER PRIMARY KEY NOT NULL, profile_id TEXT UNIQUE NOT NULL)"
                 )
-                conn.execute("PRAGMA user_version = 4")
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            # Publish only a complete database, without replacing a concurrent
+            # creator's file. A crash before publication leaves no partial target.
+            with suppress(FileExistsError):
+                os.link(temporary, registry.path)
+            parent = os.open(registry.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(parent)
+            finally:
+                os.close(parent)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+        registry._validate_for_write()
+        return registry
+
+    def _validate_for_write(self) -> None:
+        # Explicit initialization/apply may recover an interrupted SQLite write.
+        # A read-only validation first would strand a hot rollback journal.
+        with self._connection(write=True) as conn:
+            self._records(conn)
 
     def _check_parent(self) -> None:
         info = self.path.parent.stat()
@@ -238,12 +215,8 @@ class ProfileRegistry:
                 conn.execute("PRAGMA synchronous = EXTRA")
                 conn.execute("PRAGMA fullfsync = ON")
             conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
-            if not initializing and conn.execute("PRAGMA user_version").fetchone()[0] not in {
-                1,
-                2,
-                3,
-                4,
-            }:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if not initializing and version != SCHEMA_VERSION:
                 raise ValueError("Unsupported profile registry schema")
             yield conn
             if write:
@@ -256,16 +229,13 @@ class ProfileRegistry:
 
     def _records(self, conn) -> list[ProfileReservation]:
         records = []
-        bindings = {}
-        default = set()
-        if conn.execute("PRAGMA user_version").fetchone()[0] >= 4:
-            default = {row["profile_id"] for row in conn.execute("SELECT * FROM default_profiles")}
-            bindings = {
-                row["profile_id"]: ProfileBinding(
-                    Path(row["endpoint"]), Path(row["credential"]), Path(row["tmux_socket"])
-                )
-                for row in conn.execute("SELECT * FROM profile_bindings")
-            }
+        default = {row["profile_id"] for row in conn.execute("SELECT * FROM default_profiles")}
+        bindings = {
+            row["profile_id"]: ProfileBinding(
+                Path(row["endpoint"]), Path(row["credential"]), Path(row["tmux_socket"])
+            )
+            for row in conn.execute("SELECT * FROM profile_bindings")
+        }
         for row in conn.execute("SELECT * FROM profiles ORDER BY profile_id"):
             try:
                 # A failed tombstone always wins over a previously published binding.
@@ -471,8 +441,6 @@ class ProfileRegistry:
         for path in owned if own_tmux else (*owned, binding.tmux_socket):
             if not path.is_absolute() or path == data_dir or not path.is_relative_to(data_dir):
                 raise ValueError("Profile binding is outside its reserved directory")
-        if conn.execute("PRAGMA user_version").fetchone()[0] != 4:
-            raise ValueError("Profile registry needs explicit binding initialization")
         record = self._matching(conn, identity, data_dir)
         if record.state == "failed":
             raise ValueError("Profile lifecycle has been invalidated")
@@ -498,14 +466,8 @@ class ProfileRegistry:
                     return record
         raise ValueError("Profile is not ready")
 
-    def check_unadopted(self, data_dir: Path) -> None:
-        """Refuse legacy startup in any reserved tree, even without local identity.
-
-        An older restored database can predate identity reservation. Absence of
-        local metadata must not allow it to serve a reserved directory as legacy.
-        A missing registry is allowed only for this unadopted-provider check;
-        discovery still treats a missing registry as an error.
-        """
+    def check_unreserved(self, data_dir: Path) -> None:
+        """Refuse a directory inside any reserved profile. No registry reserves nothing."""
         try:
             self.path.lstat()
         except FileNotFoundError:
@@ -532,8 +494,6 @@ class ProfileRegistry:
         if not resources:
             raise ValueError("Project resources must be existing directories")
         with self._connection(write=True) as conn:
-            if conn.execute("PRAGMA user_version").fetchone()[0] not in {2, 3, 4}:
-                raise ValueError("Profile registry needs explicit project ownership initialization")
             records = self._records(conn)
             owner = self._matching(conn, identity, data_dir)
             if owner.state == "failed":
@@ -579,8 +539,6 @@ class ProfileRegistry:
             )
 
     def _project_claims(self, conn, records) -> list[tuple[Path, ProfileIdentity]]:
-        if conn.execute("PRAGMA user_version").fetchone()[0] == 1:
-            return []
         claims = []
         for row in conn.execute("SELECT * FROM project_claims"):
             try:

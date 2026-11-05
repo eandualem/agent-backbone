@@ -265,6 +265,9 @@ def main() -> int:
         detached = home.cli("up", "--detach", check=False)
         check("a detached start refuses too", detached.returncode == 1, detached.stdout[-200:])
         check("a refused start creates nothing", not home.data.exists())
+        started = home.cli("agent", "start", "ghost", "--dir", str(root), check=False)
+        check("the CLI starts nothing without a profile", started.returncode != 0)
+        check("the refused CLI creates nothing", not home.data.exists())
         home.cli("init")
         legacy = home.up()
         processes.append(legacy)
@@ -319,6 +322,13 @@ def main() -> int:
         for name, (http, bound) in clients.items():
             check(f"{name} answers", http.get("/api/profile", headers=bound).status_code == 200)
         a, b = clients["A"], clients["B"]
+        swarms = a[0].get("/api/swarms", headers=a[1])
+        log = Path(records["A"]["binding"]["credential_reference"]["path"]).parent / "state"
+        check(
+            "a profile with no sessions is not an error",
+            swarms.status_code == 200
+            and "Could not query" not in (log / "provider.log").read_text(),
+        )
         check(
             "A's key does not open B",
             b[0]

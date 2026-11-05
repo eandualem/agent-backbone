@@ -16,7 +16,6 @@ from agent_backbone.services.database import (
     ProfileOperations,
     ProfileRegistry,
     ProfileReservation,
-    check_profile_startup,
 )
 
 
@@ -183,10 +182,6 @@ async def test_explicit_apply_recovers_hot_journal_and_replays_original_receipt(
         assert result.value.code == 1
         assert json.loads(capsys.readouterr().out)["error"]["code"] == "registry_unavailable"
         assert (registry.path.read_bytes(), journal.read_bytes()) == before
-    provider = tmp_path / "legacy"
-    url = f"sqlite+aiosqlite:///{provider / 'backbone.db'}"
-    with pytest.raises(ValueError, match="unavailable"):
-        await check_profile_startup(url, provider)
     source = tmp_path / "request.json"
     source.write_text(json.dumps(request))
     with pytest.raises(SystemExit) as result:
@@ -195,8 +190,6 @@ async def test_explicit_apply_recovers_hot_journal_and_replays_original_receipt(
     assert json.loads(capsys.readouterr().out) == expected
     assert not journal.exists()
     assert operations.lookup(request["request_id"]) == expected
-    await check_profile_startup(url, provider)
-    assert not provider.exists()
 
 
 @pytest.mark.parametrize("args", [["list"], ["show", "profile-a"], ["operation", "op-a"]])

@@ -133,8 +133,9 @@ def test_configured_server_passes_private_listener_and_existing_tcp_socket(root)
     from agent_backbone.config import AgentsConfig, build_config
 
     path = root / "api.sock"
-    config = build_config(
-        root, settings={"backbone.socket_path": str(path)}, agents=AgentsConfig(), env={}
+    config = build_config(root, settings={}, agents=AgentsConfig(), env={})
+    provider = SimpleNamespace(
+        reservation=SimpleNamespace(kind="legacy_default", binding=SimpleNamespace(endpoint=path))
     )
     app = SimpleNamespace(state=SimpleNamespace())
     with (
@@ -151,8 +152,9 @@ def test_configured_server_passes_private_listener_and_existing_tcp_socket(root)
             assert path.stat().st_mode & 0o777 == 0o600
 
         server.return_value.run.side_effect = run
-        _run_server(config)
+        _run_server(config, provider=provider)
         assert server.call_args.args[0].http is local.LocalPeerProtocol
+        assert server.call_args.args[0].timeout_graceful_shutdown == 10
         tcp.close.assert_called_once()
     assert not path.exists()
 
@@ -328,7 +330,7 @@ def test_runtime_child_cannot_retain_listeners_across_upgrade(root, monkeypatch,
     runner = asyncio.run if event_loop == "asyncio" else pytest.importorskip("uvloop").run
     config = build_config(
         root,
-        settings={"backbone.socket_path": str(root / "api.sock"), "backbone.port": 0},
+        settings={"backbone.port": 0},
         agents=AgentsConfig(),
         env={},
     )
@@ -376,5 +378,10 @@ def test_runtime_child_cannot_retain_listeners_across_upgrade(root, monkeypatch,
         server.started = True
 
     monkeypatch.setattr(uvicorn.Server, "run", run)
-    _run_server(config)
+    provider = SimpleNamespace(
+        reservation=SimpleNamespace(
+            kind="legacy_default", binding=SimpleNamespace(endpoint=root / "api.sock")
+        )
+    )
+    _run_server(config, provider=provider)
     assert not (root / "api.sock").exists()
