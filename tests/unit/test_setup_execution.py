@@ -71,7 +71,7 @@ def test_initialize_creates_editable_core_and_retry_preserves_user_edits(tmp_pat
     assert code == 0 and again["code"] == "initialized"
     assert policy.read_text() == "Owner's editable policy\n"
     assert (data / ".env").read_bytes() == before
-    assert result["completed_steps"] == ["preflight", "data", "starters"]
+    assert result["completed_steps"] == ["preflight", "data", "starters", "profile"]
     assert before.decode().strip().split("=", 1)[1] not in json.dumps(result)
     assert (
         before.decode().strip().split("=", 1)[1]
@@ -626,7 +626,7 @@ def test_setup_service_failure_keeps_retry_state_and_emits_diagnostics(
     code, result = invoke(tmp_path, capsys, body)
     assert code == 3 and result["code"] == "service_unavailable"
     assert result["retry"] == "same_request"
-    assert result["completed_steps"] == ["preflight", "data", "starters"]
+    assert result["completed_steps"] == ["preflight", "data", "starters", "profile"]
     assert "exit 1" in result["message"] and "journalctl --user" in result["message"]
     data = Path(body["data_dir"])
     credential = (data / ".env").read_bytes()

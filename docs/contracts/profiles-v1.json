@@ -995,5 +995,87 @@
         }
       }
     }
+  },
+  "skills_copy": {
+    "route": "POST /api/skills",
+    "credential": "operator",
+    "request": {
+      "path": "/absolute/folder/my-skill",
+      "name": null,
+      "tags": [
+        "all"
+      ],
+      "replace": false,
+      "mode": "copy",
+      "actor": "app"
+    },
+    "succeeded_status": 200,
+    "succeeded_fields": [
+      "name",
+      "path",
+      "description",
+      "tags",
+      "relinked",
+      "warnings"
+    ],
+    "refusals": [
+      {
+        "case": "a symbolic link at the folder or inside it",
+        "status": 422
+      },
+      {
+        "case": "a special file inside it",
+        "status": 422
+      },
+      {
+        "case": "no SKILL.md, a relative path or one containing ..",
+        "status": 422
+      },
+      {
+        "case": "over 2,000 entries, 50 MB or 16 levels",
+        "status": 422
+      },
+      {
+        "case": "overlaps the skills store",
+        "status": 422
+      },
+      {
+        "case": "name taken without replace",
+        "status": 422
+      },
+      {
+        "case": "an agent credential",
+        "status": 403
+      }
+    ],
+    "note": "The folder stays in place. A .git directory is left behind. 422 detail is text to show the person."
+  },
+  "operator_document": {
+    "route": "POST /api/documents",
+    "credential": "operator",
+    "request": {
+      "author": "operator",
+      "request_id": "overview-v1",
+      "title": "Overview",
+      "html": "<h1>Overview</h1>",
+      "supersedes_id": null
+    },
+    "succeeded_status": 201,
+    "retry_status": 200,
+    "record_fields": {
+      "author_name": "operator",
+      "agent_name": null
+    },
+    "refusals": [
+      {
+        "case": "an agent credential",
+        "status": 403
+      },
+      {
+        "case": "an agent is named operator",
+        "status": 409
+      }
+    ],
+    "note": "No signature. Records use the existing DocumentMetadata shape."
   }
 }
