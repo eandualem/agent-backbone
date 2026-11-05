@@ -123,6 +123,15 @@ def install_native_environments(environments: Mapping[str, NativeEnvironment]) -
     _CONTEXT = captured
 
 
+def native_context_installed() -> bool:
+    return _CONTEXT is not None
+
+
+def native_runtime_uncaptured(runtime: str) -> bool:
+    """This profile did not capture the runtime, so it is unavailable here."""
+    return _CONTEXT is not None and runtime not in _CONTEXT
+
+
 def native_environment(runtime: str) -> NativeEnvironment | None:
     if _CONTEXT is None:
         return None

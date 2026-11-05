@@ -41,7 +41,7 @@ def terminal():
 
 
 async def test_shell_starts_isolated_in_the_profile_home(
-    api_client, auth_headers, native, terminal
+    api_app, api_client, auth_headers, native, terminal
 ):
     provider, headers, captured = native
     response = await api_client.post(
@@ -58,6 +58,26 @@ async def test_shell_starts_isolated_in_the_profile_home(
     assert options["working_dir"] == captured["shell"]["HOME"]
     assert options["inherit_environment"] is False
     assert options["environment"]["HOME"] == captured["shell"]["HOME"]
+    assert options["command"][-1] != "-l"
+    # The CLI in this shell reaches this profile, and no credential is handed over.
+    identity = provider.reservation.identity
+    assert options["environment"]["BACKBONE_DATA_DIR"] == str(api_app.state.config.data_dir)
+    assert options["environment"]["BACKBONE_PORT"] == str(api_app.state.config.backbone.port)
+    assert options["environment"]["BACKBONE_PROFILE_ID"] == identity.profile_id
+    assert options["environment"]["BACKBONE_INSTALLATION_ID"] == identity.installation_id
+    assert options["environment"]["BACKBONE_LIFECYCLE_ID"] == identity.lifecycle_id
+    assert "BACKBONE_API_KEY" not in options["environment"]
+
+
+async def test_runtime_list_reports_an_uncaptured_runtime_as_unavailable(
+    api_client, auth_headers, native
+):
+    _, headers, _ = native
+    response = await api_client.get("/api/runtimes", headers={**auth_headers, **headers})
+    assert response.status_code == 200
+    available = {item["id"]: item["available"] for item in response.json()}
+    assert available["codex"] is True
+    assert available["gemini"] is False
 
 
 async def test_a_live_shell_is_returned_unchanged(api_client, auth_headers, native, terminal):
@@ -186,6 +206,7 @@ async def test_default_shell_keeps_the_host_environment_without_secrets(
     assert options["working_dir"] == (cwd or str(Path.home()))
     assert "environment" not in options and "inherit_environment" not in options
     assert "BACKBONE_API_KEY" in options["scrub"]
+    assert options["command"][-1] == "-l"
 
 
 async def test_default_keeps_its_sign_ins(api_client, auth_headers, default_profile, terminal):

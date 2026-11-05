@@ -228,7 +228,30 @@ def fresh_install() -> tuple[list[str], object]:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def symlinked_data_dir() -> None:
+    """A data directory reached through a link serves, instead of refusing every request."""
+    root = Path(tempfile.mkdtemp(prefix="bbl", dir="/tmp")).resolve()
+    home = Home(root)
+    process = None
+    try:
+        home.data = root / "real-data"
+        home.data.mkdir()
+        (root / "linked-data").symlink_to(home.data)
+        home.env["BACKBONE_DATA_DIR"] = str(root / "linked-data")
+        home.cli("init")
+        process = home.up()
+        operator = {"Authorization": "Bearer " + home.key(home.data / ".env")}
+        answer = httpx.get(
+            f"http://127.0.0.1:{PORT}/api/agents", headers=operator, trust_env=False, timeout=30
+        )
+        check("a symlinked data directory serves", answer.status_code == 200, answer.text[:200])
+    finally:
+        home.cleanup([process] if process else [])
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main() -> int:
+    symlinked_data_dir()
     fresh_skills, fresh_policy = fresh_install()
     # Under /tmp: a pytest or scratch path can exceed the Unix socket length limit.
     root = Path(tempfile.mkdtemp(prefix="bbp", dir="/tmp")).resolve()
@@ -239,6 +262,9 @@ def main() -> int:
         check("no registry is registry_absent", "registry_absent" in absent.stdout)
         refused = home.cli("up", check=False)
         check("nothing runs without a profile", refused.returncode == 1, refused.stderr[-200:])
+        detached = home.cli("up", "--detach", check=False)
+        check("a detached start refuses too", detached.returncode == 1, detached.stdout[-200:])
+        check("a refused start creates nothing", not home.data.exists())
         home.cli("init")
         legacy = home.up()
         processes.append(legacy)
@@ -314,6 +340,7 @@ def main() -> int:
         )
 
         env_a = home.first_agent(records["A"], "worker", root / "project-a")
+        check("an isolated agent can run backbone", shutil.which("backbone", path=env_a["PATH"]))
         linked = root / "project-a" / ".agents" / "skills" / "backbone-documents"
         check("the first agent received the starter skills", linked.exists(), str(linked))
         skills = sorted(p.name for p in linked.parent.iterdir())
@@ -400,6 +427,28 @@ def main() -> int:
         first = a[0].post("/api/profile/shells", headers=a[1], json=shell).json()
         again = a[0].post("/api/profile/shells", headers=a[1], json=shell).json()
         check("shell is idempotent", (first["created"], again["created"]) == (True, False))
+        answer = root / "shell-cli.txt"
+        subprocess.run(
+            [
+                "tmux",
+                "-S",
+                socket_a,
+                "send-keys",
+                "-t",
+                first["session"],
+                f"backbone agent list > {answer} 2>&1; echo done >> {answer}",
+                "Enter",
+            ],
+            env=home.env,
+            check=True,
+        )
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and "done" not in (
+            answer.read_text() if answer.exists() else ""
+        ):
+            time.sleep(0.2)
+        said = answer.read_text() if answer.exists() else ""
+        check("the CLI in a profile shell reaches that profile", "worker" in said, said[-300:])
         signin = a[0].post(
             "/api/profile/accounts/sign-in",
             headers=a[1],

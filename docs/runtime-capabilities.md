@@ -113,7 +113,7 @@ version differs.
 | Agent registration IDs and stale-registration refusal on inspection | Select the agent again after its registration changes. |
 | Agents run inside an isolated profile with their own native environment | Use Default for this runtime. |
 | Sign a CLI account in inside an isolated profile | Use Default for this runtime. |
-| Operator-only profile discovery, lifecycle refusal receipts and reserved startup refusal | Reserved providers cannot start; profile activation is not implemented. |
+| Operator-only profile discovery, lifecycle refusal receipts and reserved startup refusal | A provider whose profile is not ready refuses to start. |
 | Current agent-authored checklists with conditional updates and contextual feedback | Keep the current checklist locally until the provider is available. |
 | GitHub acknowledgements bound to registration and successful publication | Unbound receipts cannot acknowledge work; restart older sessions normally. |
 | Retained spreadsheet workbooks, calculated revisions and contextual feedback | Keep the workbook locally until a Backbone with Sheets is available. |

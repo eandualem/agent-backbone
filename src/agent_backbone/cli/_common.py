@@ -42,11 +42,22 @@ def api_url(config: BackboneConfig, path: str) -> str:
     return f"{scheme}://{host}:{config.backbone.port}{path}"
 
 
+_PROFILE_SHELL_HEADERS = {
+    "BACKBONE_PROFILE_ID": "X-Backbone-Profile-Id",
+    "BACKBONE_INSTALLATION_ID": "X-Backbone-Installation-Id",
+    "BACKBONE_LIFECYCLE_ID": "X-Backbone-Lifecycle-Id",
+}
+
+
 def headers(config: BackboneConfig) -> dict[str, str]:
     result = {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
     if config.client_registration:
         result["X-Backbone-Client-Agent"] = config.client_agent
         result["X-Backbone-Client-Registration"] = config.client_registration
+    # Set only in a shell the profile's provider opened.
+    for variable, header in _PROFILE_SHELL_HEADERS.items():
+        if value := os.environ.get(variable):
+            result[header] = value
     return result
 
 

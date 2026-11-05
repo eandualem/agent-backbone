@@ -157,7 +157,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("up", help="run the backbone")
     p.add_argument("--detach", "-d", action="store_true", help="run inside a tmux session")
-    p.add_argument("--reload", action="store_true", help="auto-reload on code changes (dev)")
     p.add_argument(
         "--log-file",
         type=Path,

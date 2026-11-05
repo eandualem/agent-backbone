@@ -376,7 +376,7 @@ def copy_skill(
 def _copy_tree(directory_fd: int, target: Path, relative: Path, totals: list[int]) -> None:
     if len(relative.parts) >= _COPY_MAX_DEPTH:
         raise ValueError(f"the skill folder is nested too deeply at {relative}")
-    target.mkdir(mode=0o755)
+    target.mkdir(mode=0o700)
     with os.scandir(directory_fd) as entries:
         items = sorted(entries, key=lambda entry: entry.name)
     for entry in items:
@@ -400,6 +400,8 @@ def _copy_tree(directory_fd: int, target: Path, relative: Path, totals: list[int
             _copy_file(directory_fd, entry.name, target / entry.name, path, totals)
         else:
             raise ValueError(f"the skill folder contains a special file: {path}")
+    # The owner keeps full access so the store can later replace or remove it.
+    target.chmod(stat.S_IMODE(os.fstat(directory_fd).st_mode) & 0o777 | 0o700)
 
 
 def _copy_file(directory_fd: int, name: str, target: Path, path: Path, totals: list[int]) -> None:
@@ -409,7 +411,7 @@ def _copy_file(directory_fd: int, name: str, target: Path, path: Path, totals: l
         info = os.fstat(source.fileno())
         if not stat.S_ISREG(info.st_mode):
             raise ValueError(f"the skill folder contains a special file: {path}")
-        mode = 0o755 if info.st_mode & 0o100 else 0o644
+        mode = stat.S_IMODE(info.st_mode) & 0o777 | 0o600
         with open(target, "xb") as copy:
             while chunk := source.read(1 << 20):
                 totals[1] += len(chunk)

@@ -234,8 +234,7 @@ profile identity instead of `data_dir`. The CLI resolves only an authoritative
 ready registry record and its private operator credential, then verifies the
 provider before submitting the original request. Every schema-2 event echoes
 the requested profile, installation and lifecycle IDs; step events also include
-the action. Schema 1 keeps the legacy flow below. Current profile reservations
-remain non-ready; this client path does not activate them. See the
+the action. Schema 1 keeps the unbound flow below. See the
 [profile setup contract](profiles-contract.md#set-up-an-agent-within-a-captured-profile).
 
 Initialize and first-agent requests are limited to 32,768 UTF-8 bytes.

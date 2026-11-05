@@ -246,15 +246,20 @@ git clone https://github.com/eandualem/agent-backbone
 cd agent-backbone
 make install
 make check
-BACKBONE_DATA_DIR=/tmp/backbone-dev make dev
 ```
 
-`make dev` runs on its own tmux server, so its agents stay apart from your own
-tmux sessions and from a real backbone's agents. Run CLI commands for it from
-a terminal outside tmux with the same settings, for example
-`TMUX_TMPDIR=/tmp/backbone-dev-tmux-$(id -u) BACKBONE_DATA_DIR=/tmp/backbone-dev uv run backbone agent attach NAME`.
-`agent attach`, and agent commands run while `make dev` is stopped, use tmux
-directly.
+To try a change, give a scratch install its own home, tmux directory and port. From a
+terminal outside tmux:
+
+```bash
+mkdir -p /tmp/backbone-dev
+export HOME=/tmp/backbone-dev TMUX_TMPDIR=/tmp/backbone-dev BACKBONE_PORT=7199
+.venv/bin/backbone init
+.venv/bin/backbone up
+```
+
+Its profile, agents and tmux sessions stay apart from your own. Run other CLI commands
+for it with the same three settings. Restart `up` to pick up code changes.
 
 See [Contributing](CONTRIBUTING.md) for branches, checks and releases.
 

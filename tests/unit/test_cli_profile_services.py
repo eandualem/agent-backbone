@@ -1,5 +1,6 @@
 """Provider start/stop act only on the verified registered instance."""
 
+import os
 import signal
 import socket
 import subprocess
@@ -12,6 +13,7 @@ import pytest
 from agent_backbone.cli import _profile_services as module
 from agent_backbone.cli._profile_client import Refused
 from agent_backbone.cli._profile_services import ProviderServices
+from agent_backbone.cli.service import setup_binary
 from agent_backbone.services.database import ProfileOperations, ProfileRegistry
 
 
@@ -66,7 +68,9 @@ def test_start_launches_with_no_ambient_environment(created, monkeypatch):
     ProviderServices(registry).start(reservation)
     command, options = popen.call_args.args[0], popen.call_args.kwargs
     assert command[-4:] == ["serve", "--registry", str(registry.path), receipt["profile_id"]]
-    assert options["env"].get("PATH") == "/usr/bin"
+    # The launcher comes first, so the profile's agents can run `backbone`.
+    launcher = str(setup_binary().parent)
+    assert options["env"]["PATH"].split(os.pathsep)[:2] == [launcher, "/usr/bin"]
     assert set(options["env"]) <= {"PATH", "LANG", "LC_ALL"}
     assert options["cwd"] == reservation.data_dir / "home"
     assert options["start_new_session"] is True

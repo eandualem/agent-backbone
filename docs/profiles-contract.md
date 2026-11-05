@@ -5,70 +5,40 @@ A profile owns one provider, fleet, database, runtime account environment and
 integration configuration. Multiple workspaces can share that profile. Selecting
 another profile affects new work; it cannot retarget an existing request.
 
-**Implementation status:** this page and its fixtures define the agreed contract.
-Operator list/show discovery and refusal of unreconciled startup are implemented.
-Lifecycle apply/lookup commands retain requests and receipts. Creating the empty
-baseline succeeds and publishes a ready record, start/stop run that profile's provider,
-and agents run inside it on Claude Code, Codex and OpenCode. Recovery of interrupted operations, replacement and restore
-fencing, and integration account proof are not done yet. The identity
-endpoint and bound-request checks have an internal reconciliation context, but no
-production startup installs it yet; the contract below is not a procedure for
-activating profiles.
-Provider implementation is
-tracked in [#548](https://github.com/eandualem/agent-backbone/issues/548), with the
-consumer in [agent-interface#182](https://github.com/eandualem/agent-interface/issues/182).
-The agreed design revision is **2**; JSON `schema_version: 1` is the first wire
-version. Extension revision **1** adds Default adoption, setup schema 2 and
-registration-aware permission inspection without changing revision 2 identity or
-lifecycle rules. The apply journal accepts the adoption request shape but refuses it until original
-provider capture is available. Schema-2 first-agent HTTP handling now has an internal captured-provider path,
-including cancellation and per-effect checks. No production startup installs that
-context. The schema-2 CLI resolver and bound runtime catalog are implemented;
-permission-context inspection remains unimplemented. Local resolution refuses
-the current non-ready registry records and never activates them.
-There is no earlier released profile protocol.
+**Implementation status:** every installation runs as a profile. `backbone init` and
+`backbone setup` create Default, and `backbone up` refuses to run without one. Isolated
+profiles can be created, started and stopped, and agents run inside them on Claude Code,
+Codex and OpenCode. Bound discovery, identity, sessions, CLI sign-in and setup schema 2
+are implemented. Not done yet: recovery of interrupted operations, replacement and
+restore fencing, integration account proof and permission-context inspection.
+Provider implementation is tracked in
+[#548](https://github.com/eandualem/agent-backbone/issues/548), with the consumer in
+[agent-interface#182](https://github.com/eandualem/agent-interface/issues/182).
+The agreed design revision is **2**; JSON `schema_version: 1` is the first wire version.
+Extension revision **1** adds setup schema 2 and registration-aware permission inspection
+without changing revision 2 identity or lifecycle rules. There is no earlier released
+profile protocol.
 
-Provider-local identity persistence is implemented as an internal database
-reservation. It stores the profile and lifecycle IDs against the existing signing
-audience, accepts an identical replay and refuses conflicting assignments. Reading
-an unreserved database creates no identity. Startup checks for this identity before
-creating directories, initializing or migrating the database, or starting agents,
-hooks, integrations or jobs. Direct CLI database fallback, `init` and setup
-initialization apply the same guard before writing credentials or receipts.
-Any identity record is refused because activation is not implemented. Directory
-ownership is checked separately against the external registry. This does not adopt
-Default or grant legacy compatibility. Ready activation and
-replacement fencing remain unimplemented; a copied database is not evidence of a
-valid active lifecycle.
+Each provider's database stores its profile and lifecycle IDs against the signing
+audience. A replay with identical values is accepted and a conflicting one refused. Before
+creating directories, migrating or starting anything, startup checks that identity and the
+directory against the external registry. A database holding an identity that the registry
+does not explain never starts. A copied database is not evidence of a valid lifecycle.
 
-An internal, separately initialized SQLite registry now reserves isolated-profile
-identity and canonical data-directory ownership outside the provider data tree.
-Its read-only discovery snapshots match the non-ready list/show shapes below;
-they do not initialize or repair a missing registry. Conflicting identities,
-overlapping directories and changed replay input are refused. Directory ownership
-also refuses case and Unicode-normalization aliases, including on case-sensitive
-filesystems. Invalidated
-reservations remain as failed records across provider database restoration and
-cannot be revived by replay. This is a startup reconciliation guard, not
-running-service/job fencing. It cannot publish `ready`, adopt Default or activate
-a replacement. The full lifecycle and runtime account boundary remain unfinished.
+The registry is a separate SQLite file outside every provider's data tree. It reserves
+each profile's identity and canonical data directory. Conflicting identities, overlapping
+directories and changed replay input are refused. Directory ownership also refuses case
+and Unicode-normalization aliases, including on case-sensitive filesystems. Invalidated
+reservations remain as failed records across a database restore and cannot be revived by
+replay. These checks run at startup and on each bound request; they do not stop a
+same-user process from changing files.
 
-The terminal service has an internal process-level socket pin for the future
-profile startup path. It must be selected before terminal use; subsequent changes
-are refused. Commands, interactive attachment and browser PTY attachment use that
-explicit socket, regardless of inherited tmux selection. Attaching from a client
-on another server requires a separate terminal. Legacy processes retain their
-existing environment behavior. No profile startup or selection command enables
-this pin yet; it does not establish runtime account isolation or provider readiness.
+A provider pins its tmux server before any terminal use, and later changes are refused.
+Commands, interactive attachment and browser PTY attachment use that socket, regardless of
+the inherited tmux selection. Attaching from a client on another server requires a separate
+terminal.
 
-Internal read-only reconciliation captures the external reservation, local
-SQLite identity, baseline and explicit terminal socket. It refuses changed
-ownership, identity, signing audience, baseline or noncanonical paths without
-creating or repairing storage. It leaves discovery non-ready and does not lift
-the startup refusal. External databases and Default adoption are not supported
-by this isolated-provider prerequisite.
-
-With that context installed by a future activation path, authenticated
+On a running provider, authenticated
 `GET /api/profile` returns the agreed identity response. HTTP content operations
 compare the complete tuple, the actual serving database and data directory,
 persisted metadata and process terminal pin before route handling. This internal
@@ -172,15 +142,12 @@ that write or
 substitute an empty registry. Reconciliation and mutation callers must preserve
 the original identity and directory through recovery.
 
-The unadopted provider currently rejects profile-bound clients: any profile
-identity header or Socket.IO identity field returns `binding_mismatch`, including
-partial or empty bindings. Existing ingress limits and credential/registration
-failures run first. This preliminary guard then refuses HTTP requests before
-route-specific permission or signature checks, and sockets before subscriptions.
-Unbound clients retain all existing checks and behavior. The guard prevents a bound
-operation from silently reaching a legacy provider; it cannot attest an identity
-and does not implement the bound-provider contract below, adoption, discovery or
-isolation.
+An application started without a profile context, such as a custom ASGI runner, rejects
+profile-bound clients: any profile identity header or Socket.IO identity field returns
+`binding_mismatch`, including partial or empty bindings. Existing ingress limits and
+credential/registration failures run first. The guard then refuses HTTP requests before
+route-specific permission or signature checks, and sockets before subscriptions. It keeps
+a bound operation from silently reaching a provider that cannot attest its identity.
 
 [Shared fixtures](contracts/profiles-v1.json) contain discovery records, identity,
 HTTP headers, Socket.IO identity/error fields, lifecycle requests/receipts,
@@ -243,7 +210,7 @@ An unsupported schema or older provider's 404 is an explicit compatibility failu
 `backbone profiles list --json` and `backbone profiles show PROFILE_ID --json` are
 local operator control-plane operations, separate from any provider's content API.
 Agent-facing tools cannot use them as a gateway to discover sibling fleets.
-Listing is read-only: it does not adopt, start, migrate or repair providers. An
+Listing is read-only: it does not start, migrate or repair providers. An
 unavailable registry is an error, not an empty successful list. With `--json`, list,
 show and operation report it on stdout with exit status 1: `registry_absent` before
 any profile exists, `registry_unavailable` for anything else.
@@ -266,11 +233,10 @@ configuration, API or database is loaded. Human output labels provisioning state
 Before opening mutable storage, both daemon startup and direct CLI fallback check
 that the canonical provider directory and configured SQLite database path
 do not overlap any reservation, including failed reservations. This prevents a
-pre-identity database restore from starting as legacy in a reserved tree. Missing
-registries preserve ordinary unadopted startup; existing but unreadable or invalid
-registries block it because directory ownership cannot be checked. Startup never
-creates or repairs the registry. A reserved database cannot start as legacy from
-another directory. This check does not fence an already running provider or
+pre-identity database restore from starting unbound in a reserved tree. With no registry
+no profile exists, so `up` refuses and `init` or setup creates it. An unreadable or invalid
+registry blocks startup because directory ownership cannot be checked, and `up` never
+repairs it. A reserved database cannot start from another directory. This check does not fence an already running provider or
 establish account isolation.
 
 Ordinary legacy startup retains SQLite crash recovery: after confirming that
@@ -314,7 +280,10 @@ session. The same `shell_id` always means the same session: a live one is return
 unchanged with `created: false` and its `cwd` ignored, and it is never killed or
 respawned. A bad directory returns `invalid_cwd`, a terminal failure
 `shell_unavailable`. The session gets only the locale and search path from the host,
-with its roots inside the profile.
+with its roots inside the profile. It also gets the profile's data directory, port and
+identity (`BACKBONE_DATA_DIR`, `BACKBONE_PORT`, `BACKBONE_PROFILE_ID`,
+`BACKBONE_INSTALLATION_ID`, `BACKBONE_LIFECYCLE_ID`), so the `backbone` CLI in that shell
+reaches this provider. None of these is a secret, and no credential is passed.
 
 `POST /api/profile/accounts/sign-in` with `{"schema_version":1,"runtime":"codex"}` runs
 that CLI's own sign-in in a session on the same server, using that runtime's private
@@ -352,7 +321,7 @@ before initializing the external registry, reserves its exact normalized input a
 returns the original receipt on replay. Changed input returns `request_conflict`
 without replacing the original record. A pending operation prevents another
 start/stop request for that profile; the conflicting request retains a failed
-`operation_busy` receipt. Pending adoption and lifecycle requests also serialize by
+`operation_busy` receipt. Pending lifecycle requests also serialize by
 installation identity. An interrupted pending operation stays pending across
 reopen and exact replay, without repeating effects or automatically releasing its
 reservation. Its outcome needs explicit reconciliation.
@@ -383,8 +352,8 @@ stale, invalidated or unknown tuple. A `failed` reservation is a permanent inval
 a valid binding awaiting readiness.
 These are durable failed-operation receipts with nonzero exit status. Refusal
 classification and receipt storage commit atomically, so a failure before that commit
-does not leave a pending reservation. Refusals do not create provider directories,
-start/stop services or adopt an installation.
+does not leave a pending reservation. Refusals do not create provider directories or
+start/stop services.
 An unchanged failed request continues to return that failure;
 new work after prerequisites change requires a new request ID. Receipts have no
 automatic expiry or pruning: the original outcome and changed-input conflict are
@@ -427,16 +396,14 @@ Hostile rollback of every same-user snapshot is outside this product boundary.
 
 ## Preserve legacy connections
 
-Unbound compatibility belongs only to the exact adopted profile, preserved
+Unbound compatibility belongs only to the exact Default profile, preserved
 installation identity and lifecycle. Display name, kind, path and creation order
 never grant it. Renaming that instance preserves eligibility; another profile
 named Default and a replacement instance do not inherit it.
 
-Before adoption, explicit legacy single-provider startup keeps its current
-behavior. It remains separate from standalone use without Backbone. A stored
-bound workspace never downgrades after a failed handshake. Existing setup schema 1
-stays legacy-only. The following extension defines adoption and bound setup; it
-does not silently convert saved schema-1 requests.
+A stored bound workspace never downgrades after a failed handshake. Existing setup
+schema 1 stays unbound. The following extension defines bound setup; it does not silently
+convert saved schema-1 requests.
 
 ## The Default profile
 
@@ -452,8 +419,8 @@ bound runtime catalog report those runtimes unavailable there, and the app uses 
 for Default. Start launches `backbone up` if nothing answers. Stop signals that process,
 and a service manager may start it again.
 
-A shell on Default uses the host environment without the installation's secrets, and
-sign-in there refuses, because Default uses the person's own CLI sign-ins.
+A shell on Default is a login shell in the host environment, without the installation's
+secrets, and sign-in there refuses, because Default uses the person's own CLI sign-ins.
 
 Only the exact Default tuple receives revision 2 legacy eligibility.
 
@@ -637,11 +604,10 @@ Missing files remain valid for an empty profile. These checks do not inspect
 credential-helper settings, machine policy or project configuration, and do not
 protect against concurrent writes by another process with the same OS identity.
 
-Reserved profiles still cannot start. Internal preparation captures a separate,
-immutable native environment and executable for each runtime before use. Trust
+A provider captures a separate, immutable native environment and executable for each runtime before use. Trust
 preparation, hooks, user-file readers, transcript and usage readers, version probes,
 and launch/resume commands use that capture. Native account invocations carry the
-same environment; no public account operation executes them yet. Per-agent overrides
+same environment, including CLI sign-in. Per-agent overrides
 cannot redirect native stores or select an inherited account/server. Complete tmux
 launch environments clear server-only variables and disable environment import on
 attach. Activation must own the pinned server and its global environment; these
@@ -690,8 +656,7 @@ A manifest with a missing or non-list `links` field is retained for repair inste
 of discarding it and leaving its links behind.
 
 The same launch and materialization behavior tests run for Claude Code, Codex and
-OpenCode. Production startup does not install this context yet. Default adoption
-must reconcile existing materializations before installation. Native configuration
-contents, credential helpers, managed policy, database restore and in-flight operation
-fencing remain prerequisites before activation. Claims do not protect against a
-same-user process replacing files concurrently.
+OpenCode. Isolated providers take these claims; Default does not yet, so keep one checkout
+out of both Default and an isolated profile. Native configuration contents, credential
+helpers, managed policy, database restore and in-flight operation fencing are not covered.
+Claims do not protect against a same-user process replacing files concurrently.

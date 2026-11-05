@@ -644,7 +644,7 @@ For automatic upgrades, `backbone up` requests Uvicorn’s graceful exit directl
 and re-executes after shutdown completes. External termination still stops the
 process normally. A custom ASGI runner that does not install this shutdown
 callback does not perform Backbone’s automatic restart; its supervisor owns
-restart behavior. `--reload` continues to use Uvicorn’s development reloader.
+restart behavior.
 
 
 

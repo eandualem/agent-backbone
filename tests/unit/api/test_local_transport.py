@@ -155,8 +155,6 @@ def test_configured_server_passes_private_listener_and_existing_tcp_socket(root)
         assert server.call_args.args[0].http is local.LocalPeerProtocol
         tcp.close.assert_called_once()
     assert not path.exists()
-    with pytest.raises(ValueError, match="without --reload"):
-        _run_server(config, reload=True)
 
 
 def test_inconclusive_probe_is_bounded_and_preserves_socket(root):

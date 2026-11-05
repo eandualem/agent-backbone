@@ -19,7 +19,7 @@ from agent_backbone.api.auth import require_operator
 from agent_backbone.api.deps import get_config, get_db
 from agent_backbone.api.models import envelope_sender
 from agent_backbone.api.signed import Refusal, now
-from agent_backbone.services.database import RECEIPT_RETENTION_DAYS
+from agent_backbone.services.database import OPERATOR_AUTHOR, RECEIPT_RETENTION_DAYS
 from agent_backbone.services.integrations import notify_humans
 
 router = APIRouter(prefix="/api/signing", tags=["signing"])
@@ -53,6 +53,8 @@ class TransitionRequest(BaseModel):
             raise ValueError("a signing sender name is printable ASCII")
         if signing.same_name(value) in DEFAULT_SENDERS:
             raise ValueError(f"'{value}' is what Backbone records when no sender is given")
+        if signing.same_name(value) == OPERATOR_AUTHOR:
+            raise ValueError(f"'{value}' is reserved for the person's own documents")
         return value
 
 

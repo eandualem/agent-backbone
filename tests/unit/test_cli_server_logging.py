@@ -91,14 +91,65 @@ def test_a_quoted_home_path_is_expanded_before_logging_starts(tmp_path, monkeypa
     from agent_backbone.cli import server
 
     monkeypatch.setenv("HOME", str(tmp_path))
-    args = argparse.Namespace(detach=False, reload=False, log_file=Path("~/backbone.log"))
+    args = argparse.Namespace(detach=False, log_file=Path("~/backbone.log"))
     with (
         patch.object(server._common, "load_config", AsyncMock(return_value=make_config(tmp_path))),
+        patch.object(server, "_default_reservation"),
         patch.object(server, "_default_provider", AsyncMock(return_value=None)),
         patch.object(server, "_run_server") as run,
     ):
         assert server.cmd_up(args) == 0
     assert run.call_args.kwargs["log_file"] == (tmp_path / "backbone.log").resolve()
+
+
+@pytest.mark.parametrize("detach", [False, True])
+def test_up_refuses_before_creating_anything(tmp_path, monkeypatch, capsys, detach):
+    import argparse
+    from unittest.mock import AsyncMock, patch
+
+    from agent_backbone.cli import server
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path / "data"))
+    with patch("agent_backbone.services.terminal.start_session", AsyncMock()) as start:
+        assert server.cmd_up(argparse.Namespace(detach=detach, log_file=None)) == 1
+    start.assert_not_called()
+    assert not (tmp_path / "data").exists()
+    assert "run `backbone init` first" in capsys.readouterr().err
+
+
+def test_up_reports_a_server_refusal_without_a_traceback(tmp_path, capsys):
+    import argparse
+    from unittest.mock import AsyncMock, patch
+
+    from agent_backbone.cli import server
+
+    with (
+        patch.object(server, "_default_reservation"),
+        patch.object(server._common, "load_config", AsyncMock(return_value=make_config(tmp_path))),
+        patch.object(server, "_default_provider", AsyncMock(return_value=None)),
+        patch.object(server, "_run_server", side_effect=ValueError("socket already in use")),
+    ):
+        assert server.cmd_up(argparse.Namespace(detach=False, log_file=None)) == 1
+    assert "socket already in use" in capsys.readouterr().err
+
+
+async def test_default_pins_the_recorded_tmux_server(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    from agent_backbone.cli import server
+
+    recorded = tmp_path / "recorded" / "default"
+    reservation = SimpleNamespace(data_dir=tmp_path, binding=SimpleNamespace(tmux_socket=recorded))
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmp_path / "elsewhere"))
+    with (
+        patch.object(server, "_default_reservation", return_value=(None, reservation)),
+        patch("agent_backbone.services.database.reconcile_profile_provider", AsyncMock()),
+        patch("agent_backbone.services.terminal.pin_tmux_server") as pin,
+    ):
+        await server._default_provider(make_config(tmp_path))
+    pin.assert_called_once_with(recorded)
 
 
 def test_a_log_keeps_at_least_one_backup():
@@ -116,53 +167,12 @@ def test_a_pressure_threshold_is_a_percentage(value):
         validate_setting("diagnostics.pressure_free_percent", value)
 
 
-def test_reload_and_a_log_file_are_refused_together(tmp_path, capsys):
-    import argparse
-    from unittest.mock import AsyncMock, patch
-
-    from agent_backbone.cli import server
-
-    args = argparse.Namespace(detach=False, reload=True, log_file=tmp_path / "backbone.log")
-    with (
-        patch.object(server._common, "load_config", AsyncMock(return_value=make_config(tmp_path))),
-        patch.object(server, "_run_server") as run,
-    ):
-        assert server.cmd_up(args) == 2
-    run.assert_not_called()
-    assert "--reload" in capsys.readouterr().out
-
-
 def test_a_negative_log_size_is_refused_and_zero_is_kept():
     from agent_backbone.config import validate_setting
 
     with pytest.raises(ValueError, match="zero or a positive"):
         validate_setting("backbone.log_max_mb", -1)
     assert validate_setting("backbone.log_max_mb", 0) == 0
-
-
-def test_reload_factory_uses_the_actual_listener_endpoint(tmp_path, monkeypatch):
-    import os
-    from dataclasses import replace
-    from unittest.mock import patch
-
-    from agent_backbone.cli.server import _reload_app, _run_server
-    from agent_backbone.config import bootstrap_config
-
-    monkeypatch.setenv("BACKBONE_PORT", "7120")
-    monkeypatch.delenv("BACKBONE_HOST", raising=False)
-    config = bootstrap_config(tmp_path)
-    config = replace(config, backbone=replace(config.backbone, host="localhost", port=8234))
-
-    def reload_child(*args, **kwargs):
-        with patch("agent_backbone.api.app.create_app", side_effect=lambda config: config):
-            boot = _reload_app()
-        assert (boot.backbone.host, boot.backbone.port) == (kwargs["host"], kwargs["port"])
-        assert boot.backbone.port == 8234
-
-    with patch("uvicorn.run", side_effect=reload_child):
-        _run_server(config, reload=True)
-    assert os.environ["BACKBONE_PORT"] == "7120"
-    assert "BACKBONE_HOST" not in os.environ
 
 
 @pytest.mark.parametrize(
@@ -263,9 +273,10 @@ def test_off_keeps_explicit_server_failure_result_without_log_capture(
 
     path = tmp_path / "optional.log"
     config = make_config(tmp_path, settings={"diagnostics.mode": "off"})
-    args = argparse.Namespace(detach=False, reload=False, log_file=path)
+    args = argparse.Namespace(detach=False, log_file=path)
     with (
         patch.object(server._common, "load_config", AsyncMock(return_value=config)),
+        patch.object(server, "_default_reservation"),
         patch.object(server, "_default_provider", AsyncMock(return_value=None)),
         patch("uvicorn.Server.run", side_effect=SystemExit(exit_code)),
     ):

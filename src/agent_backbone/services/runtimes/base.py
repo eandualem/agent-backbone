@@ -31,6 +31,7 @@ from agent_backbone.hooks import install as hooks
 from agent_backbone.services.runtimes._environment import (
     NativeEnvironment,
     native_environment,
+    native_runtime_uncaptured,
 )
 from agent_backbone.services.runtimes._pane import (
     DIALOG_CURSOR_RE,
@@ -449,6 +450,8 @@ class Runtime:
 
     def resolve_binary(self) -> str | None:
         """Find this runtime now, including any adapter-specific install location."""
+        if native_runtime_uncaptured(self.id):
+            return None  # Never the host's.
         if captured := native_environment(self.id):
             return captured.executable
         return resolve_command(self.binary) if self.binary else None

@@ -81,18 +81,34 @@ async def _ensure(request: Request, session: str, cwd: str, command: list[str], 
     }
 
 
+def _isolated_shell_environment(request: Request) -> dict[str, str]:
+    """Point the CLI in this shell at this profile. None of these values is a secret."""
+    identity = _identity(request)
+    config = request.app.state.config
+    return {
+        **RUNTIMES["shell"].environment(),
+        "BACKBONE_DATA_DIR": str(config.data_dir),
+        "BACKBONE_PORT": str(config.backbone.port),
+        "BACKBONE_PROFILE_ID": identity.profile_id,
+        "BACKBONE_INSTALLATION_ID": identity.installation_id,
+        "BACKBONE_LIFECYCLE_ID": identity.lifecycle_id,
+    }
+
+
 async def ensure_shell(request: Request) -> dict:
     body = await _parsed(request, _Shell)
     session = f"shell-{body.shell_id}"
     _identity(request)
-    environment = None if _is_default(request) else RUNTIMES["shell"].environment()
+    environment = None if _is_default(request) else _isolated_shell_environment(request)
     home = environment["HOME"] if environment is not None else str(Path.home())
     cwd = body.cwd if body.cwd is not None else home
     # A live session keeps its directory, so its cwd is ignored rather than judged.
     if not await session_exists(session) and not (Path(cwd).is_absolute() and Path(cwd).is_dir()):
         raise _error(422, "invalid_cwd", "The directory must be an absolute existing path.")
     login_shell = pwd.getpwuid(os.getuid()).pw_shell or "/bin/sh"
-    result = await _ensure(request, session, cwd, [login_shell], environment)
+    # Default's shell reads the person's profile, like their own terminal.
+    command = [login_shell, "-l"] if environment is None else [login_shell]
+    result = await _ensure(request, session, cwd, command, environment)
     return {**result, "shell_id": body.shell_id}
 
 

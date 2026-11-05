@@ -1498,6 +1498,24 @@ async def test_bound_setup_body_cannot_replace_http_tuple_or_downgrade(
     assert len(list((provider.reservation.data_dir / "setup-receipts").glob("*.json"))) == 1
 
 
+async def test_an_unbound_list_ignores_a_cached_replaced_registration(
+    api_app, api_client, auth_headers, bound_provider
+):
+    from dataclasses import replace
+
+    from agent_backbone.services.agents import EnrichedAgent
+
+    provider, _, _ = bound_provider
+    api_app.state.profile_provider = replace(
+        provider, reservation=replace(provider.reservation, kind="legacy_default")
+    )
+    cached = EnrichedAgent(name="renamed", session="renamed", registration_id="gone")
+    api_app.state.feed.snapshot = AsyncMock(return_value=[cached])
+    with patch("agent_backbone.api.profile_binding.provider_current", AsyncMock(return_value=True)):
+        response = await api_client.get("/api/agents", headers=auth_headers)
+    assert response.status_code == 200
+
+
 async def test_bound_list_rejects_a_cached_replaced_registration(
     api_app, api_client, auth_headers, bound_provider
 ):

@@ -178,7 +178,7 @@ async def test_copied_identity_is_refused_without_migration(config, uri):
         else f"sqlite+aiosqlite:///{path}"
     )
     config = replace(config, database_url_override=url)
-    with pytest.raises(ValueError, match="not ready"):
+    with pytest.raises(ValueError, match="belongs to a profile"):
         async with Direct(config):
             pytest.fail("copied database opened")
     assert (path.read_bytes(), path.stat().st_mtime_ns) == before
@@ -197,7 +197,7 @@ async def test_agent_start_direct_fallback_refuses_reserved_identity(config, db)
         patch("agent_backbone.cli._common.api_up", AsyncMock(return_value=False)),
         patch("agent_backbone.services.agents.operations.start_resolved", AsyncMock()) as start,
     ):
-        with pytest.raises(ValueError, match="not ready"):
+        with pytest.raises(ValueError, match="belongs to a profile"):
             await _agent_start(args)
     start.assert_not_awaited()
 
@@ -235,7 +235,7 @@ async def test_legacy_journal_recovery_preserves_identity_refusal(config, identi
     path = config.data_dir / "backbone.db"
     journal = _interrupted_database(path, identity=identity)
     if identity:
-        with pytest.raises(ValueError, match="not ready"):
+        with pytest.raises(ValueError, match="belongs to a profile"):
             await check_profile_startup(config.database_url, config.data_dir)
     else:
         await check_profile_startup(config.database_url, config.data_dir)

@@ -276,6 +276,21 @@ class TestRunServerRestart:
             ["python", *(["-I"] if isolated else []), "-B", "-m", "agent_backbone.cli", "up"],
         )
 
+    def test_an_isolated_provider_starts_over_with_only_its_search_path(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from agent_backbone.cli import server
+
+        monkeypatch.setenv("HOME", "/private/home")
+        monkeypatch.setenv("BACKBONE_DATA_DIR", "/private")
+        monkeypatch.setenv("PATH", "/usr/bin")
+        provider = SimpleNamespace(reservation=SimpleNamespace(kind="isolated"))
+        with patch.object(server.os, "execve") as execve:
+            server._reexec(provider)
+        env = execve.call_args.args[2]
+        assert env["PATH"] == "/usr/bin"
+        assert set(env) <= {"PATH", "LANG", "LC_ALL"}
+
     def test_no_flag_no_exec(self, tmp_path):
         from types import SimpleNamespace
 

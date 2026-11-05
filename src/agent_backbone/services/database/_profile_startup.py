@@ -19,9 +19,9 @@ from agent_backbone.services.database.engine import is_memory
 async def check_profile_startup(database_url: str, data_dir: Path, *, recover: bool = True) -> None:
     """Refuse reservations before mkdir, migrations or direct-mode agent starts.
 
-    No profile can activate yet. Directory ownership catches pre-identity
-    restores; any persisted identity catches copied databases outside that tree.
-    This is a refusal guard, not identity attestation or running-service fencing.
+    Directory ownership catches pre-identity restores; any persisted identity catches
+    copied databases outside that tree. This is a refusal guard, not identity attestation
+    or running-service fencing.
     """
     registry = ProfileRegistry(Path(PROFILE_REGISTRY_PATH).expanduser())
     default = await asyncio.to_thread(registry.default_reservation)
@@ -66,7 +66,7 @@ async def check_profile_startup(database_url: str, data_dir: Path, *, recover: b
         await asyncio.to_thread(registry.check_unadopted, path)
         identity = await _has_identity(url.update_query_dict({"mode": "rw"}))
     if identity:
-        raise ValueError("Profile reservation is not ready; activation is not implemented")
+        raise ValueError("This database belongs to a profile that is not at this directory")
 
 
 async def _has_identity(url) -> bool:

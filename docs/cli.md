@@ -186,12 +186,12 @@ failures. `doctor` resolves `CODEX_HOME`,
 running backbone uses its own environment, which can differ when it runs as a
 login service.
 
-## `backbone up [--detach] [--reload]` · `backbone down`
+## `backbone up [--detach]` · `backbone down`
 
 Runs the backbone: API, Socket.IO, background jobs, Telegram bot, GitHub
 intake — one process. `--detach` runs it inside a tmux session
-(`backbone.session_name`); `down` stops it gracefully. `--reload` restarts
-on code changes (development).
+(`backbone.session_name`); `down` stops it gracefully. Both forms refuse with
+nothing created until `backbone init` or `backbone setup` has made the Default profile.
 
 `backbone up --detach` is manual: a tmux session ends with a reboot. To
 have the backbone start at login and restart if it dies, install the
@@ -963,8 +963,7 @@ answering; stop signals only the process behind that verified endpoint. Apply re
 refusal receipts: `baseline_unavailable` for
 any other baseline, `profile_create_failed` or `profile_path_too_long` when creation
 cannot finish, `service_start_failed` or `service_stop_failed` when a provider does not
-start or stop in time, `adoption_unavailable` or `adoption_changed` for adoption,
-`profile_not_ready` for an
+start or stop in time, `profile_not_ready` for an
 exact tuple that is still being created, or `binding_mismatch` for an unknown, stale or
 invalidated tuple.
 Pending work on the same profile or installation returns `operation_busy`.

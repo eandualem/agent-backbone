@@ -46,10 +46,6 @@ it. There is no log-collection service or universal secret-scrubbing guarantee.
 | Existing records | Still readable; ordinary retention applies | Same | Same |
 
 The running service picks up API setting changes without restarting agents.
-In developer `--reload` mode, the separate reload supervisor keeps the policy
-it was launched with, including `-v`; API updates reach the service child, not
-that supervisor. Relaunch the developer command after changing modes to apply
-the new policy to the supervisor and subsequent child startup output.
 Each new CLI invocation reads the installation policy; scoped agent clients use
 an authenticated API read. If that read is unavailable, the CLI suppresses logs
 and still reports command results. `backbone -v COMMAND` is a separate explicit

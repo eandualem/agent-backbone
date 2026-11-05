@@ -917,11 +917,14 @@ class BackboneConfig:
 
 
 def resolve_data_dir(explicit: str | Path | None = None) -> Path:
-    """Data directory from an explicit value, ``BACKBONE_DATA_DIR``, or the default."""
+    """Data directory from an explicit value, ``BACKBONE_DATA_DIR``, or the default.
+
+    Always canonical: a profile records the resolved path and compares against it.
+    """
     raw = explicit or os.environ.get("BACKBONE_DATA_DIR")
     if not raw and os.environ.get("BACKBONE_AGENT") and os.environ.get("BACKBONE_STATE_DIR"):
         raw = Path(os.environ["BACKBONE_STATE_DIR"]).expanduser().parent
-    return Path(raw or DEFAULT_DATA_DIR).expanduser()
+    return Path(raw or DEFAULT_DATA_DIR).expanduser().resolve()
 
 
 def env_file_keys(env_path: Path | str) -> tuple[str, ...]:

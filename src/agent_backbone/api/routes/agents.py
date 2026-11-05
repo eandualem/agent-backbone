@@ -43,6 +43,7 @@ from agent_backbone.api.models import (
     UnsubscribeRequest,
     WatchRequest,
 )
+from agent_backbone.api.profile_binding import PROFILE_HEADERS
 from agent_backbone.api.session_updates import SessionFeed
 from agent_backbone.config import AgentSpec, BackboneConfig
 from agent_backbone.services.agents import (
@@ -147,7 +148,7 @@ async def list_agents(
 ):
     """Known agents (plus other live tmux sessions) with live state."""
     agents = await feed.snapshot()
-    if getattr(request.state, "profile_provider", None) is not None:
+    if any(header in request.headers for header in PROFILE_HEADERS):
         current = {row["name"]: row["report_identity"] for row in await db.agents.list()}
         if any(current.get(agent.name) != agent.registration_id for agent in agents):
             raise _registration_changed()

@@ -49,7 +49,7 @@ async def test_reconcile_captures_identity_without_writes_or_activation(prepared
     assert registry.show("profile-a")["binding"] is None
     assert registry.show("profile-a")["state"] == "creating"
     assert before == (path.read_bytes(), registry.path.read_bytes())
-    with pytest.raises(ValueError, match="not ready"):
+    with pytest.raises(ValueError, match="belongs to a profile"):
         await check_profile_startup(db.url, reservation.data_dir)
 
 

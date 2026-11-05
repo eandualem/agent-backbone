@@ -333,6 +333,9 @@ async def test_copy_takes_a_skill_from_any_folder_and_leaves_it(
     (source / "scripts").mkdir()
     (source / "scripts" / "run.sh").write_text("#!/bin/sh\n")
     (source / "scripts" / "run.sh").chmod(0o4755)
+    (source / "scripts" / "private.txt").write_text("private\n")
+    (source / "scripts" / "private.txt").chmod(0o600)
+    (source / "scripts").chmod(0o700)
     (source / ".git").mkdir()
     (source / ".git" / "config").write_text("private\n")
     original = (source / "SKILL.md").read_text()
@@ -347,6 +350,8 @@ async def test_copy_takes_a_skill_from_any_folder_and_leaves_it(
     assert (source / "SKILL.md").read_text() == original
     assert 'backbone-tags: "all"' in (store / "mine" / "SKILL.md").read_text()
     assert (store / "mine" / "scripts" / "run.sh").stat().st_mode & 0o7777 == 0o755
+    assert (store / "mine" / "scripts" / "private.txt").stat().st_mode & 0o7777 == 0o600
+    assert (store / "mine" / "scripts").stat().st_mode & 0o7777 == 0o700
     assert not (store / "mine" / ".git").exists()
 
 

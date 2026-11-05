@@ -10,6 +10,7 @@ import time
 
 from agent_backbone.api.local_transport import peer_pid
 from agent_backbone.cli._profile_client import Binding, Refused, resolve_dotenv_reference
+from agent_backbone.cli.service import service_search_path, setup_binary
 from agent_backbone.services.database import ProfileRegistry
 
 START_SECONDS = 30
@@ -86,7 +87,10 @@ class ProviderServices:
                 # The Default profile uses the person's own environment.
                 env={**os.environ, "BACKBONE_DATA_DIR": str(root)}
                 if default
-                else {k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL") if k in os.environ},
+                else {
+                    **{k: os.environ[k] for k in ("LANG", "LC_ALL") if k in os.environ},
+                    "PATH": service_search_path(setup_binary()),
+                },
                 cwd=root if default else root / "home",
                 stdin=subprocess.DEVNULL,
                 stdout=log,

@@ -268,3 +268,12 @@ def test_unavailable_native_store_is_a_bounded_refusal(tmp_path, monkeypatch, co
     for operation in (lambda: rt.account_invocation("status"), rt.installed_version):
         with pytest.raises(ValueError, match="^Native (store|path) is unavailable$"):
             operation()
+
+
+def test_an_uncaptured_runtime_is_unavailable_and_never_the_hosts(tmp_path):
+    captured = RUNTIMES["shell"].capture_environment(tmp_path / "shell")
+    captured.create_directories()
+    install_native_environments({"shell": captured})
+    for runtime in ("opencode", "gemini"):
+        assert RUNTIMES[runtime].resolve_binary() is None
+        assert RUNTIMES[runtime].available() is False

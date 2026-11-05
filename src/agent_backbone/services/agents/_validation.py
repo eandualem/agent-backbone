@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from agent_backbone.config import AgentSpec
+from agent_backbone.services.database import OPERATOR_AUTHOR
 from agent_backbone.services.runtimes import RUNTIMES
 
 
@@ -20,6 +21,8 @@ def validate_repo(repo: str, *, allow_empty: bool = False) -> None:
 def validate_agent_spec(spec: AgentSpec) -> None:
     if not isinstance(spec.name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", spec.name):
         raise ValueError("invalid agent name")
+    if spec.name.casefold() == OPERATOR_AUTHOR:
+        raise ValueError(f"'{OPERATOR_AUTHOR}' is reserved for the person's own documents")
     if not isinstance(spec.dir, str) or not spec.dir.strip() or "\0" in spec.dir:
         raise ValueError("dir must be a nonempty path")
     if not isinstance(spec.runtime, str) or spec.runtime not in RUNTIMES:
