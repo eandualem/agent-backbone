@@ -1,6 +1,7 @@
 """Operator sessions on a bound provider: shells and CLI sign-in."""
 
 import json
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -228,3 +229,20 @@ async def test_legacy_provider_has_no_sessions(api_client, auth_headers):
         json={"schema_version": 1, "shell_id": "0123456789ab", "cwd": None},
     )
     assert response.status_code == 404
+
+
+def test_sign_in_stays_open_only_after_a_failure():
+    from agent_backbone.api.profile_sessions import _HOLD_OPEN
+
+    def run(cli, stdin):
+        return subprocess.run(
+            ["/bin/sh", "-c", _HOLD_OPEN, "sign-in", "/bin/sh", "-c", cli],
+            input=stdin,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+    assert "Press Enter" not in run("exit 0", "").stdout
+    failed = run("exit 1", "\n")
+    assert "Press Enter to close." in failed.stdout

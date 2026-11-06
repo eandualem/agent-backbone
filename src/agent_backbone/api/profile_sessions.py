@@ -15,7 +15,7 @@ from agent_backbone.services.terminal import session_exists, start_session
 _SIGN_IN_RUNTIMES = ("claude", "codex", "opencode")
 _lock = asyncio.Lock()
 # Keep the CLI's last words on screen: a sign-in can end before anyone attaches.
-_HOLD_OPEN = '"$@"; echo; echo "Press Enter to close."; read _'
+_HOLD_OPEN = 'if "$@"; then exit 0; fi; echo; echo "Press Enter to close."; read _'
 
 
 class _Shell(BaseModel):

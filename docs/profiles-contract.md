@@ -289,8 +289,9 @@ keychain (Claude Code, and also git and gh) uses the profile's own keychain,
 first start, makes it the default keychain of the profile's home, and unlocks it
 at each start with a password kept in the profile's `.env`. The person's own keychain is
 not used. A repeat request while that session is live
-returns it unchanged with `created: false`. The session stays open after the CLI exits
-until someone presses Enter, so its result can be read; after that a repeat starts a new
+returns it unchanged with `created: false`. The session ends when the CLI succeeds. When the CLI
+fails it stays open until someone presses Enter, so the failure can be read. After the
+session ends, a repeat starts a new
 one. `runtime_unavailable` refuses another runtime or one that is not installed. The
 `sessions` group in the shared fixtures has these bodies.
 `backbone profiles sign-in PROFILE_ID --runtime codex` does both from a terminal.
