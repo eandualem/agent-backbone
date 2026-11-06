@@ -278,17 +278,6 @@ identity (`BACKBONE_DATA_DIR`, `BACKBONE_PORT`, `BACKBONE_PROFILE_ID`,
 `BACKBONE_INSTALLATION_ID`, `BACKBONE_LIFECYCLE_ID`), so the `backbone` CLI in that shell
 reaches this provider. None of these is a secret, and no credential is passed.
 
-An agent start in an isolated profile needs nobody to answer first-run screens. Claude
-Code is the only required CLI that shows any, and Backbone adds
-`hasCompletedOnboarding` and `lastOnboardingVersion` to the profile's
-`claude/.claude.json` when they are missing, leaving existing values and every other key
-alone. This is undocumented Claude Code state, not a supported setting, so a Claude Code
-update can bring a screen back. It skips the theme picker and the Security notes notice
-("You're responsible for Claude's actions"), so an app should show that notice itself.
-It answers no terms screen: those are a separate check, and any screen that stops an
-agent ends first-agent setup with a message sending the person to its terminal. Default
-is never changed.
-
 `POST /api/profile/accounts/sign-in` with `{"schema_version":1,"runtime":"codex"}` runs
 that CLI's own sign-in in a session on the same server, using that runtime's private
 environment in this profile. All CLIs in a profile share one HOME, and each keeps its

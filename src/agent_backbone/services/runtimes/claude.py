@@ -13,7 +13,6 @@ from agent_backbone.hooks.install import save_settings
 from agent_backbone.services.runtimes._environment import (
     environment_value,
     inherited_environment,
-    native_environment,
 )
 from agent_backbone.services.runtimes._pane import sanitize_pane_content, sgr_attributes
 from agent_backbone.services.runtimes._usage import count
@@ -80,32 +79,6 @@ def _runs(
             elif attribute[0] == 38 or 30 <= attribute[0] <= 37 or 90 <= attribute[0] <= 97:
                 foreground = attribute
     return runs, foreground
-
-
-def seed_first_run(claude_config: Path, version) -> bool:
-    """Add what Claude Code records when its first-run screens are finished.
-
-    This is undocumented Claude Code state, not a supported setting, so an update can
-    bring a screen back; first-agent setup then sends the person to the terminal. It
-    skips the theme picker and the Security notes notice. It never answers a terms
-    screen, which is a separate check. Existing values and every other key stay. The
-    write is best-effort, like folder trust: on any error the screens simply appear.
-    """
-    try:
-        data = json.loads(claude_config.read_text()) if claude_config.is_file() else {}
-        if not isinstance(data, dict):
-            return False
-        missing = {}
-        if "hasCompletedOnboarding" not in data:
-            missing["hasCompletedOnboarding"] = True
-        if "lastOnboardingVersion" not in data and (installed := version()):
-            missing["lastOnboardingVersion"] = installed
-        if missing:
-            atomic_write_text(claude_config, json.dumps({**data, **missing}, indent=2))
-        return True
-    except (OSError, ValueError):
-        log.warning("Could not seed Claude Code's first run (its screens will appear)")
-        return False
 
 
 def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = None) -> bool:
@@ -301,13 +274,6 @@ class ClaudeCode(Runtime):
         if not config.is_absolute():
             config = Path(directory) / config
         pre_trust_directory(directory, claude_config=self.check_native_path(config))
-
-    def prepare_first_run(self) -> None:
-        captured = native_environment(self.id)
-        if captured is None:  # Default: the person's own Claude Code, left alone.
-            return
-        config = Path(captured["CLAUDE_CONFIG_DIR"]) / ".claude.json"
-        seed_first_run(self.check_native_path(config), self.installed_version)
 
     @staticmethod
     def _unnumbered_dialog(pane_content: str) -> bool:
