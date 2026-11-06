@@ -134,6 +134,60 @@ def test_socket_paths_over_the_limit_are_refused_before_reserving(tmp_path):
     assert not (operations.registry.path.parent / "p").exists()
 
 
+def _person_git_config(monkeypatch, home, *, email=True):
+    home.mkdir(exist_ok=True)
+    lines = ["[user]", "\tname = Example Person"] + (
+        ["\temail = person@example.com"] if email else []
+    )
+    (home / ".gitconfig").write_text("\n".join([*lines, "[credential]", "\thelper = store", ""]))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+
+
+def test_git_identity_copy_takes_only_name_and_email(operations, monkeypatch, short_root):
+    _person_git_config(monkeypatch, short_root / "person")
+    receipt = operations.apply({**request(), "git_identity": "copy"})
+    assert receipt["status"] == "succeeded"
+    assert operations.registry.show(receipt["profile_id"])["git_identity"] == "copied"
+    root = short_root / "p" / receipt["profile_id"]
+    copied = (root / "home" / ".gitconfig").read_text()
+    assert "Example Person" in copied and "person@example.com" in copied
+    assert "helper" not in copied
+
+
+def test_git_identity_defaults_to_none_and_copies_nothing(operations, monkeypatch, short_root):
+    _person_git_config(monkeypatch, short_root / "person")
+    for request_id, extra in (("create-a", {}), ("create-b", {"git_identity": "none"})):
+        receipt = operations.apply({**request(request_id), **extra})
+        assert operations.registry.show(receipt["profile_id"])["git_identity"] == "none"
+        assert not (short_root / "p" / receipt["profile_id"] / "home" / ".gitconfig").exists()
+
+
+def test_git_identity_copy_refuses_without_name_and_email(operations, monkeypatch, short_root):
+    _person_git_config(monkeypatch, short_root / "person", email=False)
+    receipt = operations.apply({**request(), "git_identity": "copy"})
+    assert receipt["error"]["code"] == "git_identity_unavailable"
+    assert receipt["profile_id"] is None
+    assert operations.registry.list()["items"] == []
+
+
+@pytest.mark.parametrize("value", ["yes", None])
+def test_git_identity_accepts_only_its_values_on_create(value):
+    with pytest.raises(ValueError):
+        module.validate_profile_operation({**request(), "git_identity": value})
+    start = {
+        "schema_version": 1,
+        "request_id": "start-a",
+        "action": "start",
+        "profile_id": "profile-a",
+        "expected_installation_id": "installation-a",
+        "expected_lifecycle_id": "lifecycle-a1",
+    }
+    with pytest.raises(ValueError):
+        module.validate_profile_operation({**start, "git_identity": "none"})
+
+
 def test_cli_creates_a_profile_the_bound_client_can_resolve(
     short_root, monkeypatch, capsys, tmp_path
 ):

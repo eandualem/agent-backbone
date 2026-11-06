@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import json
 import os
 import socket
 import sqlite3
@@ -351,8 +352,22 @@ class ProfileRegistry:
                         "schema_version": 1,
                         **record.summary(),
                         "binding": record.discovery_binding(),
+                        "git_identity": self._git_identity(conn, record.identity),
                     }
         raise ValueError("Profile reservation was not found")
+
+    @staticmethod
+    def _git_identity(conn, identity: ProfileIdentity) -> str:
+        """What creation copied, from its retained request; Default copies nothing."""
+        for (body,) in conn.execute(
+            "SELECT request_json FROM lifecycle_operations "
+            "WHERE installation_id = ? AND status = 'succeeded'",
+            (identity.installation_id,),
+        ):
+            request = json.loads(body)
+            if request.get("action") == "create":
+                return "copied" if request.get("git_identity") == "copy" else "none"
+        return "none"
 
     def setup_connection_receipt(self, request: dict, connection: dict):
         """Locate operator setup continuity outside every reserved provider tree."""

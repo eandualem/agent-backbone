@@ -597,6 +597,7 @@ def test_publish_ready_emits_the_agreed_discovery_shape(tmp_path, reservation):
             },
             "tmux": {"socket_path": str(root / "tmux" / "server.sock")},
         },
+        "git_identity": "none",
     }
     assert registry.check_reservation(reservation.identity, root) == published
     assert registry.publish_ready(reservation.identity, root, binding) == published

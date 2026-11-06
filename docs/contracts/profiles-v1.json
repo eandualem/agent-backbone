@@ -34,7 +34,8 @@
         "tmux": {
           "socket_path": "/example/profiles/a/tmux/server.sock"
         }
-      }
+      },
+      "git_identity": "none"
     },
     "show_creating": {
       "schema_version": 1,
@@ -42,7 +43,8 @@
       "display_name": "Work",
       "kind": "isolated",
       "state": "creating",
-      "binding": null
+      "binding": null,
+      "git_identity": "none"
     },
     "registry_absent": {
       "schema_version": 1,

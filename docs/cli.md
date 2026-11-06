@@ -958,11 +958,13 @@ operation receipt. Omit `--json` for labeled details.
 
 A create request naming the `core-v1` baseline reserves new identities, a private
 directory and a loopback port, sets up the database, fresh credential and the starter
-policies and skills a fresh install gets, and publishes a ready record. Start launches that profile's provider unless its exact identity is already
+policies and skills a fresh install gets, and publishes a ready record. With
+`"git_identity": "copy"` it also copies your global Git `user.name` and `user.email`,
+and nothing else, into the profile's home; the default `"none"` copies nothing. Start launches that profile's provider unless its exact identity is already
 answering; stop signals only the process behind that verified endpoint. Apply returns durable
 refusal receipts: `baseline_unavailable` for
 any other baseline, `profile_create_failed` or `profile_path_too_long` when creation
-cannot finish, `service_start_failed` or `service_stop_failed` when a provider does not
+cannot finish, `git_identity_unavailable` when copy finds no name or email, `service_start_failed` or `service_stop_failed` when a provider does not
 start or stop in time, `profile_not_ready` for an
 exact tuple that is still being created, or `binding_mismatch` for an unknown, stale or
 invalidated tuple.

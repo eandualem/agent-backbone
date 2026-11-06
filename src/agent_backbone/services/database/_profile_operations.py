@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import secrets
+import subprocess
 import uuid
 from contextlib import suppress
 
@@ -30,6 +31,8 @@ _FIELDS = {
     "start": {"profile_id", "expected_installation_id", "expected_lifecycle_id"},
     "stop": {"profile_id", "expected_installation_id", "expected_lifecycle_id"},
 }
+_GIT_IDENTITY = ("none", "copy")
+"""Copy reads only user.name and user.email from the person's own git config."""
 ERRORS = {
     "request_conflict": "Profile operation request does not match its original input.",
     "operation_busy": "Another profile lifecycle operation is pending.",
@@ -39,6 +42,7 @@ ERRORS = {
     "baseline_unavailable": "Profile baseline is not available.",
     "profile_create_failed": "Profile could not be created.",
     "profile_path_too_long": "Profile paths exceed the Unix socket length limit.",
+    "git_identity_unavailable": "Git user.name and user.email are not both set.",
     "service_start_failed": "Profile provider could not be started.",
     "service_stop_failed": "Profile provider could not be stopped.",
 }
@@ -54,7 +58,12 @@ def validate_profile_operation(request: dict) -> dict:
     if (
         type(request.get("schema_version")) is not int
         or request["schema_version"] != 1
-        or set(request) != {"schema_version", "request_id", "action"} | _FIELDS[action]
+        or set(request) - {"git_identity"}
+        != {"schema_version", "request_id", "action"} | _FIELDS[action]
+        or (
+            "git_identity" in request
+            and (action != "create" or request["git_identity"] not in _GIT_IDENTITY)
+        )
     ):
         raise ValueError("Invalid profile operation request")
     for key, value in request.items():
@@ -68,6 +77,34 @@ def validate_profile_operation(request: dict) -> dict:
         ):
             raise ValueError("Invalid profile operation request")
     return dict(request)
+
+
+def _person_git_identity() -> dict[str, str] | None:
+    values = {}
+    for key in ("user.name", "user.email"):
+        try:
+            found = subprocess.run(
+                ["git", "config", "--global", "--get", key],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if found.returncode != 0 or not found.stdout.strip():
+            return None
+        values[key] = found.stdout.strip()
+    return values
+
+
+def _write_git_identity(home, values: dict[str, str]) -> None:
+    for key, value in values.items():
+        subprocess.run(
+            ["git", "config", "--file", str(home / ".gitconfig"), key, value],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        )
 
 
 def _json(value):
@@ -262,6 +299,11 @@ class ProfileOperations:
         receipt, owned = self.begin(request)
         if not owned:
             return receipt
+        git_identity = None
+        if request.get("git_identity") == "copy":
+            git_identity = _person_git_identity()
+            if git_identity is None:
+                return self.fail(request, "git_identity_unavailable")
         identity = ProfileIdentity(secrets.token_hex(6), str(uuid.uuid4()), str(uuid.uuid4()))
         root = self.registry.path.parent / "p" / identity.profile_id
         binding = ProfileBinding(
@@ -280,6 +322,8 @@ class ProfileOperations:
             port = self._reserve_create(request, reservation)
             reserved = True
             asyncio.run(_provision_profile(self.registry, reservation, binding, port))
+            if git_identity:
+                _write_git_identity(root / "home", git_identity)
             return self._publish_create(request, reservation, binding)
         except Exception:
             if reserved:

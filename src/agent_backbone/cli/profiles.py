@@ -112,6 +112,7 @@ def cmd_profiles(args) -> int:
                 ("Name", result["display_name"]),
                 ("Kind", result["kind"]),
                 ("Provisioning state", result["state"]),
+                ("Git identity", result["git_identity"]),
                 *connection,
             ],
         )

@@ -245,7 +245,9 @@ List returns `schema_version` and `items`. Each item has `profile_id`,
 Provisioning `state` is `creating`, `ready` or `failed`; it does not say whether
 the daemon is running.
 
-Show returns an atomic record with those fields, `schema_version` and `binding`.
+Show returns an atomic record with those fields, `schema_version`, `binding` and
+`git_identity`, which is `copied` when creation copied the person's Git identity and
+otherwise `none` (always `none` for Default, which uses the person's own Git config).
 A ready binding contains installation and lifecycle identity, a Unix endpoint,
 a private dotenv credential reference and an explicit tmux socket. A non-ready
 record has `binding: null` and cannot be selected for content. The record remains
@@ -329,7 +331,12 @@ together with the reservation; creates a private directory beside the registry; 
 a generated `BACKBONE_API_KEY`; installs the starter policies and skills a fresh
 install gets; initializes a database holding the identity and those assignments;
 reconciles them; and publishes `ready` in the transaction that completes the receipt.
-It copies nothing from Default. An interruption stays pending and non-ready. A failure that
+It copies nothing from Default. The optional `git_identity` field is `none` (the
+default) or `copy`: copy reads only `user.name` and `user.email` from the person's own
+global Git config and writes them to `.gitconfig` in the profile's home. Credentials,
+helpers, SSH keys and GitHub CLI sign-ins are never copied. When either value is unset,
+`git_identity_unavailable` refuses before reserving anything. An interruption stays
+pending and non-ready. A failure that
 Create can observe leaves a `failed` tombstone with `profile_create_failed` and
 retains the directory. `profile_path_too_long` refuses, before reserving anything,
 a location whose socket paths would not fit the Unix limit.
