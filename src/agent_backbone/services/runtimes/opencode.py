@@ -62,6 +62,16 @@ class OpenCode(Runtime):
             return super().account_args(action)
         return commands[action]
 
+    def account_state(self, done):
+        try:
+            integrations = json.loads(done.stdout)
+            connected = done.returncode == 0 and any(i["connections"] for i in integrations)
+        except (ValueError, TypeError, KeyError):
+            return "unavailable"
+        if connected:
+            return "authenticated"
+        return "not_authenticated" if done.returncode == 0 else "unavailable"
+
     def native_environment_values(self, root):
         return {}
 

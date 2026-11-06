@@ -6,7 +6,8 @@ from unittest.mock import patch
 import pytest
 
 from agent_backbone import cli
-from agent_backbone.services.runtimes import RUNTIMES
+from agent_backbone.services.runtimes import RUNTIMES, _environment, install_native_environments
+from agent_backbone.services.runtimes import base as runtime_base
 
 
 @pytest.mark.parametrize("runtime", RUNTIMES.values(), ids=RUNTIMES.keys())
@@ -209,3 +210,66 @@ def test_old_path_binary_is_reported_without_silently_switching(tmp_path, monkey
     old.unlink()
     assert runtime.setup_compatibility()["compatible"] is True
     assert runtime.setup_compatibility()["path"] == str(new)
+
+
+_CONNECTED = '[{"id": "openai", "name": "OpenAI", "connections": [{"type": "api"}]}]'
+
+
+def _captured_status(monkeypatch, tmp_path, runtime, script):
+    """A real child process standing in for the CLI, in a captured environment."""
+    selected = RUNTIMES[runtime]
+    binary = tmp_path / "native-cli"
+    binary.write_text(f"#!/bin/sh\n{script}\n")
+    binary.chmod(0o700)
+    monkeypatch.setattr(_environment, "_CONTEXT", None)
+    monkeypatch.setattr(type(selected), "resolve_binary", lambda *a: str(binary))
+    environment = selected.capture_environment(tmp_path.resolve() / "profile")
+    environment.create_directories()
+    install_native_environments({runtime: environment})
+    return selected, environment
+
+
+# Outputs are what each CLI printed: Claude Code 2.1.319, Codex, OpenCode 2.1.4.
+@pytest.mark.parametrize(
+    ("runtime", "output", "code", "expected"),
+    [
+        ("claude", '{"loggedIn": true, "authMethod": "claude.ai"}', 0, "authenticated"),
+        ("claude", '{"loggedIn": false, "authMethod": "none"}', 1, "not_authenticated"),
+        ("claude", "not json", 1, "unavailable"),
+        ("claude", "[]", 0, "unavailable"),
+        ("codex", "Logged in using ChatGPT", 0, "authenticated"),
+        ("codex", "Not logged in", 1, "not_authenticated"),
+        ("codex", "config error", 2, "unavailable"),
+        ("opencode", _CONNECTED, 0, "authenticated"),
+        ("opencode", "[]", 0, "not_authenticated"),
+        ("opencode", "Standalone server exited before reporting readiness", 1, "unavailable"),
+        ("opencode", "[]", 1, "unavailable"),
+    ],
+)
+def test_bound_discovery_reports_the_clis_own_sign_in_status(
+    monkeypatch, tmp_path, runtime, output, code, expected
+):
+    selected, environment = _captured_status(
+        monkeypatch,
+        tmp_path,
+        runtime,
+        f"case \"$*\" in *--version*) echo 2.2.2; exit 0;; esac\necho '{output}'\nexit {code}",
+    )
+    item = selected.bound_discovery(environment)
+    assert item["authentication"] == expected
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+def test_sign_in_status_runs_in_the_profile_and_times_out(monkeypatch, tmp_path, runtime):
+    seen = tmp_path / "seen"
+    selected, environment = _captured_status(
+        monkeypatch, tmp_path, runtime, f'echo "$HOME $PWD" > {seen}; exec sleep 30'
+    )
+    monkeypatch.setattr(runtime_base, "ACCOUNT_STATUS_SECONDS", 1)
+    assert selected.observed_authentication() == "unavailable"
+    assert seen.read_text().split() == [environment["HOME"]] * 2
+
+
+def test_a_plain_shell_runs_no_status(monkeypatch, tmp_path):
+    selected, _ = _captured_status(monkeypatch, tmp_path, "shell", "exit 1")
+    assert selected.observed_authentication() == "not_applicable"

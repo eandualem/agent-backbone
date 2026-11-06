@@ -590,6 +590,10 @@
     },
     "authentication_cases": [
       {
+        "name": "signed_in",
+        "authentication": "authenticated"
+      },
+      {
         "name": "signed_out",
         "authentication": "not_authenticated"
       },

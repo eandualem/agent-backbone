@@ -132,6 +132,13 @@ class Codex(Runtime):
             return super().account_args(action)
         return commands[action] + ["-c", 'cli_auth_credentials_store="file"']
 
+    def account_state(self, done):
+        if done.returncode == 0:
+            return "authenticated"
+        return (
+            "not_authenticated" if "Not logged in" in done.stdout + done.stderr else "unavailable"
+        )
+
     def env_args(self, env):
         if native_environment(self.id) is not None:
             return ["-c", 'cli_auth_credentials_store="file"']

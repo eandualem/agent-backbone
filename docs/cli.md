@@ -290,8 +290,10 @@ and `sandboxed` (a boolean when supported, otherwise null). These describe
 launch options; discovery never selects unattended operation.
 
 `authentication` is `unknown` for agent CLIs and `not_applicable` for plain
-shells. Finding an executable does not prove account sign-in or capability
-coverage. Use the runtime's visible sign-in flow and the existing
+shells. The exception is the bound catalog of an isolated profile, which reports
+each CLI's own sign-in status (see the
+[profiles contract](profiles-contract.md)). Finding an executable does not prove
+account sign-in or capability coverage. Use the runtime's visible sign-in flow and the existing
 [capability contract](runtime-capabilities.md). Discovery does not launch a
 process, call a model, read account credentials or initialize an installation.
 Consumers accept additive response fields and check the major schema version.

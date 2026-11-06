@@ -79,6 +79,7 @@ def test_bound_catalog_reuses_discovery_fields_without_equating_availability_wit
     assert item["available"] is True and item["setup_compatibility"]["compatible"] is True
     assert item["unattended"]["args"] == list(RUNTIMES[item["id"]].unattended_args)
     assert {case["authentication"] for case in catalog["authentication_cases"]} == {
+        "authenticated",
         "not_authenticated",
         "unavailable",
         "unsupported",

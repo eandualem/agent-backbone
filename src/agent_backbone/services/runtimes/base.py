@@ -64,6 +64,8 @@ _FALLBACK_DIRS = (
     Path.home() / ".npm-global" / "bin",
 )
 
+ACCOUNT_STATUS_SECONDS = 5
+"""OpenCode starts a private server for its status: over 2 seconds on a first run."""
 # A version as a word of its own: ``v2.1.284`` is 2.1.284, never 1.284.
 _VERSION = re.compile(r"(?<![\w.])v?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?)(?![\w.-])")
 
@@ -398,12 +400,37 @@ class Runtime:
         """An internal native invocation, never an ambient account fallback.
 
         The lifecycle owner must check its identity fence before executing this.
-        No caller executes login/logout or exposes these commands yet.
+        Sign-in sessions run login and the bound catalog runs status; nothing runs logout.
         """
         captured = native_environment(self.id)
         if captured is None or captured.executable is None:
             raise ValueError("Native account action requires a captured environment")
         return [captured.executable, *self.account_args(action)], captured
+
+    def account_state(self, done: subprocess.CompletedProcess) -> str:
+        """Classify this CLI's own status result; anything unrecognized is unavailable."""
+        return "unavailable"
+
+    def observed_authentication(self) -> str:
+        """The CLI's own status in this profile. Shows a stored sign-in, not a working account."""
+        if self.authentication != "unknown":
+            return self.authentication
+        try:
+            command, environment = self.account_invocation("status")
+            done = subprocess.run(
+                command,
+                env=dict(environment),
+                cwd=environment["HOME"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=ACCOUNT_STATUS_SECONDS,
+                check=False,
+            )
+        except (ValueError, OSError, subprocess.SubprocessError):
+            return "unavailable"
+        return self.account_state(done)
 
     def native_environment_values(self, root: Path) -> dict[str, str]:
         """Adapter-owned store locations; unsupported adapters fail closed."""
@@ -602,6 +629,7 @@ class Runtime:
             raise ValueError("Native runtime context does not match")
         item = self.discovery()
         item["setup_compatibility"] = self.setup_compatibility()
+        item["authentication"] = self.observed_authentication()
         if native_environment(self.id) != environment:
             raise ValueError("Native runtime context does not match")
         return item

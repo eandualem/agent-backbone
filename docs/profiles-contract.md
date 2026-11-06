@@ -500,11 +500,13 @@ flags. Schema 2 echoes the full tuple and retains the existing item fields. Its
 nonempty catalog is an illustrative item, not a complete installed-runtime inventory.
 All probes use provider-owned native environments; host PATH may locate a binary
 but cannot supply account/config roots. Reject stale bindings before subprocess
-spawn. Discovery never logs in or calls a model. In the existing `authentication`
-field, `not_authenticated` means an observed signed-out state; `unavailable` means
-no usable probe result and `unsupported` means no supported probe. Unknown discovery
-remains `unknown`; binary/version availability proves none of these authentication
-outcomes. `authentication_cases` shows field values, not full responses. Unsupported
+spawn. Discovery never logs in or calls a model. In an isolated profile the catalog runs
+each CLI's own status command in that profile's environment, with a 5-second limit.
+In the existing `authentication` field, `authenticated` means that CLI reports a stored
+sign-in, which does not prove the account still works; `not_authenticated` means an
+observed signed-out state; `unavailable` means no usable probe result and `unsupported`
+means no supported probe. Unknown discovery remains `unknown`; binary/version
+availability proves none of these authentication outcomes. `authentication_cases` shows field values, not full responses. Unsupported
 schema/flags leave discovery unavailable; never retry unbound.
 
 The bound CLI uses `GET /api/runtimes?schema_version=2&check_setup=true` after

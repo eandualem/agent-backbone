@@ -1997,13 +1997,13 @@ async def test_bound_catalog_probes_captured_native_environment(
     assert response.status_code == 200
     item = response.json()["items"][0]
     assert item["id"] == runtime and item["available"] is True
-    assert item["authentication"] == "unknown"
+    assert item["authentication"] in {"authenticated", "unavailable"}
     assert item["setup_compatibility"]["compatible"] is True
-    assert calls and all(
-        kwargs["env"] == dict(environment) and kwargs["cwd"] == environment.root
-        for _, kwargs in calls
-    )
-    assert all(command == ["/synthetic/bin/native", "--version"] for command, _ in calls)
+    version, status = calls
+    assert version[0] == ["/synthetic/bin/native", "--version"]
+    assert version[1]["env"] == dict(environment) and version[1]["cwd"] == environment.root
+    assert status[0] == selected.account_invocation("status")[0]
+    assert status[1]["env"] == dict(environment) and status[1]["cwd"] == environment["HOME"]
 
 
 async def test_bound_catalog_rechecks_after_probe_and_retains_worker_on_disconnect(

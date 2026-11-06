@@ -260,19 +260,19 @@ CAPABILITIES: tuple[Capability, ...] = (
             "tests/unit/services/runtimes/test_discovery.py",
             "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
             "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
-            "no activation or account verification",
+            "an isolated profile reports the CLI's own sign-in status; no activation",
         ),
         codex=_ok(
             "tests/unit/services/runtimes/test_discovery.py",
             "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
             "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
-            "no activation or account verification",
+            "an isolated profile reports the CLI's own sign-in status; no activation",
         ),
         opencode=_ok(
             "tests/unit/services/runtimes/test_discovery.py",
             "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
             "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
-            "no activation or account verification",
+            "an isolated profile reports the CLI's own sign-in status; no activation",
         ),
         gemini=_ok(
             "tests/unit/services/runtimes/test_discovery.py",
