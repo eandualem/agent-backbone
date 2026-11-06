@@ -172,6 +172,8 @@ async def test_a_cli_that_exits_right_away_is_a_failed_launch(scenario, db, monk
     monkeypatch.setattr(onboarding, "STARTED_SECONDS", 5)
     result = await run(scenario, db)
     assert result["code"] == "launch_failed" and result["data"]["ready"] == "exited"
+    assert "exited right after starting" in result["message"]
+    assert "start the agent again" in result["message"]
     onboarding.safe_deliver.assert_not_awaited()
 
 

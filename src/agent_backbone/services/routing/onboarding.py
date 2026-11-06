@@ -443,7 +443,8 @@ async def _first(request, receipt, store, db, *, check_effect=None):
         return _answer(
             receipt,
             "launch_failed",
-            "The recorded launch has exited; setup will not restart it.",
+            "The CLI exited right after starting, so the agent is not running. Run the CLI "
+            "in a terminal in the agent's folder to see why, then start the agent again.",
             ready="exited",
         )
     actual_operation = await query_environment_var(spec.name, "BACKBONE_OPERATION_ID")
