@@ -17,6 +17,7 @@ from agent_backbone.models import (
     SetupFirstAgent,
 )
 from agent_backbone.services.database import SetupReceiptError
+from agent_backbone.services.jobs import deliver_now
 from agent_backbone.services.routing.onboarding import cancel_first_agent, first_agent
 from agent_backbone.services.runtimes import RUNTIMES, NativeEnvironment
 
@@ -61,7 +62,7 @@ async def create_first_agent(
         return await _bound_setup(request, body, config, db, store)
     if _isolated_provider(request):
         raise HTTPException(status_code=409, detail=BINDING_MISMATCH)
-    return await first_agent(body, config, store, db)
+    return await first_agent(body, config, store, db, settled=_settled(request, store, db))
 
 
 async def cancel_first_agent_request(
@@ -75,6 +76,16 @@ async def cancel_first_agent_request(
     if _isolated_provider(request):
         raise HTTPException(status_code=409, detail=BINDING_MISMATCH)
     return await cancel_first_agent(body, config)
+
+
+def _settled(request, store, db):
+    """Deliver what is queued for a new agent once it reaches its prompt."""
+    github = getattr(request.app.state, "github", None)
+
+    async def settled(name):
+        await deliver_now(store.config, db, github, name)
+
+    return settled
 
 
 async def _bound_setup(request, body, config, db, store=None):
@@ -140,7 +151,13 @@ async def _bound_setup(request, body, config, db, store=None):
         if isinstance(body, BoundSetupCancelFirstAgent):
             return await cancel_first_agent(body, config, check_effect=check_provider)
         return await first_agent(
-            body, config, store, db, check_effect=check_effect, check_admission=check_provider
+            body,
+            config,
+            store,
+            db,
+            check_effect=check_effect,
+            check_admission=check_provider,
+            settled=_settled(request, store, db),
         )
 
     task = state.api_tasks.create(run, config=config, db=db, provider=provider)

@@ -1826,7 +1826,9 @@ async def test_bound_first_agent_http_success_and_replay(
         assert response.status_code == 200, response.text
         assert response.json()["code"] == ("outcome_unknown" if was_pasted else "agent_ready")
         if was_pasted:
-            assert commands == previous_commands
+            # The first-run watch may still read the pane; nothing is sent again.
+            for command in ("paste-buffer", "send-keys"):
+                assert commands.count(command) == previous_commands.count(command)
         else:
             assert commands.count("paste-buffer") == commands.count("send-keys") == 1
         return

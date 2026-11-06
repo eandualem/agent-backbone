@@ -31,6 +31,7 @@ from agent_backbone.services.agents import (
     profile_lock,
     start_agent,
     validate_agent_spec,
+    wait_until_ready,
 )
 from agent_backbone.services.database import BoundSetupReceipt, SetupReceipt, SetupReceiptError
 from agent_backbone.services.routing import DeliveryRefused, envelope, safe_deliver
@@ -50,6 +51,11 @@ GREETING = (
 # Setup ends once the CLI is running: what it shows next is the person's to answer.
 # A CLI that cannot start quits within moments (Codex 0.160.0: under two seconds).
 STARTED_SECONDS = 3.0
+# How long the prompt is watched for behind first-run screens. After that the
+# delivery-retry job hands over anything still queued.
+FIRST_RUN_SECONDS = 600.0
+
+_watches: set[asyncio.Task] = set()
 
 # Keep the original core-v1 prerequisites valid when new defaults are added.
 # Existing installations retain their assignments and may have a pending request.
@@ -139,6 +145,7 @@ async def first_agent(
     *,
     check_effect=None,
     check_admission=None,
+    settled=None,
 ):
     """Run once or reconcile the same explicit request; API authentication is upstream."""
     bound = isinstance(request, BoundSetupFirstAgent)
@@ -164,7 +171,9 @@ async def first_agent(
             receipt.save(agent_name=request.agent.name)
             async with lifecycle_lock(request.agent.name):
                 await _check(check_effect)
-                return await _first(request, receipt, store, db, check_effect=check_effect)
+                return await _first(
+                    request, receipt, store, db, check_effect=check_effect, settled=settled
+                )
     except SetupReceiptError as exc:
         return setup_result(
             "first_agent",
@@ -259,7 +268,39 @@ async def _check(check_effect):
         await check_effect()
 
 
-async def _first(request, receipt, store, db, *, check_effect=None):
+async def _watch_first_run(name, config, runtime, since, settled):
+    """Clear the ``starting`` marker at the prompt, then hand over a queued greeting."""
+    deadline = time.monotonic() + FIRST_RUN_SECONDS
+    while (remaining := deadline - time.monotonic()) > 0:
+        outcome, _ = await wait_until_ready(
+            name,
+            state_dir=config.state_dir,
+            runtime=runtime,
+            timeout=remaining,
+            stale_threshold=config.timing.stale_threshold_seconds,
+            since=since,
+        )
+        if outcome == "ready":
+            break
+        if outcome != "waiting_for_human":
+            return
+        await asyncio.sleep(1)
+    else:
+        return
+    if settled is not None:
+        await settled(name)
+        # Delivery holds a message for the grace period after an idle hook.
+        await asyncio.sleep(config.timing.grace_period_seconds + 1)
+        await settled(name)
+
+
+def _watch_ended(task):
+    _watches.discard(task)
+    if not task.cancelled() and (error := task.exception()) is not None:
+        log.warning("First-run watch ended early (%s)", type(error).__name__)
+
+
+async def _first(request, receipt, store, db, *, check_effect=None, settled=None):
     await _check(check_effect)
     await store.refresh(**({"check_effect": check_effect} if check_effect is not None else {}))
     await _check(check_effect)
@@ -415,6 +456,7 @@ async def _first(request, receipt, store, db, *, check_effect=None):
         await _check(check_effect)
         operation = uuid4().hex
         receipt.save(launch_operation=operation)
+        launched_at = time.time()
         started = await start_agent(
             spec,
             config,
@@ -433,10 +475,13 @@ async def _first(request, receipt, store, db, *, check_effect=None):
             )
         await _check(check_effect)
         await store.touch_started(spec.name)
-        deadline = time.monotonic() + STARTED_SECONDS
-        while time.monotonic() < deadline and await session_exists(spec.name):
-            await _check(check_effect)
-            await asyncio.sleep(0.25)
+        watch = asyncio.create_task(
+            _watch_first_run(spec.name, config, spec.runtime, launched_at, settled)
+        )
+        _watches.add(watch)
+        watch.add_done_callback(_watch_ended)
+        await asyncio.wait({watch}, timeout=STARTED_SECONDS)
+        await _check(check_effect)
     # A lost launch response is reconciled from the exact operation and registration,
     # never from the presence of a same-name terminal alone.
     if not await session_exists(spec.name):

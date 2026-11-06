@@ -165,10 +165,12 @@ brief. It preserves global runtime settings and records folder trust for the cho
 directory as any agent start does (`agents.pre_trust`); it never sets unattended mode.
 Setup does not wait for the agent's prompt. It is complete once the CLI has stayed
 running for three seconds, whatever the CLI shows: a first-run, sign-in, trust or terms
-screen is the person's to answer in the agent's terminal, and a greeting waits in the
-queue until the agent can take it. `data.ready` and `agent_ready` mean the CLI is running,
-not that it has reached its prompt; `data.evidence` gives the state seen. A CLI that exits
-within those seconds is `launch_failed`, and retrying does not start it again.
+screen is the person's to answer in the agent's terminal. The service keeps watching for
+the prompt for ten minutes; a greeting waits in the queue and is delivered once the agent
+reaches it, and after those ten minutes the delivery-retry job takes over. `data.ready`
+and `agent_ready` mean the CLI is running, not that it has reached its prompt;
+`data.evidence` gives the state seen. A CLI that exits within those seconds is
+`launch_failed`, and retrying does not start it again.
 Directory creation creates only the chosen directory and
 missing parents, without initializing a Git repository or mandatory instructions.
 An existing name, case variant, registered directory or unrelated terminal is a

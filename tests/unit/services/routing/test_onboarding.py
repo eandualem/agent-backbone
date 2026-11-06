@@ -87,6 +87,7 @@ async def scenario(request, db, tmp_path, monkeypatch):
         AsyncMock(return_value=DeliveryReport(DeliveryOutcome.DELIVERED, delivery_id=123)),
     )
     monkeypatch.setattr(onboarding, "STARTED_SECONDS", 0)
+    monkeypatch.setattr(onboarding, "wait_until_ready", AsyncMock(return_value=("ready", [])))
     return body, store, state
 
 
@@ -161,20 +162,44 @@ async def test_setup_is_complete_once_the_cli_runs_whatever_it_shows(scenario, d
 
 
 async def test_a_cli_that_exits_right_away_is_a_failed_launch(scenario, db, monkeypatch):
-    launch = onboarding.start_agent
-
     async def exits(*args, **kwargs):
-        result = await launch(*args, **kwargs)
-        asyncio.get_running_loop().call_later(0.05, scenario[2].update, {"live": False})
-        return result
+        scenario[2]["live"] = False
+        return "exited", []
 
-    monkeypatch.setattr(onboarding, "start_agent", exits)
+    monkeypatch.setattr(onboarding, "wait_until_ready", exits)
     monkeypatch.setattr(onboarding, "STARTED_SECONDS", 5)
     result = await run(scenario, db)
     assert result["code"] == "launch_failed" and result["data"]["ready"] == "exited"
     assert "exited right after starting" in result["message"]
     assert "start the agent again" in result["message"]
     onboarding.safe_deliver.assert_not_awaited()
+
+
+async def test_setup_returns_while_the_first_run_is_still_watched(scenario, db, monkeypatch):
+    at_prompt = asyncio.Event()
+    settled = AsyncMock()
+
+    async def watch(*args, **kwargs):
+        await at_prompt.wait()
+        return "exited", []
+
+    monkeypatch.setattr(onboarding, "wait_until_ready", watch)
+    body, store, _ = scenario
+    result = await onboarding.first_agent(body, store.config, store, db, settled=settled)
+    assert result["code"] == "agent_ready" and len(onboarding._watches) == 1
+    at_prompt.set()
+    await asyncio.gather(*onboarding._watches)
+    settled.assert_not_awaited()
+
+
+async def test_first_run_watch_hands_over_the_greeting_past_a_screen(scenario, monkeypatch):
+    onboarding.wait_until_ready.side_effect = [("waiting_for_human", []), ("ready", [])]
+    monkeypatch.setattr(onboarding.asyncio, "sleep", AsyncMock())
+    settled = AsyncMock()
+    await onboarding._watch_first_run("guide", scenario[1].config, "codex", 1.0, settled)
+    assert onboarding.wait_until_ready.await_count == 2
+    assert onboarding.wait_until_ready.await_args.kwargs["since"] == 1.0
+    assert settled.await_count == 2
 
 
 async def test_no_greeting_without_explicit_request(scenario, db):
