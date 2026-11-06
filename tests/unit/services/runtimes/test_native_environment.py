@@ -279,3 +279,54 @@ def test_an_uncaptured_runtime_is_unavailable_and_never_the_hosts(tmp_path):
     for runtime in ("opencode", "gemini"):
         assert RUNTIMES[runtime].resolve_binary() is None
         assert RUNTIMES[runtime].available() is False
+
+
+def _claude_profile(tmp_path, monkeypatch):
+    rt = RUNTIMES["claude"]
+    monkeypatch.setattr(type(rt), "resolve_binary", lambda self: "/bin/true")
+    monkeypatch.setattr(type(rt), "installed_version", lambda self: "2.1.319")
+    captured = rt.capture_environment(tmp_path.resolve() / "profile")
+    captured.create_directories()
+    install_native_environments({"claude": captured})
+    return rt, captured.root / "claude/.claude.json"
+
+
+def test_first_run_is_seeded_only_where_it_is_missing(tmp_path, monkeypatch):
+    rt, config = _claude_profile(tmp_path, monkeypatch)
+    rt.prepare_first_run()
+    assert json.loads(config.read_text()) == {
+        "hasCompletedOnboarding": True,
+        "lastOnboardingVersion": "2.1.319",
+    }
+    existing = {"hasCompletedOnboarding": False, "projects": {"/p": {"a": 1}}, "theme": "light"}
+    config.write_text(json.dumps(existing))
+    rt.prepare_first_run()
+    assert json.loads(config.read_text()) == {**existing, "lastOnboardingVersion": "2.1.319"}
+
+
+def test_a_broken_first_run_file_is_left_alone(tmp_path, monkeypatch):
+    rt, config = _claude_profile(tmp_path, monkeypatch)
+    config.write_text("not json")
+    rt.prepare_first_run()
+    assert config.read_text() == "not json"
+
+
+def test_default_never_seeds_first_run(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / "claude"))
+    RUNTIMES["claude"].prepare_first_run()
+    assert not list(home.rglob("*"))
+
+
+@pytest.mark.parametrize("runtime", ["codex", "opencode", "shell"])
+def test_other_clis_have_no_first_run_state_to_seed(tmp_path, monkeypatch, runtime):
+    rt = RUNTIMES[runtime]
+    monkeypatch.setattr(type(rt), "resolve_binary", lambda self: "/bin/true")
+    captured = rt.capture_environment(tmp_path.resolve() / "profile")
+    captured.create_directories()
+    install_native_environments({runtime: captured})
+    before = sorted(captured.root.rglob("*"))
+    rt.prepare_first_run()
+    assert sorted(captured.root.rglob("*")) == before

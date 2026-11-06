@@ -575,6 +575,9 @@ class Runtime:
     def pre_trust(self, directory: Path | str, *, env: dict[str, str] | None = None) -> None:
         """Prepare folder trust in the same native environment as the child process."""
 
+    def prepare_first_run(self) -> None:
+        """Let an isolated profile reach its prompt with nobody answering first-run screens."""
+
     def launch_env(self, model: str | None, effort: str | None = None) -> dict[str, str]:
         """Extra environment the session needs (runtimes that take the model or
         the effort from a variable)."""

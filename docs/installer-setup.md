@@ -166,7 +166,9 @@ directory as any agent start does (`agents.pre_trust`); it never sets unattended
 If the agent does not reach its prompt within `timing.start_timeout_seconds`, or asks
 something first, setup returns `launch_timeout` or `runtime_permission` and tells the
 person to answer in the agent's terminal. This covers any first-run or terms screen,
-on every CLI, without recognizing the screen itself. Retrying does not start it again. Directory creation creates only the chosen directory and
+on every CLI, without recognizing the screen itself. Retrying does not start it again.
+An isolated profile also skips Claude Code's first-run screens; see the
+[profiles contract](profiles-contract.md). Directory creation creates only the chosen directory and
 missing parents, without initializing a Git repository or mandatory instructions.
 An existing name, case variant, registered directory or unrelated terminal is a
 conflict. There is no automatic suffix or takeover.

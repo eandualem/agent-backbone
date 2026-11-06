@@ -325,6 +325,7 @@ async def _start_agent(
     details["stage"] = "preparation"
     if section.pre_trust:
         rt.pre_trust(spec.path, env=extra_env)
+    await asyncio.to_thread(rt.prepare_first_run)
 
     # The owner's explicit choice, or the swarm rule decided at this launch:
     # a member whose runtime confines it to the worktree never asks. Decided
