@@ -51,7 +51,7 @@ async def scenario(request, db, tmp_path, monkeypatch):
     async def launch(spec, config, **kwargs):
         assert config.launch.pre_trust is True
         assert spec.unattended is False
-        assert kwargs["wait"] is True
+        assert kwargs["wait"] is False
         assert (
             Path(kwargs["brief_file"]).read_text()
             == (data / "templates/onboarding/orchestrator-v1.md").read_text()
@@ -86,6 +86,7 @@ async def scenario(request, db, tmp_path, monkeypatch):
         "safe_deliver",
         AsyncMock(return_value=DeliveryReport(DeliveryOutcome.DELIVERED, delivery_id=123)),
     )
+    monkeypatch.setattr(onboarding, "STARTED_SECONDS", 0)
     return body, store, state
 
 
@@ -151,24 +152,27 @@ async def test_new_runtime_install_reaches_first_agent_launch_with_old_daemon_pa
     assert len(commands) == 1 and onboarding.safe_deliver.await_count == 1
 
 
-async def test_a_stalled_first_run_tells_the_person_where_to_go(scenario, db):
-    scenario[2]["state"] = AgentState.BUSY
-    stalled = await run(scenario, db)
-    assert stalled["code"] == "launch_timeout" and stalled["status"] == "action_required"
-    assert "Open its terminal" in stalled["message"]
-    assert "terms" in stalled["message"]
+@pytest.mark.parametrize("state", [AgentState.BUSY, AgentState.WAITING_FOR_HUMAN])
+async def test_setup_is_complete_once_the_cli_runs_whatever_it_shows(scenario, db, state):
+    scenario[2]["state"] = state
+    result = await run(scenario, db)
+    assert result["code"] == "agent_ready" and result["status"] == "completed"
+    assert result["data"]["evidence"] == [f"state={state.value}; source=push"]
 
 
-async def test_permission_wait_is_visible_and_retry_does_not_restart(scenario, db):
-    scenario[2]["state"] = AgentState.WAITING_FOR_HUMAN
-    first = await run(scenario, db)
-    assert first["code"] == "runtime_permission"
-    assert first["data"]["ready"] == "waiting_for_human"
+async def test_a_cli_that_exits_right_away_is_a_failed_launch(scenario, db, monkeypatch):
+    launch = onboarding.start_agent
+
+    async def exits(*args, **kwargs):
+        result = await launch(*args, **kwargs)
+        asyncio.get_running_loop().call_later(0.05, scenario[2].update, {"live": False})
+        return result
+
+    monkeypatch.setattr(onboarding, "start_agent", exits)
+    monkeypatch.setattr(onboarding, "STARTED_SECONDS", 5)
+    result = await run(scenario, db)
+    assert result["code"] == "launch_failed" and result["data"]["ready"] == "exited"
     onboarding.safe_deliver.assert_not_awaited()
-    scenario[2]["state"] = AgentState.IDLE
-    assert (await run(scenario, db))["code"] == "agent_ready"
-    assert onboarding.start_agent.await_count == 1
-    assert onboarding.safe_deliver.await_count == 1
 
 
 async def test_no_greeting_without_explicit_request(scenario, db):
@@ -209,11 +213,11 @@ async def test_lost_launch_with_no_session_is_not_repeated(scenario, db):
 
 
 async def test_replaced_launch_is_never_used_for_greeting(scenario, db):
-    scenario[2]["state"] = AgentState.WAITING_FOR_HUMAN
-    assert (await run(scenario, db))["code"] == "runtime_permission"
+    onboarding.safe_deliver.side_effect = OSError("send response lost")
+    assert (await run(scenario, db))["code"] == "outcome_unknown"
     scenario[2]["env"]["BACKBONE_LAUNCH_ID"] = "other-launch"
     assert (await run(scenario, db))["code"] == "agent_conflict"
-    onboarding.safe_deliver.assert_not_awaited()
+    assert onboarding.safe_deliver.await_count == 1
 
 
 async def test_uncertain_greeting_is_not_repeated(scenario, db):
@@ -266,9 +270,7 @@ async def test_original_core_can_start_and_retry_but_selected_swarms_must_be_rea
         assert (await run(scenario, db))["code"] == "starter_conflict"
         onboarding.start_agent.assert_not_awaited()
     else:
-        state["state"] = AgentState.WAITING_FOR_HUMAN
-        assert (await run(scenario, db))["code"] == "runtime_permission"
-        state["state"] = AgentState.IDLE
+        assert (await run(scenario, db))["code"] == "agent_ready"
         assert (await run(scenario, db))["code"] == "agent_ready"
         assert onboarding.start_agent.await_count == 1
         assert onboarding.safe_deliver.await_count == 1
@@ -447,16 +449,15 @@ async def test_setup_failure_log_is_classified_without_exception_content(scenari
 async def test_registered_retry_does_not_repeat_runtime_version_preflight(
     scenario, db, monkeypatch
 ):
-    scenario[2]["state"] = AgentState.WAITING_FOR_HUMAN
-    assert (await run(scenario, db))["code"] == "runtime_permission"
+    onboarding.safe_deliver.side_effect = OSError("send response lost")
+    assert (await run(scenario, db))["code"] == "outcome_unknown"
     runtime = RUNTIMES[scenario[0].agent.runtime]
 
     def unavailable(self):
         raise AssertionError("version probe must not block an already registered launch")
 
     monkeypatch.setattr(type(runtime), "setup_error", unavailable)
-    scenario[2]["state"] = AgentState.IDLE
-    assert (await run(scenario, db))["code"] == "agent_ready"
+    assert (await run(scenario, db))["code"] == "outcome_unknown"
     assert onboarding.start_agent.await_count == 1
 
 

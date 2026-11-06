@@ -6,7 +6,9 @@ unrelated agent, weakens runtime trust, or guesses that a lost send was unsent.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -44,6 +46,10 @@ GREETING = (
     "coordinate specialist agents, then ask what I want to accomplish first. "
     "Wait for my answer before creating agents, changing projects or making commitments."
 )
+
+# Setup ends once the CLI is running: what it shows next is the person's to answer.
+# A CLI that cannot start quits within moments (Codex 0.160.0: under two seconds).
+STARTED_SECONDS = 3.0
 
 # Keep the original core-v1 prerequisites valid when new defaults are added.
 # Existing installations retain their assignments and may have a pending request.
@@ -414,7 +420,7 @@ async def _first(request, receipt, store, db, *, check_effect=None):
             config,
             db=db,
             brief_file=brief_path,
-            wait=True,
+            wait=False,
             operation_id=operation,
             **({"check_effect": check_effect} if check_effect is not None else {}),
         )
@@ -427,6 +433,10 @@ async def _first(request, receipt, store, db, *, check_effect=None):
             )
         await _check(check_effect)
         await store.touch_started(spec.name)
+        deadline = time.monotonic() + STARTED_SECONDS
+        while time.monotonic() < deadline and await session_exists(spec.name):
+            await _check(check_effect)
+            await asyncio.sleep(0.25)
     # A lost launch response is reconciled from the exact operation and registration,
     # never from the presence of a same-name terminal alone.
     if not await session_exists(spec.name):
@@ -456,24 +466,6 @@ async def _first(request, receipt, store, db, *, check_effect=None):
         return dict(
             receipt.record["result"],
             data={**receipt.record["result"]["data"], "evidence": evidence},
-        )
-    if snapshot.state.value == "waiting_for_human":
-        return _answer(
-            receipt,
-            "runtime_permission",
-            "The agent is asking something, which may be a first-run, trust or terms screen. "
-            "Open its terminal, answer it, then retry this request.",
-            ready="waiting_for_human",
-            evidence=evidence,
-        )
-    if snapshot.state.value != "idle":
-        return _answer(
-            receipt,
-            "launch_timeout",
-            "The agent has not reached its prompt. It may be waiting on a first-run or terms "
-            "screen. Open its terminal, answer it, then retry this request.",
-            ready="timeout",
-            evidence=evidence,
         )
     await _check(check_effect)
     receipt.completed("ready")
@@ -505,7 +497,8 @@ async def _first(request, receipt, store, db, *, check_effect=None):
     final = _answer(
         receipt,
         "agent_ready",
-        "Agent started; any greeting receipt records submission only.",
+        "Agent started; it may show its own first-run screens in its terminal. "
+        "Any greeting receipt records submission only.",
         ready="ready",
         completed=True,
         evidence=evidence,

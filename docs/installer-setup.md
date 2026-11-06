@@ -163,10 +163,13 @@ The running service executes first-agent setup through operator-only
 installation-owned hooks, registers a new agent and starts it with the selected
 brief. It preserves global runtime settings and records folder trust for the chosen
 directory as any agent start does (`agents.pre_trust`); it never sets unattended mode.
-If the agent does not reach its prompt within `timing.start_timeout_seconds`, or asks
-something first, setup returns `launch_timeout` or `runtime_permission` and tells the
-person to answer in the agent's terminal. This covers any first-run or terms screen,
-on every CLI, without recognizing the screen itself. Retrying does not start it again. Directory creation creates only the chosen directory and
+Setup does not wait for the agent's prompt. It is complete once the CLI has stayed
+running for three seconds, whatever the CLI shows: a first-run, sign-in, trust or terms
+screen is the person's to answer in the agent's terminal, and a greeting waits in the
+queue until the agent can take it. `data.ready` and `agent_ready` mean the CLI is running,
+not that it has reached its prompt; `data.evidence` gives the state seen. A CLI that exits
+within those seconds is `launch_failed`, and retrying does not start it again.
+Directory creation creates only the chosen directory and
 missing parents, without initializing a Git repository or mandatory instructions.
 An existing name, case variant, registered directory or unrelated terminal is a
 conflict. There is no automatic suffix or takeover.
@@ -265,7 +268,7 @@ agent start after inspection. Replay never restarts it.
 Result codes include `initialized`, `existing_preserved`, `agent_ready`,
 `validated`, `invalid_request`, `operator_required`, `installation_conflict`,
 `starter_conflict`, `agent_conflict`, `runtime_missing`, `runtime_permission`,
-`service_unavailable`, `launch_failed`, `launch_timeout`, `outcome_unknown`,
+`service_unavailable`, `launch_failed`, `outcome_unknown`,
 `request_conflict`, `filesystem_unsupported`, `request_cancelled` and `cancellation_unsafe`. `retry` is `same_request`, `new_request` or `none`.
 
 Private receipts under `setup-receipts` bind each request ID to its full input
