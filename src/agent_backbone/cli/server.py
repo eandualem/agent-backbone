@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -138,7 +139,11 @@ def serve_profile(registry_path: Path, profile_id: str) -> None:
         ProfileRegistry,
         reconcile_profile_provider,
     )
-    from agent_backbone.services.runtimes import RUNTIMES, install_native_environments
+    from agent_backbone.services.runtimes import (
+        RUNTIMES,
+        install_native_environments,
+        prepare_profile_keychain,
+    )
     from agent_backbone.services.terminal import pin_tmux_server
 
     registry = ProfileRegistry(registry_path)
@@ -150,6 +155,11 @@ def serve_profile(registry_path: Path, profile_id: str) -> None:
     # the tmux server, and the user's tmux.conf unread.
     process_environment = RUNTIMES["shell"].capture_environment(root)
     native = _native_environments(root)
+    homes = [Path(process_environment["HOME"])] + [Path(env["HOME"]) for env in native.values()]
+    try:
+        prepare_profile_keychain(root, homes)
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        log.warning("Sign-ins that use the macOS keychain will fail in this profile: %s", exc)
     os.environ.clear()
     os.environ.update(process_environment, BACKBONE_DATA_DIR=str(root))
 

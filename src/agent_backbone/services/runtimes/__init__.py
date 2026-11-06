@@ -18,6 +18,7 @@ from agent_backbone.services.runtimes._environment import (
     NativeEnvironment,
     install_native_environments,
 )
+from agent_backbone.services.runtimes._keychain import prepare_profile_keychain
 from agent_backbone.services.runtimes._pane import GENERIC_BUSY_FRAGMENTS, sanitize_pane_content
 from agent_backbone.services.runtimes._usage import read_jsonl as read_usage_jsonl
 from agent_backbone.services.runtimes.base import (
@@ -156,6 +157,7 @@ __all__ = [
     "get_runtime",
     "install_hint",
     "install_native_environments",
+    "prepare_profile_keychain",
     "project_skill_dirs",
     "read_brief",
     "read_usage_jsonl",
