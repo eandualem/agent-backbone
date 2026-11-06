@@ -161,8 +161,12 @@ or authentication.
 The running service executes first-agent setup through operator-only
 `POST /api/setup/first-agent`. It verifies core prerequisites, prepares
 installation-owned hooks, registers a new agent and starts it with the selected
-brief. It preserves global runtime settings and workspace trust prompts; it never
-sets unattended mode. Directory creation creates only the chosen directory and
+brief. It preserves global runtime settings and records folder trust for the chosen
+directory as any agent start does (`agents.pre_trust`); it never sets unattended mode.
+If the agent does not reach its prompt within `timing.start_timeout_seconds`, or asks
+something first, setup returns `launch_timeout` or `runtime_permission` and tells the
+person to answer in the agent's terminal. This covers any first-run or terms screen,
+on every CLI, without recognizing the screen itself. Retrying does not start it again. Directory creation creates only the chosen directory and
 missing parents, without initializing a Git repository or mandatory instructions.
 An existing name, case variant, registered directory or unrelated terminal is a
 conflict. There is no automatic suffix or takeover.

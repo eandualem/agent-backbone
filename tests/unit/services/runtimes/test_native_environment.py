@@ -1,5 +1,6 @@
 """A captured native context cannot drift to ambient or sibling account stores."""
 
+import json
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -50,7 +51,8 @@ def test_captured_environment_is_used_for_preparation_readers_and_accounts(
         assert "ANTHROPIC_API_KEY" not in environment
         assert "OPENCODE_SERVER" not in environment
     if runtime == "claude":
-        assert (a.root / "claude/.claude.json").is_file()
+        recorded = json.loads((a.root / "claude/.claude.json").read_text())
+        assert recorded["projects"][str(project.resolve())]["hasTrustDialogAccepted"] is True
         assert rt.hook_settings_path(None) == a.root / "claude/settings.json"
     if runtime == "codex":
         assert (a.root / "codex/config.toml").is_file()

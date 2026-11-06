@@ -49,7 +49,7 @@ async def scenario(request, db, tmp_path, monkeypatch):
     state = {"live": False, "env": {}, "state": AgentState.IDLE}
 
     async def launch(spec, config, **kwargs):
-        assert config.launch.pre_trust is False
+        assert config.launch.pre_trust is True
         assert spec.unattended is False
         assert kwargs["wait"] is True
         assert (
@@ -149,6 +149,14 @@ async def test_new_runtime_install_reaches_first_agent_launch_with_old_daemon_pa
     assert (await run(scenario, db))["code"] == "agent_ready"
     assert (await run(scenario, db))["code"] == "agent_ready"
     assert len(commands) == 1 and onboarding.safe_deliver.await_count == 1
+
+
+async def test_a_stalled_first_run_tells_the_person_where_to_go(scenario, db):
+    scenario[2]["state"] = AgentState.BUSY
+    stalled = await run(scenario, db)
+    assert stalled["code"] == "launch_timeout" and stalled["status"] == "action_required"
+    assert "Open its terminal" in stalled["message"]
+    assert "terms" in stalled["message"]
 
 
 async def test_permission_wait_is_visible_and_retry_does_not_restart(scenario, db):

@@ -7,7 +7,6 @@ unrelated agent, weakens runtime trust, or guesses that a lost send was unsent.
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -403,9 +402,6 @@ async def _first(request, receipt, store, db, *, check_effect=None):
         receipt.completed("agent")
         await _check(check_effect)
         config = store.config
-    # Turn off workspace pre-trust for this explicit interactive first launch.
-    # Other launch settings and each adapter's sandbox/dialog behavior remain intact.
-    config = replace(config, launch=replace(config.launch, pre_trust=False))
     operation = receipt.record.get("launch_operation")
     if operation is None:
         if await session_exists(spec.name):
@@ -465,7 +461,8 @@ async def _first(request, receipt, store, db, *, check_effect=None):
         return _answer(
             receipt,
             "runtime_permission",
-            "Continue in the agent terminal, then retry this request.",
+            "The agent is asking something, which may be a first-run, trust or terms screen. "
+            "Open its terminal, answer it, then retry this request.",
             ready="waiting_for_human",
             evidence=evidence,
         )
@@ -473,7 +470,8 @@ async def _first(request, receipt, store, db, *, check_effect=None):
         return _answer(
             receipt,
             "launch_timeout",
-            "The runtime is not confirmed ready; inspect its terminal.",
+            "The agent has not reached its prompt. It may be waiting on a first-run or terms "
+            "screen. Open its terminal, answer it, then retry this request.",
             ready="timeout",
             evidence=evidence,
         )

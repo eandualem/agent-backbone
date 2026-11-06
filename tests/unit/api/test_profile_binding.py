@@ -1712,7 +1712,7 @@ async def test_bound_first_agent_http_success_and_replay(
 
     async def launch(spec, config, **kwargs):
         assert selected.environment() == environment
-        assert config.data_dir == root and not config.launch.pre_trust
+        assert config.data_dir == root and config.launch.pre_trust
         state["live"] = True
         state["env"] = {
             "BACKBONE_OPERATION_ID": kwargs["operation_id"],
