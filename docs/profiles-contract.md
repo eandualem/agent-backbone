@@ -494,7 +494,8 @@ including failures before an instance can be resolved. Events retain increasing
 identify the original action. Step events carry step/status; results retain the
 existing status/code/message/retry/completed_steps/data shape. `setup.progress`
 and `setup.result` illustrate one invocation; other results are independent cases
-with their own sequence. Ready means measured launch readiness, not proven login.
+with their own sequence. Ready means the CLI stayed running after launch, not that it
+reached its prompt or is signed in.
 
 Cancellation changes only the original action to `cancel_first_agent`, preserving
 ID, body and binding. Compare the saved body after normalizing that action back to

@@ -464,7 +464,7 @@
       "type": "result",
       "status": "completed",
       "code": "agent_ready",
-      "message": "Agent started; any greeting receipt records submission only.",
+      "message": "Agent started; it may show its own first-run screens in its terminal. Any greeting receipt records submission only.",
       "retry": "none",
       "completed_steps": [
         "preflight",
