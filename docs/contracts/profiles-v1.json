@@ -590,10 +590,6 @@
     },
     "authentication_cases": [
       {
-        "name": "signed_in",
-        "authentication": "authenticated"
-      },
-      {
         "name": "signed_out",
         "authentication": "not_authenticated"
       },
@@ -953,6 +949,12 @@
       "runtime": "codex",
       "session": "sign-in-codex",
       "created": false
+    },
+    "account_status_query": "/api/profile/accounts/status?runtime=codex",
+    "account_status_response": {
+      "schema_version": 1,
+      "runtime": "codex",
+      "authentication": "authenticated"
     },
     "sign_in_refusals": {
       "runtime_unavailable": {

@@ -246,3 +246,39 @@ def test_sign_in_stays_open_only_after_a_failure():
     assert "Press Enter" not in run("exit 0", "").stdout
     failed = run("exit 1", "\n")
     assert "Press Enter to close." in failed.stdout
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_account_status_runs_one_cli_for_an_operator(
+    api_client, auth_headers, native, runtime, monkeypatch
+):
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        output = {"claude": '{"loggedIn": true}', "codex": "", "opencode": "[]"}[runtime]
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    _, headers, captured = native
+    response = await api_client.get(
+        f"/api/profile/accounts/status?runtime={runtime}", headers={**auth_headers, **headers}
+    )
+    assert response.status_code == 200
+    expected = "not_authenticated" if runtime == "opencode" else "authenticated"
+    assert response.json() == {
+        "schema_version": 1,
+        "runtime": runtime,
+        "authentication": expected,
+    }
+    assert [kwargs["env"] for _, kwargs in calls] == [dict(captured[runtime])]
+
+
+async def test_account_status_refuses_other_runtimes(api_client, auth_headers, native):
+    _, headers, _ = native
+    for query in ("?runtime=shell", ""):
+        response = await api_client.get(
+            f"/api/profile/accounts/status{query}", headers={**auth_headers, **headers}
+        )
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "runtime_unavailable"

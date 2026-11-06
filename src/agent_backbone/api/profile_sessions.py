@@ -112,6 +112,21 @@ async def ensure_shell(request: Request) -> dict:
     return {**result, "shell_id": body.shell_id}
 
 
+async def account_status(request: Request, runtime: str = "") -> dict:
+    """One CLI's own sign-in status: a stored sign-in, not proof the account works."""
+    _identity(request)
+    if _is_default(request):
+        raise _error(422, "runtime_unavailable", "Default keeps its existing CLI sign-ins.")
+    if runtime not in _SIGN_IN_RUNTIMES:
+        raise _error(422, "runtime_unavailable", "This runtime has no sign-in here.")
+    try:
+        RUNTIMES[runtime].account_invocation("status")
+    except ValueError:
+        raise _error(422, "runtime_unavailable", "This runtime is not installed.") from None
+    authentication = await asyncio.to_thread(RUNTIMES[runtime].observed_authentication)
+    return {"schema_version": 1, "runtime": runtime, "authentication": authentication}
+
+
 async def sign_in(request: Request) -> dict:
     """Run a CLI's own sign-in in a session the operator attaches to."""
     body = await _parsed(request, _SignIn)

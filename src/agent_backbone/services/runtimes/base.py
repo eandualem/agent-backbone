@@ -400,7 +400,7 @@ class Runtime:
         """An internal native invocation, never an ambient account fallback.
 
         The lifecycle owner must check its identity fence before executing this.
-        Sign-in sessions run login and the bound catalog runs status; nothing runs logout.
+        Sign-in sessions run login and the account status route runs status; nothing runs logout.
         """
         captured = native_environment(self.id)
         if captured is None or captured.executable is None:
@@ -629,7 +629,6 @@ class Runtime:
             raise ValueError("Native runtime context does not match")
         item = self.discovery()
         item["setup_compatibility"] = self.setup_compatibility()
-        item["authentication"] = self.observed_authentication()
         if native_environment(self.id) != environment:
             raise ValueError("Native runtime context does not match")
         return item

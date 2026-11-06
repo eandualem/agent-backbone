@@ -294,6 +294,18 @@ fails it stays open until someone presses Enter, so the failure can be read. Aft
 session ends, a repeat starts a new
 one. `runtime_unavailable` refuses another runtime or one that is not installed. The
 `sessions` group in the shared fixtures has these bodies.
+
+`GET /api/profile/accounts/status?runtime=codex` runs that one CLI's own status command in
+this profile's environment, with a 5-second limit, and returns
+`{"schema_version":1,"runtime":"codex","authentication":"authenticated"}`. It makes no
+model call and reads no credential itself. `authenticated` means the CLI reports a stored
+sign-in, which does not prove the account still works; `not_authenticated` means it
+reports signed out; `unavailable` means no usable result, such as a timeout. A sign-in
+session ending does not show that it worked, so read this after it ends. Read it when a
+setup screen opens and when a sign-in ends, and repeat it only for the CLI being signed in
+while that session is open: OpenCode starts a private local server for each read, and
+each CLI may update its own bookkeeping files. `runtime_unavailable` refuses as for
+sign-in, including on Default.
 `backbone profiles sign-in PROFILE_ID --runtime codex` does both from a terminal.
 
 ## Keep work pinned
@@ -501,13 +513,11 @@ flags. Schema 2 echoes the full tuple and retains the existing item fields. Its
 nonempty catalog is an illustrative item, not a complete installed-runtime inventory.
 All probes use provider-owned native environments; host PATH may locate a binary
 but cannot supply account/config roots. Reject stale bindings before subprocess
-spawn. Discovery never logs in or calls a model. In an isolated profile the catalog runs
-each CLI's own status command in that profile's environment, with a 5-second limit.
-In the existing `authentication` field, `authenticated` means that CLI reports a stored
-sign-in, which does not prove the account still works; `not_authenticated` means an
-observed signed-out state; `unavailable` means no usable probe result and `unsupported`
-means no supported probe. Unknown discovery remains `unknown`; binary/version
-availability proves none of these authentication outcomes. `authentication_cases` shows field values, not full responses. Unsupported
+spawn. Discovery never logs in or calls a model. In the existing `authentication`
+field, `not_authenticated` means an observed signed-out state; `unavailable` means
+no usable probe result and `unsupported` means no supported probe. Unknown discovery
+remains `unknown`; binary/version availability proves none of these authentication
+outcomes. The catalog runs no account status; use the account status route. `authentication_cases` shows field values, not full responses. Unsupported
 schema/flags leave discovery unavailable; never retry unbound.
 
 The bound CLI uses `GET /api/runtimes?schema_version=2&check_setup=true` after

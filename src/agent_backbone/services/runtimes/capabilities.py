@@ -260,19 +260,19 @@ CAPABILITIES: tuple[Capability, ...] = (
             "tests/unit/services/runtimes/test_discovery.py",
             "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
             "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
-            "an isolated profile reports the CLI's own sign-in status; no activation",
+            "no activation or account verification",
         ),
         codex=_ok(
             "tests/unit/services/runtimes/test_discovery.py",
             "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
             "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
-            "an isolated profile reports the CLI's own sign-in status; no activation",
+            "no activation or account verification",
         ),
         opencode=_ok(
             "tests/unit/services/runtimes/test_discovery.py",
             "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
             "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
-            "an isolated profile reports the CLI's own sign-in status; no activation",
+            "no activation or account verification",
         ),
         gemini=_ok(
             "tests/unit/services/runtimes/test_discovery.py",
@@ -348,13 +348,17 @@ CAPABILITIES: tuple[Capability, ...] = (
         fallback="Use Default for this runtime.",
         implemented=lambda rt: rt.id != "shell",
         claude=_ok(
-            "tests/unit/api/test_profile_sessions.py", "Sign-in itself is checked on a real account"
+            "tests/unit/api/test_profile_sessions.py",
+            "Sign-in itself is checked on a real account; status route reads the CLI's own status",
         ),
         codex=_ok(
-            "tests/unit/api/test_profile_sessions.py", "Sign-in itself is checked on a real account"
+            "tests/unit/api/test_profile_sessions.py",
+            "Sign-in itself is checked on a real account; status route reads the CLI's own status",
         ),
         opencode=_ok(
-            "tests/unit/api/test_profile_sessions.py", "Sign-in itself is checked on a real account"
+            "tests/unit/api/test_profile_sessions.py",
+            "Sign-in itself is checked on a real account; status route reads the CLI's own status; "
+            "a real signed-in OpenCode result is not yet seen",
         ),
         gemini=_gap(note="Refused in isolated profiles until someone needs it."),
         deepcode=_gap(note="Refused in isolated profiles until someone needs it."),

@@ -246,17 +246,11 @@ def _captured_status(monkeypatch, tmp_path, runtime, script):
         ("opencode", "[]", 1, "unavailable"),
     ],
 )
-def test_bound_discovery_reports_the_clis_own_sign_in_status(
+def test_observed_authentication_reads_the_clis_own_sign_in_status(
     monkeypatch, tmp_path, runtime, output, code, expected
 ):
-    selected, environment = _captured_status(
-        monkeypatch,
-        tmp_path,
-        runtime,
-        f"case \"$*\" in *--version*) echo 2.2.2; exit 0;; esac\necho '{output}'\nexit {code}",
-    )
-    item = selected.bound_discovery(environment)
-    assert item["authentication"] == expected
+    selected, _ = _captured_status(monkeypatch, tmp_path, runtime, f"echo '{output}'\nexit {code}")
+    assert selected.observed_authentication() == expected
 
 
 @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
