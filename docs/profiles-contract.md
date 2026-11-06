@@ -278,12 +278,13 @@ reaches this provider. None of these is a secret, and no credential is passed.
 
 `POST /api/profile/accounts/sign-in` with `{"schema_version":1,"runtime":"codex"}` runs
 that CLI's own sign-in in a session on the same server, using that runtime's private
-environment in this profile. Attach to the returned session to complete it. Claude Code,
+environment in this profile. All CLIs in a profile share one HOME, and each keeps its
+own store inside it. Attach to the returned session to complete it. Claude Code,
 Codex and OpenCode are supported. Backbone never sees the credentials; the CLI stores
 them in its own files inside the profile. On macOS, a CLI that saves its sign-in in the
 keychain (Claude Code, and also git and gh) uses the profile's own keychain,
 `keychain/profile.keychain-db` in the profile directory. The profile creates it on its
-first start, makes it the default keychain of every home in the profile, and unlocks it
+first start, makes it the default keychain of the profile's home, and unlocks it
 at each start with a password kept in the profile's `.env`. The person's own keychain is
 not used. A repeat request while that session is live
 returns it unchanged with `created: false`. The session stays open after the CLI exits

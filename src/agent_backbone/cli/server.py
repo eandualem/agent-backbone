@@ -108,14 +108,15 @@ def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
 
 
 def _native_environments(root: Path) -> dict:
-    """Capture each required runtime under its own root. Every other adapter is refused,
-    and so is a runtime that is not installed: nothing falls back to the host's."""
+    """Capture each required runtime in the profile's one home, where each keeps its own
+    store. Every other adapter is refused, and so is a runtime that is not installed:
+    nothing falls back to the host's."""
     from agent_backbone.services.runtimes import RUNTIMES
 
     captured = {}
     for runtime in ("shell", "claude", "codex", "opencode"):
         try:
-            environment = RUNTIMES[runtime].capture_environment(root / "native" / runtime)
+            environment = RUNTIMES[runtime].capture_environment(root)
         except ValueError:
             continue
         environment.create_directories()
@@ -155,9 +156,8 @@ def serve_profile(registry_path: Path, profile_id: str) -> None:
     # the tmux server, and the user's tmux.conf unread.
     process_environment = RUNTIMES["shell"].capture_environment(root)
     native = _native_environments(root)
-    homes = [Path(process_environment["HOME"])] + [Path(env["HOME"]) for env in native.values()]
     try:
-        prepare_profile_keychain(root, homes)
+        prepare_profile_keychain(root, [Path(process_environment["HOME"])])
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         log.warning("Sign-ins that use the macOS keychain will fail in this profile: %s", exc)
     os.environ.clear()

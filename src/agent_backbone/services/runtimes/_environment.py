@@ -111,13 +111,6 @@ def install_native_environments(environments: Mapping[str, NativeEnvironment]) -
     captured = MappingProxyType(dict(environments))
     for env in captured.values():
         env.check()
-    roots = [env.root for env in captured.values()]
-    if any(
-        a.is_relative_to(b) or b.is_relative_to(a)
-        for index, a in enumerate(roots)
-        for b in roots[index + 1 :]
-    ):
-        raise ValueError("Native runtime roots overlap")
     if _CONTEXT is not None and captured != _CONTEXT:
         raise ValueError("Native runtime context is already pinned")
     _CONTEXT = captured
