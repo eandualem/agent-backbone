@@ -150,6 +150,8 @@ class Codex(Runtime):
     native_files = ("codex/auth.json", "codex/config.toml", "codex/hooks.json")
 
     setup_hooks = True
+    runs_in_profiles = True
+    profile_sign_in = True
 
     supports_exact_resume = True
     id = "codex"

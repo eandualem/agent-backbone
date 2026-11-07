@@ -334,7 +334,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Agents run inside an isolated profile with their own native environment",
         "cli/server.py; services/runtimes/_environment.py",
         fallback="Use Default for this runtime.",
-        implemented=lambda rt: True,
+        implemented=lambda rt: rt.runs_in_profiles,
         claude=_ok("tests/unit/services/agents/test_launch.py", _ISOLATED_LAUNCH),
         codex=_ok("tests/unit/services/agents/test_launch.py", _ISOLATED_LAUNCH),
         opencode=_ok("tests/unit/services/agents/test_launch.py", _ISOLATED_LAUNCH),
@@ -348,7 +348,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Sign a CLI account in inside an isolated profile",
         "api/profile_sessions.py; cli/profiles.py",
         fallback="Use Default for this runtime.",
-        implemented=lambda rt: rt.id != "shell",
+        implemented=lambda rt: rt.profile_sign_in,
         claude=_ok(
             "tests/unit/api/test_profile_sessions.py",
             "Sign-in itself is checked on a real account; status route reads the CLI's own status",

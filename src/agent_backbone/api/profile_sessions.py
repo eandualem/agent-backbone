@@ -12,7 +12,6 @@ from agent_backbone.config import session_secret_keys
 from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.terminal import session_exists, start_session
 
-_SIGN_IN_RUNTIMES = ("claude", "codex", "opencode")
 _lock = asyncio.Lock()
 # Keep the CLI's last words on screen: a sign-in can end before anyone attaches.
 _HOLD_OPEN = 'if "$@"; then exit 0; fi; echo; echo "Press Enter to close."; read _'
@@ -128,7 +127,7 @@ async def account_status(request: Request, runtime: str = "") -> dict:
     _identity(request)
     if _is_default(request):
         raise _error(422, "runtime_unavailable", "Default keeps its existing CLI sign-ins.")
-    if runtime not in _SIGN_IN_RUNTIMES:
+    if runtime not in RUNTIMES or not RUNTIMES[runtime].profile_sign_in:
         raise _error(422, "runtime_unavailable", "This runtime has no sign-in here.")
     try:
         RUNTIMES[runtime].account_invocation("status")
@@ -148,7 +147,7 @@ async def sign_in(request: Request) -> dict:
             "runtime_unavailable",
             "Default keeps its existing CLI sign-ins; manage them with the CLI in a terminal.",
         )
-    if body.runtime not in _SIGN_IN_RUNTIMES:
+    if body.runtime not in RUNTIMES or not RUNTIMES[body.runtime].profile_sign_in:
         raise _error(422, "runtime_unavailable", "This runtime cannot be signed in here.")
     try:
         command, environment = RUNTIMES[body.runtime].account_invocation("login")

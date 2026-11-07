@@ -642,6 +642,12 @@ class Runtime:
     setup_hooks = False
     """Whether the finite installer can prepare isolated launch hooks."""
 
+    runs_in_profiles = False
+    """Whether agents of this runtime may run in an isolated profile."""
+
+    profile_sign_in = False
+    """Whether an isolated profile can run this CLI's own sign-in and status."""
+
     def setup_error(self) -> str | None:
         """Return a deterministic installer preflight refusal, before registration."""
         return None

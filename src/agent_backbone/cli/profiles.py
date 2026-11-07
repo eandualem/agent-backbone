@@ -35,7 +35,10 @@ def add_profiles_parser(sub) -> None:
     operation.add_argument("--json", dest="json_output", action="store_true")
     signing = commands.add_parser("sign-in", help="sign a CLI account in inside a running profile")
     signing.add_argument("profile_id")
-    signing.add_argument("--runtime", required=True, choices=("claude", "codex", "opencode"))
+    from agent_backbone.services.runtimes import RUNTIMES
+
+    sign_in = [rid for rid, rt in RUNTIMES.items() if rt.profile_sign_in]
+    signing.add_argument("--runtime", required=True, choices=sign_in)
     # Internal: the local control plane launches this for a ready profile.
     serve = commands.add_parser("serve")
     serve.add_argument("--registry", required=True, type=Path)

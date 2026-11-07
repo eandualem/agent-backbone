@@ -114,7 +114,7 @@ def _native_environments(root: Path) -> dict:
     from agent_backbone.services.runtimes import RUNTIMES
 
     captured = {}
-    for runtime in ("shell", "claude", "codex", "opencode"):
+    for runtime in (rid for rid, rt in RUNTIMES.items() if rt.runs_in_profiles):
         try:
             environment = RUNTIMES[runtime].capture_environment(root)
         except ValueError:

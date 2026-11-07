@@ -141,6 +141,8 @@ class ClaudeCode(Runtime):
     )
 
     setup_hooks = True
+    runs_in_profiles = True
+    profile_sign_in = True
 
     supports_exact_resume = True
     id = "claude"
