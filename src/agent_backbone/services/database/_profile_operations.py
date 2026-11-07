@@ -7,6 +7,7 @@ import secrets
 import subprocess
 import uuid
 from contextlib import suppress
+from pathlib import Path
 
 from agent_backbone.config import SQLITE_FILENAME, sqlite_url
 from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
@@ -85,6 +86,8 @@ def _person_git_identity() -> dict[str, str] | None:
         try:
             found = subprocess.run(
                 ["git", "config", "--global", "--includes", "--get", key],
+                # includeIf "gitdir:" depends on the folder; read from HOME, not a repository.
+                cwd=Path.home(),
                 capture_output=True,
                 text=True,
                 timeout=10,

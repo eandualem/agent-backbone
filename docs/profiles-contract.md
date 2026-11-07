@@ -636,8 +636,9 @@ process concurrently replacing files or path components.
 
 Claude Code, Codex and OpenCode have internal preparation tests; other model adapters
 refuse this preparation. Codex requests file credential storage, subject to native
-managed policy. OpenCode uses a private native server. Real sign-ins were
-checked on the working installation; the adversarial acceptance list and lifecycle
+managed policy. OpenCode uses a private native server. Claude Code and Codex
+sign-ins were checked on the working installation, and a signed-in OpenCode result is
+not yet seen (#579); the adversarial acceptance list and lifecycle
 fencing are not done yet (#575, #574).
 
 Internal skill materialization can now claim the old and new checkout and their

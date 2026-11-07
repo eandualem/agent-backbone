@@ -403,13 +403,21 @@ def main() -> int:
             "no agent on Default's server",
             "worker" not in home.sessions(record["binding"]["tmux"]["socket_path"]),
         )
-        check(
-            "separate HOME and CLI store",
-            env_a["HOME"] != env_b["HOME"]
-            and env_a["CODEX_HOME"].startswith(str(Path(env_a["HOME"]).parent))
-            and env_b["CLAUDE_CONFIG_DIR"].startswith(str(Path(env_b["HOME"]).parent)),
+        root_a, root_b = (
+            Path(records[n]["binding"]["credential_reference"]["path"]).parent for n in "AB"
         )
-        check("one HOME for a profile's CLIs", env_c["HOME"] == env_a["HOME"])
+
+        def inside(env, root, *keys):
+            return env["HOME"] == str(root / "home") and all(
+                Path(env[key]).is_relative_to(root) for key in keys
+            )
+
+        check(
+            "each CLI's HOME and store are its profile's",
+            inside(env_a, root_a, "CODEX_HOME")
+            and inside(env_b, root_b, "CLAUDE_CONFIG_DIR")
+            and inside(env_c, root_a, "XDG_CONFIG_HOME", "XDG_DATA_HOME"),
+        )
         ports = {env_a["BACKBONE_PORT"], env_b["BACKBONE_PORT"], str(PORT)}
         check("separate ports", len(ports) == 3)
         check(

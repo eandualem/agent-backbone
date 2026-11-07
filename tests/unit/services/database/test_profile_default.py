@@ -90,6 +90,14 @@ def test_init_refuses_a_profile_whose_registry_it_cannot_see(root, capsys):
     assert (root / ".env").read_bytes() == env
 
 
+def test_init_refuses_a_database_it_cannot_read(root, capsys):
+    root.mkdir(parents=True)
+    (root / "backbone.db").write_bytes(b"not a database")
+    assert run("init") == 1
+    assert "Cannot read" in capsys.readouterr().out
+    assert not (root / ".env").exists()
+
+
 def test_a_crash_before_the_identity_is_recorded_is_finished_by_running_init_again(
     root, monkeypatch
 ):

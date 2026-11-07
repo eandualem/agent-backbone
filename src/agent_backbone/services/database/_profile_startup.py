@@ -38,7 +38,11 @@ def _has_identity(database: Path) -> bool:
     connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)
     try:
         return connection.execute("SELECT 1 FROM profile_identity").fetchone() is not None
-    except sqlite3.OperationalError:
-        return False
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            return False
+        raise ValueError(f"Cannot read {database}; refusing to initialize it") from None
+    except sqlite3.Error:
+        raise ValueError(f"Cannot read {database}; refusing to initialize it") from None
     finally:
         connection.close()
