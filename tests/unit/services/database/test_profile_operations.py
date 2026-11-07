@@ -13,18 +13,20 @@ from agent_backbone.services.database import (
     ProfileReservation,
     validate_profile_operation,
 )
+from tests.support import reserve_profile
 
 
 @pytest.fixture
 def operations(tmp_path):
     registry = ProfileRegistry.create(tmp_path / "registry" / "index.db")
-    registry.reserve(
+    reserve_profile(
+        registry,
         ProfileReservation(
             ProfileIdentity("profile-a", "installation-a", "lifecycle-a1"),
             tmp_path / "provider-a",
             "Work",
             "baseline-example-v1",
-        )
+        ),
     )
     return ProfileOperations(registry)
 

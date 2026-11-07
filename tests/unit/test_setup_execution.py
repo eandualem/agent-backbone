@@ -10,6 +10,7 @@ import pytest
 
 from agent_backbone.cli import build_parser, main, onboarding, service
 from agent_backbone.services.database import SetupReceipt, SetupReceiptError
+from tests.support import reserve_profile
 
 
 def payload(tmp_path, **changes):
@@ -1043,13 +1044,14 @@ def test_init_and_onboarding_refuse_reservations_before_writes(
     body = payload(tmp_path)
     directory = Path(body["data_dir"])
     registry = ProfileRegistry.create(Path(PROFILE_REGISTRY_PATH).expanduser())
-    registry.reserve(
+    reserve_profile(
+        registry,
         ProfileReservation(
             ProfileIdentity("profile-a", "installation-a", "lifecycle-a1"),
             directory,
             "Work",
             "baseline-v1",
-        )
+        ),
     )
     if existing:
         directory.mkdir()

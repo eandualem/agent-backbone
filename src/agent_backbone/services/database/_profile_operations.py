@@ -268,7 +268,7 @@ class ProfileOperations:
         request = validate_profile_operation(request)
         if request["action"] == "create" and request["baseline_version"] == BASELINE:
             return self._create(request)
-        if request["action"] in {"start", "stop"} and self.services is not None:
+        if request["action"] in {"start", "stop"}:
             return self._run_service(request)
         # Refusal has no effects to reconcile. Classify and retain its receipt
         # in one transaction so a failed read/write cannot leave a pending lock.
@@ -384,7 +384,7 @@ class ProfileOperations:
                 and identity.lifecycle_id == request["expected_lifecycle_id"]
                 and record.state != "failed"
             ):
-                if record.state == "ready" and self.services is not None:
+                if record.state == "ready":
                     return None
                 return "profile_not_ready"
         return "binding_mismatch"

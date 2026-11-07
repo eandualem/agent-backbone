@@ -17,6 +17,7 @@ from agent_backbone.services.database import (
     ProfileReservation,
     reconcile_profile_provider,
 )
+from tests.support import reserve_profile
 
 
 @pytest.fixture
@@ -28,7 +29,9 @@ async def prepared(tmp_path):
         identity = ProfileIdentity("profile-a", await db.signing.audience(), "lifecycle-a1")
         await db.profile_identity.reserve(identity)
         registry = ProfileRegistry.create(tmp_path / "control" / "registry.db")
-        reservation = registry.reserve(ProfileReservation(identity, root, "Work", "baseline-v1"))
+        reservation = reserve_profile(
+            registry, ProfileReservation(identity, root, "Work", "baseline-v1")
+        )
         yield registry, reservation, database_path, root / "tmux" / "server.sock", db
 
 

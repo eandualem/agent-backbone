@@ -17,6 +17,7 @@ from agent_backbone.services.database import (
     ProfileRegistry,
     ProfileReservation,
 )
+from tests.support import reserve_profile
 
 
 def test_discovery_is_local_atomic_and_read_only(tmp_path, capsys):
@@ -27,7 +28,7 @@ def test_discovery_is_local_atomic_and_read_only(tmp_path, capsys):
         "Work",
         "baseline-example-v1",
     )
-    registry.reserve(record)
+    reserve_profile(registry, record)
     before = registry.path.read_bytes(), registry.path.stat().st_mtime_ns
     with patch("agent_backbone.cli.bootstrap_config", side_effect=AssertionError("provider read")):
         for args, expected in (
@@ -78,13 +79,14 @@ def test_agent_credential_alone_cannot_discover_profiles(key, monkeypatch):
 def test_human_discovery_retains_fields(tmp_path, capsys, monkeypatch, width):
     monkeypatch.setenv("COLUMNS", str(width))
     registry = ProfileRegistry.create(Path(PROFILE_REGISTRY_PATH).expanduser())
-    registry.reserve(
+    reserve_profile(
+        registry,
         ProfileReservation(
             ProfileIdentity("profile-a", "installation-a", "lifecycle-a1"),
             tmp_path / "provider",
             "Work [blue]",
             "baseline-v1",
-        )
+        ),
     )
     for args in (["list"], ["show", "profile-a"]):
         with pytest.raises(SystemExit) as result:

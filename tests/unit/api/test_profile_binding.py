@@ -11,6 +11,7 @@ import socketio
 
 from agent_backbone.api.session_updates import SessionFeed
 from agent_backbone.config import agent_api_key
+from tests.support import reserve_profile
 
 FIXTURES = json.loads((Path(__file__).parents[3] / "docs/contracts/profiles-v1.json").read_text())
 HEADERS = FIXTURES["request_headers"]
@@ -113,7 +114,9 @@ async def bound_provider(api_app, tmp_path, monkeypatch):
         identity = ProfileIdentity("profile-a", await db.signing.audience(), "lifecycle-a1")
         await db.profile_identity.reserve(identity)
         registry = ProfileRegistry.create(tmp_path / "registry" / "registry.db")
-        reservation = registry.reserve(ProfileReservation(identity, root, "Work", "baseline-v1"))
+        reservation = reserve_profile(
+            registry, ProfileReservation(identity, root, "Work", "baseline-v1")
+        )
         provider = await reconcile_profile_provider(registry, reservation, path, root / "tmux.sock")
         monkeypatch.setattr(_server, "_socket", None)
         monkeypatch.setattr(_server, "_used", False)
@@ -1730,6 +1733,8 @@ async def test_bound_first_agent_http_success_and_replay(
         return state["env"].get(key)
 
     monkeypatch.setattr(onboarding, "start_agent", AsyncMock(side_effect=launch))
+    monkeypatch.setattr(onboarding, "STARTED_SECONDS", 0)
+    monkeypatch.setattr(onboarding, "wait_until_ready", AsyncMock(return_value=("ready", [])))
     monkeypatch.setattr(onboarding, "detect_repo", AsyncMock(return_value=""))
     monkeypatch.setattr(onboarding, "session_exists", exists)
     monkeypatch.setattr(onboarding, "query_environment_var", variable)

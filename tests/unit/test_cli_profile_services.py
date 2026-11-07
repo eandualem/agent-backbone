@@ -171,12 +171,6 @@ def test_operations_report_a_service_failure_with_a_fixed_code(created, action):
     assert "private" not in result["error"]["message"]
 
 
-def test_without_services_a_ready_profile_stays_refused(created):
-    registry, receipt = created
-    result = ProfileOperations(registry).apply(lifecycle(receipt))
-    assert result["error"]["code"] == "profile_not_ready"
-
-
 @pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
 def test_each_required_runtime_shares_the_profile_home(tmp_path, monkeypatch, runtime):
     from agent_backbone.cli.server import _native_environments

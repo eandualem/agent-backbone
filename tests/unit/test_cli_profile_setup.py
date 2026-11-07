@@ -8,6 +8,7 @@ import pytest
 
 from agent_backbone.cli._profile_client import Binding, Refused
 from agent_backbone.cli._profile_setup import PendingSetup
+from tests.support import reserve_profile
 
 
 @pytest.fixture
@@ -256,13 +257,14 @@ def test_bound_cli_nonready_authoritative_registry_does_not_read_credentials(
     )
 
     registry = ProfileRegistry.create(tmp_path / "registry" / "registry.db")
-    registry.reserve(
+    reserve_profile(
+        registry,
         ProfileReservation(
             ProfileIdentity("profile-a", "installation-a", "lifecycle-a1"),
             tmp_path / "provider",
             "Work",
             "baseline-v1",
-        )
+        ),
     )
     monkeypatch.setattr(config, "PROFILE_REGISTRY_PATH", str(registry.path))
     monkeypatch.setattr(
@@ -287,13 +289,14 @@ def local_connection(fixtures, tmp_path, monkeypatch):
     registry = ProfileRegistry.create(tmp_path / "registry" / "registry.db")
     root = tmp_path / "provider"
     root.mkdir(mode=0o700)
-    registry.reserve(
+    reserve_profile(
+        registry,
         ProfileReservation(
             ProfileIdentity("profile-a", "installation-a", "lifecycle-a1"),
             root,
             "Work",
             "baseline-v1",
-        )
+        ),
     )
     credential = root / ".env"
     credential.write_text("BACKBONE_API_KEY=synthetic-original-credential\n")
@@ -481,13 +484,14 @@ def test_connection_capacity_and_capture_lock_are_independent_per_profile(
     )
 
     registry, _, credential = local_connection
-    registry.reserve(
+    reserve_profile(
+        registry,
         ProfileReservation(
             ProfileIdentity("profile-b", "installation-b", "lifecycle-b1"),
             credential.parent.with_name("provider-b"),
             "Other",
             "baseline-v1",
-        )
+        ),
     )
     monkeypatch.setattr(_setup_receipts, "SETUP_RECEIPTS", 1)
     first = fixtures["setup"]["first_agent"]

@@ -291,11 +291,6 @@ class ProfileRegistry:
     def _overlap(cls, first: Path, second: Path) -> bool:
         return cls._contains(first, second) or cls._contains(second, first)
 
-    def reserve(self, reservation: ProfileReservation) -> ProfileReservation:
-        """Reserve once, retaining failed tombstones and rejecting conflicting replay."""
-        with self._connection(write=True) as conn:
-            return self._reserve(conn, reservation)
-
     def _reserve(self, conn, reservation: ProfileReservation) -> ProfileReservation:
         if reservation.state != "creating":
             raise ValueError("New profile reservations must be creating")
@@ -304,19 +299,9 @@ class ProfileRegistry:
             raise ValueError("Profile registry fence must be outside the provider data directory")
         records = self._records(conn)
         for stored in records:
-            if stored.identity.profile_id == reservation.identity.profile_id:
-                if (
-                    stored.identity != reservation.identity
-                    or stored.data_dir != reservation.data_dir
-                    or stored.display_name != reservation.display_name
-                    or stored.baseline_version != reservation.baseline_version
-                ):
-                    raise ValueError("Profile reservation does not match")
-                if stored.state == "failed":
-                    raise ValueError("Profile lifecycle has been invalidated")
-                return stored
             if (
-                stored.identity.installation_id == reservation.identity.installation_id
+                stored.identity.profile_id == reservation.identity.profile_id
+                or stored.identity.installation_id == reservation.identity.installation_id
                 or self._overlap(stored.data_dir, reservation.data_dir)
             ):
                 raise ValueError("Profile reservation conflicts with an existing reservation")
@@ -417,17 +402,6 @@ class ProfileRegistry:
                 raise ValueError("Profile lifecycle has been invalidated")
             return record
 
-    def publish_ready(
-        self, identity: ProfileIdentity, data_dir: Path, binding: ProfileBinding
-    ) -> ProfileReservation:
-        """Publish discovery atomically; the caller has reconciled provider metadata.
-
-        An identical replay returns the record, a changed binding is refused and an
-        invalidated lifecycle never returns to ready.
-        """
-        with self._connection(write=True) as conn:
-            return self._publish(conn, identity, data_dir, binding)
-
     def _allocate_port(self, conn, profile_id: str) -> int:
         """Keep one loopback port per profile; a tombstone retains its port."""
         used = {row["port"] for row in conn.execute("SELECT port FROM profile_ports")}
@@ -460,9 +434,7 @@ class ProfileRegistry:
         if record.state == "failed":
             raise ValueError("Profile lifecycle has been invalidated")
         if record.state == "ready":
-            if record.binding != binding:
-                raise ValueError("Profile binding does not match")
-            return record
+            raise ValueError("Profile is already ready")
         conn.execute(
             "INSERT INTO profile_bindings VALUES (?, ?, ?, ?)",
             (

@@ -13,6 +13,7 @@ import pytest
 from agent_backbone.services.database import ProfileIdentity, ProfileRegistry, ProfileReservation
 from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.skills import Skill, manifest_path, materialize
+from tests.support import reserve_profile
 
 
 @pytest.fixture
@@ -26,7 +27,7 @@ def profiles(tmp_path):
             name,
             "test-v1",
         )
-        registry.reserve(owner)
+        reserve_profile(registry, owner)
         owners.append(owner)
     return registry, owners
 
@@ -157,7 +158,7 @@ def test_new_profile_directory_cannot_take_an_existing_project_claim(profiles, t
     candidate = replace(a, identity=ProfileIdentity("c", "installation-c", "lifecycle-c"))
     for path in (repo, repo / "nested"):
         with pytest.raises(ValueError, match="project claim"):
-            registry.reserve(replace(candidate, data_dir=path))
+            reserve_profile(registry, replace(candidate, data_dir=path))
     assert len(registry.list()["items"]) == 2
 
 
@@ -209,17 +210,18 @@ def test_moved_checkout_alias_does_not_block_unrelated_profile_work(profiles, tm
     candidate = replace(
         b, identity=ProfileIdentity("c", "installation-c", "lifecycle-c"), data_dir=tmp_path / "c"
     )
-    registry.reserve(candidate)
+    reserve_profile(registry, candidate)
     # The moved resource still belongs to A, through either spelling.
     for path in (old, moved):
         assert not apply(registry, b, path, rt).ok
         with pytest.raises(ValueError, match="project claim"):
-            registry.reserve(
+            reserve_profile(
+                registry,
                 replace(
                     candidate,
                     identity=ProfileIdentity("d", "i-d", "l-d"),
                     data_dir=path.resolve() / "nested",
-                )
+                ),
             )
     assert apply(registry, a, moved, rt).ok
     # A broken retired alias is no longer a registry-wide failure either.
