@@ -42,7 +42,8 @@ class Home:
             "TMUX_TMPDIR": str(root),
             "BACKBONE_PORT": str(PORT),
         }
-        self.sockets: list[str] = []
+        # Default's server in this home, whichever flow starts it.
+        self.sockets: list[str] = [str(root / f"tmux-{os.getuid()}" / "default")]
 
     def cli(self, *args, check=True):
         result = subprocess.run(

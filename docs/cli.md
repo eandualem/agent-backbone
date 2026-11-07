@@ -938,8 +938,8 @@ registry at `~/.local/share/agent-backbone-profiles/registry.db`, independently 
 credentials are refused. Local OS-user file access remains the authority boundary;
 clearing environment markers is not an OS isolation boundary (see
 [security](security.md)). An unavailable registry or unknown profile exits nonzero with an
-error on stderr; listing never initializes or repairs it. Current reservations
-are non-ready (`creating` or `failed`) and have no usable binding. Provisioning
+error on stderr; listing never initializes or repairs it. A reservation that is
+`creating` or `failed` has no usable binding; a `ready` one does. Provisioning
 state does not report whether a daemon is running.
 
 Lifecycle requests use the same local operator boundary:

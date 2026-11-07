@@ -319,6 +319,7 @@ def cmd_up(args: argparse.Namespace) -> int:
         registry, reservation = default_profile_at(resolve_data_dir())
         config = asyncio.run(_common.load_config())
         if args.detach:
+            _common.pin_default_terminal()
             return asyncio.run(_up_detached(config, log_file))
         provider = asyncio.run(_default_provider(registry, reservation))
         _run_server(config, log_file=log_file, provider=provider)
@@ -350,6 +351,7 @@ async def _down(config: BackboneConfig) -> int:
 
 
 def cmd_down(args: argparse.Namespace) -> int:
+    _common.pin_default_terminal()
     return asyncio.run(_down(asyncio.run(_common.load_config())))
 
 

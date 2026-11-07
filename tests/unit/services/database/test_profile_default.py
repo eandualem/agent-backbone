@@ -126,6 +126,18 @@ def test_a_default_made_meanwhile_by_another_init_refuses(root, tmp_path):
             create_default_profile(registry_path(), other, "manual")
 
 
+def test_attaching_from_another_tmux_server_refuses_clearly(root, monkeypatch):
+    from agent_backbone.cli import _common
+    from agent_backbone.services.terminal import attach_session, tmux_server_socket
+
+    init()
+    _common.pin_default_terminal()
+    assert tmux_server_socket() == str(default_tmux_socket())
+    monkeypatch.setenv("TMUX", "/tmp/elsewhere/named,1,0")
+    with pytest.raises(ValueError, match="different tmux server"):
+        attach_session("worker")
+
+
 def test_a_crash_before_the_identity_is_recorded_is_finished_by_running_init_again(
     root, monkeypatch
 ):

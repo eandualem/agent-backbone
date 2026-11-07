@@ -204,6 +204,25 @@ class Direct:
         await asyncio.to_thread(check, self._boot.data_dir)
 
 
+def pin_default_terminal() -> None:
+    """Local terminal commands use the tmux server Default recorded, not the caller's.
+
+    Agents run there whichever tmux server the command is typed in; an isolated
+    profile's shell is already on that profile's own server.
+    """
+    from agent_backbone.config import resolve_data_dir
+    from agent_backbone.services.database import default_profile_at
+    from agent_backbone.services.terminal import pin_tmux_server
+
+    if os.environ.get("BACKBONE_PROFILE_ID"):
+        return
+    try:
+        _, reservation = default_profile_at(resolve_data_dir())
+    except (ValueError, OSError):
+        return
+    pin_tmux_server(reservation.binding.tmux_socket)
+
+
 def print_json(data: Any) -> None:
     print(json.dumps(data, indent=2, default=str))
 

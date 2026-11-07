@@ -898,6 +898,7 @@ async def _agent(args: argparse.Namespace) -> int:
 
 
 def cmd_agent(args: argparse.Namespace) -> int:
+    _common.pin_default_terminal()
     attach = args.agent_command == "attach" or getattr(args, "attach", False)
     if attach and not sys.stdin.isatty():
         print("attachment needs an interactive terminal; use `backbone agent inspect NAME`")
