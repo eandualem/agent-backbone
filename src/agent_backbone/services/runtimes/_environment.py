@@ -1,7 +1,6 @@
-"""Internal, process-pinned native environments for isolated providers.
+"""Process-pinned native environments for isolated providers.
 
-No production caller installs these yet. A context is not proof of native account
-isolation, nor permission to activate a reserved provider.
+An isolated provider installs them at start (``cli/server.py``).
 """
 
 from __future__ import annotations

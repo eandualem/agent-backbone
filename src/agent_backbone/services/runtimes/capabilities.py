@@ -175,6 +175,7 @@ _USER_FILES = "tests/unit/services/runtimes/test_user_instructions.py"
 _MEMORY = "tests/unit/services/runtimes/test_native_memory.py"
 _VERSION = "tests/unit/services/runtimes/test_installed_version.py"
 _SIGNED = "tests/unit/api/routes/test_api_signing.py"
+_ISOLATED_LAUNCH = "Launch in a real tmux profile: tests/smoke_profiles.py; no model calls"
 _API_BOUNDARY = "checked at the API, the same for every runtime"
 _CONFIRMED = "tests/unit/api/routes/test_api_confirmations.py"
 _VALIDATE = "tests/unit/services/terminal/test_callers.py"
@@ -230,19 +231,20 @@ CAPABILITIES: tuple[Capability, ...] = (
             "tests/unit/services/routing/test_onboarding.py",
             "Bound CLI: tests/unit/test_cli_profile_setup.py; "
             "HTTP guards: tests/unit/api/test_profile_binding.py; "
-            "production ready activation unavailable; working-installation live check pending",
+            "live, 6 Nov 2026: started and greeted on the working installation; "
+            "the reply stopped at an account usage limit",
         ),
         codex=_ok(
             "tests/unit/services/routing/test_onboarding.py",
             "Bound CLI: tests/unit/test_cli_profile_setup.py; "
             "HTTP guards: tests/unit/api/test_profile_binding.py; "
-            "production ready activation unavailable; working-installation live check pending",
+            "live, 6 Nov 2026: started, greeted and replied on the working installation",
         ),
         opencode=_ok(
             "tests/unit/services/routing/test_onboarding.py",
             "Bound CLI: tests/unit/test_cli_profile_setup.py; "
             "HTTP guards: tests/unit/api/test_profile_binding.py; "
-            "production ready activation unavailable; working-installation live check pending",
+            "live start on the final build not yet seen (#579)",
         ),
         gemini=_gap(note="installer hook preparation is not implemented"),
         deepcode=_gap(note="installer hook preparation is not implemented"),
@@ -333,9 +335,9 @@ CAPABILITIES: tuple[Capability, ...] = (
         "cli/server.py; services/runtimes/_environment.py",
         fallback="Use Default for this runtime.",
         implemented=lambda rt: True,
-        claude=_ok("tests/unit/test_cli_profile_services.py", "Shared boundary; no model calls"),
-        codex=_ok("tests/unit/test_cli_profile_services.py", "Shared boundary; no model calls"),
-        opencode=_ok("tests/unit/test_cli_profile_services.py", "Shared boundary; no model calls"),
+        claude=_ok("tests/unit/services/agents/test_launch.py", _ISOLATED_LAUNCH),
+        codex=_ok("tests/unit/services/agents/test_launch.py", _ISOLATED_LAUNCH),
+        opencode=_ok("tests/unit/services/agents/test_launch.py", _ISOLATED_LAUNCH),
         gemini=_gap(note="Refused in isolated profiles until someone needs it."),
         deepcode=_gap(note="Refused in isolated profiles until someone needs it."),
         aider=_gap(note="Refused in isolated profiles until someone needs it."),

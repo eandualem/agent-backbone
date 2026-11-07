@@ -95,7 +95,7 @@ request body and full identity, namespaces receipts by that tuple and request ID
 and validates provider and native ownership before effects and after deferred
 probes. Cancellation shares the original normalized receipt and prevents a delayed
 original request, including when no native environment is available. Schema-1 setup
-cannot execute against an internally bound provider. Client cancellation does not cancel setup
+cannot execute against an isolated provider; Default accepts it. Client cancellation does not cancel setup
 workers, and cancellation of the owned batch waits for its executor functions to
 exit before releasing the reservation. Shutdown closes admission and drains these API tasks, including every
 setup worker, before stopping integrations or storage; cancelling the shutdown
@@ -121,8 +121,8 @@ history writes retain their own captured provider guard through transaction
 cleanup, including after a snapshot times out or is cancelled. They recheck the
 feed's database, configuration and terminal context before writing; a retired or
 mismatched context cannot record history.
-Complete replacement/restore fencing, ready publication
-and runtime/integration isolation remain required before activation is exposed.
+Replacement and restore fencing and integration isolation are not done yet
+(#574, #576).
 The legacy identity endpoint authenticates and then returns 404.
 
 Registry initialization publishes a complete private database without replacing
@@ -636,11 +636,9 @@ process concurrently replacing files or path components.
 
 Claude Code, Codex and OpenCode have internal preparation tests; other model adapters
 refuse this preparation. Codex requests file credential storage, subject to native
-managed policy. OpenCode uses a private native server. These mechanisms are not
-account-isolation acceptance: real-account login/logout/refresh, native configuration
-and credential-helper constraints, project materialization conflicts, and lifecycle
-fencing remain prerequisites before activation. No shipped capability coverage or
-profile readiness is promoted by these internal tests.
+managed policy. OpenCode uses a private native server. Real sign-ins were
+checked on the working installation; the adversarial acceptance list and lifecycle
+fencing are not done yet (#575, #574).
 
 Internal skill materialization can now claim the old and new checkout and their
 common Git directories in the external profile registry before removing links,

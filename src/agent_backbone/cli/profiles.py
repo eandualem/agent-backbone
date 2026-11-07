@@ -145,7 +145,11 @@ def _sign_in(args) -> int:
             json={"schema_version": 1, "runtime": args.runtime},
         )
     if response.status_code != 200:
-        raise ValueError(f"Sign-in could not start: {response.status_code}")
+        try:
+            reason = response.json()["detail"]["message"]
+        except (ValueError, KeyError, TypeError):
+            reason = str(response.status_code)
+        raise ValueError(f"Sign-in could not start: {reason}")
     tmux = shutil.which("tmux")
     if tmux is None:
         raise ValueError("tmux is not available")

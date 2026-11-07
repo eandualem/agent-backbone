@@ -117,24 +117,24 @@ class Home:
             },
         )
 
-    def first_agent(self, record, name, directory):
+    def first_agent(self, record, name, directory, runtime="codex"):
         directory.mkdir()
-        request = self.root / f"setup-{record['profile_id']}.json"
+        request = self.root / f"setup-{record['profile_id']}-{name}.json"
         request.write_text(
             json.dumps(
                 {
                     "schema_version": 2,
-                    "request_id": f"setup-{record['profile_id']}",
+                    "request_id": f"setup-{record['profile_id']}-{name}",
                     "action": "first_agent",
                     "profile_id": record["profile_id"],
                     "expected_installation_id": record["binding"]["installation_id"],
                     "expected_lifecycle_id": record["binding"]["lifecycle_id"],
-                    "hooks": ["codex"],
+                    "hooks": [runtime],
                     "agent": {
                         "name": name,
                         "directory": str(directory),
                         "create_directory": False,
-                        "runtime": "codex",
+                        "runtime": runtime,
                         "model": None,
                         "brief": {"template": "orchestrator-v1"},
                     },
@@ -142,11 +142,9 @@ class Home:
                 }
             )
         )
-        # The stand-in shows no real prompt, so readiness times out after launch.
-        lines = self.cli("setup", "--file", str(request), "--jsonl", check=False).stdout
-        check(
-            "first-agent setup accepts the starter", "starter_conflict" not in lines, lines[-300:]
-        )
+        result = self.cli("setup", "--file", str(request), "--jsonl", check=False)
+        lines = result.stdout
+        check(f"{runtime} first agent is ready", agent_ready(lines), (lines + result.stderr)[-900:])
         env = {}
         for line in (directory / "runtime.env").read_text().splitlines():
             if "=" in line:
@@ -172,6 +170,15 @@ class Home:
             if process.poll() is None:
                 process.terminate()
                 process.wait(timeout=30)
+
+
+def agent_ready(lines: str) -> bool:
+    """The setup result says the CLI started and stayed running."""
+    results = [json.loads(line) for line in lines.splitlines() if '"code"' in line]
+    return bool(results) and (results[-1]["code"], results[-1]["data"].get("ready")) == (
+        "agent_ready",
+        "ready",
+    )
 
 
 def check(label, condition, detail=""):
@@ -214,7 +221,7 @@ def fresh_install() -> tuple[list[str], object]:
             },
             start_greeting=False,
         )
-        check("fresh install's first agent starts", "starter_conflict" not in lines, lines[-200:])
+        check("fresh install's first agent is ready", agent_ready(lines), lines[-300:])
         operator = {"Authorization": "Bearer " + home.key(home.data / ".env")}
         policy = httpx.get(
             f"http://127.0.0.1:{PORT}/api/config/agents.shared_policy",
@@ -269,8 +276,8 @@ def main() -> int:
         check("the CLI starts nothing without a profile", started.returncode != 0)
         check("the refused CLI creates nothing", not home.data.exists())
         home.cli("init")
-        legacy = home.up()
-        processes.append(legacy)
+        first = home.up()
+        processes.append(first)
         operator = {"Authorization": "Bearer " + home.key(home.data / ".env")}
         tcp = httpx.Client(base_url=f"http://127.0.0.1:{PORT}", trust_env=False, timeout=30)
         check("install answers", tcp.get("/api/agents", headers=operator).status_code == 200)
@@ -281,13 +288,13 @@ def main() -> int:
         )
 
         default = {"profile_id": listed[0]["profile_id"]}
-        legacy.terminate()
-        legacy.wait(timeout=60)
-        adopted = home.up()
-        processes.append(adopted)
+        first.terminate()
+        first.wait(timeout=60)
+        restarted = home.up()
+        processes.append(restarted)
         record = home.show(default["profile_id"])
         home.sockets.append(record["binding"]["tmux"]["socket_path"])
-        check("Default is listed", record["kind"] == "legacy_default")
+        check("Default survives a restart", record["kind"] == "legacy_default")
         check(
             "unbound clients still work on Default",
             tcp.get("/api/agents", headers=operator).status_code == 200,
@@ -385,7 +392,8 @@ def main() -> int:
             document.status_code == 201 and document.json()["record"]["agent_name"] is None,
             document.text[:200],
         )
-        env_b = home.first_agent(records["B"], "worker", root / "project-b")
+        env_b = home.first_agent(records["B"], "worker", root / "project-b", "claude")
+        env_c = home.first_agent(records["A"], "helper", root / "project-c", "opencode")
         socket_a, socket_b = (records[n]["binding"]["tmux"]["socket_path"] for n in "AB")
         check(
             "same agent name runs in both",
@@ -397,9 +405,13 @@ def main() -> int:
         )
         check(
             "separate HOME and CLI store",
-            env_a["HOME"] != env_b["HOME"] and env_a["CODEX_HOME"] != env_b["CODEX_HOME"],
+            env_a["HOME"] != env_b["HOME"]
+            and env_a["CODEX_HOME"].startswith(str(Path(env_a["HOME"]).parent))
+            and env_b["CLAUDE_CONFIG_DIR"].startswith(str(Path(env_b["HOME"]).parent)),
         )
-        check("separate ports", env_a["BACKBONE_PORT"] != env_b["BACKBONE_PORT"] != str(PORT))
+        check("one HOME for a profile's CLIs", env_c["HOME"] == env_a["HOME"])
+        ports = {env_a["BACKBONE_PORT"], env_b["BACKBONE_PORT"], str(PORT)}
+        check("separate ports", len(ports) == 3)
         check(
             "no host variables", "BACKBONE_DATA_DIR" not in env_a and "SSH_AUTH_SOCK" not in env_a
         )
@@ -408,7 +420,10 @@ def main() -> int:
             body = client[0].get("/api/agents", headers=client[1]).json()
             return [item["name"] for item in body["items"]]
 
-        check("each profile lists only its own agent", names(a) == ["worker"] == names(b))
+        check(
+            "each profile lists only its own agents",
+            sorted(names(a)) == ["helper", "worker"] and names(b) == ["worker"],
+        )
         registration = {"Authorization": "Bearer " + env_a["BACKBONE_API_KEY"]}
         own = httpx.get(
             f"http://127.0.0.1:{env_a['BACKBONE_PORT']}/api/reports",
@@ -466,8 +481,7 @@ def main() -> int:
         )
         check(
             "sign-in session opens",
-            signin.status_code == 200
-            and signin.json()["session"] in home.sessions(socket_a) | {"sign-in-codex"},
+            signin.status_code == 200 and signin.json()["session"] in home.sessions(socket_a),
         )
 
         home.lifecycle("stop-A", "stop", created["A"])

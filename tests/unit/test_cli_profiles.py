@@ -213,3 +213,33 @@ def test_broken_registry_is_a_different_error(capsys):
         main(["profiles", "list", "--json"])
     assert result.value.code == 1
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "registry_unavailable"
+
+
+def test_sign_in_prints_the_providers_refusal(monkeypatch, capsys):
+    import httpx
+
+    from agent_backbone.cli import _profile_client, profiles
+
+    binding = {"installation_id": "installation-a", "lifecycle_id": "lifecycle-a1"}
+    monkeypatch.setattr(profiles.ProfileRegistry, "__init__", lambda self, path: None)
+    monkeypatch.setattr(profiles.ProfileRegistry, "show", lambda self, pid: {"binding": binding})
+
+    class Bound:
+        endpoint = "/unused.sock"
+
+        async def handshake(self):
+            return None
+
+        def headers(self):
+            return {}
+
+    monkeypatch.setattr(_profile_client, "resolve_binding", lambda identity: Bound())
+    refusal = {"detail": {"code": "runtime_unavailable", "message": "Default keeps its sign-ins."}}
+    monkeypatch.setattr(
+        profiles.httpx,
+        "HTTPTransport",
+        lambda **kwargs: httpx.MockTransport(lambda request: httpx.Response(422, json=refusal)),
+    )
+    with pytest.raises(SystemExit, match="1"):
+        main(["profiles", "sign-in", "profile-a", "--runtime", "codex"])
+    assert "Sign-in could not start: Default keeps its sign-ins." in capsys.readouterr().err

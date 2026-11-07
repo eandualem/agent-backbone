@@ -2133,6 +2133,56 @@ async def test_own_agent_credential_needs_no_identity_headers(
     assert response.json() == FIXTURES["http_errors"]["binding_mismatch"]["body"]
 
 
+async def test_a_real_default_serves_unbound_clients_and_checks_a_tuple(
+    api_client, auth_headers, api_app, tmp_path, monkeypatch
+):
+    from agent_backbone.config import sqlite_url
+    from agent_backbone.services.database import (
+        BackboneDB,
+        ProfileRegistry,
+        _profile_default,
+        create_default_profile,
+        reconcile_profile_provider,
+    )
+    from agent_backbone.services.terminal import _server, pin_tmux_server
+
+    root = (tmp_path / "default").resolve()
+    root.mkdir(mode=0o700)
+    socket = tmp_path / "tmux" / "default"
+    monkeypatch.setattr(_profile_default, "default_tmux_socket", lambda: socket)
+    async with BackboneDB.connect(sqlite_url(root)) as db:
+        await db.signing.audience()
+        registry_path = tmp_path / "registry" / "registry.db"
+        reservation = create_default_profile(registry_path, root, "core-v1")
+        registry = ProfileRegistry(registry_path)
+        provider = await reconcile_profile_provider(
+            registry, reservation, root / "backbone.db", socket
+        )
+        monkeypatch.setattr(_server, "_socket", None)
+        monkeypatch.setattr(_server, "_used", False)
+        pin_tmux_server(socket)
+        monkeypatch.setattr(api_app.state, "db", db)
+        config = api_app.state.config
+        monkeypatch.setattr(
+            api_app.state,
+            "config",
+            replace(config, backbone=replace(config.backbone, data_dir=str(root))),
+        )
+        monkeypatch.setattr(api_app.state.agent_store, "_db", db)
+        api_app.state.profile_provider = provider
+        assert (await api_client.get("/api/reports", headers=auth_headers)).status_code == 200
+        identity = reservation.identity
+        bound = {
+            f"X-Backbone-{field.replace('_', '-')}": value
+            for field, value in vars(identity).items()
+        }
+        response = await api_client.get("/api/reports", headers={**auth_headers, **bound})
+        assert response.status_code == 200
+        wrong = {**bound, "X-Backbone-Lifecycle-ID": "another-lifecycle"}
+        response = await api_client.get("/api/reports", headers={**auth_headers, **wrong})
+        assert response.status_code == 409
+
+
 async def test_only_the_default_profile_keeps_unbound_clients(
     api_client, auth_headers, api_app, bound_provider
 ):
