@@ -80,6 +80,16 @@ def test_a_second_directory_cannot_become_default(root, tmp_path, monkeypatch, c
     assert ProfileRegistry(registry_path()).default_reservation().data_dir == root.resolve()
 
 
+def test_init_refuses_a_profile_whose_registry_it_cannot_see(root, capsys):
+    # As in an isolated profile's shell, where HOME is the profile's own home.
+    init()
+    registry_path().unlink()
+    env = (root / ".env").read_bytes()
+    assert run("init", "--force") == 1
+    assert "belongs to another profile" in capsys.readouterr().out
+    assert (root / ".env").read_bytes() == env
+
+
 def test_a_crash_before_the_identity_is_recorded_is_finished_by_running_init_again(
     root, monkeypatch
 ):

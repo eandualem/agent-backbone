@@ -260,7 +260,7 @@ Initialize data contains `data_dir`, `installation` (`created` or
 `existing_preserved`), `service_state` (`running`, `installed`, `not_installed`,
 `unsupported`, `unknown`), `api_url` (nullable) and `health` (`healthy`, `unhealthy`,
 `unknown`). First-agent data contains `agent_name`, `launch_id` (nullable), `ready`
-(`ready`, `waiting_for_human`, `exited`, `timeout`, `not_started`),
+(`ready`, meaning the CLI stayed running after launch, `exited` or `not_started`),
 `greeting_delivery_id` (nullable integer) and bounded classification `evidence`.
 A preflight failure may have empty `data`. A completed first-agent replay reconciles its registration and launch identities
 without requiring its old policy, brief, model or runtime availability to remain

@@ -84,7 +84,7 @@ def _person_git_identity() -> dict[str, str] | None:
     for key in ("user.name", "user.email"):
         try:
             found = subprocess.run(
-                ["git", "config", "--global", "--get", key],
+                ["git", "config", "--global", "--includes", "--get", key],
                 capture_output=True,
                 text=True,
                 timeout=10,

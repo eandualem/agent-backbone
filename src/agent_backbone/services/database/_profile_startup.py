@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
-from agent_backbone.config import PROFILE_REGISTRY_PATH
+from agent_backbone.config import PROFILE_REGISTRY_PATH, SQLITE_FILENAME
 from agent_backbone.services.database._profile_registry import ProfileRegistry
 
 
@@ -23,5 +24,21 @@ def check_new_default(data_dir: Path) -> None:
     default = registry.default_reservation()
     if default is None:
         registry.check_unreserved(data_dir)
+        # The registry records Default before its database does, so an identity
+        # with no registry here belongs to a profile this home cannot see.
+        if _has_identity(data_dir / SQLITE_FILENAME):
+            raise ValueError(f"{data_dir} belongs to another profile")
     elif default.data_dir != data_dir:
         raise ValueError(f"The Default profile is already at {default.data_dir}")
+
+
+def _has_identity(database: Path) -> bool:
+    if not database.exists():
+        return False
+    connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)
+    try:
+        return connection.execute("SELECT 1 FROM profile_identity").fetchone() is not None
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        connection.close()
