@@ -124,6 +124,28 @@ def isolated_user_instructions(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def unpinned_tmux_server(monkeypatch):
+    """A CLI command that pins Default's tmux server does so for one test only."""
+    from agent_backbone.services.terminal import _server
+
+    monkeypatch.setattr(_server, "_socket", None)
+    monkeypatch.setattr(_server, "_used", False)
+
+
+@pytest.fixture(autouse=True)
+def direct_cli_has_a_profile(request, monkeypatch):
+    """CLI tests run on a bare data directory; `real_profile_check` tests the refusal."""
+    if "real_profile_check" in request.keywords:
+        return
+    from agent_backbone.cli._common import Direct
+
+    async def allowed(self):
+        return None
+
+    monkeypatch.setattr(Direct, "_check_profile", allowed)
+
+
+@pytest.fixture(autouse=True)
 def isolated_backbone_environment(monkeypatch):
     """The suite never inherits a running backbone's session environment.
 

@@ -13,18 +13,20 @@ from agent_backbone.services.database import (
     ProfileReservation,
     validate_profile_operation,
 )
+from tests.support import reserve_profile
 
 
 @pytest.fixture
 def operations(tmp_path):
     registry = ProfileRegistry.create(tmp_path / "registry" / "index.db")
-    registry.reserve(
+    reserve_profile(
+        registry,
         ProfileReservation(
             ProfileIdentity("profile-a", "installation-a", "lifecycle-a1"),
             tmp_path / "provider-a",
             "Work",
             "baseline-example-v1",
-        )
+        ),
     )
     return ProfileOperations(registry)
 
@@ -128,27 +130,6 @@ def test_all_agreed_action_shapes_are_accepted(fixtures):
             validate_profile_operation(fixtures["lifecycle"][action])
             == fixtures["lifecycle"][action]
         )
-    assert (
-        validate_profile_operation(fixtures["adoption"]["request"])
-        == fixtures["adoption"]["request"]
-    )
-
-
-@pytest.mark.parametrize("adoption_first", [False, True])
-def test_adoption_serializes_with_lifecycle_on_its_installation(
-    operations, fixtures, adoption_first
-):
-    start = fixtures["lifecycle"]["start"]
-    adoption = {
-        **fixtures["adoption"]["request"],
-        "expected_installation_id": start["expected_installation_id"],
-    }
-    first, second = (adoption, start) if adoption_first else (start, adoption)
-    assert operations.begin(first)[1]
-    receipt, execute = operations.begin(second)
-    assert not execute
-    assert receipt["error"]["code"] == "operation_busy"
-    assert operations.lookup(second["request_id"]) == receipt
 
 
 def test_failed_reservation_is_an_invalidated_binding(operations, fixtures):

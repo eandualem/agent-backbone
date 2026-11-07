@@ -458,6 +458,13 @@ Supported runtimes with availability; raw tmux session names; a one-shot
 capture of a **registered agent's** screen (404 for any other tmux session —
 the API never reads or types into sessions that are not backbone agents).
 
+`GET /api/runtimes?schema_version=2&check_setup=true` is the operator-only,
+profile-bound runtime catalog. It requires the complete binding headers and an
+internally reconciled provider. It returns the schema-2 identity envelope and
+runtime observations from provider-owned native contexts. Missing context never
+falls back to host discovery. Schema 1 and the omitted-version response retain
+the existing list shape. See the [profile contract](profiles-contract.md).
+
 ## Fleet snapshots
 
 The agents running at one moment, each with the conversation it was in, saved
@@ -621,7 +628,9 @@ store entry with its tags, validity, the agents it reaches and the
 their snapshots at `/api/{skills|policies}/{artifact_id}/versions`.
 `POST /api/skills` `{path, name?, tags, replace?, actor}` **moves** a skill
 directory into the store and tags it (422 when the directory is not a skill or
-the name is taken without `replace`; 400 when `skills.store` is empty).
+the name is taken without `replace`; 400 when `skills.store` is empty). With
+`mode: "copy"` it copies from any absolute folder instead and leaves that folder
+in place (see [skills](skills.md)).
 `PUT /api/skills/{name}/tags` `{tags, actor}` replaces its tags (404 for an
 unknown skill). Both relink every running agent at once and return the skill
 with `relinked`, one evidence line per running agent whose links were brought
@@ -852,7 +861,7 @@ so a failed join cannot retire a later successful join. Cancellation or output E
 retains the attachment until its process exits and its reader worker finishes.
 Failed cleanup remains tracked for retry. Internally bound providers retain their
 lifecycle fence across creation and cleanup, independently of the requesting
-handler or output forwarder. Profile activation remains unavailable.
+handler or output forwarder.
 Shutdown closes socket admission, stops producers, then drains handlers, terminal
 resources and emissions before closing services and the database. Bulk PTY cleanup
 reports failure and retains resources for retry; a failed component stop preserves
@@ -902,15 +911,11 @@ for the response fields, signed publication, byte limits, retries and retention.
 
 ### Private local transport
 
-For a local client that must authenticate the provider before sending its API
-key, configure `backbone.socket_path` to an absolute socket path inside the
-Backbone data directory. Its parent must belong to the service account and have
-mode 0700. On the next explicitly requested server start, Backbone binds a 0600
-Unix socket alongside its existing TCP listener. `--reload` is not supported
-with this optional listener. No socket is enabled by default.
+Every profile also listens on a 0600 Unix socket at `run/api.sock` in its data directory,
+alongside its TCP port, so a local client can authenticate the provider before sending its
+API key. Find the path in the profile's binding (`backbone profiles show ID --json`).
 
-Give the same absolute path to the client as `BACKBONE_SOCKET_PATH`. Before
-sending HTTP or bearer credentials, the client must verify the private parent,
+Before sending HTTP or bearer credentials, the client must verify the private parent,
 socket type, 0600 mode and ownership, then check the connected peer UID against
 its effective UID. The provider similarly rejects Unix peers with a different
 UID before HTTP parsing. HTTP routes, request bodies, response framing and API

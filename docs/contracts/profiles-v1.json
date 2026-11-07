@@ -34,7 +34,8 @@
         "tmux": {
           "socket_path": "/example/profiles/a/tmux/server.sock"
         }
-      }
+      },
+      "git_identity": "none"
     },
     "show_creating": {
       "schema_version": 1,
@@ -42,7 +43,22 @@
       "display_name": "Work",
       "kind": "isolated",
       "state": "creating",
-      "binding": null
+      "binding": null,
+      "git_identity": "none"
+    },
+    "registry_absent": {
+      "schema_version": 1,
+      "error": {
+        "code": "registry_absent",
+        "message": "No profiles exist yet."
+      }
+    },
+    "registry_unavailable": {
+      "schema_version": 1,
+      "error": {
+        "code": "registry_unavailable",
+        "message": "Registry error."
+      }
     }
   },
   "identity": {
@@ -265,7 +281,7 @@
       "display_name": "Work"
     },
     {
-      "name": "legacy_adopted",
+      "name": "default_profile",
       "serving_identity": {
         "profile_id": "profile-legacy",
         "installation_id": "installation-legacy",
@@ -361,161 +377,6 @@
     }
   },
   "extension_revision": 1,
-  "adoption": {
-    "preview_command": [
-      "backbone",
-      "profiles",
-      "adoption-preview",
-      "--json"
-    ],
-    "preview": {
-      "schema_version": 1,
-      "installation_id": "installation-default",
-      "data_dir": "/example/default",
-      "tmux": {
-        "socket_path": "/example/default/tmux.sock"
-      },
-      "baseline_version": "baseline-example-v1",
-      "adoption_token": "preflight-default-v1"
-    },
-    "request": {
-      "schema_version": 1,
-      "request_id": "adopt-default-1",
-      "action": "adopt_default",
-      "expected_installation_id": "installation-default",
-      "adoption_token": "preflight-default-v1"
-    },
-    "succeeded": {
-      "schema_version": 1,
-      "request_id": "adopt-default-1",
-      "action": "adopt_default",
-      "profile_id": "profile-default",
-      "installation_id": "installation-default",
-      "lifecycle_id": "lifecycle-default1",
-      "status": "succeeded",
-      "error": null
-    },
-    "pending": {
-      "schema_version": 1,
-      "request_id": "adopt-default-1",
-      "action": "adopt_default",
-      "profile_id": null,
-      "installation_id": null,
-      "lifecycle_id": null,
-      "status": "pending",
-      "error": null
-    },
-    "changed": {
-      "schema_version": 1,
-      "request_id": "adopt-default-1",
-      "action": "adopt_default",
-      "profile_id": null,
-      "installation_id": null,
-      "lifecycle_id": null,
-      "status": "failed",
-      "error": {
-        "code": "adoption_changed",
-        "message": "Default adoption metadata changed."
-      }
-    },
-    "repeat_request": {
-      "schema_version": 1,
-      "request_id": "adopt-default-2",
-      "action": "adopt_default",
-      "expected_installation_id": "installation-default",
-      "adoption_token": "preflight-default-v1"
-    },
-    "repeat_succeeded": {
-      "schema_version": 1,
-      "request_id": "adopt-default-2",
-      "action": "adopt_default",
-      "profile_id": "profile-default",
-      "installation_id": "installation-default",
-      "lifecycle_id": "lifecycle-default1",
-      "status": "succeeded",
-      "error": null
-    },
-    "cases": [
-      {
-        "name": "first_adoption",
-        "request": "request",
-        "prior": null,
-        "current_token": "preflight-default-v1",
-        "outcome": "succeeded",
-        "allocates_identity": true,
-        "expected_receipt": "succeeded"
-      },
-      {
-        "name": "identical_body_replay",
-        "request": "request",
-        "prior": "succeeded",
-        "current_token": "preflight-default-v1",
-        "outcome": "succeeded",
-        "allocates_identity": false,
-        "expected_receipt": "succeeded"
-      },
-      {
-        "name": "identical_body_replay_changed_token",
-        "request": "request",
-        "prior": "succeeded",
-        "current_token": "preflight-default-v2",
-        "outcome": "succeeded",
-        "allocates_identity": false,
-        "expected_receipt": "succeeded"
-      },
-      {
-        "name": "new_request_existing_instance",
-        "request": "repeat_request",
-        "prior": "succeeded",
-        "current_token": "preflight-default-v1",
-        "outcome": "succeeded",
-        "allocates_identity": false,
-        "expected_receipt": "repeat_succeeded"
-      },
-      {
-        "name": "changed_body_same_id",
-        "request": "request",
-        "request_changes": {
-          "adoption_token": "preflight-default-v2"
-        },
-        "prior": "succeeded",
-        "current_token": "preflight-default-v2",
-        "outcome": "request_conflict",
-        "allocates_identity": false
-      },
-      {
-        "name": "stale_token_new_request",
-        "request": "repeat_request",
-        "prior": "succeeded",
-        "current_token": "preflight-default-v2",
-        "outcome": "adoption_changed",
-        "allocates_identity": false,
-        "expected_receipt": "repeat_changed"
-      },
-      {
-        "name": "stale_token_first_adoption",
-        "request": "request",
-        "prior": null,
-        "current_token": "preflight-default-v2",
-        "outcome": "adoption_changed",
-        "allocates_identity": false,
-        "expected_receipt": "changed"
-      }
-    ],
-    "repeat_changed": {
-      "schema_version": 1,
-      "request_id": "adopt-default-2",
-      "action": "adopt_default",
-      "profile_id": null,
-      "installation_id": null,
-      "lifecycle_id": null,
-      "status": "failed",
-      "error": {
-        "code": "adoption_changed",
-        "message": "Default adoption metadata changed."
-      }
-    }
-  },
   "setup": {
     "first_agent": {
       "schema_version": 2,
@@ -603,7 +464,7 @@
       "type": "result",
       "status": "completed",
       "code": "agent_ready",
-      "message": "Agent started; any greeting receipt records submission only.",
+      "message": "Agent started; it may show its own first-run screens in its terminal. Any greeting receipt records submission only.",
       "retry": "none",
       "completed_steps": [
         "preflight",
@@ -1017,5 +878,212 @@
         }
       }
     }
+  },
+  "sessions": {
+    "shell_request": {
+      "schema_version": 1,
+      "shell_id": "0123456789ab",
+      "cwd": "/example/project"
+    },
+    "shell_request_home": {
+      "schema_version": 1,
+      "shell_id": "0123456789ab",
+      "cwd": null
+    },
+    "shell_response": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "shell_id": "0123456789ab",
+      "session": "shell-0123456789ab",
+      "created": true
+    },
+    "shell_refusals": {
+      "invalid_cwd": {
+        "status": 422,
+        "body": {
+          "detail": {
+            "code": "invalid_cwd",
+            "message": "The directory must be an absolute existing path."
+          }
+        }
+      },
+      "shell_unavailable": {
+        "status": 503,
+        "body": {
+          "detail": {
+            "code": "shell_unavailable",
+            "message": "The terminal session could not be started."
+          }
+        }
+      }
+    },
+    "sign_in_request": {
+      "schema_version": 1,
+      "runtime": "codex"
+    },
+    "sign_in_response": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "runtime": "codex",
+      "session": "sign-in-codex",
+      "created": true
+    },
+    "shell_reused": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "shell_id": "0123456789ab",
+      "session": "shell-0123456789ab",
+      "created": false
+    },
+    "sign_in_reused": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "runtime": "codex",
+      "session": "sign-in-codex",
+      "created": false
+    },
+    "account_status_query": "/api/profile/accounts/status?runtime=codex",
+    "account_status_response": {
+      "schema_version": 1,
+      "runtime": "codex",
+      "authentication": "authenticated"
+    },
+    "sign_in_refusals": {
+      "runtime_unavailable": {
+        "status": 422,
+        "body": {
+          "detail": {
+            "code": "runtime_unavailable",
+            "message": "This runtime cannot be signed in here."
+          }
+        }
+      },
+      "runtime_not_installed": {
+        "status": 422,
+        "body": {
+          "detail": {
+            "code": "runtime_unavailable",
+            "message": "This runtime is not installed."
+          }
+        }
+      },
+      "shell_unavailable": {
+        "status": 503,
+        "body": {
+          "detail": {
+            "code": "shell_unavailable",
+            "message": "The terminal session could not be started."
+          }
+        }
+      },
+      "default_keeps_sign_ins": {
+        "status": 422,
+        "body": {
+          "detail": {
+            "code": "runtime_unavailable",
+            "message": "Default keeps its existing CLI sign-ins; manage them with the CLI in a terminal."
+          }
+        }
+      }
+    },
+    "invalid_request": {
+      "status": 422,
+      "body": {
+        "detail": {
+          "code": "invalid_request",
+          "message": "The request is not valid."
+        }
+      }
+    }
+  },
+  "skills_copy": {
+    "route": "POST /api/skills",
+    "credential": "operator",
+    "request": {
+      "path": "/absolute/folder/my-skill",
+      "name": null,
+      "tags": [
+        "all"
+      ],
+      "replace": false,
+      "mode": "copy",
+      "actor": "app"
+    },
+    "succeeded_status": 200,
+    "succeeded_fields": [
+      "name",
+      "path",
+      "description",
+      "tags",
+      "relinked",
+      "warnings"
+    ],
+    "refusals": [
+      {
+        "case": "a symbolic link at the folder or inside it",
+        "status": 422
+      },
+      {
+        "case": "a special file inside it",
+        "status": 422
+      },
+      {
+        "case": "no SKILL.md, a relative path or one containing ..",
+        "status": 422
+      },
+      {
+        "case": "over 2,000 entries, 50 MB or 16 levels",
+        "status": 422
+      },
+      {
+        "case": "overlaps the skills store",
+        "status": 422
+      },
+      {
+        "case": "name taken without replace",
+        "status": 422
+      },
+      {
+        "case": "an agent credential",
+        "status": 403
+      }
+    ],
+    "note": "The folder stays in place. A .git directory is left behind. 422 detail is text to show the person."
+  },
+  "operator_document": {
+    "route": "POST /api/documents",
+    "credential": "operator",
+    "request": {
+      "author": "operator",
+      "request_id": "overview-v1",
+      "title": "Overview",
+      "html": "<h1>Overview</h1>",
+      "supersedes_id": null
+    },
+    "succeeded_status": 201,
+    "retry_status": 200,
+    "record_fields": {
+      "author_name": "operator",
+      "agent_name": null
+    },
+    "refusals": [
+      {
+        "case": "an agent credential",
+        "status": 403
+      },
+      {
+        "case": "an agent is named operator",
+        "status": 409
+      }
+    ],
+    "note": "No signature. Records use the existing DocumentMetadata shape."
   }
 }

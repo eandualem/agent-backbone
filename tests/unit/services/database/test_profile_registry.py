@@ -17,10 +17,12 @@ import pytest
 from agent_backbone.config import sqlite_url
 from agent_backbone.services.database import (
     BackboneDB,
+    ProfileBinding,
     ProfileIdentity,
     ProfileRegistry,
     ProfileReservation,
 )
+from tests.support import publish_profile, reserve_profile
 
 
 @pytest.fixture
@@ -39,7 +41,7 @@ def registry(tmp_path):
 
 
 def test_operation_fence_blocks_invalidation_across_processes(registry, reservation):
-    registry.reserve(reservation)
+    reserve_profile(registry, reservation)
     script = """
 import sys
 from pathlib import Path
@@ -73,13 +75,13 @@ except ValueError as exc:
 
 
 def test_operation_fence_is_per_profile_and_releases_on_error(registry, reservation):
-    registry.reserve(reservation)
+    reserve_profile(registry, reservation)
     other = replace(
         reservation,
         identity=ProfileIdentity("profile-b", "installation-b", "lifecycle-b1"),
         data_dir=reservation.data_dir.with_name("b"),
     )
-    registry.reserve(other)
+    reserve_profile(registry, other)
     with pytest.raises(RuntimeError, match="operation failed"):
         with registry.operation(reservation.identity, reservation.data_dir):
             registry.invalidate(other.identity, other.data_dir)
@@ -94,8 +96,8 @@ def test_operation_directory_cannot_be_provider_or_project_storage(registry, res
     directory = registry.path.with_name(registry.path.name + ".operations")
     for path in (directory, directory / "child", directory.with_name(directory.name.upper())):
         with pytest.raises(ValueError, match="outside"):
-            registry.reserve(replace(reservation, data_dir=path))
-    registry.reserve(reservation)
+            reserve_profile(registry, replace(reservation, data_dir=path))
+    reserve_profile(registry, reservation)
     directory.mkdir(mode=0o700)
     with pytest.raises(ValueError, match="profile storage"):
         registry.claim_projects(reservation.identity, reservation.data_dir, (directory,))
@@ -113,7 +115,7 @@ def test_operation_directory_cannot_be_provider_or_project_storage(registry, res
 
 @pytest.mark.parametrize("suffix", ["", "/child"])
 def test_old_fence_directory_reservations_remain_readable(registry, reservation, suffix):
-    registry.reserve(reservation)
+    reserve_profile(registry, reservation)
     directory = registry.path.with_name(registry.path.name + ".operations")
     legacy = replace(
         reservation,
@@ -149,16 +151,16 @@ def test_old_fence_directory_reservations_remain_readable(registry, reservation,
 
 @pytest.mark.parametrize("suffix", ["", "/child"])
 def test_unreserved_provider_cannot_start_in_fence_directory(registry, reservation, suffix):
-    registry.reserve(reservation)
+    reserve_profile(registry, reservation)
     directory = registry.path.with_name(registry.path.name + ".operations")
     with registry.operation(reservation.identity, reservation.data_dir):
         with pytest.raises(ValueError, match="fence must be outside"):
-            registry.check_unadopted(Path(str(directory) + suffix))
-    registry.check_unadopted(reservation.data_dir.with_name("legacy"))
+            registry.check_unreserved(Path(str(directory) + suffix))
+    registry.check_unreserved(reservation.data_dir.with_name("legacy"))
 
 
 def test_concurrent_invalidation_reports_fence_contention(registry, reservation):
-    registry.reserve(reservation)
+    reserve_profile(registry, reservation)
     with registry._operation_fence(reservation.identity, reservation.data_dir, exclusive=True):
         with pytest.raises(ValueError, match="fence is busy"):
             registry.invalidate(reservation.identity, reservation.data_dir)
@@ -167,7 +169,7 @@ def test_concurrent_invalidation_reports_fence_contention(registry, reservation)
 
 
 def test_registry_hardlink_cannot_bypass_an_active_fence(registry, reservation):
-    registry.reserve(reservation)
+    reserve_profile(registry, reservation)
     alias = registry.path.with_name("alias.db")
     with registry.operation(reservation.identity, reservation.data_dir):
         os.link(registry.path, alias)
@@ -181,7 +183,7 @@ def test_registry_hardlink_cannot_bypass_an_active_fence(registry, reservation):
 
 @pytest.mark.parametrize("alias", ["symlink", "hardlink", "fifo", "public"])
 def test_operation_fence_refuses_unsafe_lock_files(registry, reservation, tmp_path, alias):
-    registry.reserve(reservation)
+    reserve_profile(registry, reservation)
     with registry.operation(reservation.identity, reservation.data_dir):
         pass
     directory = registry.path.with_name(registry.path.name + ".operations")
@@ -220,7 +222,7 @@ def test_read_never_creates_or_repairs_registry(tmp_path):
 
 def test_empty_and_nonready_discovery_are_read_only(registry, reservation):
     assert registry.list() == {"schema_version": 1, "items": []}
-    assert registry.reserve(reservation) == reservation
+    assert reserve_profile(registry, reservation) == reservation
     before = registry.path.read_bytes(), registry.path.stat().st_mtime_ns
     fixture = json.loads(
         (Path(__file__).parents[4] / "docs/contracts/profiles-v1.json").read_text()
@@ -237,11 +239,12 @@ def test_empty_and_nonready_discovery_are_read_only(registry, reservation):
         registry.show("unknown")
 
 
-def test_ordinary_reopen_and_exact_replay_preserve_identity(registry, reservation):
-    registry.reserve(reservation)
+def test_reopen_preserves_identity_and_a_repeat_is_refused(registry, reservation):
+    reserve_profile(registry, reservation)
     reopened = ProfileRegistry(registry.path)
-    assert reopened.reserve(reservation) == reservation
     assert reopened.check_reservation(reservation.identity, reservation.data_dir) == reservation
+    with pytest.raises(ValueError, match="conflicts"):
+        reserve_profile(reopened, reservation)
 
 
 @pytest.mark.parametrize(
@@ -254,14 +257,14 @@ def test_ordinary_reopen_and_exact_replay_preserve_identity(registry, reservatio
     ],
 )
 def test_conflicting_replay_never_overwrites(registry, reservation, changes):
-    registry.reserve(reservation)
-    with pytest.raises(ValueError, match="does not match"):
-        registry.reserve(replace(reservation, **changes))
+    reserve_profile(registry, reservation)
+    with pytest.raises(ValueError, match="conflicts"):
+        reserve_profile(registry, replace(reservation, **changes))
     assert registry.check_reservation(reservation.identity, reservation.data_dir) == reservation
 
 
 def test_copied_identity_and_overlapping_paths_are_rejected(registry, reservation):
-    registry.reserve(reservation)
+    reserve_profile(registry, reservation)
     other = replace(
         reservation,
         identity=ProfileIdentity("profile-b", "installation-b", "lifecycle-b1"),
@@ -276,16 +279,18 @@ def test_copied_identity_and_overlapping_paths_are_rejected(registry, reservatio
     ]
     for conflict in conflicts:
         with pytest.raises(ValueError, match="conflicts"):
-            registry.reserve(conflict)
-    registry.reserve(other)
+            reserve_profile(registry, conflict)
+    reserve_profile(registry, other)
     assert len(registry.list()["items"]) == 2
 
 
 def test_registry_cannot_be_restored_as_part_of_provider_directory(registry, reservation):
     with pytest.raises(ValueError, match="outside"):
-        registry.reserve(replace(reservation, data_dir=registry.path.parent))
+        reserve_profile(registry, replace(reservation, data_dir=registry.path.parent))
     with pytest.raises(ValueError, match="outside"):
-        registry.reserve(replace(reservation, data_dir=registry.path.parent.with_name("CONTROL")))
+        reserve_profile(
+            registry, replace(reservation, data_dir=registry.path.parent.with_name("CONTROL"))
+        )
     assert registry.list()["items"] == []
 
 
@@ -293,30 +298,34 @@ def test_registry_cannot_be_restored_as_part_of_provider_directory(registry, res
 def test_unicode_directory_aliases_cannot_acquire_separate_reservations(
     registry, reservation, names
 ):
-    registry.reserve(replace(reservation, data_dir=reservation.data_dir.with_name(names[0])))
+    reserve_profile(
+        registry, replace(reservation, data_dir=reservation.data_dir.with_name(names[0]))
+    )
     with pytest.raises(ValueError, match="conflicts"):
-        registry.reserve(
+        reserve_profile(
+            registry,
             replace(
                 reservation,
                 identity=ProfileIdentity("profile-b", "installation-b", "lifecycle-b1"),
                 data_dir=reservation.data_dir.with_name(names[1]),
-            )
+            ),
         )
 
 
 def test_symlink_alias_cannot_reserve_another_profiles_directory(registry, reservation, tmp_path):
-    registry.reserve(reservation)
+    reserve_profile(registry, reservation)
     alias = tmp_path / "alias"
     alias.symlink_to(reservation.data_dir, target_is_directory=True)
     with pytest.raises(ValueError, match="canonical"):
-        registry.reserve(replace(reservation, data_dir=alias))
+        reserve_profile(registry, replace(reservation, data_dir=alias))
     with pytest.raises(ValueError, match="conflicts"):
-        registry.reserve(
+        reserve_profile(
+            registry,
             replace(
                 reservation,
                 identity=ProfileIdentity("profile-b", "installation-b", "lifecycle-b1"),
                 data_dir=alias.resolve(),
-            )
+            ),
         )
 
     pending = replace(
@@ -326,7 +335,7 @@ def test_symlink_alias_cannot_reserve_another_profiles_directory(registry, reser
     )
     pending.data_dir.symlink_to(reservation.data_dir, target_is_directory=True)
     with pytest.raises(ValueError, match="canonical"):
-        registry.reserve(pending)
+        reserve_profile(registry, pending)
     assert len(registry.list()["items"]) == 1
 
 
@@ -336,19 +345,19 @@ def test_concurrent_reservations_serialize_before_reading(registry, reservation,
 
     def reserve(value):
         try:
-            return ProfileRegistry(registry.path).reserve(value)
+            return reserve_profile(ProfileRegistry(registry.path), value)
         except ValueError as exc:
             return exc
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(reserve, [reservation, other]))
-    assert sum(isinstance(r, ValueError) for r in results) == (0 if same_input else 1)
+    assert sum(isinstance(r, ValueError) for r in results) == 1
     stored = registry.check_reservation(reservation.identity, reservation.data_dir)
     assert all(result == stored for result in results if not isinstance(result, ValueError))
 
 
 def test_invalidation_requires_exact_identity_and_path(registry, reservation):
-    registry.reserve(reservation)
+    reserve_profile(registry, reservation)
     for identity, directory in [
         (replace(reservation.identity, lifecycle_id="stale"), reservation.data_dir),
         (reservation.identity, reservation.data_dir.with_name("b")),
@@ -368,7 +377,7 @@ async def test_provider_database_restore_cannot_resurrect_invalidated_reservatio
         identity = replace(reservation.identity, installation_id=await db.signing.audience())
         await db.profile_identity.reserve(identity)
     reservation = replace(reservation, identity=identity)
-    registry.reserve(reservation)
+    reserve_profile(registry, reservation)
     backup = tmp_path / "backup"
     shutil.copytree(directory, backup)
     registry.invalidate(identity, directory)
@@ -379,18 +388,20 @@ async def test_provider_database_restore_cannot_resurrect_invalidated_reservatio
         assert await db.profile_identity.read() == identity
         with pytest.raises(ValueError, match="invalidated"):
             registry.check_reservation(await db.profile_identity.read(), directory)
-    with pytest.raises(ValueError, match="invalidated"):
-        ProfileRegistry(registry.path).reserve(reservation)
+    with pytest.raises(ValueError, match="conflicts"):
+        reserve_profile(ProfileRegistry(registry.path), reservation)
     assert registry.show(identity.profile_id)["binding"] is None
     assert registry.list()["items"][0]["state"] == "failed"
-    with pytest.raises(ValueError, match="does not match"):
-        registry.reserve(replace(reservation, identity=replace(identity, lifecycle_id="new")))
+    with pytest.raises(ValueError, match="conflicts"):
+        reserve_profile(
+            registry, replace(reservation, identity=replace(identity, lifecycle_id="new"))
+        )
 
 
 @pytest.mark.parametrize(
     "statement",
     [
-        "PRAGMA user_version = 4",
+        "PRAGMA user_version = 5",
         "UPDATE profiles SET profile_id = ''",
         "UPDATE profiles SET data_dir = 'relative'",
         "UPDATE profiles SET baseline_version = ''",
@@ -401,14 +412,14 @@ async def test_provider_database_restore_cannot_resurrect_invalidated_reservatio
     ],
 )
 def test_invalid_metadata_fails_closed_without_repair(registry, reservation, statement):
-    registry.reserve(reservation)
+    reserve_profile(registry, reservation)
     with sqlite3.connect(registry.path) as conn:
         conn.execute(statement)
     before = registry.path.read_bytes()
     for operation in [
         registry.list,
         lambda: registry.show("profile-a"),
-        lambda: registry.reserve(reservation),
+        lambda: reserve_profile(registry, reservation),
         lambda: registry.check_reservation(reservation.identity, reservation.data_dir),
         lambda: registry.invalidate(reservation.identity, reservation.data_dir),
     ]:
@@ -417,19 +428,19 @@ def test_invalid_metadata_fails_closed_without_repair(registry, reservation, sta
     assert registry.path.read_bytes() == before
 
 
-def test_ready_is_not_a_reservation_state(reservation):
-    with pytest.raises(ValueError, match="state"):
+def test_ready_requires_a_connection_binding(reservation):
+    with pytest.raises(ValueError, match="binding"):
         replace(reservation, state="ready")
 
 
 def test_changed_provider_path_cannot_block_discovery_or_invalidation(registry, reservation):
-    registry.reserve(reservation)
+    reserve_profile(registry, reservation)
     other = replace(
         reservation,
         identity=ProfileIdentity("profile-b", "installation-b", "lifecycle-b1"),
         data_dir=reservation.data_dir.with_name("b"),
     )
-    registry.reserve(other)
+    reserve_profile(registry, other)
     reservation.data_dir.parent.mkdir()
     reservation.data_dir.symlink_to(other.data_dir, target_is_directory=True)
     with pytest.raises(ValueError, match="canonical"):
@@ -472,13 +483,13 @@ def test_concurrent_initialization_publishes_only_complete_registries(tmp_path):
 
 
 def test_symlink_loops_refuse_reconciliation_without_blocking_invalidation(registry, reservation):
-    registry.reserve(reservation)
+    reserve_profile(registry, reservation)
     reservation.data_dir.parent.mkdir()
     reservation.data_dir.symlink_to(reservation.data_dir)
     with pytest.raises(ValueError, match="Profile path"):
         registry.check_reservation(reservation.identity, reservation.data_dir)
     with pytest.raises(ValueError, match="Profile path"):
-        registry.reserve(reservation)
+        reserve_profile(registry, reservation)
     with pytest.raises(ValueError, match="Profile path"):
         ProfileRegistry(reservation.data_dir)
     with pytest.raises(ValueError, match="Profile path"):
@@ -524,7 +535,7 @@ def test_registry_requires_its_parent_to_belong_to_the_current_user(registry, mo
 def test_interrupted_invalidation_requires_explicit_replay_for_journal_recovery(
     registry, reservation
 ):
-    registry.reserve(reservation)
+    reserve_profile(registry, reservation)
     # Spill enough pages to leave a hot journal when the child exits without
     # committing. No service, signals to other processes or model call is used.
     with sqlite3.connect(registry.path) as conn:
@@ -557,3 +568,95 @@ def test_interrupted_invalidation_requires_explicit_replay_for_journal_recovery(
     registry.invalidate(reservation.identity, reservation.data_dir)
     assert registry.show(reservation.identity.profile_id)["state"] == "failed"
     assert not journal.exists()
+
+
+def _ready_binding(root: Path) -> ProfileBinding:
+    return ProfileBinding(root / "run" / "api.sock", root / ".env", root / "tmux" / "server.sock")
+
+
+def _published(tmp_path, reservation):
+    registry = ProfileRegistry.create(tmp_path / "registry" / "registry.db")
+    reserve_profile(registry, reservation)
+    binding = _ready_binding(reservation.data_dir)
+    return (
+        registry,
+        binding,
+        publish_profile(registry, reservation.identity, reservation.data_dir, binding),
+    )
+
+
+def test_publish_ready_emits_the_agreed_discovery_shape(tmp_path, reservation):
+    registry, binding, published = _published(tmp_path, reservation)
+    root = reservation.data_dir
+    assert published.state == "ready"
+    assert registry.list()["items"][0]["state"] == "ready"
+    assert registry.show("profile-a") == {
+        "schema_version": 1,
+        "profile_id": "profile-a",
+        "display_name": reservation.display_name,
+        "kind": "isolated",
+        "state": "ready",
+        "binding": {
+            "installation_id": "installation-a",
+            "lifecycle_id": "lifecycle-a1",
+            "endpoint": {"kind": "unix", "path": str(root / "run" / "api.sock")},
+            "credential_reference": {
+                "kind": "dotenv",
+                "path": str(root / ".env"),
+                "key": "BACKBONE_API_KEY",
+            },
+            "tmux": {"socket_path": str(root / "tmux" / "server.sock")},
+        },
+        "git_identity": "none",
+    }
+    assert registry.check_reservation(reservation.identity, root) == published
+    with pytest.raises(ValueError, match="already ready"):
+        publish_profile(registry, reservation.identity, root, binding)
+
+
+def test_ready_shape_matches_the_shared_fixture_keys(tmp_path, reservation):
+    fixture = json.loads(Path("docs/contracts/profiles-v1.json").read_text())["discovery"]
+    registry, _, _ = _published(tmp_path, reservation)
+    shown = registry.show("profile-a")
+    expected = fixture["show_ready"]
+    assert set(shown) == set(expected)
+    assert set(shown["binding"]) == set(expected["binding"])
+    for key in ("endpoint", "credential_reference", "tmux"):
+        assert set(shown["binding"][key]) == set(expected["binding"][key])
+
+
+def test_ready_refuses_changed_binding_and_paths_outside_the_profile(tmp_path, reservation):
+    registry, binding, _ = _published(tmp_path, reservation)
+    root = reservation.data_dir
+    with pytest.raises(ValueError, match="already ready"):
+        publish_profile(
+            registry,
+            reservation.identity,
+            root,
+            replace(binding, endpoint=root / "run" / "other.sock"),
+        )
+    with pytest.raises(ValueError, match="outside its reserved directory"):
+        publish_profile(
+            registry,
+            reservation.identity,
+            root,
+            replace(binding, endpoint=tmp_path / "outside.sock"),
+        )
+
+
+def test_invalidated_profile_never_returns_to_ready(tmp_path, reservation):
+    registry, binding, _ = _published(tmp_path, reservation)
+    root = reservation.data_dir
+    registry.invalidate(reservation.identity, root)
+    assert registry.show("profile-a")["state"] == "failed"
+    assert registry.show("profile-a")["binding"] is None
+    with pytest.raises(ValueError, match="invalidated"):
+        publish_profile(registry, reservation.identity, root, binding)
+    with pytest.raises(ValueError, match="invalidated"):
+        registry.check_reservation(reservation.identity, root)
+
+
+def test_ready_still_refuses_legacy_startup_in_its_directory(tmp_path, reservation):
+    registry, _, _ = _published(tmp_path, reservation)
+    with pytest.raises(ValueError, match="reserved profile"):
+        registry.check_unreserved(reservation.data_dir)

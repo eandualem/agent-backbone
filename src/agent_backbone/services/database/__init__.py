@@ -14,9 +14,14 @@ from agent_backbone.services.database._conversations_repo import (
 from agent_backbone.services.database._current_plans_repo import CurrentPlanError
 from agent_backbone.services.database._diagnostics_repo import diagnostic_details
 from agent_backbone.services.database._documents_repo import (
+    OPERATOR_AUTHOR,
     DocumentCapacity,
     DocumentConflict,
     DocumentRateLimit,
+)
+from agent_backbone.services.database._profile_default import (
+    create_default_profile,
+    default_tmux_socket,
 )
 from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
 from agent_backbone.services.database._profile_operations import (
@@ -27,8 +32,15 @@ from agent_backbone.services.database._profile_provider import (
     ProfileProvider,
     reconcile_profile_provider,
 )
-from agent_backbone.services.database._profile_registry import ProfileRegistry, ProfileReservation
-from agent_backbone.services.database._profile_startup import check_profile_startup
+from agent_backbone.services.database._profile_registry import (
+    ProfileBinding,
+    ProfileRegistry,
+    ProfileReservation,
+)
+from agent_backbone.services.database._profile_startup import (
+    check_new_default,
+    default_profile_at,
+)
 from agent_backbone.services.database._reports_repo import (
     ReportConflict,
     ReportForbidden,
@@ -48,6 +60,7 @@ from agent_backbone.services.database.engine import build_engine
 __all__ = [
     "CONVERSATION_KINDS",
     "CONVERSATION_TEXT_CHARACTERS",
+    "OPERATOR_AUTHOR",
     "RECEIPT_RETENTION_DAYS",
     "BackboneDB",
     "Base",
@@ -58,6 +71,7 @@ __all__ = [
     "DocumentConflict",
     "DocumentRateLimit",
     "Limits",
+    "ProfileBinding",
     "ProfileIdentity",
     "ProfileOperations",
     "ProfileProvider",
@@ -70,7 +84,10 @@ __all__ = [
     "SetupReceiptError",
     "UnknownArtifact",
     "build_engine",
-    "check_profile_startup",
+    "check_new_default",
+    "create_default_profile",
+    "default_profile_at",
+    "default_tmux_socket",
     "diagnostic_details",
     "format_iso",
     "now_iso",

@@ -150,15 +150,19 @@ async def _grant(conn, confirmation_id: str) -> dict | None:
 
 
 class SigningRepo(Repo):
-    async def audience(self) -> str:
-        """This install's audience id, created on first use and never changed."""
+    async def audience(self, initial: str | None = None) -> str:
+        """This install's audience id, created on first use and never changed.
+
+        ``initial`` names the ID a profile reservation already holds; it never
+        replaces an existing audience.
+        """
         async with self._tx() as conn:
             await conn.execute(
                 text(
                     "INSERT INTO signing_install (id, audience, created_at) "
                     "VALUES (1, :audience, :at) ON CONFLICT(id) DO NOTHING"
                 ),
-                {"audience": str(uuid.uuid4()), "at": now_iso()},
+                {"audience": initial or str(uuid.uuid4()), "at": now_iso()},
             )
             row = (await conn.execute(text("SELECT audience FROM signing_install"))).fetchone()
         return row[0]

@@ -18,7 +18,7 @@ from agent_backbone.fs import atomic_write_text
 from agent_backbone.hooks import install as hooks
 from agent_backbone.services.runtimes._environment import (
     environment_value,
-    native_environment,
+    native_context_installed,
 )
 from agent_backbone.services.runtimes._opencode_v2_launch import failure_path
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
@@ -62,6 +62,16 @@ class OpenCode(Runtime):
             return super().account_args(action)
         return commands[action]
 
+    def account_state(self, done):
+        try:
+            integrations = json.loads(done.stdout)
+            connected = done.returncode == 0 and any(i["connections"] for i in integrations)
+        except (ValueError, TypeError, KeyError):
+            return "unavailable"
+        if connected:
+            return "authenticated"
+        return "not_authenticated" if done.returncode == 0 else "unavailable"
+
     def native_environment_values(self, root):
         return {}
 
@@ -76,6 +86,8 @@ class OpenCode(Runtime):
     )
 
     setup_hooks = True
+    runs_in_profiles = True
+    profile_sign_in = True
 
     supports_exact_resume = True
     id = "opencode"
@@ -204,9 +216,8 @@ class OpenCode(Runtime):
         return tuple(map(int, match.groups())) if match else ()
 
     def resolve_binary(self) -> str | None:
-        if native_environment(self.id) is not None:
-            return super().resolve_binary()
-        if path := super().resolve_binary():
+        path = super().resolve_binary()
+        if path or native_context_installed():
             return path
         # The standalone installer can run after the daemon has started. Probe
         # its standard location on every lookup without replacing PATH choices

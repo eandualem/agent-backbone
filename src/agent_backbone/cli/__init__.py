@@ -109,6 +109,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("runtimes", help="supported runtimes, whether installed, example model ids")
     p.add_argument("--json", action="store_true", help="versioned runtime discovery for setup")
+    p.add_argument("--profile", help="capture this profile for operator runtime discovery")
+    p.add_argument("--expected-installation-id")
+    p.add_argument("--expected-lifecycle-id")
     p.add_argument(
         "--check-setup",
         action="store_true",
@@ -154,7 +157,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("up", help="run the backbone")
     p.add_argument("--detach", "-d", action="store_true", help="run inside a tmux session")
-    p.add_argument("--reload", action="store_true", help="auto-reload on code changes (dev)")
     p.add_argument(
         "--log-file",
         type=Path,

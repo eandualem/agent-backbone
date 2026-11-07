@@ -121,6 +121,15 @@ class ClaudeCode(Runtime):
             return super().account_args(action)
         return commands[action]
 
+    def account_state(self, done):
+        try:
+            signed_in = json.loads(done.stdout).get("loggedIn")
+        except (ValueError, AttributeError):
+            return "unavailable"
+        if signed_in is True:
+            return "authenticated"
+        return "not_authenticated" if signed_in is False else "unavailable"
+
     def native_environment_values(self, root):
         return {"CLAUDE_CONFIG_DIR": str(root / "claude")}
 
@@ -132,6 +141,8 @@ class ClaudeCode(Runtime):
     )
 
     setup_hooks = True
+    runs_in_profiles = True
+    profile_sign_in = True
 
     supports_exact_resume = True
     id = "claude"

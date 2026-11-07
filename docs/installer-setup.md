@@ -161,8 +161,17 @@ or authentication.
 The running service executes first-agent setup through operator-only
 `POST /api/setup/first-agent`. It verifies core prerequisites, prepares
 installation-owned hooks, registers a new agent and starts it with the selected
-brief. It preserves global runtime settings and workspace trust prompts; it never
-sets unattended mode. Directory creation creates only the chosen directory and
+brief. It preserves global runtime settings and records folder trust for the chosen
+directory as any agent start does (`agents.pre_trust`); it never sets unattended mode.
+Setup does not wait for the agent's prompt. It is complete once the CLI has stayed
+running for three seconds, whatever the CLI shows: a first-run, sign-in, trust or terms
+screen is the person's to answer in the agent's terminal. The service keeps watching for
+the prompt for ten minutes; a greeting waits in the queue and is delivered once the agent
+reaches it, and after those ten minutes the delivery-retry job takes over. `data.ready`
+and `agent_ready` mean the CLI is running, not that it has reached its prompt;
+`data.evidence` gives the state seen. A CLI that exits within those seconds is
+`launch_failed`, and retrying does not start it again.
+Directory creation creates only the chosen directory and
 missing parents, without initializing a Git repository or mandatory instructions.
 An existing name, case variant, registered directory or unrelated terminal is a
 conflict. There is no automatic suffix or takeover.
@@ -229,6 +238,14 @@ execution request, not a status query.
 
 ## Results and recovery
 
+Bound first-agent and cancellation requests use schema 2 and the full expected
+profile identity instead of `data_dir`. The CLI resolves only an authoritative
+ready registry record and its private operator credential, then verifies the
+provider before submitting the original request. Every schema-2 event echoes
+the requested profile, installation and lifecycle IDs; step events also include
+the action. Schema 1 keeps the unbound flow below. See the
+[profile setup contract](profiles-contract.md#set-up-an-agent-within-a-captured-profile).
+
 Initialize and first-agent requests are limited to 32,768 UTF-8 bytes.
 Cancellation allows 32,775 bytes so even a maximum-size original input can
 change only its action to the longer cancellation action. JSONL events carry `schema_version: 1`,
@@ -243,7 +260,7 @@ Initialize data contains `data_dir`, `installation` (`created` or
 `existing_preserved`), `service_state` (`running`, `installed`, `not_installed`,
 `unsupported`, `unknown`), `api_url` (nullable) and `health` (`healthy`, `unhealthy`,
 `unknown`). First-agent data contains `agent_name`, `launch_id` (nullable), `ready`
-(`ready`, `waiting_for_human`, `exited`, `timeout`, `not_started`),
+(`ready`, meaning the CLI stayed running after launch, `exited` or `not_started`),
 `greeting_delivery_id` (nullable integer) and bounded classification `evidence`.
 A preflight failure may have empty `data`. A completed first-agent replay reconciles its registration and launch identities
 without requiring its old policy, brief, model or runtime availability to remain
@@ -253,7 +270,7 @@ agent start after inspection. Replay never restarts it.
 Result codes include `initialized`, `existing_preserved`, `agent_ready`,
 `validated`, `invalid_request`, `operator_required`, `installation_conflict`,
 `starter_conflict`, `agent_conflict`, `runtime_missing`, `runtime_permission`,
-`service_unavailable`, `launch_failed`, `launch_timeout`, `outcome_unknown`,
+`service_unavailable`, `launch_failed`, `outcome_unknown`,
 `request_conflict`, `filesystem_unsupported`, `request_cancelled` and `cancellation_unsafe`. `retry` is `same_request`, `new_request` or `none`.
 
 Private receipts under `setup-receipts` bind each request ID to its full input

@@ -3,7 +3,6 @@
 import json
 import os
 import shutil
-import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from functools import partial
@@ -14,6 +13,7 @@ import pytest
 from agent_backbone.services.database import ProfileIdentity, ProfileRegistry, ProfileReservation
 from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.skills import Skill, manifest_path, materialize
+from tests.support import reserve_profile
 
 
 @pytest.fixture
@@ -27,7 +27,7 @@ def profiles(tmp_path):
             name,
             "test-v1",
         )
-        registry.reserve(owner)
+        reserve_profile(registry, owner)
         owners.append(owner)
     return registry, owners
 
@@ -151,22 +151,6 @@ def test_aliases_nested_paths_and_failed_lifecycles_keep_claims(profiles, tmp_pa
         ProfileRegistry(registry.path).claim_projects(b.identity, b.data_dir, (repo,))
 
 
-def test_old_registry_needs_explicit_initialization_not_discovery(profiles, tmp_path):
-    registry, (a, _) = profiles
-    repo = make_repo(tmp_path / "project")
-    with sqlite3.connect(registry.path) as conn:
-        conn.execute("DROP TABLE project_claims")
-        conn.execute("DROP TABLE lifecycle_operations")
-        conn.execute("PRAGMA user_version = 1")
-    before = registry.path.read_bytes()
-    assert registry.show(a.identity.profile_id)["binding"] is None
-    assert registry.path.read_bytes() == before
-    with pytest.raises(ValueError, match="initialization"):
-        registry.claim_projects(a.identity, a.data_dir, (repo,))
-    ProfileRegistry.create(registry.path).claim_projects(a.identity, a.data_dir, (repo,))
-    assert registry.check_reservation(a.identity, a.data_dir) == a
-
-
 def test_new_profile_directory_cannot_take_an_existing_project_claim(profiles, tmp_path):
     registry, (a, _) = profiles
     repo = make_repo(tmp_path / "project")
@@ -174,7 +158,7 @@ def test_new_profile_directory_cannot_take_an_existing_project_claim(profiles, t
     candidate = replace(a, identity=ProfileIdentity("c", "installation-c", "lifecycle-c"))
     for path in (repo, repo / "nested"):
         with pytest.raises(ValueError, match="project claim"):
-            registry.reserve(replace(candidate, data_dir=path))
+            reserve_profile(registry, replace(candidate, data_dir=path))
     assert len(registry.list()["items"]) == 2
 
 
@@ -226,17 +210,18 @@ def test_moved_checkout_alias_does_not_block_unrelated_profile_work(profiles, tm
     candidate = replace(
         b, identity=ProfileIdentity("c", "installation-c", "lifecycle-c"), data_dir=tmp_path / "c"
     )
-    registry.reserve(candidate)
+    reserve_profile(registry, candidate)
     # The moved resource still belongs to A, through either spelling.
     for path in (old, moved):
         assert not apply(registry, b, path, rt).ok
         with pytest.raises(ValueError, match="project claim"):
-            registry.reserve(
+            reserve_profile(
+                registry,
                 replace(
                     candidate,
                     identity=ProfileIdentity("d", "i-d", "l-d"),
                     data_dir=path.resolve() / "nested",
-                )
+                ),
             )
     assert apply(registry, a, moved, rt).ok
     # A broken retired alias is no longer a registry-wide failure either.

@@ -42,7 +42,7 @@ async def _read(conn) -> ProfileIdentity | None:
 
 
 class ProfileIdentityRepo(Repo):
-    """Reserve once; never infer adoption or rotate an identity during a read."""
+    """Reserve once; never rotate an identity during a read."""
 
     async def read(self) -> ProfileIdentity | None:
         """Read validated metadata without allocating an identity or signing audience."""
@@ -53,7 +53,7 @@ class ProfileIdentityRepo(Repo):
         """Persist a control-plane reservation, or verify an exact replay.
 
         The caller must already have obtained this database's signing audience.
-        Conflicting input never overwrites metadata. This does not adopt Default,
+        Conflicting input never overwrites metadata. This does not activate a provider,
         make a provider ready, or grant unbound-client compatibility. Replacement
         needs an external lifecycle guard and is deliberately not an upsert here.
         """

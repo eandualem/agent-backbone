@@ -6,8 +6,9 @@ unrelated agent, weakens runtime trust, or guesses that a lost send was unsent.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from dataclasses import replace
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -30,6 +31,7 @@ from agent_backbone.services.agents import (
     profile_lock,
     start_agent,
     validate_agent_spec,
+    wait_until_ready,
 )
 from agent_backbone.services.database import BoundSetupReceipt, SetupReceipt, SetupReceiptError
 from agent_backbone.services.routing import DeliveryRefused, envelope, safe_deliver
@@ -45,6 +47,15 @@ GREETING = (
     "coordinate specialist agents, then ask what I want to accomplish first. "
     "Wait for my answer before creating agents, changing projects or making commitments."
 )
+
+# Setup ends once the CLI is running: what it shows next is the person's to answer.
+# A CLI that cannot start quits within moments (Codex 0.160.0: under two seconds).
+STARTED_SECONDS = 3.0
+# How long the prompt is watched for behind first-run screens. After that the
+# delivery-retry job hands over anything still queued.
+FIRST_RUN_SECONDS = 600.0
+
+_watches: set[asyncio.Task] = set()
 
 # Keep the original core-v1 prerequisites valid when new defaults are added.
 # Existing installations retain their assignments and may have a pending request.
@@ -134,6 +145,7 @@ async def first_agent(
     *,
     check_effect=None,
     check_admission=None,
+    settled=None,
 ):
     """Run once or reconcile the same explicit request; API authentication is upstream."""
     bound = isinstance(request, BoundSetupFirstAgent)
@@ -159,9 +171,16 @@ async def first_agent(
             receipt.save(agent_name=request.agent.name)
             async with lifecycle_lock(request.agent.name):
                 await _check(check_effect)
-                return await _first(request, receipt, store, db, check_effect=check_effect)
+                return await _first(
+                    request, receipt, store, db, check_effect=check_effect, settled=settled
+                )
     except SetupReceiptError as exc:
-        return setup_result("first_agent", exc.code, str(exc))
+        return setup_result(
+            "first_agent",
+            exc.code,
+            str(exc),
+            retry="none" if bound and exc.reason == "receipt_capacity" else None,
+        )
     except AtomicCreateUnsupported:
         return setup_result(
             "first_agent",
@@ -227,7 +246,12 @@ async def cancel_first_agent(request: SetupCancelFirstAgent, config, *, check_ef
                 data={"cancelled_request_id": request.request_id, "can_start_new_request": True},
             )
     except SetupReceiptError as exc:
-        return setup_result(action, exc.code, str(exc))
+        return setup_result(
+            action,
+            exc.code,
+            str(exc),
+            retry="none" if bound and exc.reason == "receipt_capacity" else None,
+        )
     except Exception as exc:
         log.error(
             "Setup cancellation failed request=%s error=%s", request.request_id, type(exc).__name__
@@ -244,7 +268,39 @@ async def _check(check_effect):
         await check_effect()
 
 
-async def _first(request, receipt, store, db, *, check_effect=None):
+async def _watch_first_run(name, config, runtime, since, settled):
+    """Clear the ``starting`` marker at the prompt, then hand over a queued greeting."""
+    deadline = time.monotonic() + FIRST_RUN_SECONDS
+    while (remaining := deadline - time.monotonic()) > 0:
+        outcome, _ = await wait_until_ready(
+            name,
+            state_dir=config.state_dir,
+            runtime=runtime,
+            timeout=remaining,
+            stale_threshold=config.timing.stale_threshold_seconds,
+            since=since,
+        )
+        if outcome == "ready":
+            break
+        if outcome != "waiting_for_human":
+            return
+        await asyncio.sleep(1)
+    else:
+        return
+    if settled is not None:
+        await settled(name)
+        # Delivery holds a message for the grace period after an idle hook.
+        await asyncio.sleep(config.timing.grace_period_seconds + 1)
+        await settled(name)
+
+
+def _watch_ended(task):
+    _watches.discard(task)
+    if not task.cancelled() and (error := task.exception()) is not None:
+        log.warning("First-run watch ended early (%s)", type(error).__name__)
+
+
+async def _first(request, receipt, store, db, *, check_effect=None, settled=None):
     await _check(check_effect)
     await store.refresh(**({"check_effect": check_effect} if check_effect is not None else {}))
     await _check(check_effect)
@@ -393,9 +449,6 @@ async def _first(request, receipt, store, db, *, check_effect=None):
         receipt.completed("agent")
         await _check(check_effect)
         config = store.config
-    # Turn off workspace pre-trust for this explicit interactive first launch.
-    # Other launch settings and each adapter's sandbox/dialog behavior remain intact.
-    config = replace(config, launch=replace(config.launch, pre_trust=False))
     operation = receipt.record.get("launch_operation")
     if operation is None:
         if await session_exists(spec.name):
@@ -403,12 +456,13 @@ async def _first(request, receipt, store, db, *, check_effect=None):
         await _check(check_effect)
         operation = uuid4().hex
         receipt.save(launch_operation=operation)
+        launched_at = time.time()
         started = await start_agent(
             spec,
             config,
             db=db,
             brief_file=brief_path,
-            wait=True,
+            wait=False,
             operation_id=operation,
             **({"check_effect": check_effect} if check_effect is not None else {}),
         )
@@ -421,13 +475,21 @@ async def _first(request, receipt, store, db, *, check_effect=None):
             )
         await _check(check_effect)
         await store.touch_started(spec.name)
+        watch = asyncio.create_task(
+            _watch_first_run(spec.name, config, spec.runtime, launched_at, settled)
+        )
+        _watches.add(watch)
+        watch.add_done_callback(_watch_ended)
+        await asyncio.sleep(STARTED_SECONDS)
+        await _check(check_effect)
     # A lost launch response is reconciled from the exact operation and registration,
     # never from the presence of a same-name terminal alone.
     if not await session_exists(spec.name):
         return _answer(
             receipt,
             "launch_failed",
-            "The recorded launch has exited; setup will not restart it.",
+            "The CLI exited right after starting, so the agent is not running. Run the CLI "
+            "in a terminal in the agent's folder to see why, then start the agent again.",
             ready="exited",
         )
     actual_operation = await query_environment_var(spec.name, "BACKBONE_OPERATION_ID")
@@ -450,22 +512,6 @@ async def _first(request, receipt, store, db, *, check_effect=None):
         return dict(
             receipt.record["result"],
             data={**receipt.record["result"]["data"], "evidence": evidence},
-        )
-    if snapshot.state.value == "waiting_for_human":
-        return _answer(
-            receipt,
-            "runtime_permission",
-            "Continue in the agent terminal, then retry this request.",
-            ready="waiting_for_human",
-            evidence=evidence,
-        )
-    if snapshot.state.value != "idle":
-        return _answer(
-            receipt,
-            "launch_timeout",
-            "The runtime is not confirmed ready; inspect its terminal.",
-            ready="timeout",
-            evidence=evidence,
         )
     await _check(check_effect)
     receipt.completed("ready")
@@ -497,7 +543,8 @@ async def _first(request, receipt, store, db, *, check_effect=None):
     final = _answer(
         receipt,
         "agent_ready",
-        "Agent started; any greeting receipt records submission only.",
+        "Agent started; it may show its own first-run screens in its terminal. "
+        "Any greeting receipt records submission only.",
         ready="ready",
         completed=True,
         evidence=evidence,

@@ -348,7 +348,7 @@ async def lifespan(app: FastAPI):
     from agent_backbone.api.session_updates import SessionFeed
     from agent_backbone.api.socketio_server import configure_pty_manager, get_pty_manager
     from agent_backbone.services.agents import AgentStore
-    from agent_backbone.services.database import BackboneDB, check_profile_startup
+    from agent_backbone.services.database import BackboneDB
     from agent_backbone.services.github import GitHubClient
     from agent_backbone.services.integrations import build_integrations
     from agent_backbone.services.sources import build_sources
@@ -356,7 +356,9 @@ async def lifespan(app: FastAPI):
 
     boot: BackboneConfig = getattr(app.state, "config", None) or bootstrap_config()
     data_dir = boot.data_dir
-    await check_profile_startup(boot.database_url, data_dir)
+    provider = getattr(app.state, "profile_provider", None)
+    if provider is not None:
+        await provider.check()
     data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     data_dir.chmod(0o700)
     app.state.config = boot
@@ -504,6 +506,22 @@ def create_app(config: BackboneConfig | None = None):
     app.add_middleware(SignedSenderMiddleware)
     app.add_middleware(ProfileBindingMiddleware)
     app.add_api_route("/api/profile", profile_identity, methods=["GET"])
+    from agent_backbone.api.auth import require_operator
+    from agent_backbone.api.profile_sessions import account_status, ensure_shell, sign_in
+
+    for path, handler in (("shells", ensure_shell), ("accounts/sign-in", sign_in)):
+        app.add_api_route(
+            f"/api/profile/{path}",
+            handler,
+            methods=["POST"],
+            dependencies=[Depends(require_operator)],
+        )
+    app.add_api_route(
+        "/api/profile/accounts/status",
+        account_status,
+        methods=["GET"],
+        dependencies=[Depends(require_operator)],
+    )
 
     cors_origins = list(config.backbone.cors_origins)
     if cors_origins:

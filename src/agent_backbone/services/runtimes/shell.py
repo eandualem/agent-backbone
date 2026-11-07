@@ -18,6 +18,7 @@ class Shell(Runtime):
         return {}
 
     id = "shell"
+    runs_in_profiles = True
     display_name = "Plain shell"
     binary = None
     authentication = "not_applicable"

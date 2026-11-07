@@ -124,3 +124,4 @@ source = ["agent_backbone"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = ["real_profile_check: the direct CLI's profile refusal runs for real"]

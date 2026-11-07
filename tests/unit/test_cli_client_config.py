@@ -263,3 +263,17 @@ async def test_invalid_diagnostic_policy_does_not_discard_stored_address(
     assert client.backbone.port == 8345 and client.backbone.host == "127.0.0.2"
     assert client.settings["diagnostics.mode"] == "off"
     assert db_path.read_bytes() == before
+
+
+def test_a_profile_shell_sends_its_binding(tmp_path, monkeypatch):
+    from agent_backbone.cli._common import headers
+
+    config = build_config(tmp_path, settings={}, agents=AgentsConfig())
+    assert "X-Backbone-Profile-Id" not in headers(config)
+    monkeypatch.setenv("BACKBONE_PROFILE_ID", "p")
+    monkeypatch.setenv("BACKBONE_INSTALLATION_ID", "i")
+    monkeypatch.setenv("BACKBONE_LIFECYCLE_ID", "l")
+    sent = headers(config)
+    assert sent["X-Backbone-Profile-Id"] == "p"
+    assert sent["X-Backbone-Installation-Id"] == "i"
+    assert sent["X-Backbone-Lifecycle-Id"] == "l"

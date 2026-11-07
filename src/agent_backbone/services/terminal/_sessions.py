@@ -319,10 +319,10 @@ async def list_sessions(*, strict: bool = False) -> list[str]:
         "list-sessions", "-F", "#{session_name}", capture_stdout=True
     )
     if rc != 0:
-        if strict:
-            raise RuntimeError(
-                f"tmux session query failed: {stderr.decode(errors='replace').strip()}"
-            )
+        text = stderr.decode(errors="replace").strip()
+        # No server yet is what a profile without sessions has: empty, not unavailable.
+        if strict and "no server running" not in text and "No such file or directory" not in text:
+            raise RuntimeError(f"tmux session query failed: {text}")
         return []
     return [s.strip() for s in stdout.decode().splitlines() if s.strip()]
 

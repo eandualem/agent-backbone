@@ -603,3 +603,20 @@ async def test_current_plan_and_feedback_preserve_enrolled_author_signature(
     with patch("agent_backbone.api.routes.current_plans.deliver_now", AsyncMock()):
         accepted = await api_client.post(path, headers={**auth_headers, **signed}, content=raw)
     assert accepted.status_code == 200 and accepted.json()["delivery"]["queued"]
+
+
+async def test_the_operator_document_author_cannot_be_enrolled(api_client, auth_headers):
+    response = await api_client.post(
+        "/api/signing/transitions",
+        headers=auth_headers,
+        json={
+            "sender": "Operator",
+            "action": "set",
+            "expected_epoch": 0,
+            "new_public_key": "key",
+            "request_id": "11111111-1111-4111-8111-111111111111",
+            "proof": None,
+        },
+    )
+    assert response.status_code == 422
+    assert "reserved" in response.text

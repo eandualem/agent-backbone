@@ -186,12 +186,12 @@ failures. `doctor` resolves `CODEX_HOME`,
 running backbone uses its own environment, which can differ when it runs as a
 login service.
 
-## `backbone up [--detach] [--reload]` · `backbone down`
+## `backbone up [--detach]` · `backbone down`
 
 Runs the backbone: API, Socket.IO, background jobs, Telegram bot, GitHub
 intake — one process. `--detach` runs it inside a tmux session
-(`backbone.session_name`); `down` stops it gracefully. `--reload` restarts
-on code changes (development).
+(`backbone.session_name`); `down` stops it gracefully. Both forms refuse with
+nothing created until `backbone init` or `backbone setup` has made the Default profile.
 
 `backbone up --detach` is manual: a tmux session ends with a reboot. To
 have the backbone start at login and restart if it dies, install the
@@ -295,6 +295,14 @@ coverage. Use the runtime's visible sign-in flow and the existing
 [capability contract](runtime-capabilities.md). Discovery does not launch a
 process, call a model, read account credentials or initialize an installation.
 Consumers accept additive response fields and check the major schema version.
+
+For an explicitly bound profile, use `--json --check-setup --profile ID
+--expected-installation-id ID --expected-lifecycle-id ID`. All three identity
+flags are required together. This operator-only variant resolves the external
+registry, verifies the provider identity, and returns a matching schema-2 catalog.
+The provider performs the probes; the requesting CLI never falls back to local
+discovery. A profile that is not ready, or whose provider is not running, cannot
+resolve a connection. See the [profile contract](profiles-contract.md).
 
 Each line also prints the reasoning-effort levels that runtime accepts —
 `low, medium, high, xhigh, max` for Claude Code, the same plus `ultra`
@@ -913,6 +921,9 @@ appends a revision; a stale base is refused. Use `create --schema`, and see
 
 ## `backbone profiles`
 
+`backbone profiles sign-in PROFILE_ID --runtime claude|codex|opencode` runs that CLI's
+own sign-in inside a running profile and attaches you to it.
+
 From a local operator terminal, inspect profile reservations without starting a
 provider:
 
@@ -927,8 +938,8 @@ registry at `~/.local/share/agent-backbone-profiles/registry.db`, independently 
 credentials are refused. Local OS-user file access remains the authority boundary;
 clearing environment markers is not an OS isolation boundary (see
 [security](security.md)). An unavailable registry or unknown profile exits nonzero with an
-error on stderr; listing never initializes or repairs it. Current reservations
-are non-ready (`creating` or `failed`) and have no usable binding. Provisioning
+error on stderr; listing never initializes or repairs it. A reservation that is
+`creating` or `failed` has no usable binding; a `ready` one does. Provisioning
 state does not report whether a daemon is running.
 
 Lifecycle requests use the same local operator boundary:
@@ -945,10 +956,18 @@ the original receipt; different input under the same ID returns `request_conflic
 An unknown request returns the lookup error `operation_not_found`, not a fabricated
 operation receipt. Omit `--json` for labeled details.
 
-Successful create/start/stop, Default adoption and ready activation remain
-unimplemented. Apply returns durable refusal receipts: `baseline_unavailable` for
-create, `adoption_unavailable` for adoption, `profile_not_ready` for an exact creating
-reservation, or `binding_mismatch` for an unknown, stale or invalidated tuple.
+A create request naming the `core-v1` baseline reserves new identities, a private
+directory and a loopback port, sets up the database, fresh credential and the starter
+policies and skills a fresh install gets, and publishes a ready record. With
+`"git_identity": "copy"` it also copies your global Git `user.name` and `user.email`,
+and nothing else, into the profile's home; the default `"none"` copies nothing. Start launches that profile's provider unless its exact identity is already
+answering; stop signals only the process behind that verified endpoint. Apply returns durable
+refusal receipts: `baseline_unavailable` for
+any other baseline, `profile_create_failed` or `profile_path_too_long` when creation
+cannot finish, `git_identity_unavailable` when copy finds no name or email, `service_start_failed` or `service_stop_failed` when a provider does not
+start or stop in time, `profile_not_ready` for an
+exact tuple that is still being created, or `binding_mismatch` for an unknown, stale or
+invalidated tuple.
 Pending work on the same profile or installation returns `operation_busy`.
 Errors exit nonzero. Replay of a pending request never repeats unknown effects;
 explicit reconciliation is still required after interruption. See the

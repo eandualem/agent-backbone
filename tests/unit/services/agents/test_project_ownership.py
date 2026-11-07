@@ -29,6 +29,7 @@ from agent_backbone.services.database import (
 from agent_backbone.services.runtimes import RUNTIMES, _environment
 from agent_backbone.services.swarm.interface import create_swarm, teardown_swarm
 from agent_backbone.skills import manifest_path
+from tests.support import reserve_profile
 
 
 @pytest.fixture
@@ -44,7 +45,7 @@ async def owners(tmp_path, monkeypatch):
             db = await stack.enter_async_context(BackboneDB.connect(sqlite_url(root)))
             identity = ProfileIdentity(f"profile-{name}", await db.signing.audience(), "generation")
             await db.profile_identity.reserve(identity)
-            reservation = registry.reserve(ProfileReservation(identity, root, name, "v1"))
+            reservation = reserve_profile(registry, ProfileReservation(identity, root, name, "v1"))
             providers.append(
                 await reconcile_profile_provider(
                     registry, reservation, root / "backbone.db", root / "tmux/server.sock"

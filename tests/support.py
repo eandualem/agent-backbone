@@ -89,3 +89,15 @@ async def register_config_agents(db, config):
 
 async def registration_id(db, name):
     return next(row["report_identity"] for row in await db.agents.list() if row["name"] == name)
+
+
+def reserve_profile(registry, reservation):
+    """Reserve in one transaction, as profile creation does."""
+    with registry._connection(write=True) as conn:
+        return registry._reserve(conn, reservation)
+
+
+def publish_profile(registry, identity, data_dir, binding):
+    """Publish a reserved profile ready in one transaction, as profile creation does."""
+    with registry._connection(write=True) as conn:
+        return registry._publish(conn, identity, data_dir, binding)

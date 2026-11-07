@@ -146,6 +146,13 @@ terminal, which moves it with your own permissions. The API is
 `GET /api/skills`, `POST /api/skills`, `PUT /api/skills/{name}/tags` and
 `GET /api/skills/preview/{agent}`.
 
+An app adding a person's folder sends `"mode": "copy"` to `POST /api/skills`, with an
+operator credential. That takes any absolute folder and leaves it in place. It never
+follows a link: a symbolic link at the folder or inside it refuses the copy, as does a
+special file. Only directories and regular files come across, without special mode bits,
+and a `.git` directory is left behind. A folder over 2,000 entries, 50 MB or 16 levels
+deep is refused, as is one that overlaps the store.
+
 Validation happens before either directory moves. A failed or interrupted add
 restores the originals or reports where recovery data remains. If installation
 succeeds but removing the old backup fails, the add still succeeds and is

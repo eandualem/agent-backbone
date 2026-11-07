@@ -132,6 +132,13 @@ class Codex(Runtime):
             return super().account_args(action)
         return commands[action] + ["-c", 'cli_auth_credentials_store="file"']
 
+    def account_state(self, done):
+        if done.returncode == 0:
+            return "authenticated"
+        return (
+            "not_authenticated" if "Not logged in" in done.stdout + done.stderr else "unavailable"
+        )
+
     def env_args(self, env):
         if native_environment(self.id) is not None:
             return ["-c", 'cli_auth_credentials_store="file"']
@@ -143,6 +150,8 @@ class Codex(Runtime):
     native_files = ("codex/auth.json", "codex/config.toml", "codex/hooks.json")
 
     setup_hooks = True
+    runs_in_profiles = True
+    profile_sign_in = True
 
     supports_exact_resume = True
     id = "codex"

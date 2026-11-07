@@ -55,6 +55,9 @@ AGENT_TAG_PREFIX = "agent:"
 """``agent:NAME`` reaches exactly that agent, whatever its tags."""
 
 NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9]|-(?!-)){0,62}$")
+_COPY_MAX_ENTRIES = 2_000
+_COPY_MAX_BYTES = 50 * 1024 * 1024
+_COPY_MAX_DEPTH = 16
 """Spec skill names: lowercase, digits, single hyphens, no leading/trailing hyphen."""
 TAG_RE = re.compile(r"^[a-z0-9][a-z0-9:._-]{0,99}$")
 
@@ -330,6 +333,92 @@ def add_skill(
             parent_fd=parent_fd,
             source_fd=source_fd,
         )
+
+
+def copy_skill(
+    store: Path,
+    source: str,
+    *,
+    work_dir: Path,
+    name: str | None = None,
+    tags: tuple[str, ...] = (),
+    replace: bool = False,
+) -> Skill:
+    """Copy a skill from any absolute folder into the store; the source stays as it is.
+
+    Never follows a symbolic link: a link at the folder or anywhere inside it refuses
+    the copy, because following one could pull in files from outside the folder. Only
+    directories and regular files come across, without their special mode bits. A
+    `.git` directory is left behind, so the store's history stays its own.
+    """
+    origin = Path(source)
+    if not origin.is_absolute() or ".." in origin.parts or not origin.name:
+        raise ValueError("the skill folder must be an absolute path")
+    origin = origin.parent.resolve() / origin.name
+    store_root = Path(store).resolve()
+    if origin == store_root or store_root in origin.parents or origin in store_root.parents:
+        raise ValueError(f"{origin} overlaps the skills store")
+    with tempfile.TemporaryDirectory(prefix=".skill-copy-", dir=work_dir) as staging:
+        copied = Path(staging) / origin.name
+        try:
+            source_fd = os.open(origin, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError as exc:
+            raise ValueError(f"{origin} is not a folder (a link is not followed)") from exc
+        try:
+            _copy_tree(source_fd, copied, Path(), [0, 0])
+        finally:
+            os.close(source_fd)
+        if not (copied / "SKILL.md").is_file():
+            raise ValueError(f"{origin} is not a skill directory (no SKILL.md)")
+        return _add_skill(store, copied, name=name, tags=tags, replace=replace)
+
+
+def _copy_tree(directory_fd: int, target: Path, relative: Path, totals: list[int]) -> None:
+    if len(relative.parts) >= _COPY_MAX_DEPTH:
+        raise ValueError(f"the skill folder is nested too deeply at {relative}")
+    target.mkdir(mode=0o700)
+    with os.scandir(directory_fd) as entries:
+        items = sorted(entries, key=lambda entry: entry.name)
+    for entry in items:
+        if entry.name == ".git":
+            continue
+        path = relative / entry.name
+        totals[0] += 1
+        if totals[0] > _COPY_MAX_ENTRIES:
+            raise ValueError(f"the skill folder has more than {_COPY_MAX_ENTRIES} entries")
+        if entry.is_symlink():
+            raise ValueError(f"the skill folder contains a symbolic link: {path}")
+        if entry.is_dir(follow_symlinks=False):
+            child = os.open(
+                entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd
+            )
+            try:
+                _copy_tree(child, target / entry.name, path, totals)
+            finally:
+                os.close(child)
+        elif entry.is_file(follow_symlinks=False):
+            _copy_file(directory_fd, entry.name, target / entry.name, path, totals)
+        else:
+            raise ValueError(f"the skill folder contains a special file: {path}")
+    # The owner keeps full access so the store can later replace or remove it.
+    target.chmod(stat.S_IMODE(os.fstat(directory_fd).st_mode) & 0o777 | 0o700)
+
+
+def _copy_file(directory_fd: int, name: str, target: Path, path: Path, totals: list[int]) -> None:
+    # O_NONBLOCK: a file swapped for a FIFO after the scan must not hang the request.
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+    with os.fdopen(descriptor, "rb") as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"the skill folder contains a special file: {path}")
+        mode = stat.S_IMODE(info.st_mode) & 0o777 | 0o600
+        with open(target, "xb") as copy:
+            while chunk := source.read(1 << 20):
+                totals[1] += len(chunk)
+                if totals[1] > _COPY_MAX_BYTES:
+                    raise ValueError(f"the skill folder exceeds {_COPY_MAX_BYTES} bytes")
+                copy.write(chunk)
+    target.chmod(mode)
 
 
 def _add_skill(

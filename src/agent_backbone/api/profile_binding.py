@@ -8,7 +8,7 @@ from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 
 from agent_backbone.api.auth import require_api_key
-from agent_backbone.config import BackboneConfig
+from agent_backbone.config import BackboneConfig, agent_credential
 from agent_backbone.services.database import BackboneDB, ProfileProvider
 from agent_backbone.services.terminal import tmux_server_socket
 
@@ -56,7 +56,10 @@ async def binding_error(provider: ProfileProvider | None, values: dict, app) -> 
     if provider is None:
         return BINDING_MISMATCH if values else None
     if not values:
-        return BINDING_REQUIRED
+        # Unbound local clients belong only to the Default profile.
+        if provider.reservation.kind != "legacy_default":
+            return BINDING_REQUIRED
+        return None if await provider_current(provider, app) else BINDING_MISMATCH
     identity = provider.reservation.identity
     if values != {field: getattr(identity, field) for field in PROFILE_FIELDS}:
         return BINDING_MISMATCH
@@ -103,6 +106,11 @@ class ProfileBindingMiddleware:
         if prefix and path.startswith(prefix + "/"):
             path = path[len(prefix) :]
         exempt = not values and (scope["method"], path) in UNBOUND_ROUTES
+        # An agent credential derives from this provider's key and authenticates
+        # nowhere else, so an agent's own CLI needs no identity headers.
+        agent = not values and agent_credential(
+            headers.get("authorization", "").removeprefix("Bearer ")
+        )
         if not exempt:
             try:
                 await require_api_key(Request(scope))
@@ -118,7 +126,7 @@ class ProfileBindingMiddleware:
                 return await JSONResponse({"detail": BINDING_MISMATCH}, status_code=409)(
                     scope, receive, send
                 )
-            if exempt:
+            if exempt or agent:
                 # Preserve the route's authentication. Hold its fence through the
                 # entire response, just as for authenticated bound content.
                 error = None if await provider_current(provider, scope["app"]) else BINDING_MISMATCH

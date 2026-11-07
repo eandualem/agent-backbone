@@ -5,67 +5,40 @@ A profile owns one provider, fleet, database, runtime account environment and
 integration configuration. Multiple workspaces can share that profile. Selecting
 another profile affects new work; it cannot retarget an existing request.
 
-**Implementation status:** this page and its fixtures define the agreed contract.
-Operator list/show discovery and refusal of unreconciled startup are implemented.
-Lifecycle apply/lookup commands retain requests and refusal receipts. Successful
-creation, start/stop, adoption and ready activation remain unimplemented. The identity
-endpoint and bound-request checks have an internal reconciliation context, but no
-production startup installs it yet; the contract below is not a procedure for
-activating profiles.
-Provider implementation is
-tracked in [#548](https://github.com/eandualem/agent-backbone/issues/548), with the
-consumer in [agent-interface#182](https://github.com/eandualem/agent-interface/issues/182).
-The agreed design revision is **2**; JSON `schema_version: 1` is the first wire
-version. Extension revision **1** adds Default adoption, setup schema 2 and
-registration-aware permission inspection without changing revision 2 identity or
-lifecycle rules. The apply journal accepts the adoption request shape but refuses it until original
-provider capture is available. Schema-2 first-agent HTTP handling now has an internal captured-provider path,
-including cancellation and per-effect checks. No production startup installs that
-context, and the schema-2 CLI resolver, runtime catalog and permission-context
-inspection remain unimplemented.
-There is no earlier released profile protocol.
+**Implementation status:** every installation runs as a profile. `backbone init` and
+`backbone setup` create Default, and `backbone up` refuses to run without one. Isolated
+profiles can be created, started and stopped, and agents run inside them on Claude Code,
+Codex and OpenCode. Bound discovery, identity, sessions, CLI sign-in and setup schema 2
+are implemented. Not done yet: recovery of interrupted operations, replacement and
+restore fencing, integration account proof and permission-context inspection.
+Provider implementation is tracked in
+[#548](https://github.com/eandualem/agent-backbone/issues/548), with the consumer in
+[agent-interface#182](https://github.com/eandualem/agent-interface/issues/182).
+The agreed design revision is **2**; JSON `schema_version: 1` is the first wire version.
+Extension revision **1** adds setup schema 2 and registration-aware permission inspection
+without changing revision 2 identity or lifecycle rules. There is no earlier released
+profile protocol.
 
-Provider-local identity persistence is implemented as an internal database
-reservation. It stores the profile and lifecycle IDs against the existing signing
-audience, accepts an identical replay and refuses conflicting assignments. Reading
-an unreserved database creates no identity. Startup checks for this identity before
-creating directories, initializing or migrating the database, or starting agents,
-hooks, integrations or jobs. Direct CLI database fallback, `init` and setup
-initialization apply the same guard before writing credentials or receipts.
-Any identity record is refused because activation is not implemented. Directory
-ownership is checked separately against the external registry. This does not adopt
-Default, enable bound clients or grant legacy compatibility. Ready activation and
-replacement fencing remain unimplemented; a copied database is not evidence of a
-valid active lifecycle.
+Each provider's database stores its profile and lifecycle IDs against the signing
+audience. A replay with identical values is accepted and a conflicting one refused. Before
+creating directories, migrating or starting anything, startup checks that identity and the
+directory against the external registry. A database holding an identity that the registry
+does not explain never starts. A copied database is not evidence of a valid lifecycle.
 
-An internal, separately initialized SQLite registry now reserves isolated-profile
-identity and canonical data-directory ownership outside the provider data tree.
-Its read-only discovery snapshots match the non-ready list/show shapes below;
-they do not initialize or repair a missing registry. Conflicting identities,
-overlapping directories and changed replay input are refused. Directory ownership
-also refuses case and Unicode-normalization aliases, including on case-sensitive
-filesystems. Invalidated
-reservations remain as failed records across provider database restoration and
-cannot be revived by replay. This is a startup reconciliation guard, not
-running-service/job fencing. It cannot publish `ready`, adopt Default or activate
-a replacement. The full lifecycle and runtime account boundary remain unfinished.
+The registry is a separate SQLite file outside every provider's data tree. It reserves
+each profile's identity and canonical data directory. Conflicting identities, overlapping
+directories and changed replay input are refused. Directory ownership also refuses case
+and Unicode-normalization aliases, including on case-sensitive filesystems. Invalidated
+reservations remain as failed records across a database restore and cannot be revived by
+replay. These checks run at startup and on each bound request; they do not stop a
+same-user process from changing files.
 
-The terminal service has an internal process-level socket pin for the future
-profile startup path. It must be selected before terminal use; subsequent changes
-are refused. Commands, interactive attachment and browser PTY attachment use that
-explicit socket, regardless of inherited tmux selection. Attaching from a client
-on another server requires a separate terminal. Legacy processes retain their
-existing environment behavior. No profile startup or selection command enables
-this pin yet; it does not establish runtime account isolation or provider readiness.
+A provider pins its tmux server before any terminal use, and later changes are refused.
+Commands, interactive attachment and browser PTY attachment use that socket, regardless of
+the inherited tmux selection. Attaching from a client on another server requires a separate
+terminal.
 
-Internal read-only reconciliation captures the external reservation, local
-SQLite identity, baseline and explicit terminal socket. It refuses changed
-ownership, identity, signing audience, baseline or noncanonical paths without
-creating or repairing storage. It leaves discovery non-ready and does not lift
-the startup refusal. External databases and Default adoption are not supported
-by this isolated-provider prerequisite.
-
-With that context installed by a future activation path, authenticated
+On a running provider, authenticated
 `GET /api/profile` returns the agreed identity response. HTTP content operations
 compare the complete tuple, the actual serving database and data directory,
 persisted metadata and process terminal pin before route handling. This internal
@@ -122,7 +95,7 @@ request body and full identity, namespaces receipts by that tuple and request ID
 and validates provider and native ownership before effects and after deferred
 probes. Cancellation shares the original normalized receipt and prevents a delayed
 original request, including when no native environment is available. Schema-1 setup
-cannot execute against an internally bound provider. Client cancellation does not cancel setup
+cannot execute against an isolated provider; Default accepts it. Client cancellation does not cancel setup
 workers, and cancellation of the owned batch waits for its executor functions to
 exit before releasing the reservation. Shutdown closes admission and drains these API tasks, including every
 setup worker, before stopping integrations or storage; cancelling the shutdown
@@ -148,8 +121,8 @@ history writes retain their own captured provider guard through transaction
 cleanup, including after a snapshot times out or is cancelled. They recheck the
 feed's database, configuration and terminal context before writing; a retired or
 mismatched context cannot record history.
-Complete replacement/restore fencing, ready publication
-and runtime/integration isolation remain required before activation is exposed.
+Replacement and restore fencing and integration isolation are not done yet
+(#574, #576).
 The legacy identity endpoint authenticates and then returns 404.
 
 Registry initialization publishes a complete private database without replacing
@@ -169,20 +142,17 @@ that write or
 substitute an empty registry. Reconciliation and mutation callers must preserve
 the original identity and directory through recovery.
 
-The unadopted provider currently rejects profile-bound clients: any profile
-identity header or Socket.IO identity field returns `binding_mismatch`, including
-partial or empty bindings. Existing ingress limits and credential/registration
-failures run first. This preliminary guard then refuses HTTP requests before
-route-specific permission or signature checks, and sockets before subscriptions.
-Unbound clients retain all existing checks and behavior. The guard prevents a bound
-operation from silently reaching a legacy provider; it cannot attest an identity
-and does not implement the bound-provider contract below, adoption, discovery or
-isolation.
+An application started without a profile context, such as a custom ASGI runner, rejects
+profile-bound clients: any profile identity header or Socket.IO identity field returns
+`binding_mismatch`, including partial or empty bindings. Existing ingress limits and
+credential/registration failures run first. The guard then refuses HTTP requests before
+route-specific permission or signature checks, and sockets before subscriptions. It keeps
+a bound operation from silently reaching a provider that cannot attest its identity.
 
 [Shared fixtures](contracts/profiles-v1.json) contain discovery records, identity,
 HTTP headers, Socket.IO identity/error fields, lifecycle requests/receipts,
 unknown-operation lookup, binding cases and extension examples described below. All identifiers and paths are synthetic.
-`baseline-example-v1` is a fixture value, not an available baseline. The file's top-level groups and binding cases
+`baseline-example-v1` is a fixture value, not an available baseline; `core-v1` is the shipped one. The file's top-level groups and binding cases
 are a test container, not a new API response. Consumers can pin this file to a
 commit and run its cases against their own implementation.
 
@@ -240,8 +210,10 @@ An unsupported schema or older provider's 404 is an explicit compatibility failu
 `backbone profiles list --json` and `backbone profiles show PROFILE_ID --json` are
 local operator control-plane operations, separate from any provider's content API.
 Agent-facing tools cannot use them as a gateway to discover sibling fleets.
-Listing is read-only: it does not adopt, start, migrate or repair providers. An
-unavailable registry is an error, not an empty successful list.
+Listing is read-only: it does not start, migrate or repair providers. An
+unavailable registry is an error, not an empty successful list. With `--json`, list,
+show and operation report it on stdout with exit status 1: `registry_absent` before
+any profile exists, `registry_unavailable` for anything else.
 
 Run these commands from a local operator terminal. Recognized managed-agent
 environment markers and agent credentials are refused before registry access.
@@ -254,29 +226,18 @@ The commands read
 `~/.local/share/agent-backbone-profiles/registry.db`, outside provider data trees;
 `BACKBONE_DATA_DIR` does not select the control-plane registry. No provider secret,
 configuration, API or database is loaded. Human output labels provisioning state;
-`--json` returns the exact list/show shape. The current registry supports only
-`creating` and `failed` records, with null bindings. A missing registry returns a nonzero exit and an error on stderr. Lifecycle
+`--json` returns the exact list/show shape. Lifecycle
 `apply` explicitly initializes or upgrades the external registry; discovery and
 `operation` lookup never initialize or recover it.
 
-Before opening mutable storage, both daemon startup and direct CLI fallback check
-that the canonical provider directory and configured SQLite database path
-do not overlap any reservation, including failed reservations. This prevents a
-pre-identity database restore from starting as legacy in a reserved tree. Missing
-registries preserve ordinary unadopted startup; existing but unreadable or invalid
-registries block it because directory ownership cannot be checked. Startup never
-creates or repairs the registry. A reserved database cannot start as legacy from
-another directory. This check does not fence an already running provider or
-establish account isolation.
+The CLI opens a database directly only for the Default profile at that directory, and only
+when no provider answers. With no profile it refuses and creates nothing. `init` and
+`setup` (`initialize`) are the exception, because they create Default: they first refuse a
+directory inside any reservation, including a failed one, and any directory other than an
+existing Default's. An unreadable or invalid registry blocks all of these, because
+ownership cannot be checked, and they never repair it. An isolated profile's database is
+opened only by its own provider.
 
-Ordinary legacy startup retains SQLite crash recovery: after confirming that
-neither location overlaps a reservation, a hot rollback journal may be recovered
-by reopening the existing database read-write and inspecting identity again.
-This does not create a database or migrate its schema. Other read errors never
-trigger writable fallback. Explicit read-only database URLs and existing-installation
-setup inspection stay read-only; a recovery requirement is an error. An unfinished
-fresh setup may recover its own local database only after validating the exact
-recorded request and unchanged credentials under the existing receipt lock.
 Registry discovery and reservation checks never recover journals implicitly.
 
 List returns `schema_version` and `items`. Each item has `profile_id`,
@@ -284,7 +245,9 @@ List returns `schema_version` and `items`. Each item has `profile_id`,
 Provisioning `state` is `creating`, `ready` or `failed`; it does not say whether
 the daemon is running.
 
-Show returns an atomic record with those fields, `schema_version` and `binding`.
+Show returns an atomic record with those fields, `schema_version`, `binding` and
+`git_identity`, which is `copied` when creation copied the person's Git identity and
+otherwise `none` (always `none` for Default, which uses the person's own Git config).
 A ready binding contains installation and lifecycle identity, a Unix endpoint,
 a private dotenv credential reference and an explicit tmux socket. A non-ready
 record has `binding: null` and cannot be selected for content. The record remains
@@ -300,6 +263,55 @@ environment overlays or credential bytes appear in discovery JSON.
 The provider owns runtime environments, path permissions and service identities.
 The client retains existing tmux server/pane/window checks: a socket path alone
 does not establish that a terminal survived server replacement.
+
+## Open terminal sessions
+
+`POST /api/profile/shells` ensures a shell on the profile's private tmux server for a
+bound operator: `{"schema_version":1,"shell_id":"<12 lowercase hex>","cwd":<absolute
+path or null>}`. A null `cwd` starts in the profile's own HOME. The response names the
+session. The same `shell_id` always means the same session: a live one is returned
+unchanged with `created: false` and its `cwd` ignored, and it is never killed or
+respawned. A bad directory returns `invalid_cwd`, a terminal failure
+`shell_unavailable`. The session gets only the locale and search path from the host,
+with its roots inside the profile. It also gets the profile's data directory, port and
+identity (`BACKBONE_DATA_DIR`, `BACKBONE_PORT`, `BACKBONE_PROFILE_ID`,
+`BACKBONE_INSTALLATION_ID`, `BACKBONE_LIFECYCLE_ID`), so the `backbone` CLI in that shell
+reaches this provider. None of these is a secret, and no credential is passed.
+
+`POST /api/profile/accounts/sign-in` with `{"schema_version":1,"runtime":"codex"}` runs
+that CLI's own sign-in in a session on the same server, using that runtime's private
+environment in this profile. All CLIs in a profile share one HOME, and each keeps its
+own store inside it. Attach to the returned session to complete it. Claude Code,
+Codex and OpenCode are supported. Backbone never sees the credentials; the CLI stores
+them in its own files inside the profile. On macOS, a CLI that saves its sign-in in the
+keychain (Claude Code, and also git and gh) uses the profile's own keychain,
+`keychain/profile.keychain-db` in the profile directory. The profile creates it on its
+first start, makes it the default keychain of the profile's home, and unlocks it
+at each start with a password kept in the profile's `.env`. The person's own keychain is
+not used. A repeat request while that session is live
+returns it unchanged with `created: false`. The session ends when the CLI succeeds. When the CLI
+fails it stays open until someone presses Enter, so the failure can be read. After the
+session ends, a repeat starts a new
+one. `runtime_unavailable` refuses another runtime or one that is not installed. The
+`sessions` group in the shared fixtures has these bodies.
+
+These sessions are named `shell-<shell_id>` and `sign-in-<runtime>`. Agent names in
+those forms are reserved: starting, setting up, registering or renaming an agent refuses a
+name that starts with `sign-in-` or is `shell-` followed by 12 hex digits (any case).
+
+`GET /api/profile/accounts/status?runtime=codex` runs that one CLI's own status command in
+this profile's environment, with a 5-second limit, and returns
+`{"schema_version":1,"runtime":"codex","authentication":"authenticated"}`. It makes no
+model call and reads no credential itself. `authenticated` means the CLI reports a stored
+sign-in, which does not prove the account still works; `not_authenticated` means it
+reports signed out; `unavailable` means no usable result, such as a timeout. A sign-in
+session ending does not show that it worked, so read this after it ends. Read it when a
+setup screen opens and when a sign-in ends, and repeat it only for the CLI being signed in
+while that session is open: OpenCode starts a private local server for each read, and
+each CLI may update its own bookkeeping files. `runtime_unavailable` refuses as for
+sign-in, including on Default.
+`backbone profiles sign-in PROFILE_ID --runtime codex` opens and attaches the sign-in
+session from a terminal; it does not read the status, so use the status route after it ends.
 
 ## Keep work pinned
 
@@ -326,21 +338,45 @@ before initializing the external registry, reserves its exact normalized input a
 returns the original receipt on replay. Changed input returns `request_conflict`
 without replacing the original record. A pending operation prevents another
 start/stop request for that profile; the conflicting request retains a failed
-`operation_busy` receipt. Pending adoption and lifecycle requests also serialize by
+`operation_busy` receipt. Pending lifecycle requests also serialize by
 installation identity. An interrupted pending operation stays pending across
 reopen and exact replay, without repeating effects or automatically releasing its
 reservation. Its outcome needs explicit reconciliation.
 
-Execution is still unavailable: create returns `baseline_unavailable`, adoption
-returns `adoption_unavailable`, and start/stop return `profile_not_ready` for an
-exact `creating` reservation or `binding_mismatch` for a stale, invalidated or
-unknown tuple. A `failed` reservation is a permanent invalidation tombstone, not
+Create with the `core-v1` baseline, the one shipped version, has effects. It
+allocates the profile, installation and lifecycle IDs and a loopback port once,
+together with the reservation; creates a private directory beside the registry; writes
+a generated `BACKBONE_API_KEY`; installs the starter policies and skills a fresh
+install gets; initializes a database holding the identity and those assignments;
+reconciles them; and publishes `ready` in the transaction that completes the receipt.
+It copies nothing from Default. The optional `git_identity` field is `none` (the
+default) or `copy`: copy reads only `user.name` and `user.email` from the person's own
+global Git config and writes them to `.gitconfig` in the profile's home. Credentials,
+helpers, SSH keys and GitHub CLI sign-ins are never copied. When either value is unset,
+`git_identity_unavailable` refuses before reserving anything. An interruption stays
+pending and non-ready. A failure that
+Create can observe leaves a `failed` tombstone with `profile_create_failed` and
+retains the directory. `profile_path_too_long` refuses, before reserving anything,
+a location whose socket paths would not fit the Unix limit.
+
+Start launches the provider detached, unless that exact identity already answers, and
+succeeds once the authenticated identity check passes. Stop verifies the same identity,
+then signals only the process the kernel reports behind that endpoint, and succeeds
+once connections are refused. Nothing listening is already stopped. It never forces a
+process to exit. The profile's private tmux server and its sessions outlive the
+provider. `service_start_failed` and `service_stop_failed` report a provider that did
+not get there in time; another identity behind the endpoint is never signalled.
+
+Any other baseline returns `baseline_unavailable`, and
+start/stop return
+`profile_not_ready` for a reservation still being created or `binding_mismatch` for a
+stale, invalidated or unknown tuple. A `failed` reservation is a permanent invalidation tombstone, not
 a valid binding awaiting readiness.
 These are durable failed-operation receipts with nonzero exit status. Refusal
 classification and receipt storage commit atomically, so a failure before that commit
-does not leave a pending reservation. They do not
-create provider directories, start/stop services, adopt an installation or publish
-ready discovery. An unchanged failed request continues to return that failure;
+does not leave a pending reservation. Refusals do not create provider directories or
+start/stop services.
+An unchanged failed request continues to return that failure;
 new work after prerequisites change requires a new request ID. Receipts have no
 automatic expiry or pruning: the original outcome and changed-input conflict are
 retained without a replay window. Any future compaction or storage quota needs an
@@ -382,56 +418,65 @@ Hostile rollback of every same-user snapshot is outside this product boundary.
 
 ## Preserve legacy connections
 
-Unbound compatibility belongs only to the exact adopted profile, preserved
+Unbound compatibility belongs only to the exact Default profile, preserved
 installation identity and lifecycle. Display name, kind, path and creation order
 never grant it. Renaming that instance preserves eligibility; another profile
 named Default and a replacement instance do not inherit it.
 
-Before adoption, explicit legacy single-provider startup keeps its current
-behavior. It remains separate from standalone use without Backbone. A stored
-bound workspace never downgrades after a failed handshake. Existing setup schema 1
-stays legacy-only. The following extension defines adoption and bound setup; it
-does not silently convert saved schema-1 requests.
+A stored bound workspace never downgrades after a failed handshake. Existing setup
+schema 1 stays unbound. The following extension defines bound setup; it does not silently
+convert saved schema-1 requests.
 
-## Adopt Default explicitly
+## The Default profile
 
-`backbone profiles adoption-preview --json` is the agreed read-only operator
-preflight. It resolves the configured existing installation independently of the
-selected content profile. It never starts, stops, migrates, repairs or writes.
-Unsafe or ambiguous ownership refuses preview rather than choosing an instance.
-The `adoption.preview` fixture contains the existing installation ID, canonical
-data directory, tmux mapping, baseline and an opaque adoption token.
+`backbone init` and `backbone setup` (`initialize`) create the first profile, named
+Default. It is the installation at its data directory, in the person's own environment:
+their HOME, CLI sign-ins and default tmux server. Other profiles are isolated from it and
+from each other. Creating it again is safe and changes nothing, and only one data directory
+can be Default. `backbone up` serves it, and refuses when no profile exists.
 
-The token fingerprints canonical data/database locators, installation identity,
-credential locator and change evidence, effective service/tmux mapping and recorded
-runtime-environment semantics. It contains no credential bytes and grants no
-additional authority. The provider owns its computation; clients retain it unchanged.
-Submit `adoption.request` through `profiles apply`. The request accepts no arbitrary
-data directory, environment, credential source or account-copy input.
+Default serves its identity on both its port and its socket. It installs no captured
+runtime environments, so its agents use the person's CLI sign-ins; schema-2 setup and the
+bound runtime catalog report those runtimes unavailable there, and the app uses schema 1
+for Default. Start launches `backbone up` if nothing answers. Stop signals that process,
+and a service manager may start it again.
 
-Serialize adoption with lifecycle work on that installation. Validate the current
-token before adoption, including a new request for an already adopted instance.
-Changed metadata returns `adoption_changed`. An identical original request/body
-replays its durable receipt; a changed body under that ID conflicts. A new request
-for the same original instance returns the existing tuple, never a sibling identity.
-An identity-incompatible restore is not repeated adoption. The `adoption.cases`
-records describe these separate scenarios. `outcome` is `succeeded` or a refusal
-code; optional `expected_receipt` names the corresponding receipt fixture. These
-are case metadata, not wire fields. Changed-body reuse is a rejection, not a new
-operation or permission to overwrite the original receipt. Completed exact replay returns its recorded result;
-it performs no new adoption effects.
+A shell on Default is a login shell in the host environment, without the installation's
+secrets, and sign-in there refuses, because Default uses the person's own CLI sign-ins.
 
-Reserve the request before effects and allocate profile/lifecycle IDs once,
-preserving the installation ID. Back up touched metadata first and retain that
-receipt locally. Preserve credential bytes, native account roots, baseline edits,
-data and service/tmux mapping in place. Adoption does not restart a service,
-relocate storage or log in/out. Receipt identities may be null before reservation.
-Success means metadata reconciliation, not a verified accepting service. Fence old
-processes, jobs and streams before any replacement accepts bound traffic, then use
-explicit lifecycle operations and an authenticated handshake to establish access.
-Only the exact adopted tuple receives revision 2 legacy eligibility.
+Only the exact Default tuple receives revision 2 legacy eligibility.
 
 ## Set up an agent within a captured profile
+
+The local CLI admits an operator before reading the external registry or the
+selected credential. It captures one atomic ready record, reads its exact private
+dotenv reference without interpolation, and verifies the authenticated identity
+and terminal socket over that record's Unix endpoint. There is no ambient
+credential, proxy, redirect or legacy-provider fallback. Each invocation retains
+the original request bytes and resolved credential; it never refreshes or retries
+the transport automatically. A lost mutation result remains uncertain.
+
+After a successful handshake and before the first setup or cancellation POST, a
+private local receipt captures the normalized intent fingerprint, endpoint,
+credential reference and digest, and
+terminal socket. It lives beside the registry in its protected operations directory,
+outside provider data. It stores neither credential bytes nor the request's brief.
+Both actions share one tuple-and-request-ID receipt. Concurrent capture is serialized;
+changed intent returns `request_conflict`, and changed connection metadata returns
+`binding_mismatch`. Existing or corrupt receipts are never replaced to recapture
+an operation. An existing capture is checked before the handshake and again before
+the POST; a failed initial handshake does not pin a never-dispatched connection.
+Each profile has its own capture lock and capacity. Receipts do not expire; at the
+existing 1,024-receipt capacity per profile, new IDs are refused while recorded IDs
+remain usable. Capacity refusal explains that limit with `retry: "none"`; repeating
+or replacing a new ID cannot free space. The provider's execution and
+cancellation journal remains authoritative.
+
+A new CLI process is not permission to refresh a pending operation's connection.
+Digest-only continuity deliberately refuses a rotated credential, even if the
+original credential might still work. This is a conservative availability limit,
+not seamless recovery across rotation. A refusal proves neither cancellation nor
+absence of previous effects; retain the original request and inspect its provider.
 
 `backbone setup --file request.json --jsonl` accepts the agreed schema-2
 `setup.first_agent` shape. It replaces schema-1 `data_dir` authority with
@@ -454,7 +499,8 @@ including failures before an instance can be resolved. Events retain increasing
 identify the original action. Step events carry step/status; results retain the
 existing status/code/message/retry/completed_steps/data shape. `setup.progress`
 and `setup.result` illustrate one invocation; other results are independent cases
-with their own sequence. Ready means measured launch readiness, not proven login.
+with their own sequence. Ready means the CLI stayed running after launch, not that it
+reached its prompt or is signed in.
 
 Cancellation changes only the original action to `cancel_first_agent`, preserving
 ID, body and binding. Compare the saved body after normalizing that action back to
@@ -477,8 +523,18 @@ spawn. Discovery never logs in or calls a model. In the existing `authentication
 field, `not_authenticated` means an observed signed-out state; `unavailable` means
 no usable probe result and `unsupported` means no supported probe. Unknown discovery
 remains `unknown`; binary/version availability proves none of these authentication
-outcomes. `authentication_cases` shows field values, not full responses. Unsupported
+outcomes. The catalog runs no account status; use the account status route. `authentication_cases` shows field values, not full responses. Unsupported
 schema/flags leave discovery unavailable; never retry unbound.
+
+The bound CLI uses `GET /api/runtimes?schema_version=2&check_setup=true` after
+the identity handshake. This operator-only variant returns the schema-2 envelope;
+omitting `schema_version`, or passing `1`, retains the existing API list shape.
+The provider owns and drains the observation task through executor completion,
+rechecks its captured context before each probe and before publication, and
+retains the operation fence after client cancellation. A runtime without an owned
+native environment has unavailable setup observation, without a host probe.
+Adapters without isolated native support report unsupported authentication.
+Available binaries and compatible versions still leave authentication unknown.
 
 Bound setup also rechecks after registration/profile locks and database reads,
 before snapshot publication and credential provisioning, and after terminal
@@ -571,11 +627,10 @@ Missing files remain valid for an empty profile. These checks do not inspect
 credential-helper settings, machine policy or project configuration, and do not
 protect against concurrent writes by another process with the same OS identity.
 
-Reserved profiles still cannot start. Internal preparation captures a separate,
-immutable native environment and executable for each runtime before use. Trust
+A provider captures a separate, immutable native environment and executable for each runtime before use. Trust
 preparation, hooks, user-file readers, transcript and usage readers, version probes,
 and launch/resume commands use that capture. Native account invocations carry the
-same environment; no public account operation executes them yet. Per-agent overrides
+same environment, including CLI sign-in. Per-agent overrides
 cannot redirect native stores or select an inherited account/server. Complete tmux
 launch environments clear server-only variables and disable environment import on
 attach. Activation must own the pinned server and its global environment; these
@@ -586,11 +641,10 @@ process concurrently replacing files or path components.
 
 Claude Code, Codex and OpenCode have internal preparation tests; other model adapters
 refuse this preparation. Codex requests file credential storage, subject to native
-managed policy. OpenCode uses a private native server. These mechanisms are not
-account-isolation acceptance: real-account login/logout/refresh, native configuration
-and credential-helper constraints, project materialization conflicts, and lifecycle
-fencing remain prerequisites before activation. No shipped capability coverage or
-profile readiness is promoted by these internal tests.
+managed policy. OpenCode uses a private native server. Claude Code and Codex
+sign-ins were checked on the working installation, and a signed-in OpenCode result is
+not yet seen (#579); the adversarial acceptance list and lifecycle
+fencing are not done yet (#575, #574).
 
 Internal skill materialization can now claim the old and new checkout and their
 common Git directories in the external profile registry before removing links,
@@ -624,8 +678,7 @@ A manifest with a missing or non-list `links` field is retained for repair inste
 of discarding it and leaving its links behind.
 
 The same launch and materialization behavior tests run for Claude Code, Codex and
-OpenCode. Production startup does not install this context yet. Default adoption
-must reconcile existing materializations before installation. Native configuration
-contents, credential helpers, managed policy, database restore and in-flight operation
-fencing remain prerequisites before activation. Claims do not protect against a
-same-user process replacing files concurrently.
+OpenCode. Isolated providers take these claims; Default does not yet, so keep one checkout
+out of both Default and an isolated profile. Native configuration contents, credential
+helpers, managed policy, database restore and in-flight operation fencing are not covered.
+Claims do not protect against a same-user process replacing files concurrently.

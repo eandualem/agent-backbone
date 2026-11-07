@@ -1,5 +1,6 @@
 """A captured native context cannot drift to ambient or sibling account stores."""
 
+import json
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -50,7 +51,8 @@ def test_captured_environment_is_used_for_preparation_readers_and_accounts(
         assert "ANTHROPIC_API_KEY" not in environment
         assert "OPENCODE_SERVER" not in environment
     if runtime == "claude":
-        assert (a.root / "claude/.claude.json").is_file()
+        recorded = json.loads((a.root / "claude/.claude.json").read_text())
+        assert recorded["projects"][str(project.resolve())]["hasTrustDialogAccepted"] is True
         assert rt.hook_settings_path(None) == a.root / "claude/settings.json"
     if runtime == "codex":
         assert (a.root / "codex/config.toml").is_file()
@@ -268,3 +270,12 @@ def test_unavailable_native_store_is_a_bounded_refusal(tmp_path, monkeypatch, co
     for operation in (lambda: rt.account_invocation("status"), rt.installed_version):
         with pytest.raises(ValueError, match="^Native (store|path) is unavailable$"):
             operation()
+
+
+def test_an_uncaptured_runtime_is_unavailable_and_never_the_hosts(tmp_path):
+    captured = RUNTIMES["shell"].capture_environment(tmp_path / "shell")
+    captured.create_directories()
+    install_native_environments({"shell": captured})
+    for runtime in ("opencode", "gemini"):
+        assert RUNTIMES[runtime].resolve_binary() is None
+        assert RUNTIMES[runtime].available() is False

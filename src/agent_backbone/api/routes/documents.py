@@ -8,11 +8,12 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
 
-from agent_backbone.api.auth import require_api_key
+from agent_backbone.api.auth import require_api_key, require_operator
 from agent_backbone.api.deps import get_db
 from agent_backbone.api.routes.conversations import versions
 from agent_backbone.models import DOCUMENT_METADATA_BYTES, DOCUMENT_WIRE_BYTES, PublishDocument
 from agent_backbone.services.database import (
+    OPERATOR_AUTHOR,
     BackboneDB,
     DocumentCapacity,
     DocumentConflict,
@@ -103,8 +104,13 @@ class DocumentPage(BaseModel):
 
 @router.post("", response_model=DocumentPublication, operation_id="publish_document")
 async def publish_document(
-    publication: PublishDocument, response: Response, db: BackboneDB = Depends(get_db)
+    publication: PublishDocument,
+    request: Request,
+    response: Response,
+    db: BackboneDB = Depends(get_db),
 ):
+    if publication.author == OPERATOR_AUTHOR:
+        await require_operator(request)
     try:
         record, created = await db.documents.publish(publication)
     except KeyError as exc:

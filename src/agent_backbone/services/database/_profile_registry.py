@@ -1,23 +1,38 @@
 """External profile reservations, independent of provider database restoration.
 
-This internal store has no activation operation. Discovery can only describe
-non-ready reservations; a successful guard check never authorizes serving work.
+Discovery describes what is recorded; a successful guard check never authorizes
+serving work.
 """
 
 from __future__ import annotations
 
 import fcntl
 import hashlib
+import json
 import os
+import socket
 import sqlite3
 import stat
 import tempfile
 import unicodedata
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
+
+PROFILE_PORTS = range(7121, 8121)
+SCHEMA_VERSION = 4
+"""Loopback ports for isolated providers; the default installation uses 7120."""
+
+
+def _port_is_free(port: int) -> bool:
+    with socket.socket() as probe:
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
 
 
 def _resolve(path: Path) -> Path:
@@ -36,12 +51,23 @@ def _resolve(path: Path) -> Path:
 
 
 @dataclass(frozen=True)
+class ProfileBinding:
+    """Provider-owned connection references; a ready record never holds a secret."""
+
+    endpoint: Path
+    credential: Path
+    tmux_socket: Path
+
+
+@dataclass(frozen=True)
 class ProfileReservation:
     identity: ProfileIdentity
     data_dir: Path
     display_name: str
     baseline_version: str
     state: str = "creating"
+    binding: ProfileBinding | None = None
+    kind: str = "isolated"
 
     def __post_init__(self) -> None:
         if not isinstance(self.identity, ProfileIdentity):
@@ -59,15 +85,32 @@ class ProfileReservation:
                 or any(ord(c) < 0x20 or ord(c) == 0x7F for c in value)
             ):
                 raise ValueError("Invalid profile reservation metadata")
-        if self.state not in {"creating", "failed"}:
+        if self.state not in {"creating", "ready", "failed"}:
             raise ValueError("Unsupported profile reservation state")
+        if (self.state == "ready") != (self.binding is not None):
+            raise ValueError("Only a ready profile has a connection binding")
 
     def summary(self) -> dict:
         return {
             "profile_id": self.identity.profile_id,
             "display_name": self.display_name,
-            "kind": "isolated",
+            "kind": self.kind,
             "state": self.state,
+        }
+
+    def discovery_binding(self) -> dict | None:
+        if self.binding is None:
+            return None
+        return {
+            "installation_id": self.identity.installation_id,
+            "lifecycle_id": self.identity.lifecycle_id,
+            "endpoint": {"kind": "unix", "path": str(self.binding.endpoint)},
+            "credential_reference": {
+                "kind": "dotenv",
+                "path": str(self.binding.credential),
+                "key": "BACKBONE_API_KEY",
+            },
+            "tmux": {"socket_path": str(self.binding.tmux_socket)},
         }
 
 
@@ -90,8 +133,6 @@ class ProfileRegistry:
         registry._check_parent()
         if registry.path.exists():
             registry._validate_for_write()
-            registry._initialize_project_claims()
-            registry._initialize_operations()
             return registry
         fd, temporary = tempfile.mkstemp(prefix=".registry-", dir=registry.path.parent)
         os.close(fd)
@@ -105,43 +146,11 @@ class ProfileRegistry:
                     "baseline_version TEXT NOT NULL, state TEXT NOT NULL "
                     "CHECK (state IN ('creating', 'failed')))"
                 )
-                conn.execute("PRAGMA user_version = 1")
-            # Publish only a complete database, without replacing a concurrent
-            # creator's file. A crash before publication leaves no partial target.
-            with suppress(FileExistsError):
-                os.link(temporary, registry.path)
-            parent = os.open(registry.path.parent, os.O_RDONLY)
-            try:
-                os.fsync(parent)
-            finally:
-                os.close(parent)
-        finally:
-            Path(temporary).unlink(missing_ok=True)
-        registry._validate_for_write()
-        registry._initialize_project_claims()
-        registry._initialize_operations()
-        return registry
-
-    def _validate_for_write(self) -> None:
-        # Explicit initialization/apply may recover an interrupted SQLite write.
-        # A read-only validation first would strand a hot rollback journal.
-        with self._connection(write=True) as conn:
-            self._records(conn)
-
-    def _initialize_project_claims(self) -> None:
-        """Explicitly upgrade reservations; discovery never changes the schema."""
-        with self._connection(write=True) as conn:
-            if conn.execute("PRAGMA user_version").fetchone()[0] == 1:
                 conn.execute(
                     "CREATE TABLE project_claims ("
                     "path TEXT PRIMARY KEY NOT NULL, profile_id TEXT NOT NULL, "
                     "installation_id TEXT NOT NULL, lifecycle_id TEXT NOT NULL)"
                 )
-                conn.execute("PRAGMA user_version = 2")
-
-    def _initialize_operations(self) -> None:
-        with self._connection(write=True) as conn:
-            if conn.execute("PRAGMA user_version").fetchone()[0] == 2:
                 conn.execute(
                     "CREATE TABLE lifecycle_operations ("
                     "request_id TEXT PRIMARY KEY NOT NULL, request_json TEXT NOT NULL, "
@@ -157,7 +166,36 @@ class ProfileRegistry:
                     "CREATE UNIQUE INDEX lifecycle_installation_pending "
                     "ON lifecycle_operations(installation_id) WHERE status = 'pending'"
                 )
-                conn.execute("PRAGMA user_version = 3")
+                conn.execute(
+                    "CREATE TABLE profile_bindings ("
+                    "profile_id TEXT PRIMARY KEY NOT NULL, endpoint TEXT NOT NULL, "
+                    "credential TEXT NOT NULL, tmux_socket TEXT NOT NULL)"
+                )
+                conn.execute("CREATE TABLE default_profiles (profile_id TEXT PRIMARY KEY NOT NULL)")
+                conn.execute(
+                    "CREATE TABLE profile_ports ("
+                    "port INTEGER PRIMARY KEY NOT NULL, profile_id TEXT UNIQUE NOT NULL)"
+                )
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            # Publish only a complete database, without replacing a concurrent
+            # creator's file. A crash before publication leaves no partial target.
+            with suppress(FileExistsError):
+                os.link(temporary, registry.path)
+            parent = os.open(registry.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(parent)
+            finally:
+                os.close(parent)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+        registry._validate_for_write()
+        return registry
+
+    def _validate_for_write(self) -> None:
+        # Explicit initialization/apply may recover an interrupted SQLite write.
+        # A read-only validation first would strand a hot rollback journal.
+        with self._connection(write=True) as conn:
+            self._records(conn)
 
     def _check_parent(self) -> None:
         info = self.path.parent.stat()
@@ -178,11 +216,8 @@ class ProfileRegistry:
                 conn.execute("PRAGMA synchronous = EXTRA")
                 conn.execute("PRAGMA fullfsync = ON")
             conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
-            if not initializing and conn.execute("PRAGMA user_version").fetchone()[0] not in {
-                1,
-                2,
-                3,
-            }:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if not initializing and version != SCHEMA_VERSION:
                 raise ValueError("Unsupported profile registry schema")
             yield conn
             if write:
@@ -195,14 +230,25 @@ class ProfileRegistry:
 
     def _records(self, conn) -> list[ProfileReservation]:
         records = []
+        default = {row["profile_id"] for row in conn.execute("SELECT * FROM default_profiles")}
+        bindings = {
+            row["profile_id"]: ProfileBinding(
+                Path(row["endpoint"]), Path(row["credential"]), Path(row["tmux_socket"])
+            )
+            for row in conn.execute("SELECT * FROM profile_bindings")
+        }
         for row in conn.execute("SELECT * FROM profiles ORDER BY profile_id"):
             try:
+                # A failed tombstone always wins over a previously published binding.
+                binding = bindings.get(row["profile_id"]) if row["state"] == "creating" else None
                 record = ProfileReservation(
                     ProfileIdentity(row["profile_id"], row["installation_id"], row["lifecycle_id"]),
                     Path(row["data_dir"]),
                     row["display_name"],
                     row["baseline_version"],
-                    row["state"],
+                    "ready" if binding else row["state"],
+                    binding,
+                    "legacy_default" if row["profile_id"] in default else "isolated",
                 )
             except (IndexError, TypeError) as exc:
                 raise ValueError("Invalid profile registry metadata") from exc
@@ -245,49 +291,37 @@ class ProfileRegistry:
     def _overlap(cls, first: Path, second: Path) -> bool:
         return cls._contains(first, second) or cls._contains(second, first)
 
-    def reserve(self, reservation: ProfileReservation) -> ProfileReservation:
-        """Reserve once, retaining failed tombstones and rejecting conflicting replay."""
+    def _reserve(self, conn, reservation: ProfileReservation) -> ProfileReservation:
         if reservation.state != "creating":
             raise ValueError("New profile reservations must be creating")
         self._external(reservation.data_dir)
         if self._overlap(reservation.data_dir, self._operation_directory):
             raise ValueError("Profile registry fence must be outside the provider data directory")
-        with self._connection(write=True) as conn:
-            records = self._records(conn)
-            for stored in records:
-                if stored.identity.profile_id == reservation.identity.profile_id:
-                    if (
-                        stored.identity != reservation.identity
-                        or stored.data_dir != reservation.data_dir
-                        or stored.display_name != reservation.display_name
-                        or stored.baseline_version != reservation.baseline_version
-                    ):
-                        raise ValueError("Profile reservation does not match")
-                    if stored.state == "failed":
-                        raise ValueError("Profile lifecycle has been invalidated")
-                    return stored
-                if (
-                    stored.identity.installation_id == reservation.identity.installation_id
-                    or self._overlap(stored.data_dir, reservation.data_dir)
-                ):
-                    raise ValueError("Profile reservation conflicts with an existing reservation")
-            if any(
-                self._project_overlap(reservation.data_dir, path)
-                for path, _ in self._project_claims(conn, records)
+        records = self._records(conn)
+        for stored in records:
+            if (
+                stored.identity.profile_id == reservation.identity.profile_id
+                or stored.identity.installation_id == reservation.identity.installation_id
+                or self._overlap(stored.data_dir, reservation.data_dir)
             ):
-                raise ValueError("Profile directory conflicts with an existing project claim")
-            conn.execute(
-                "INSERT INTO profiles VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    reservation.identity.profile_id,
-                    reservation.identity.installation_id,
-                    reservation.identity.lifecycle_id,
-                    str(reservation.data_dir),
-                    reservation.display_name,
-                    reservation.baseline_version,
-                    reservation.state,
-                ),
-            )
+                raise ValueError("Profile reservation conflicts with an existing reservation")
+        if any(
+            self._project_overlap(reservation.data_dir, path)
+            for path, _ in self._project_claims(conn, records)
+        ):
+            raise ValueError("Profile directory conflicts with an existing project claim")
+        conn.execute(
+            "INSERT INTO profiles VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                reservation.identity.profile_id,
+                reservation.identity.installation_id,
+                reservation.identity.lifecycle_id,
+                str(reservation.data_dir),
+                reservation.display_name,
+                reservation.baseline_version,
+                reservation.state,
+            ),
+        )
         return reservation
 
     def list(self) -> dict:
@@ -299,8 +333,61 @@ class ProfileRegistry:
         with self._connection() as conn:
             for record in self._records(conn):
                 if record.identity.profile_id == profile_id:
-                    return {"schema_version": 1, **record.summary(), "binding": None}
+                    return {
+                        "schema_version": 1,
+                        **record.summary(),
+                        "binding": record.discovery_binding(),
+                        "git_identity": self._git_identity(conn, record.identity),
+                    }
         raise ValueError("Profile reservation was not found")
+
+    @staticmethod
+    def _git_identity(conn, identity: ProfileIdentity) -> str:
+        """What creation copied, from its retained request; Default copies nothing."""
+        for (body,) in conn.execute(
+            "SELECT request_json FROM lifecycle_operations "
+            "WHERE installation_id = ? AND status = 'succeeded'",
+            (identity.installation_id,),
+        ):
+            request = json.loads(body)
+            if request.get("action") == "create":
+                return "copied" if request.get("git_identity") == "copy" else "none"
+        return "none"
+
+    def setup_connection_receipt(self, request: dict, connection: dict):
+        """Locate operator setup continuity outside every reserved provider tree."""
+        from agent_backbone.services.database._setup_receipts import ProfileSetupConnectionReceipt
+
+        root = self._operation_directory
+        with self._connection() as conn:
+            records = self._records(conn)
+            if any(self._overlap(record.data_dir, root) for record in records):
+                raise ValueError("Profile setup continuity overlaps provider storage")
+            if not any(
+                record.identity
+                == ProfileIdentity(
+                    request["profile_id"],
+                    request["expected_installation_id"],
+                    request["expected_lifecycle_id"],
+                )
+                and record.state != "failed"
+                for record in records
+            ):
+                raise ValueError("Profile setup identity does not match")
+        connections = root / "setup-connections"
+        profile = connections / hashlib.sha256(request["profile_id"].encode()).hexdigest()
+        for directory in (root, connections, profile):
+            if directory.resolve() != directory:
+                raise ValueError("Profile setup continuity path is not canonical")
+            directory.mkdir(mode=0o700, exist_ok=True)
+            info = directory.lstat()
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) & 0o077
+            ):
+                raise ValueError("Profile setup continuity must be private")
+        return ProfileSetupConnectionReceipt(profile, request, connection)
 
     def check_reservation(self, identity: ProfileIdentity, data_dir: Path) -> ProfileReservation:
         """Compare external identity/path ownership; does not establish readiness.
@@ -311,18 +398,63 @@ class ProfileRegistry:
         self._external(data_dir)
         with self._connection() as conn:
             record = self._matching(conn, identity, data_dir)
-            if record.state != "creating":
+            if record.state == "failed":
                 raise ValueError("Profile lifecycle has been invalidated")
             return record
 
-    def check_unadopted(self, data_dir: Path) -> None:
-        """Refuse legacy startup in any reserved tree, even without local identity.
+    def _allocate_port(self, conn, profile_id: str) -> int:
+        """Keep one loopback port per profile; a tombstone retains its port."""
+        used = {row["port"] for row in conn.execute("SELECT port FROM profile_ports")}
+        for port in PROFILE_PORTS:
+            if port not in used and _port_is_free(port):
+                conn.execute("INSERT INTO profile_ports VALUES (?, ?)", (port, profile_id))
+                return port
+        raise ValueError("No loopback port is available for a new profile")
 
-        An older restored database can predate identity reservation. Absence of
-        local metadata must not allow it to serve a reserved directory as legacy.
-        A missing registry is allowed only for this unadopted-provider check;
-        discovery still treats a missing registry as an error.
-        """
+    def default_reservation(self) -> ProfileReservation | None:
+        """The ready Default profile, if there is one."""
+        try:
+            self.path.lstat()
+        except FileNotFoundError:
+            return None
+        with self._connection() as conn:
+            for record in self._records(conn):
+                if record.kind == "legacy_default" and record.state == "ready":
+                    return record
+        return None
+
+    def _publish(self, conn, identity, data_dir, binding, *, own_tmux=False) -> ProfileReservation:
+        self._external(data_dir)
+        # The Default profile uses the person's own tmux server.
+        owned = (binding.endpoint, binding.credential)
+        for path in owned if own_tmux else (*owned, binding.tmux_socket):
+            if not path.is_absolute() or path == data_dir or not path.is_relative_to(data_dir):
+                raise ValueError("Profile binding is outside its reserved directory")
+        record = self._matching(conn, identity, data_dir)
+        if record.state == "failed":
+            raise ValueError("Profile lifecycle has been invalidated")
+        if record.state == "ready":
+            raise ValueError("Profile is already ready")
+        conn.execute(
+            "INSERT INTO profile_bindings VALUES (?, ?, ?, ?)",
+            (
+                identity.profile_id,
+                str(binding.endpoint),
+                str(binding.credential),
+                str(binding.tmux_socket),
+            ),
+        )
+        return replace(record, state="ready", binding=binding)
+
+    def ready_reservation(self, profile_id: str) -> ProfileReservation:
+        with self._connection() as conn:
+            for record in self._records(conn):
+                if record.identity.profile_id == profile_id and record.state == "ready":
+                    return record
+        raise ValueError("Profile is not ready")
+
+    def check_unreserved(self, data_dir: Path) -> None:
+        """Refuse a directory inside any reserved profile. No registry reserves nothing."""
         try:
             self.path.lstat()
         except FileNotFoundError:
@@ -349,11 +481,9 @@ class ProfileRegistry:
         if not resources:
             raise ValueError("Project resources must be existing directories")
         with self._connection(write=True) as conn:
-            if conn.execute("PRAGMA user_version").fetchone()[0] not in {2, 3}:
-                raise ValueError("Profile registry needs explicit project ownership initialization")
             records = self._records(conn)
             owner = self._matching(conn, identity, data_dir)
-            if owner.state != "creating":
+            if owner.state == "failed":
                 raise ValueError("Profile lifecycle has been invalidated")
             claims = self._project_claims(conn, records)
             owned = {path for path, claimant in claims if claimant == identity}
@@ -396,8 +526,6 @@ class ProfileRegistry:
             )
 
     def _project_claims(self, conn, records) -> list[tuple[Path, ProfileIdentity]]:
-        if conn.execute("PRAGMA user_version").fetchone()[0] == 1:
-            return []
         claims = []
         for row in conn.execute("SELECT * FROM project_claims"):
             try:

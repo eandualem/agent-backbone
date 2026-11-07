@@ -10,6 +10,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from starlette.responses import JSONResponse
 
 from agent_backbone.api.auth import require_operator
 from agent_backbone.api.deps import (
@@ -42,6 +43,7 @@ from agent_backbone.api.models import (
     UnsubscribeRequest,
     WatchRequest,
 )
+from agent_backbone.api.profile_binding import PROFILE_HEADERS
 from agent_backbone.api.session_updates import SessionFeed
 from agent_backbone.config import AgentSpec, BackboneConfig
 from agent_backbone.services.agents import (
@@ -146,7 +148,7 @@ async def list_agents(
 ):
     """Known agents (plus other live tmux sessions) with live state."""
     agents = await feed.snapshot()
-    if getattr(request.state, "profile_provider", None) is not None:
+    if any(header in request.headers for header in PROFILE_HEADERS):
         current = {row["name"]: row["report_identity"] for row in await db.agents.list()}
         if any(current.get(agent.name) != agent.registration_id for agent in agents):
             raise _registration_changed()
@@ -338,8 +340,17 @@ async def _runtime_setup_checks():
 
 
 @router.get("/runtimes", response_model=list[RuntimeInfo])
-async def list_runtimes(request: Request, check_setup: bool = False):
+async def list_runtimes(
+    request: Request, check_setup: bool = False, schema_version: int = Query(default=1, ge=1, le=2)
+):
     """Supported runtimes and whether their binary is installed."""
+    if schema_version == 2:
+        from agent_backbone.api.runtime_catalog import bound_catalog
+
+        await require_operator(request)
+        if not check_setup:
+            raise HTTPException(status_code=422, detail="Schema 2 requires check_setup=true")
+        return JSONResponse(await bound_catalog(request))
     checks = {}
     if check_setup:
         await require_operator(request)

@@ -840,3 +840,27 @@ async def test_start_guard_refuses_before_launch_file_after_terminal_reads(
         )
     create_file.assert_not_called()
     assert _sessions._run_tmux.await_count == (boundary == "environment_probe")
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [b"no server running on /tmp/s", b"error connecting to /tmp/s (No such file or directory)"],
+)
+async def test_strict_list_reads_no_server_as_no_sessions(stderr):
+    from unittest.mock import AsyncMock, patch
+
+    from agent_backbone.services.terminal import _sessions
+
+    with patch.object(_sessions, "_run_tmux", AsyncMock(return_value=(1, b"", stderr))):
+        assert await _sessions.list_sessions(strict=True) == []
+
+
+async def test_strict_list_still_reports_an_unavailable_server():
+    from unittest.mock import AsyncMock, patch
+
+    from agent_backbone.services.terminal import _sessions
+
+    denied = (1, b"", b"error connecting to /tmp/s (Operation not permitted)")
+    with patch.object(_sessions, "_run_tmux", AsyncMock(return_value=denied)):
+        with pytest.raises(RuntimeError, match="not permitted"):
+            await _sessions.list_sessions(strict=True)

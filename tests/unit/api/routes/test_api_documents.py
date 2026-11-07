@@ -6,6 +6,7 @@ import json
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from agent_backbone.config import agent_api_key
 from agent_backbone.models import DOCUMENT_HTML_BYTES, DOCUMENT_WIRE_BYTES
 from tests.report_support import author
 from tests.unit.api.routes.test_api_signing import NOW, SENDER, _enroll, _signed
@@ -132,3 +133,46 @@ async def test_signed_large_original_bytes_and_other_routes_stay_bounded(
     assert (
         await api_client.post("/api/messages", headers=auth_headers, content=b" " * 1_048_577)
     ).status_code == 413
+
+
+async def test_a_person_publishes_under_the_reserved_author(api_app, api_client, auth_headers):
+    first = await api_client.post("/api/documents", headers=auth_headers, json=body("operator"))
+    assert first.status_code == 201, first.text
+    record = first.json()["record"]
+    assert record["author_name"] == "operator" and record["agent_name"] is None
+    retry = await api_client.post("/api/documents", headers=auth_headers, json=body("operator"))
+    assert retry.status_code == 200 and retry.json()["record"]["id"] == record["id"]
+    correction = await api_client.post(
+        "/api/documents",
+        headers=auth_headers,
+        json=body("operator", key="second", supersedes_id=record["id"], html="fixed"),
+    )
+    assert correction.status_code == 201
+    assert correction.json()["record"]["document_id"] == record["document_id"]
+    page = await api_client.get(
+        f"/api/documents?author_id={record['author_id']}", headers=auth_headers
+    )
+    assert page.json()["items"][0]["author_name"] == "operator"
+    thread = await api_client.get(
+        f"/api/conversations/document/{record['document_id']}", headers=auth_headers
+    )
+    assert thread.status_code == 200, thread.text
+
+
+async def test_only_an_operator_credential_uses_the_reserved_author(
+    api_app, api_client, auth_headers
+):
+    agent = agent_api_key(auth_headers["Authorization"].removeprefix("Bearer "))
+    refused = await api_client.post(
+        "/api/documents", headers={"Authorization": f"Bearer {agent}"}, json=body("operator")
+    )
+    assert refused.status_code == 403
+    assert (await api_client.get("/api/documents", headers=auth_headers)).json()["items"] == []
+
+
+async def test_an_agent_named_operator_blocks_the_reserved_author(
+    api_app, api_client, auth_headers
+):
+    await author(api_app.state.db, "operator")
+    refused = await api_client.post("/api/documents", headers=auth_headers, json=body("operator"))
+    assert refused.status_code == 409

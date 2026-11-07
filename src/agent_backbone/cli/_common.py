@@ -42,11 +42,22 @@ def api_url(config: BackboneConfig, path: str) -> str:
     return f"{scheme}://{host}:{config.backbone.port}{path}"
 
 
+_PROFILE_SHELL_HEADERS = {
+    "BACKBONE_PROFILE_ID": "X-Backbone-Profile-Id",
+    "BACKBONE_INSTALLATION_ID": "X-Backbone-Installation-Id",
+    "BACKBONE_LIFECYCLE_ID": "X-Backbone-Lifecycle-Id",
+}
+
+
 def headers(config: BackboneConfig) -> dict[str, str]:
     result = {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
     if config.client_registration:
         result["X-Backbone-Client-Agent"] = config.client_agent
         result["X-Backbone-Client-Registration"] = config.client_registration
+    # Set only in a shell the profile's provider opened.
+    for variable, header in _PROFILE_SHELL_HEADERS.items():
+        if value := os.environ.get(variable):
+            result[header] = value
     return result
 
 
@@ -157,8 +168,9 @@ def is_agent_client(key: str) -> bool:
 class Direct:
     """Direct database access for when the backbone is not running."""
 
-    def __init__(self, config: BackboneConfig) -> None:
+    def __init__(self, config: BackboneConfig, *, bootstrap: bool = False) -> None:
         self._boot = config
+        self._bootstrap = bootstrap
         self.db = None
         self.store = None
         self.config = config
@@ -169,9 +181,9 @@ class Direct:
                 "Agent credentials require the running API; direct database fallback is disabled"
             )
         from agent_backbone.services.agents import AgentStore
-        from agent_backbone.services.database import BackboneDB, check_profile_startup
+        from agent_backbone.services.database import BackboneDB
 
-        await check_profile_startup(self._boot.database_url, self._boot.data_dir)
+        await self._check_profile()
         self.db = BackboneDB(self._boot.database_url)
         await self.db.start()
         self.store = AgentStore(self.db, self._boot.data_dir)
@@ -180,6 +192,38 @@ class Direct:
 
     async def __aexit__(self, *exc: Any) -> None:
         await self.db.stop()
+
+    async def _check_profile(self) -> None:
+        """Only `init` and setup, which create the first profile, run without one."""
+        from agent_backbone.config import sqlite_url
+        from agent_backbone.services.database import check_new_default, default_profile_at
+
+        if self._boot.database_url != sqlite_url(self._boot.data_dir):
+            raise ValueError("A profile uses its own SQLite database; unset BACKBONE_DATABASE_URL")
+        check = check_new_default if self._bootstrap else default_profile_at
+        await asyncio.to_thread(check, self._boot.data_dir)
+
+
+def pin_default_terminal() -> None:
+    """Local terminal commands use the tmux server Default recorded, not the caller's.
+
+    Agents run there whichever tmux server the command is typed in; an isolated
+    profile's shell is already on that profile's own server.
+    """
+    from agent_backbone.config import resolve_data_dir
+    from agent_backbone.services.database import default_profile_at
+    from agent_backbone.services.terminal import pin_tmux_server
+
+    if os.environ.get("BACKBONE_PROFILE_ID"):
+        return
+    try:
+        _, reservation = default_profile_at(resolve_data_dir())
+    except (ValueError, OSError):
+        return
+    socket = reservation.binding.tmux_socket
+    # tmux makes this directory itself unless a socket is named, and a restart clears /tmp.
+    socket.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    pin_tmux_server(socket)
 
 
 def print_json(data: Any) -> None:

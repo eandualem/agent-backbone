@@ -17,12 +17,21 @@ from agent_backbone.config import (
     build_config,
     effective_settings,
     load_secrets,
+    resolve_data_dir,
     session_secret_keys,
     validate_setting,
 )
 
 
 class TestDefaults:
+    def test_the_data_directory_is_canonical(self, monkeypatch, tmp_path):
+        real = tmp_path / "real"
+        real.mkdir()
+        (tmp_path / "link").symlink_to(real)
+        assert resolve_data_dir(tmp_path / "link") == real.resolve()
+        monkeypatch.chdir(tmp_path)
+        assert resolve_data_dir("real") == real.resolve()
+
     def test_bootstrap_is_generic(self, monkeypatch, tmp_path):
         for var in (
             "BACKBONE_API_KEY",

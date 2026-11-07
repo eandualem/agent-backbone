@@ -10,6 +10,7 @@ import pytest
 
 from agent_backbone.cli import build_parser, main, onboarding, service
 from agent_backbone.services.database import SetupReceipt, SetupReceiptError
+from tests.support import reserve_profile
 
 
 def payload(tmp_path, **changes):
@@ -71,7 +72,7 @@ def test_initialize_creates_editable_core_and_retry_preserves_user_edits(tmp_pat
     assert code == 0 and again["code"] == "initialized"
     assert policy.read_text() == "Owner's editable policy\n"
     assert (data / ".env").read_bytes() == before
-    assert result["completed_steps"] == ["preflight", "data", "starters"]
+    assert result["completed_steps"] == ["preflight", "data", "starters", "profile"]
     assert before.decode().strip().split("=", 1)[1] not in json.dumps(result)
     assert (
         before.decode().strip().split("=", 1)[1]
@@ -626,7 +627,7 @@ def test_setup_service_failure_keeps_retry_state_and_emits_diagnostics(
     code, result = invoke(tmp_path, capsys, body)
     assert code == 3 and result["code"] == "service_unavailable"
     assert result["retry"] == "same_request"
-    assert result["completed_steps"] == ["preflight", "data", "starters"]
+    assert result["completed_steps"] == ["preflight", "data", "starters", "profile"]
     assert "exit 1" in result["message"] and "journalctl --user" in result["message"]
     data = Path(body["data_dir"])
     credential = (data / ".env").read_bytes()
@@ -1034,7 +1035,6 @@ def test_init_and_onboarding_refuse_reservations_before_writes(
     tmp_path, capsys, existing, offline, monkeypatch
 ):
     from agent_backbone.config import PROFILE_REGISTRY_PATH
-    from agent_backbone.services import database
     from agent_backbone.services.database import (
         ProfileIdentity,
         ProfileRegistry,
@@ -1044,13 +1044,14 @@ def test_init_and_onboarding_refuse_reservations_before_writes(
     body = payload(tmp_path)
     directory = Path(body["data_dir"])
     registry = ProfileRegistry.create(Path(PROFILE_REGISTRY_PATH).expanduser())
-    registry.reserve(
+    reserve_profile(
+        registry,
         ProfileReservation(
             ProfileIdentity("profile-a", "installation-a", "lifecycle-a1"),
             directory,
             "Work",
             "baseline-v1",
-        )
+        ),
     )
     if existing:
         directory.mkdir()
@@ -1060,15 +1061,10 @@ def test_init_and_onboarding_refuse_reservations_before_writes(
             conn.execute("CREATE TABLE agents (name TEXT)")
     before = {p.name: p.read_bytes() for p in directory.iterdir()} if existing else None
     args = build_parser().parse_args(["init", "--data-dir", str(directory), "--force"])
-    with pytest.raises(ValueError, match="reserved profile"):
-        args.func(args)
-    capsys.readouterr()
-    preflight = AsyncMock(wraps=database.check_profile_startup)
-    monkeypatch.setattr(database, "check_profile_startup", preflight)
+    assert args.func(args) == 1
+    assert "reserved profile" in capsys.readouterr().out
     code, result = invoke(tmp_path, capsys, body)
     assert code == 3 and result["code"] == "installation_conflict"
-    preflight.assert_awaited_once()
-    assert preflight.await_args.args[1] == directory
     if existing:
         assert {p.name: p.read_bytes() for p in directory.iterdir()} == before
     else:

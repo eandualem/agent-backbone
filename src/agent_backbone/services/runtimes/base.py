@@ -31,6 +31,7 @@ from agent_backbone.hooks import install as hooks
 from agent_backbone.services.runtimes._environment import (
     NativeEnvironment,
     native_environment,
+    native_runtime_uncaptured,
 )
 from agent_backbone.services.runtimes._pane import (
     DIALOG_CURSOR_RE,
@@ -63,6 +64,8 @@ _FALLBACK_DIRS = (
     Path.home() / ".npm-global" / "bin",
 )
 
+ACCOUNT_STATUS_SECONDS = 5
+"""OpenCode starts a private server for its status: over 2 seconds on a first run."""
 # A version as a word of its own: ``v2.1.284`` is 2.1.284, never 1.284.
 _VERSION = re.compile(r"(?<![\w.])v?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?)(?![\w.-])")
 
@@ -397,12 +400,37 @@ class Runtime:
         """An internal native invocation, never an ambient account fallback.
 
         The lifecycle owner must check its identity fence before executing this.
-        No caller executes login/logout or exposes these commands yet.
+        Sign-in sessions run login and the account status route runs status; nothing runs logout.
         """
         captured = native_environment(self.id)
         if captured is None or captured.executable is None:
             raise ValueError("Native account action requires a captured environment")
         return [captured.executable, *self.account_args(action)], captured
+
+    def account_state(self, done: subprocess.CompletedProcess) -> str:
+        """Classify this CLI's own status result; anything unrecognized is unavailable."""
+        return "unavailable"
+
+    def observed_authentication(self) -> str:
+        """The CLI's own status in this profile. Shows a stored sign-in, not a working account."""
+        if self.authentication != "unknown":
+            return self.authentication
+        try:
+            command, environment = self.account_invocation("status")
+            done = subprocess.run(
+                command,
+                env=dict(environment),
+                cwd=environment["HOME"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=ACCOUNT_STATUS_SECONDS,
+                check=False,
+            )
+        except (ValueError, OSError, subprocess.SubprocessError):
+            return "unavailable"
+        return self.account_state(done)
 
     def native_environment_values(self, root: Path) -> dict[str, str]:
         """Adapter-owned store locations; unsupported adapters fail closed."""
@@ -449,6 +477,8 @@ class Runtime:
 
     def resolve_binary(self) -> str | None:
         """Find this runtime now, including any adapter-specific install location."""
+        if native_runtime_uncaptured(self.id):
+            return None  # Never the host's.
         if captured := native_environment(self.id):
             return captured.executable
         return resolve_command(self.binary) if self.binary else None
@@ -561,13 +591,13 @@ class Runtime:
         """How the backbone learns this runtime's state (for ``backbone runtimes``)."""
         return "hooks + terminal" if self.hook_script else "terminal"
 
-    def discovery(self) -> dict:
+    def discovery(self, *, bound_available: bool | None = None) -> dict:
         """Read-only onboarding metadata; no process launch, login or model call."""
         supported = self.unattended_args is not None
         return {
             "id": self.id,
             "display_name": self.display_name,
-            "available": self.available(),
+            "available": self.available() if bound_available is None else bound_available,
             "setup_supported": self.setup_hooks,
             "reports_state": self.reports_state,
             "models": list(self.models),
@@ -580,6 +610,29 @@ class Runtime:
             "authentication": self.authentication,
         }
 
+    def bound_discovery(self, environment: NativeEnvironment | None) -> dict:
+        """Observe only a provider-owned context; missing context never probes the host."""
+        if environment is None:
+            item = self.discovery(bound_available=False)
+            item["setup_supported"] = False
+            item["authentication"] = "unavailable" if self.setup_hooks else "unsupported"
+            item["setup_compatibility"] = {
+                "compatible": False,
+                "reason": "runtime_permission" if self.setup_hooks else "unsupported",
+                "message": "Runtime setup observation requires an owned native environment.",
+                "path": None,
+                "version": None,
+                "version_error": "unavailable",
+            }
+            return item
+        if native_environment(self.id) != environment:
+            raise ValueError("Native runtime context does not match")
+        item = self.discovery()
+        item["setup_compatibility"] = self.setup_compatibility()
+        if native_environment(self.id) != environment:
+            raise ValueError("Native runtime context does not match")
+        return item
+
     def hook_launch_args(
         self, data_dir: Path | str | None, state_dir: Path | str | None
     ) -> list[str]:
@@ -588,6 +641,12 @@ class Runtime:
 
     setup_hooks = False
     """Whether the finite installer can prepare isolated launch hooks."""
+
+    runs_in_profiles = False
+    """Whether agents of this runtime may run in an isolated profile."""
+
+    profile_sign_in = False
+    """Whether an isolated profile can run this CLI's own sign-in and status."""
 
     def setup_error(self) -> str | None:
         """Return a deterministic installer preflight refusal, before registration."""

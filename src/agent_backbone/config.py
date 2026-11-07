@@ -90,7 +90,6 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "usage.context_note_step_tokens": 100_000,
     "backbone.host": "127.0.0.1",
     "backbone.port": DEFAULT_PORT,
-    "backbone.socket_path": "",
     "backbone.session_name": "backbone",
     "backbone.cors_origins": [],
     "backbone.restart_on_upgrade": True,
@@ -167,9 +166,6 @@ SETTINGS_HELP: dict[str, str] = {
         "the CLI reaches a non-loopback host over https)"
     ),
     "backbone.port": "API port",
-    "backbone.socket_path": (
-        "Optional absolute Unix socket under the data directory; empty disables it"
-    ),
     "backbone.log_max_mb": (
         "Rotate the service log (`backbone up --log-file`) at this size in MB (0: never)"
     ),
@@ -651,7 +647,6 @@ class BackboneSection:
     data_dir: str = DEFAULT_DATA_DIR
     host: str = "127.0.0.1"
     port: int = DEFAULT_PORT
-    socket_path: str = ""
     session_name: str = "backbone"
     cors_origins: tuple[str, ...] = ()
     restart_on_upgrade: bool = True
@@ -917,11 +912,14 @@ class BackboneConfig:
 
 
 def resolve_data_dir(explicit: str | Path | None = None) -> Path:
-    """Data directory from an explicit value, ``BACKBONE_DATA_DIR``, or the default."""
+    """Data directory from an explicit value, ``BACKBONE_DATA_DIR``, or the default.
+
+    Always canonical: a profile records the resolved path and compares against it.
+    """
     raw = explicit or os.environ.get("BACKBONE_DATA_DIR")
     if not raw and os.environ.get("BACKBONE_AGENT") and os.environ.get("BACKBONE_STATE_DIR"):
         raw = Path(os.environ["BACKBONE_STATE_DIR"]).expanduser().parent
-    return Path(raw or DEFAULT_DATA_DIR).expanduser()
+    return Path(raw or DEFAULT_DATA_DIR).expanduser().resolve()
 
 
 def env_file_keys(env_path: Path | str) -> tuple[str, ...]:
@@ -1168,7 +1166,6 @@ def build_config(
             if env.get("BACKBONE_CLIENT_REGISTRATION")
             else s["backbone.host"],
             port=_opt_int(env.get("BACKBONE_PORT")) or s["backbone.port"],
-            socket_path=s["backbone.socket_path"],
             session_name=s["backbone.session_name"],
             cors_origins=tuple(s["backbone.cors_origins"]),
             restart_on_upgrade=bool(s["backbone.restart_on_upgrade"]),

@@ -16,8 +16,8 @@ from agent_backbone.services.database import (
     ProfileOperations,
     ProfileRegistry,
     ProfileReservation,
-    check_profile_startup,
 )
+from tests.support import reserve_profile
 
 
 def test_discovery_is_local_atomic_and_read_only(tmp_path, capsys):
@@ -28,7 +28,7 @@ def test_discovery_is_local_atomic_and_read_only(tmp_path, capsys):
         "Work",
         "baseline-example-v1",
     )
-    registry.reserve(record)
+    reserve_profile(registry, record)
     before = registry.path.read_bytes(), registry.path.stat().st_mtime_ns
     with patch("agent_backbone.cli.bootstrap_config", side_effect=AssertionError("provider read")):
         for args, expected in (
@@ -41,18 +41,6 @@ def test_discovery_is_local_atomic_and_read_only(tmp_path, capsys):
             assert json.loads(capsys.readouterr().out) == expected
     assert before == (registry.path.read_bytes(), registry.path.stat().st_mtime_ns)
     assert not record.data_dir.exists()
-
-
-@pytest.mark.parametrize("command", [["list"], ["show", "unknown"]])
-def test_missing_registry_is_error_not_empty_success(command, capsys):
-    path = Path(PROFILE_REGISTRY_PATH).expanduser()
-    with pytest.raises(SystemExit) as result:
-        main(["profiles", *command, "--json"])
-    assert result.value.code == 1
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "unavailable" in captured.err
-    assert not path.parent.exists()
 
 
 @pytest.mark.parametrize(
@@ -91,13 +79,14 @@ def test_agent_credential_alone_cannot_discover_profiles(key, monkeypatch):
 def test_human_discovery_retains_fields(tmp_path, capsys, monkeypatch, width):
     monkeypatch.setenv("COLUMNS", str(width))
     registry = ProfileRegistry.create(Path(PROFILE_REGISTRY_PATH).expanduser())
-    registry.reserve(
+    reserve_profile(
+        registry,
         ProfileReservation(
             ProfileIdentity("profile-a", "installation-a", "lifecycle-a1"),
             tmp_path / "provider",
             "Work [blue]",
             "baseline-v1",
-        )
+        ),
     )
     for args in (["list"], ["show", "profile-a"]):
         with pytest.raises(SystemExit) as result:
@@ -193,13 +182,8 @@ async def test_explicit_apply_recovers_hot_journal_and_replays_original_receipt(
         with pytest.raises(SystemExit) as result:
             main(["profiles", *args, "--json"])
         assert result.value.code == 1
-        captured = capsys.readouterr()
-        assert not captured.out and "unavailable" in captured.err
+        assert json.loads(capsys.readouterr().out)["error"]["code"] == "registry_unavailable"
         assert (registry.path.read_bytes(), journal.read_bytes()) == before
-    provider = tmp_path / "legacy"
-    url = f"sqlite+aiosqlite:///{provider / 'backbone.db'}"
-    with pytest.raises(ValueError, match="unavailable"):
-        await check_profile_startup(url, provider)
     source = tmp_path / "request.json"
     source.write_text(json.dumps(request))
     with pytest.raises(SystemExit) as result:
@@ -208,5 +192,54 @@ async def test_explicit_apply_recovers_hot_journal_and_replays_original_receipt(
     assert json.loads(capsys.readouterr().out) == expected
     assert not journal.exists()
     assert operations.lookup(request["request_id"]) == expected
-    await check_profile_startup(url, provider)
-    assert not provider.exists()
+
+
+@pytest.mark.parametrize("args", [["list"], ["show", "profile-a"], ["operation", "op-a"]])
+def test_absent_registry_is_a_structured_json_error(args, capsys):
+    fixtures = json.loads(Path("docs/contracts/profiles-v1.json").read_text())
+    with pytest.raises(SystemExit) as result:
+        main(["profiles", *args, "--json"])
+    assert result.value.code == 1
+    assert json.loads(capsys.readouterr().out) == fixtures["discovery"]["registry_absent"]
+    assert not Path(PROFILE_REGISTRY_PATH).expanduser().parent.exists()
+
+
+def test_broken_registry_is_a_different_error(capsys):
+    path = Path(PROFILE_REGISTRY_PATH).expanduser()
+    path.parent.mkdir(mode=0o700, parents=True)
+    path.write_text("not a database")
+    path.chmod(0o600)
+    with pytest.raises(SystemExit) as result:
+        main(["profiles", "list", "--json"])
+    assert result.value.code == 1
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "registry_unavailable"
+
+
+def test_sign_in_prints_the_providers_refusal(monkeypatch, capsys):
+    import httpx
+
+    from agent_backbone.cli import _profile_client, profiles
+
+    binding = {"installation_id": "installation-a", "lifecycle_id": "lifecycle-a1"}
+    monkeypatch.setattr(profiles.ProfileRegistry, "__init__", lambda self, path: None)
+    monkeypatch.setattr(profiles.ProfileRegistry, "show", lambda self, pid: {"binding": binding})
+
+    class Bound:
+        endpoint = "/unused.sock"
+
+        async def handshake(self):
+            return None
+
+        def headers(self):
+            return {}
+
+    monkeypatch.setattr(_profile_client, "resolve_binding", lambda identity: Bound())
+    refusal = {"detail": {"code": "runtime_unavailable", "message": "Default keeps its sign-ins."}}
+    monkeypatch.setattr(
+        profiles.httpx,
+        "HTTPTransport",
+        lambda **kwargs: httpx.MockTransport(lambda request: httpx.Response(422, json=refusal)),
+    )
+    with pytest.raises(SystemExit, match="1"):
+        main(["profiles", "sign-in", "profile-a", "--runtime", "codex"])
+    assert "Sign-in could not start: Default keeps its sign-ins." in capsys.readouterr().err

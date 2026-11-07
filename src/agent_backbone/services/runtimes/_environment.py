@@ -1,7 +1,6 @@
-"""Internal, process-pinned native environments for isolated providers.
+"""Process-pinned native environments for isolated providers.
 
-No production caller installs these yet. A context is not proof of native account
-isolation, nor permission to activate a reserved provider.
+An isolated provider installs them at start (``cli/server.py``).
 """
 
 from __future__ import annotations
@@ -71,6 +70,11 @@ class NativeEnvironment(Mapping[str, str]):
             raise ValueError("Native path escapes the captured runtime environment")
         return path
 
+    def create_directories(self) -> None:
+        """Make the private native roots a captured runtime needs before first use."""
+        for key in _PATH_KEYS | self.path_keys:
+            Path(self[key]).mkdir(mode=0o700, parents=True, exist_ok=True)
+
     def overlay(self, values: Mapping[str, str]) -> NativeEnvironment:
         self.check()
         for key, value in values.items():
@@ -106,16 +110,18 @@ def install_native_environments(environments: Mapping[str, NativeEnvironment]) -
     captured = MappingProxyType(dict(environments))
     for env in captured.values():
         env.check()
-    roots = [env.root for env in captured.values()]
-    if any(
-        a.is_relative_to(b) or b.is_relative_to(a)
-        for index, a in enumerate(roots)
-        for b in roots[index + 1 :]
-    ):
-        raise ValueError("Native runtime roots overlap")
     if _CONTEXT is not None and captured != _CONTEXT:
         raise ValueError("Native runtime context is already pinned")
     _CONTEXT = captured
+
+
+def native_context_installed() -> bool:
+    return _CONTEXT is not None
+
+
+def native_runtime_uncaptured(runtime: str) -> bool:
+    """This profile did not capture the runtime, so it is unavailable here."""
+    return _CONTEXT is not None and runtime not in _CONTEXT
 
 
 def native_environment(runtime: str) -> NativeEnvironment | None:

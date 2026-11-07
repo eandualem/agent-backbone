@@ -2,14 +2,16 @@
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import socketio
 
 from agent_backbone.api.session_updates import SessionFeed
 from agent_backbone.config import agent_api_key
+from tests.support import reserve_profile
 
 FIXTURES = json.loads((Path(__file__).parents[3] / "docs/contracts/profiles-v1.json").read_text())
 HEADERS = FIXTURES["request_headers"]
@@ -112,7 +114,9 @@ async def bound_provider(api_app, tmp_path, monkeypatch):
         identity = ProfileIdentity("profile-a", await db.signing.audience(), "lifecycle-a1")
         await db.profile_identity.reserve(identity)
         registry = ProfileRegistry.create(tmp_path / "registry" / "registry.db")
-        reservation = registry.reserve(ProfileReservation(identity, root, "Work", "baseline-v1"))
+        reservation = reserve_profile(
+            registry, ProfileReservation(identity, root, "Work", "baseline-v1")
+        )
         provider = await reconcile_profile_provider(registry, reservation, path, root / "tmux.sock")
         monkeypatch.setattr(_server, "_socket", None)
         monkeypatch.setattr(_server, "_used", False)
@@ -1497,6 +1501,24 @@ async def test_bound_setup_body_cannot_replace_http_tuple_or_downgrade(
     assert len(list((provider.reservation.data_dir / "setup-receipts").glob("*.json"))) == 1
 
 
+async def test_an_unbound_list_ignores_a_cached_replaced_registration(
+    api_app, api_client, auth_headers, bound_provider
+):
+    from dataclasses import replace
+
+    from agent_backbone.services.agents import EnrichedAgent
+
+    provider, _, _ = bound_provider
+    api_app.state.profile_provider = replace(
+        provider, reservation=replace(provider.reservation, kind="legacy_default")
+    )
+    cached = EnrichedAgent(name="renamed", session="renamed", registration_id="gone")
+    api_app.state.feed.snapshot = AsyncMock(return_value=[cached])
+    with patch("agent_backbone.api.profile_binding.provider_current", AsyncMock(return_value=True)):
+        response = await api_client.get("/api/agents", headers=auth_headers)
+    assert response.status_code == 200
+
+
 async def test_bound_list_rejects_a_cached_replaced_registration(
     api_app, api_client, auth_headers, bound_provider
 ):
@@ -1693,7 +1715,7 @@ async def test_bound_first_agent_http_success_and_replay(
 
     async def launch(spec, config, **kwargs):
         assert selected.environment() == environment
-        assert config.data_dir == root and not config.launch.pre_trust
+        assert config.data_dir == root and config.launch.pre_trust
         state["live"] = True
         state["env"] = {
             "BACKBONE_OPERATION_ID": kwargs["operation_id"],
@@ -1711,6 +1733,8 @@ async def test_bound_first_agent_http_success_and_replay(
         return state["env"].get(key)
 
     monkeypatch.setattr(onboarding, "start_agent", AsyncMock(side_effect=launch))
+    monkeypatch.setattr(onboarding, "STARTED_SECONDS", 0)
+    monkeypatch.setattr(onboarding, "wait_until_ready", AsyncMock(return_value=("ready", [])))
     monkeypatch.setattr(onboarding, "detect_repo", AsyncMock(return_value=""))
     monkeypatch.setattr(onboarding, "session_exists", exists)
     monkeypatch.setattr(onboarding, "query_environment_var", variable)
@@ -1807,7 +1831,9 @@ async def test_bound_first_agent_http_success_and_replay(
         assert response.status_code == 200, response.text
         assert response.json()["code"] == ("outcome_unknown" if was_pasted else "agent_ready")
         if was_pasted:
-            assert commands == previous_commands
+            # The first-run watch may still read the pane; nothing is sent again.
+            for command in ("paste-buffer", "send-keys"):
+                assert commands.count(command) == previous_commands.count(command)
         else:
             assert commands.count("paste-buffer") == commands.count("send-keys") == 1
         return
@@ -1904,3 +1930,269 @@ async def test_bound_first_agent_http_success_and_replay(
     with BoundSetupReceipt(root, body) as receipt:
         assert receipt.record["registration_id"] == store.agents.get("guide").registration_id
         assert receipt.record["result"]["status"] == "completed"
+
+
+async def test_schema2_catalog_requires_bound_operator_before_observation(api_client, auth_headers):
+    response = await api_client.get(
+        "/api/runtimes?schema_version=2&check_setup=true", headers=auth_headers
+    )
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": {"code": "binding_mismatch", "message": "Profile binding does not match."}
+    }
+    assert (
+        await api_client.get("/api/runtimes?schema_version=2&check_setup=true")
+    ).status_code == 401
+    assert isinstance((await api_client.get("/api/runtimes", headers=auth_headers)).json(), list)
+    assert (
+        await api_client.get("/api/runtimes?schema_version=3", headers=auth_headers)
+    ).status_code == 422
+
+
+async def test_bound_catalog_missing_native_context_never_probes_host(
+    api_client, api_app, auth_headers, bound_provider, monkeypatch
+):
+    from agent_backbone.services.runtimes import _environment, base
+
+    monkeypatch.setattr(_environment, "_CONTEXT", None)
+    monkeypatch.setattr(base.Runtime, "available", lambda *a: pytest.fail("ambient discovery"))
+    monkeypatch.setattr(base.Runtime, "setup_compatibility", lambda *a: pytest.fail("native probe"))
+    provider, _, headers = bound_provider
+    response = await api_client.get(
+        "/api/runtimes?schema_version=2&check_setup=true", headers={**auth_headers, **headers}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema_version"] == 2
+    assert body["profile_id"] == provider.reservation.identity.profile_id
+    assert body["installation_id"] == provider.reservation.identity.installation_id
+    assert body["lifecycle_id"] == provider.reservation.identity.lifecycle_id
+    assert len(body["items"]) == 7
+    assert all(
+        not item["available"] and not item["setup_compatibility"]["compatible"]
+        for item in body["items"]
+    )
+    assert {item["authentication"] for item in body["items"]} == {"unavailable", "unsupported"}
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_bound_catalog_probes_captured_native_environment(
+    api_client, api_app, auth_headers, bound_provider, monkeypatch, runtime
+):
+    import subprocess
+
+    from agent_backbone.api import runtime_catalog
+    from agent_backbone.services.runtimes import RUNTIMES, _environment, install_native_environments
+
+    provider, _, headers = bound_provider
+    selected = RUNTIMES[runtime]
+    monkeypatch.setattr(_environment, "_CONTEXT", None)
+    monkeypatch.setattr(type(selected), "resolve_binary", lambda *a: "/synthetic/bin/native")
+    environment = selected.capture_environment(provider.reservation.data_dir / "native" / runtime)
+    install_native_environments({runtime: environment})
+    monkeypatch.setattr(runtime_catalog, "RUNTIMES", {runtime: selected})
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "2.2.2", "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    response = await api_client.get(
+        "/api/runtimes?schema_version=2&check_setup=true", headers={**auth_headers, **headers}
+    )
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["id"] == runtime and item["available"] is True
+    assert item["authentication"] == "unknown"
+    assert item["setup_compatibility"]["compatible"] is True
+    assert calls and all(
+        kwargs["env"] == dict(environment) and kwargs["cwd"] == environment.root
+        for _, kwargs in calls
+    )
+    assert all(command == ["/synthetic/bin/native", "--version"] for command, _ in calls)
+
+
+async def test_bound_catalog_rechecks_after_probe_and_retains_worker_on_disconnect(
+    api_client, api_app, auth_headers, bound_provider, monkeypatch
+):
+    import threading
+    from types import SimpleNamespace
+
+    from agent_backbone.api import runtime_catalog
+
+    provider, registry, headers = bound_provider
+    entered, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def observe(environment):
+        assert environment is None
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(10)
+        return {"id": "synthetic"}
+
+    monkeypatch.setattr(
+        runtime_catalog,
+        "RUNTIMES",
+        {"synthetic": SimpleNamespace(environment=lambda: {}, bound_discovery=observe)},
+    )
+    pending = asyncio.create_task(
+        api_client.get(
+            "/api/runtimes?schema_version=2&check_setup=true", headers={**auth_headers, **headers}
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        with pytest.raises(ValueError, match="fence is busy"):
+            registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+        task = api_app.state.bound_runtime_catalog[2]
+        api_app.state.profile_provider = None
+        release.set()
+        result = await asyncio.gather(task, return_exceptions=True)
+        assert getattr(result[0], "status_code", None) == 409
+        await api_app.state.api_tasks.stop()
+        registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        await api_app.state.api_tasks.stop()
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+@pytest.mark.parametrize("action", ["first_agent", "cancel_first_agent"])
+async def test_bound_provider_capacity_never_advises_retry(
+    api_app, api_client, auth_headers, bound_provider, monkeypatch, runtime, action
+):
+    from agent_backbone.services.agents import AgentStore
+
+    provider, _, headers = bound_provider
+    identity = provider.reservation.identity
+    store = AgentStore(api_app.state.db, provider.reservation.data_dir)
+    await store.start()
+    monkeypatch.setattr(api_app.state, "agent_store", store)
+    monkeypatch.setattr("agent_backbone.services.database._setup_receipts.SETUP_RECEIPTS", 0)
+    body = FIXTURES["setup"][action] | {
+        "profile_id": identity.profile_id,
+        "expected_installation_id": identity.installation_id,
+        "expected_lifecycle_id": identity.lifecycle_id,
+        "hooks": [runtime],
+        "agent": {**FIXTURES["setup"][action]["agent"], "runtime": runtime},
+    }
+    response = await api_client.post(
+        "/api/setup/first-agent" + ("/cancel" if action == "cancel_first_agent" else ""),
+        headers={**auth_headers, **headers},
+        json=body,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["action"] == action
+    assert result["code"] == "installation_conflict"
+    assert result["retry"] == "none"
+    assert "capacity reached" in result["message"]
+    assert not list((provider.reservation.data_dir / "setup-receipts").glob("*.json"))
+
+
+@pytest.mark.parametrize("action", ["first_agent", "cancel_first_agent"])
+async def test_legacy_provider_capacity_keeps_its_existing_retry_classification(
+    api_client, config, auth_headers, monkeypatch, action
+):
+    monkeypatch.setattr("agent_backbone.services.database._setup_receipts.SETUP_RECEIPTS", 0)
+    body = {
+        key: value
+        for key, value in FIXTURES["setup"][action].items()
+        if key not in {"profile_id", "expected_installation_id", "expected_lifecycle_id"}
+    } | {"schema_version": 1, "data_dir": str(config.data_dir.resolve())}
+    response = await api_client.post(
+        "/api/setup/first-agent" + ("/cancel" if action == "cancel_first_agent" else ""),
+        headers=auth_headers,
+        json=body,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["code"] == "installation_conflict"
+    assert result["retry"] == "same_request"
+    assert "capacity reached" in result["message"]
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_own_agent_credential_needs_no_identity_headers(
+    api_client, api_app, bound_provider, runtime
+):
+    provider, registry, _ = bound_provider
+    spec = await api_app.state.agent_store.update("ike", runtime=runtime)
+    key = agent_api_key(api_app.state.config.api_key, spec.registration_id)
+    agent = {"Authorization": f"Bearer {key}"}
+    assert (await api_client.get("/api/reports", headers=agent)).status_code == 200
+    forged = {"Authorization": "Bearer " + agent_api_key("another-provider", spec.registration_id)}
+    assert (await api_client.get("/api/reports", headers=forged)).status_code in {401, 403}
+    registry.invalidate(provider.reservation.identity, provider.reservation.data_dir)
+    response = await api_client.get("/api/reports", headers=agent)
+    assert response.status_code == 409
+    assert response.json() == FIXTURES["http_errors"]["binding_mismatch"]["body"]
+
+
+async def test_a_real_default_serves_unbound_clients_and_checks_a_tuple(
+    api_client, auth_headers, api_app, tmp_path, monkeypatch
+):
+    from agent_backbone.config import sqlite_url
+    from agent_backbone.services.database import (
+        BackboneDB,
+        ProfileRegistry,
+        _profile_default,
+        create_default_profile,
+        reconcile_profile_provider,
+    )
+    from agent_backbone.services.terminal import _server, pin_tmux_server
+
+    root = (tmp_path / "default").resolve()
+    root.mkdir(mode=0o700)
+    socket = tmp_path / "tmux" / "default"
+    monkeypatch.setattr(_profile_default, "default_tmux_socket", lambda: socket)
+    async with BackboneDB.connect(sqlite_url(root)) as db:
+        await db.signing.audience()
+        registry_path = tmp_path / "registry" / "registry.db"
+        reservation = create_default_profile(registry_path, root, "core-v1")
+        registry = ProfileRegistry(registry_path)
+        provider = await reconcile_profile_provider(
+            registry, reservation, root / "backbone.db", socket
+        )
+        monkeypatch.setattr(_server, "_socket", None)
+        monkeypatch.setattr(_server, "_used", False)
+        pin_tmux_server(socket)
+        monkeypatch.setattr(api_app.state, "db", db)
+        config = api_app.state.config
+        monkeypatch.setattr(
+            api_app.state,
+            "config",
+            replace(config, backbone=replace(config.backbone, data_dir=str(root))),
+        )
+        monkeypatch.setattr(api_app.state.agent_store, "_db", db)
+        api_app.state.profile_provider = provider
+        assert (await api_client.get("/api/reports", headers=auth_headers)).status_code == 200
+        identity = reservation.identity
+        bound = {
+            f"X-Backbone-{field.replace('_', '-')}": value
+            for field, value in vars(identity).items()
+        }
+        response = await api_client.get("/api/reports", headers={**auth_headers, **bound})
+        assert response.status_code == 200
+        wrong = {**bound, "X-Backbone-Lifecycle-ID": "another-lifecycle"}
+        response = await api_client.get("/api/reports", headers={**auth_headers, **wrong})
+        assert response.status_code == 409
+
+
+async def test_only_the_default_profile_keeps_unbound_clients(
+    api_client, auth_headers, api_app, bound_provider
+):
+    provider, _, headers = bound_provider
+    response = await api_client.get("/api/reports", headers=auth_headers)
+    assert response.json()["detail"]["code"] == "binding_required"
+    default = replace(provider, reservation=replace(provider.reservation, kind="legacy_default"))
+    api_app.state.profile_provider = default
+    with patch("agent_backbone.api.profile_binding.provider_current", AsyncMock(return_value=True)):
+        assert (await api_client.get("/api/reports", headers=auth_headers)).status_code == 200
+        wrong = {**headers, next(iter(headers)): "another-profile"}
+        response = await api_client.get("/api/reports", headers={**auth_headers, **wrong})
+        assert response.status_code == 409

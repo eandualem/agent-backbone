@@ -640,11 +640,14 @@ The readiness wait may time out while native migration continues; Backbone does
 not terminate that migration to meet the readiness deadline.
 
 
+A stop or restart gives in-flight requests 10 seconds to finish, then cancels them; agent
+sessions in tmux are unaffected.
+
 For automatic upgrades, `backbone up` requests Uvicorn’s graceful exit directly
 and re-executes after shutdown completes. External termination still stops the
 process normally. A custom ASGI runner that does not install this shutdown
 callback does not perform Backbone’s automatic restart; its supervisor owns
-restart behavior. `--reload` continues to use Uvicorn’s development reloader.
+restart behavior.
 
 
 

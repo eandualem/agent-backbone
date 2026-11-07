@@ -85,7 +85,7 @@ def private_listener(data_dir: Path, location: str):
     path = Path(location).expanduser()
     root = data_dir.resolve()
     if not path.is_absolute() or not path.parent.resolve().is_relative_to(root):
-        raise ValueError("backbone.socket_path must be absolute and inside the data directory")
+        raise ValueError("the local socket must be absolute and inside the data directory")
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     parent = path.parent.stat()
     if parent.st_uid != os.geteuid() or stat.S_IMODE(parent.st_mode) != 0o700:
