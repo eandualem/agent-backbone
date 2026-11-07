@@ -220,7 +220,10 @@ def pin_default_terminal() -> None:
         _, reservation = default_profile_at(resolve_data_dir())
     except (ValueError, OSError):
         return
-    pin_tmux_server(reservation.binding.tmux_socket)
+    socket = reservation.binding.tmux_socket
+    # tmux makes this directory itself unless a socket is named, and a restart clears /tmp.
+    socket.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    pin_tmux_server(socket)
 
 
 def print_json(data: Any) -> None:

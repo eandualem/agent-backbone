@@ -131,8 +131,10 @@ def test_attaching_from_another_tmux_server_refuses_clearly(root, monkeypatch):
     from agent_backbone.services.terminal import attach_session, tmux_server_socket
 
     init()
+    assert not default_tmux_socket().parent.exists()
     _common.pin_default_terminal()
     assert tmux_server_socket() == str(default_tmux_socket())
+    assert default_tmux_socket().parent.is_dir()
     monkeypatch.setenv("TMUX", "/tmp/elsewhere/named,1,0")
     with pytest.raises(ValueError, match="different tmux server"):
         attach_session("worker")
