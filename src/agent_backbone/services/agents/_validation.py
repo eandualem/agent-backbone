@@ -23,6 +23,11 @@ def validate_agent_spec(spec: AgentSpec) -> None:
         raise ValueError("invalid agent name")
     if spec.name.casefold() == OPERATOR_AUTHOR:
         raise ValueError(f"'{OPERATOR_AUTHOR}' is reserved for the person's own documents")
+    if re.fullmatch(r"sign-in-.*|shell-[0-9a-f]{12}", spec.name.casefold()):
+        raise ValueError(
+            "names starting with 'sign-in-', and 'shell-' followed by 12 hex digits, "
+            "are reserved for profile terminal sessions"
+        )
     if not isinstance(spec.dir, str) or not spec.dir.strip() or "\0" in spec.dir:
         raise ValueError("dir must be a nonempty path")
     if not isinstance(spec.runtime, str) or spec.runtime not in RUNTIMES:

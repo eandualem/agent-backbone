@@ -295,6 +295,10 @@ session ends, a repeat starts a new
 one. `runtime_unavailable` refuses another runtime or one that is not installed. The
 `sessions` group in the shared fixtures has these bodies.
 
+These sessions are named `shell-<shell_id>` and `sign-in-<runtime>`. Agent names in
+those forms are reserved: starting, setting up, registering or renaming an agent refuses a
+name that starts with `sign-in-` or is `shell-` followed by 12 hex digits (any case).
+
 `GET /api/profile/accounts/status?runtime=codex` runs that one CLI's own status command in
 this profile's environment, with a 5-second limit, and returns
 `{"schema_version":1,"runtime":"codex","authentication":"authenticated"}`. It makes no

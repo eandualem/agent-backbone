@@ -172,3 +172,26 @@ def test_the_operator_document_author_cannot_be_an_agent(name):
 
     with pytest.raises(ValueError, match="reserved"):
         validate_agent_spec(AgentSpec(name=name, dir="/tmp", runtime="shell"))
+
+
+@pytest.mark.parametrize(
+    ("name", "reserved"),
+    [
+        ("sign-in-codex", True),
+        ("Sign-In-tool", True),
+        ("shell-0123456789ab", True),
+        ("shell-0123456789AB", True),
+        ("shell-tools", False),
+        ("signin-codex", False),
+    ],
+)
+def test_profile_session_names_cannot_be_agents(name, reserved):
+    from agent_backbone.config import AgentSpec
+    from agent_backbone.services.agents import validate_agent_spec
+
+    spec = AgentSpec(name=name, dir="/tmp", runtime="shell")
+    if reserved:
+        with pytest.raises(ValueError, match="profile terminal sessions"):
+            validate_agent_spec(spec)
+    else:
+        validate_agent_spec(spec)
