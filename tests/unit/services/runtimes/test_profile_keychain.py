@@ -60,6 +60,16 @@ def test_a_default_that_did_not_take_is_refused(tmp_path, security):
         prepare_profile_keychain(*_profile(tmp_path))
 
 
+def test_the_password_gets_its_own_line_after_an_unterminated_value(tmp_path, security):
+    run, _ = security
+    root, homes = _profile(tmp_path)
+    (root / ".env").write_text("BACKBONE_API_KEY=k")
+    run.keychain = root / "keychain" / "profile.keychain-db"
+    prepare_profile_keychain(root, homes)
+    lines = (root / ".env").read_text().splitlines()
+    assert lines[0] == "BACKBONE_API_KEY=k" and lines[1].startswith("BACKBONE_KEYCHAIN_PASSWORD=")
+
+
 def test_failed_security_command_is_refused(tmp_path, monkeypatch, security):
     monkeypatch.setattr(
         _keychain.subprocess,

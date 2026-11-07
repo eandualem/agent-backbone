@@ -249,10 +249,11 @@ make check
 ```
 
 To try a change, give a scratch install its own home, tmux directory and port. From a
-terminal outside tmux:
+terminal outside tmux, with no `BACKBONE_*` variables set:
 
 ```bash
 mkdir -p /tmp/backbone-dev
+unset $(env | grep -o '^BACKBONE_[A-Z_]*')
 export HOME=/tmp/backbone-dev TMUX_TMPDIR=/tmp/backbone-dev BACKBONE_PORT=7199
 .venv/bin/backbone init
 .venv/bin/backbone up

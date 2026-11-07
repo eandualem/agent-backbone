@@ -163,7 +163,9 @@ class Home:
 
     def cleanup(self, processes):
         # Providers from `profiles apply` are detached, so find them by their home.
-        subprocess.run(["pkill", "-TERM", "-f", f"--registry {self.root}"], capture_output=True)
+        subprocess.run(
+            ["pkill", "-TERM", "-f", "--", f"--registry {self.root}"], capture_output=True
+        )
         for path in self.sockets:
             subprocess.run(["tmux", "-S", path, "kill-server"], env=self.env, capture_output=True)
         for process in processes:

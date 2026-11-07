@@ -98,6 +98,34 @@ def test_init_refuses_a_database_it_cannot_read(root, capsys):
     assert not (root / ".env").exists()
 
 
+@pytest.mark.real_profile_check
+def test_offline_commands_open_only_the_profiles_own_database(root, tmp_path, monkeypatch):
+    from agent_backbone.cli import _common
+    from agent_backbone.config import bootstrap_config
+
+    init()
+    other = tmp_path / "other.db"
+    monkeypatch.setenv("BACKBONE_DATABASE_URL", f"sqlite+aiosqlite:///{other}")
+
+    async def open_direct():
+        async with _common.Direct(bootstrap_config()):
+            pass
+
+    with pytest.raises(ValueError, match="BACKBONE_DATABASE_URL"):
+        asyncio.run(open_direct())
+    assert not other.exists()
+
+
+def test_a_default_made_meanwhile_by_another_init_refuses(root, tmp_path):
+    init()
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "backbone.db").write_bytes((root / "backbone.db").read_bytes())
+    with patch.object(ProfileRegistry, "default_reservation", lambda self: None):
+        with pytest.raises(ValueError, match="already at"):
+            create_default_profile(registry_path(), other, "manual")
+
+
 def test_a_crash_before_the_identity_is_recorded_is_finished_by_running_init_again(
     root, monkeypatch
 ):

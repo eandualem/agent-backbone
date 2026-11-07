@@ -480,7 +480,7 @@ async def _first(request, receipt, store, db, *, check_effect=None, settled=None
         )
         _watches.add(watch)
         watch.add_done_callback(_watch_ended)
-        await asyncio.wait({watch}, timeout=STARTED_SECONDS)
+        await asyncio.sleep(STARTED_SECONDS)
         await _check(check_effect)
     # A lost launch response is reconciled from the exact operation and registration,
     # never from the presence of a same-name terminal alone.

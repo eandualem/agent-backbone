@@ -53,14 +53,19 @@ def _is_default(request: Request) -> bool:
     return request.state.profile_provider.reservation.kind == "legacy_default"
 
 
-async def _ensure(request: Request, session: str, cwd: str, command: list[str], env) -> dict:
+async def _ensure(
+    request: Request, session: str, cwd: str, command: list[str], env, connection=None
+) -> dict:
     """Return a live session unchanged; never kill or respawn one."""
     identity = _identity(request)
     # The Default profile uses the person's environment, without the installation's secrets.
     options = (
         {"environment": dict(env), "inherit_environment": False}
         if env is not None
-        else {"scrub": session_secret_keys(request.app.state.config.data_dir)}
+        else {
+            "scrub": session_secret_keys(request.app.state.config.data_dir),
+            "environment": connection or {},
+        }
     )
     async with _lock:
         created = not await session_exists(session)
@@ -108,7 +113,13 @@ async def ensure_shell(request: Request) -> dict:
     login_shell = pwd.getpwuid(os.getuid()).pw_shell or "/bin/sh"
     # Default's shell reads the person's profile, like their own terminal.
     command = [login_shell, "-l"] if environment is None else [login_shell]
-    result = await _ensure(request, session, cwd, command, environment)
+    config = request.app.state.config
+    # The person's tmux server may carry another installation's settings.
+    connection = {
+        "BACKBONE_DATA_DIR": str(config.data_dir),
+        "BACKBONE_PORT": str(config.backbone.port),
+    }
+    result = await _ensure(request, session, cwd, command, environment, connection)
     return {**result, "shell_id": body.shell_id}
 
 

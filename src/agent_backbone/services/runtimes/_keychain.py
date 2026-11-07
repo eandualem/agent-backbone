@@ -55,9 +55,10 @@ def _password(env_file: Path) -> str:
     if password:
         return password
     password = secrets.token_hex(32)
+    separator = "" if env_file.read_bytes().endswith(b"\n") else "\n"
     descriptor = os.open(env_file, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
     with os.fdopen(descriptor, "a") as handle:
-        handle.write(f"{PASSWORD_KEY}={password}\n")
+        handle.write(f"{separator}{PASSWORD_KEY}={password}\n")
         handle.flush()
         os.fsync(descriptor)
     return password

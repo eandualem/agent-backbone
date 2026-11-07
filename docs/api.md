@@ -463,8 +463,7 @@ profile-bound runtime catalog. It requires the complete binding headers and an
 internally reconciled provider. It returns the schema-2 identity envelope and
 runtime observations from provider-owned native contexts. Missing context never
 falls back to host discovery. Schema 1 and the omitted-version response retain
-the existing list shape. Profile activation remains unavailable; see the
-[profile contract](profiles-contract.md).
+the existing list shape. See the [profile contract](profiles-contract.md).
 
 ## Fleet snapshots
 
@@ -862,7 +861,7 @@ so a failed join cannot retire a later successful join. Cancellation or output E
 retains the attachment until its process exits and its reader worker finishes.
 Failed cleanup remains tracked for retry. Internally bound providers retain their
 lifecycle fence across creation and cleanup, independently of the requesting
-handler or output forwarder. Profile activation remains unavailable.
+handler or output forwarder.
 Shutdown closes socket admission, stops producers, then drains handlers, terminal
 resources and emissions before closing services and the database. Bulk PTY cleanup
 reports failure and retains resources for retry; a failed component stop preserves

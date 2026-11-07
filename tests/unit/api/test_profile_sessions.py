@@ -205,7 +205,12 @@ async def test_default_shell_keeps_the_host_environment_without_secrets(
     assert response.status_code == 200
     options = terminal.call_args.kwargs
     assert options["working_dir"] == (cwd or str(Path.home()))
-    assert "environment" not in options and "inherit_environment" not in options
+    assert "inherit_environment" not in options
+    config = api_app.state.config
+    assert options["environment"] == {
+        "BACKBONE_DATA_DIR": str(config.data_dir),
+        "BACKBONE_PORT": str(config.backbone.port),
+    }
     assert "BACKBONE_API_KEY" in options["scrub"]
     assert options["command"][-1] == "-l"
 

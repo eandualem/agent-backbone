@@ -310,7 +310,8 @@ setup screen opens and when a sign-in ends, and repeat it only for the CLI being
 while that session is open: OpenCode starts a private local server for each read, and
 each CLI may update its own bookkeeping files. `runtime_unavailable` refuses as for
 sign-in, including on Default.
-`backbone profiles sign-in PROFILE_ID --runtime codex` does both from a terminal.
+`backbone profiles sign-in PROFILE_ID --runtime codex` opens and attaches the sign-in
+session from a terminal; it does not read the status, so use the status route after it ends.
 
 ## Keep work pinned
 

@@ -195,8 +195,11 @@ class Direct:
 
     async def _check_profile(self) -> None:
         """Only `init` and setup, which create the first profile, run without one."""
+        from agent_backbone.config import sqlite_url
         from agent_backbone.services.database import check_new_default, default_profile_at
 
+        if self._boot.database_url != sqlite_url(self._boot.data_dir):
+            raise ValueError("A profile uses its own SQLite database; unset BACKBONE_DATABASE_URL")
         check = check_new_default if self._bootstrap else default_profile_at
         await asyncio.to_thread(check, self._boot.data_dir)
 

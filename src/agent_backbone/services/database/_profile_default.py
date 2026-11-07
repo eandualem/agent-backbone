@@ -49,6 +49,10 @@ def create_default_profile(
         identity = ProfileIdentity(token_hex(6), installation_id[0], str(uuid4()))
         binding = ProfileBinding(root / "run" / "api.sock", root / ".env", default_tmux_socket())
         with registry._connection(write=True) as conn:
+            # Another init may have made Default since the read above.
+            for record in registry._records(conn):
+                if record.kind == "legacy_default":
+                    raise ValueError(f"The Default profile is already at {record.data_dir}")
             registry._reserve(
                 conn, ProfileReservation(identity, root, DEFAULT_DISPLAY_NAME, baseline)
             )

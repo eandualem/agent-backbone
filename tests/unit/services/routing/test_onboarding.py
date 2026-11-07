@@ -167,12 +167,27 @@ async def test_a_cli_that_exits_right_away_is_a_failed_launch(scenario, db, monk
         return "exited", []
 
     monkeypatch.setattr(onboarding, "wait_until_ready", exits)
-    monkeypatch.setattr(onboarding, "STARTED_SECONDS", 5)
+    monkeypatch.setattr(onboarding, "STARTED_SECONDS", 0.05)
     result = await run(scenario, db)
     assert result["code"] == "launch_failed" and result["data"]["ready"] == "exited"
     assert "exited right after starting" in result["message"]
     assert "start the agent again" in result["message"]
     onboarding.safe_deliver.assert_not_awaited()
+
+
+async def test_the_launch_window_holds_when_the_watch_ends_early(scenario, db, monkeypatch):
+    async def exits_after_the_watch(*args, **kwargs):
+        # The watch ends after this second hand-over; the CLI exits just after it.
+        if settled.call_count == 2:
+            loop = asyncio.get_running_loop()
+            loop.call_later(0.1, scenario[2].__setitem__, "live", False)
+
+    monkeypatch.setattr(onboarding, "STARTED_SECONDS", 1.3)
+    settled = AsyncMock(side_effect=exits_after_the_watch)
+    body, store, _ = scenario
+    await store.set_setting("timing.grace_period_seconds", 0)
+    result = await onboarding.first_agent(body, store.config, store, db, settled=settled)
+    assert result["code"] == "launch_failed" and result["data"]["ready"] == "exited"
 
 
 async def test_setup_returns_while_the_first_run_is_still_watched(scenario, db, monkeypatch):

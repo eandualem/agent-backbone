@@ -301,8 +301,8 @@ For an explicitly bound profile, use `--json --check-setup --profile ID
 flags are required together. This operator-only variant resolves the external
 registry, verifies the provider identity, and returns a matching schema-2 catalog.
 The provider performs the probes; the requesting CLI never falls back to local
-discovery. Current reservations remain non-ready, so they cannot yet resolve a
-connection. See the [profile contract](profiles-contract.md).
+discovery. A profile that is not ready, or whose provider is not running, cannot
+resolve a connection. See the [profile contract](profiles-contract.md).
 
 Each line also prints the reasoning-effort levels that runtime accepts —
 `low, medium, high, xhigh, max` for Claude Code, the same plus `ultra`
