@@ -14,8 +14,10 @@ async def metadata(request, body, db):
     if registration and name != body.from_entity:
         raise HTTPException(403, "Sender does not match the agent credential")
     sender = await db.interactions.attribution(body.from_entity, registration, owner_origin)
-    if sender["attribution"] == "unverified" and getattr(request.state, "signed_sender", None):
-        # The signing middleware verified this request's from_entity with an enrolled key.
+    signed = getattr(request.state, "signed_sender", None)
+    if sender["attribution"] == "unverified" and signed and signed.sender == body.from_entity:
+        # Verified by an enrolled key. Only an exact name: case-twin registrations can
+        # exist, and the actor lookup above is exact, so a variant could name the other.
         sender["attribution"] = "signed"
     try:
         relations = await db.interactions.validate_relations(

@@ -429,6 +429,21 @@ async def test_a_null_confirmation_is_an_ordinary_signed_request(
     assert deliver.await_args.kwargs["interaction"]["sender"]["attribution"] == "signed"
 
 
+async def test_a_case_variant_sender_is_never_recorded_as_signed(
+    api_client, auth_headers, api_app, key
+):
+    """Case-twin registrations can exist: only the signer's exact name is signed."""
+    deliver = AsyncMock(return_value=DeliveryReport(DeliveryOutcome.DELIVERED))
+    variant = {**MESSAGE, "from_entity": SENDER.upper(), "owner_confirmation": None}
+    with patch("agent_backbone.api.routes.messages.safe_deliver", deliver):
+        raw, signed = await _signed(api_app.state.db, key, "POST", "/api/messages", variant)
+        resp = await api_client.post(
+            "/api/messages", headers={**auth_headers, **signed}, content=raw
+        )
+    assert resp.status_code == 200, resp.text
+    assert deliver.await_args.kwargs["interaction"]["sender"]["attribution"] != "signed"
+
+
 async def test_an_old_confirmation_still_recovers_its_receipt(
     api_client, auth_headers, api_app, key, drain, monkeypatch
 ):

@@ -102,7 +102,8 @@ async def feedback(
         body,
         lambda sender, text: envelope(sender, text, relay=signed is not None),
         credential_registration=getattr(request.state, "credential_registration", None),
-        signed=signed is not None,  # the signing middleware verified body.author
+        # Verified by its exact name only: case-twin registrations can exist.
+        signed=signed is not None and signed.sender == body.author,
     )
     target = await db.current_plans.recipient(author_id)
     if target is not None:
