@@ -413,3 +413,10 @@ def test_window_bounds_before_year_1000_stay_four_digit():
 
     early = format_iso(datetime(5, 1, 1, tzinfo=UTC))
     assert early == "0005-01-01T00:00:00.000000Z" and parse_iso(early).year == 5
+
+
+def test_a_long_retention_cutoff_stays_four_digit():
+    from agent_backbone.services.database._time import cutoff_iso, parse_iso
+
+    cutoff = cutoff_iso(days=400_000)  # back before year 1000
+    assert cutoff[4] == "-" and parse_iso(cutoff).year < 1000

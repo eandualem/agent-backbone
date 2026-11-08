@@ -12,12 +12,12 @@ _FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 
 def now_iso() -> str:
-    return datetime.now(UTC).strftime(_FORMAT)
+    return format_iso(datetime.now(UTC))
 
 
 def cutoff_iso(**delta) -> str:
     """The timestamp ``timedelta(**delta)`` ago, e.g. ``cutoff_iso(minutes=5)``."""
-    return (datetime.now(UTC) - timedelta(**delta)).strftime(_FORMAT)
+    return format_iso(datetime.now(UTC) - timedelta(**delta))
 
 
 def format_iso(moment: datetime) -> str:
