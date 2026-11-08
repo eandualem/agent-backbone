@@ -313,13 +313,18 @@ PROFILE_WAIT_SECONDS = 10
 
 
 def _under_service_manager() -> bool:
-    """launchd names the job in XPC_SERVICE_NAME; systemd sets INVOCATION_ID."""
+    """Started by the login service itself, not merely beneath it: every process under
+    the service inherits its variables, so the parent must be the manager. launchd
+    (pid 1) names the job in XPC_SERVICE_NAME; systemd sets MANAGERPID on what it starts."""
     from agent_backbone.cli.service import LABEL
 
-    return os.environ.get("XPC_SERVICE_NAME") == LABEL or bool(os.environ.get("INVOCATION_ID"))
+    parent = os.getppid()
+    if os.environ.get("XPC_SERVICE_NAME") == LABEL and parent == 1:
+        return True
+    return bool(os.environ.get("INVOCATION_ID")) and os.environ.get("MANAGERPID") == str(parent)
 
 
-def _default_profile(data_dir: Path):
+def _default_profile(data_dir: Path, *, wait: bool = True):
     """The Default profile, or a refusal. Under a service manager the refusal is
     logged once and ``up`` waits for ``backbone init`` instead of exiting, which
     the service would restart every few seconds."""
@@ -328,7 +333,7 @@ def _default_profile(data_dir: Path):
     try:
         return default_profile_at(data_dir)
     except ValueError as exc:
-        if not _under_service_manager():
+        if not wait or not _under_service_manager():
             raise
         print(
             f"error: {exc}; waiting for it, checking every {PROFILE_WAIT_SECONDS} s",
@@ -349,7 +354,8 @@ def cmd_up(args: argparse.Namespace) -> int:
     log_file = args.log_file.expanduser().resolve() if args.log_file else None
     try:
         # Before anything can create a database or report a detached start.
-        registry, reservation = _default_profile(resolve_data_dir())
+        # The service never runs --detach: a detached start always answers at once.
+        registry, reservation = _default_profile(resolve_data_dir(), wait=not args.detach)
         config = asyncio.run(_common.load_config())
         if args.detach:
             _common.pin_default_terminal()

@@ -431,6 +431,7 @@ def test_a_refused_up_under_a_service_waits_for_its_profile(monkeypatch, capsys)
     from agent_backbone.cli import server
 
     monkeypatch.setenv("XPC_SERVICE_NAME", "dev.agent-backbone")
+    monkeypatch.setattr(server.os, "getppid", lambda: 1)  # started by launchd itself
     found = (object(), object())
     lookup = MagicMock(side_effect=[ValueError("No profile at /d"), ValueError("still"), found])
     with (
@@ -453,3 +454,17 @@ def test_a_refused_up_in_a_terminal_still_exits(monkeypatch):
         pytest.raises(ValueError),
     ):
         server._default_profile(Path("/d"))
+
+
+@pytest.mark.parametrize("detach", [False, True])
+def test_a_shell_beneath_the_service_or_a_detached_start_never_waits(monkeypatch, detach):
+    from agent_backbone.cli import server
+
+    monkeypatch.setenv("XPC_SERVICE_NAME", "dev.agent-backbone")  # inherited in a pane
+    monkeypatch.setattr(server.os, "getppid", lambda: 1 if detach else 4242)
+    lookup = MagicMock(side_effect=ValueError("No profile at /d"))
+    with (
+        patch("agent_backbone.services.database.default_profile_at", lookup),
+        pytest.raises(ValueError),
+    ):
+        server._default_profile(Path("/d"), wait=not detach)
