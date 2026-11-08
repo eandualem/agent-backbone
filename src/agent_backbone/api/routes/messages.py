@@ -220,6 +220,8 @@ async def steer(
                 db, exc, sender=body.from_entity, path="/api/steer", target=body.target_session
             )
             raise
+        # Validated before the claim: a refused attribution must not hold the offer.
+        interaction = await interaction_metadata(request, body, db)
         token = await db.signing.claim_offer(confirmation.confirmation_id, int(time.time()))
         if token is None:
             # Offered once already, or an earlier request is offering it now:
@@ -259,7 +261,7 @@ async def steer(
             config,
             db=db,
             sender=body.from_entity,
-            interaction=await interaction_metadata(request, body, db),
+            interaction=interaction,
             confirmation_id=confirmation.confirmation_id,
             operation_id=row["operation_id"],
             claim_token=token,
