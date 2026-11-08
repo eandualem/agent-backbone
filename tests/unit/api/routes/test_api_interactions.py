@@ -309,7 +309,7 @@ async def test_failed_retry_keeps_original_and_capture_failure_prevents_paste(
     monkeypatch.setattr(
         api_app.state.db.interactions, "capture", AsyncMock(side_effect=OSError("full"))
     )
-    with pytest.raises(OSError, match="full"):
+    with pytest.raises(RuntimeError, match="interaction capture failed"):
         await send(api_client, auth_headers, message="new independent message")
     transport[1].assert_not_awaited()
 
