@@ -14,6 +14,11 @@ from agent_backbone.services.database.backbone_db import BackboneDB, metadata
 from tests.support import queue_row
 
 _EXPECTED_TABLES = {
+    "registered_state_observations",
+    "interaction_capture_checkpoints",
+    "interactions",
+    "interaction_events",
+    "interaction_coverage",
     "acknowledgments",
     "agent_states",
     "agent_state_history",
@@ -62,6 +67,14 @@ _EXPECTED_TABLES = {
 }
 
 _EXPECTED_INDEXES = {
+    "idx_registered_state_agent_time",
+    "idx_interaction_checkpoints_time",
+    "idx_interaction_checkpoints_recorder",
+    "idx_registered_state_recorder",
+    "idx_interactions_sender",
+    "idx_interactions_recipient",
+    "idx_interaction_events_time",
+    "idx_interaction_events_operation",
     "idx_state_history_agent",
     "idx_state_history_at",
     "uq_agents_report_identity",

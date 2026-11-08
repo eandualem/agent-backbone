@@ -22,6 +22,7 @@ A conversation is keyed by the artifact's kind and stable ID:
 | `skill` | Assigned when Backbone first reads the skill ([below](#skills-and-policies)) | The maintainer the operator mapped, if any |
 | `policy` | Assigned when Backbone first reads the policy | The maintainer the operator mapped, if any |
 | `plan` | The agent registration’s `author_id` | That registration |
+| `interaction` | Captured interaction ID | The first verified agent captured on it: its sender, otherwise its recipient, retired or not. The owner names the participant each question goes to |
 | `sheet` | `sheet_id` | The workbook’s registered owner |
 
 Responses and reports carry `conversation_id` in their list and show output.
@@ -246,3 +247,13 @@ Messages are at most 4,000 characters. The message and rate limits are
 [settings](configuration.md#conversations--artifact-conversations). Revision
 events are never refused, so publishing is never blocked by a full
 conversation. Conversations, Documents, Responses and reports are never pruned.
+
+## Interaction context
+
+Interaction conversations retain the original message as their immutable artifact.
+The header includes `original_context` with the captured identities and retained
+body; participant access does not grant access to the operator history feed.
+An agent must have a registration-bound credential matching an original verified
+participant. Retiring a participant does not transfer access to a reused name.
+Replies explain the message now and cannot provide a resulting revision of the
+original. See [Interactions](interactions.md) for coverage and retention.

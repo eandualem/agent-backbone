@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from agent_backbone.api.auth import require_operator
 from agent_backbone.api.deps import get_config, get_db
+from agent_backbone.api.interaction_capture import signed_as
 from agent_backbone.api.models import MessageResponse
 from agent_backbone.api.routes.conversations import versions
 from agent_backbone.api.routes.reports import _ReportRoute
@@ -98,7 +99,11 @@ async def feedback(
         await require_operator(request)
     signed = getattr(request.state, "signed_sender", None)
     receipt = await db.current_plans.feedback(
-        author_id, body, lambda sender, text: envelope(sender, text, relay=signed is not None)
+        author_id,
+        body,
+        lambda sender, text: envelope(sender, text, relay=signed is not None),
+        credential_registration=getattr(request.state, "credential_registration", None),
+        signed=body.author is not None and await signed_as(request, db, body.author),
     )
     target = await db.current_plans.recipient(author_id)
     if target is not None:

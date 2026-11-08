@@ -12,19 +12,21 @@ _FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 
 def now_iso() -> str:
-    return datetime.now(UTC).strftime(_FORMAT)
+    return format_iso(datetime.now(UTC))
 
 
 def cutoff_iso(**delta) -> str:
     """The timestamp ``timedelta(**delta)`` ago, e.g. ``cutoff_iso(minutes=5)``."""
-    return (datetime.now(UTC) - timedelta(**delta)).strftime(_FORMAT)
+    return format_iso(datetime.now(UTC) - timedelta(**delta))
 
 
 def format_iso(moment: datetime) -> str:
     """``moment`` (any timezone; naive means UTC) in the stored format."""
     if moment.tzinfo is not None:
         moment = moment.astimezone(UTC)
-    return moment.strftime(_FORMAT)
+    # %Y is not zero-padded before year 1000 on every platform (glibc): pad it here so
+    # stored times stay parseable and sort lexically.
+    return f"{moment.year:04d}" + moment.strftime(_FORMAT.removeprefix("%Y"))
 
 
 def parse_iso(value: str) -> datetime:

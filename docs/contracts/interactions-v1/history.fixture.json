@@ -1,0 +1,342 @@
+{
+  "schema_version": 1,
+  "items": [
+    {
+      "id": "11111111111111111111111111111111",
+      "operation_id": "11111111111111111111111111111111",
+      "accepted_at": "2026-10-31T12:00:00+00:00",
+      "last_event_at": "2026-10-31T12:00:00+00:00",
+      "kind": "message",
+      "sender": {
+        "kind": "agent",
+        "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "coordinator",
+        "name_at_capture": "coordinator",
+        "attribution": "credential_bound",
+        "retired": false
+      },
+      "recipient": {
+        "kind": "agent",
+        "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "researcher",
+        "name_at_capture": "researcher",
+        "attribution": "credential_bound",
+        "retired": false
+      },
+      "original_target": "researcher",
+      "preview": "Illustrative fixture: inspect the test change.",
+      "body": {
+        "level": "full",
+        "text": "Illustrative fixture: inspect the test change.",
+        "reason": null,
+        "format": "text"
+      },
+      "status": {
+        "value": "delivered",
+        "observed_at": "2026-10-31T12:00:00+00:00",
+        "evidence": "recorded delivery outcome",
+        "delivered": true
+      },
+      "attempt_count": 1,
+      "attempts": {
+        "items": [
+          {
+            "id": "delivery:1",
+            "operation_id": "11111111111111111111111111111111",
+            "delivery_id": 1,
+            "queue_id": null,
+            "outcome": "delivered",
+            "source": "fixture",
+            "recorded_at": "2026-10-31T12:00:00+00:00",
+            "settled_at": null
+          }
+        ],
+        "next_cursor": null
+      },
+      "lifecycle": {
+        "items": [
+          {
+            "id": "event:1",
+            "kind": "accepted",
+            "time": "2026-10-31T12:00:00+00:00",
+            "time_basis": "recorded",
+            "outcome": null,
+            "attempt_id": null,
+            "source": "fixture"
+          },
+          {
+            "id": "event:2",
+            "kind": "attempt",
+            "time": "2026-10-31T12:00:00+00:00",
+            "time_basis": "observed",
+            "outcome": "delivered",
+            "attempt_id": "delivery:1",
+            "source": "fixture"
+          }
+        ],
+        "next_cursor": null
+      },
+      "relations": [
+        {
+          "source_interaction_id": null,
+          "type": "for_owner_request",
+          "target": {
+            "kind": "owner_request",
+            "id": "22222222222222222222222222222222",
+            "artifact_kind": null,
+            "entry_id": null
+          },
+          "recorded_at": "2026-10-31T12:00:00+00:00",
+          "provenance": "explicit_sender"
+        }
+      ],
+      "relations_truncated": false,
+      "conversation": {
+        "supported": true,
+        "kind": "interaction",
+        "artifact_id": "11111111111111111111111111111111",
+        "recipients": [
+          {
+            "kind": "agent",
+            "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "name": "coordinator",
+            "name_at_capture": "coordinator",
+            "attribution": "credential_bound",
+            "retired": false
+          },
+          {
+            "kind": "agent",
+            "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "name": "researcher",
+            "name_at_capture": "researcher",
+            "attribution": "credential_bound",
+            "retired": false
+          }
+        ],
+        "reason": null,
+        "total": 0,
+        "last_entry_at": null
+      },
+      "conversation_entry": null
+    },
+    {
+      "id": "22222222222222222222222222222222",
+      "operation_id": "22222222222222222222222222222222",
+      "accepted_at": "2026-10-31T12:00:00+00:00",
+      "last_event_at": "2026-10-31T12:00:00+00:00",
+      "kind": "message",
+      "sender": {
+        "kind": "owner",
+        "id": "owner",
+        "name": "You",
+        "name_at_capture": "You",
+        "attribution": "operator_asserted",
+        "retired": false
+      },
+      "recipient": {
+        "kind": "agent",
+        "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "coordinator",
+        "name_at_capture": "coordinator",
+        "attribution": "credential_bound",
+        "retired": false
+      },
+      "original_target": "coordinator",
+      "preview": "Illustrative fixture: check this task.",
+      "body": {
+        "level": "full",
+        "text": "Illustrative fixture: check this task.",
+        "reason": null,
+        "format": "text"
+      },
+      "status": {
+        "value": "delivered",
+        "observed_at": "2026-10-31T12:00:00+00:00",
+        "evidence": "recorded delivery outcome",
+        "delivered": true
+      },
+      "attempt_count": 1,
+      "attempts": {
+        "items": [
+          {
+            "id": "delivery:1",
+            "operation_id": "22222222222222222222222222222222",
+            "delivery_id": 1,
+            "queue_id": null,
+            "outcome": "delivered",
+            "source": "fixture",
+            "recorded_at": "2026-10-31T12:00:00+00:00",
+            "settled_at": null
+          }
+        ],
+        "next_cursor": null
+      },
+      "lifecycle": {
+        "items": [
+          {
+            "id": "event:1",
+            "kind": "accepted",
+            "time": "2026-10-31T12:00:00+00:00",
+            "time_basis": "recorded",
+            "outcome": null,
+            "attempt_id": null,
+            "source": "fixture"
+          },
+          {
+            "id": "event:2",
+            "kind": "attempt",
+            "time": "2026-10-31T12:00:00+00:00",
+            "time_basis": "observed",
+            "outcome": "delivered",
+            "attempt_id": "delivery:1",
+            "source": "fixture"
+          }
+        ],
+        "next_cursor": null
+      },
+      "relations": [],
+      "relations_truncated": false,
+      "conversation": {
+        "supported": true,
+        "kind": "interaction",
+        "artifact_id": "22222222222222222222222222222222",
+        "recipients": [
+          {
+            "kind": "agent",
+            "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "name": "coordinator",
+            "name_at_capture": "coordinator",
+            "attribution": "credential_bound",
+            "retired": false
+          }
+        ],
+        "reason": null,
+        "total": 0,
+        "last_entry_at": null
+      },
+      "conversation_entry": null
+    },
+    {
+      "id": "33333333333333333333333333333333",
+      "operation_id": "33333333333333333333333333333333",
+      "accepted_at": "2026-10-31T12:00:00+00:00",
+      "last_event_at": "2026-10-31T12:00:00+00:00",
+      "kind": "message",
+      "sender": {
+        "kind": "unknown",
+        "id": null,
+        "name": "sender not recorded",
+        "name_at_capture": "",
+        "attribution": "unverified",
+        "retired": false
+      },
+      "recipient": {
+        "kind": "agent",
+        "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "researcher",
+        "name_at_capture": "researcher",
+        "attribution": "credential_bound",
+        "retired": false
+      },
+      "original_target": "researcher",
+      "preview": "Illustrative retained opening…",
+      "body": {
+        "level": "excerpt",
+        "text": "Illustrative retained opening…",
+        "reason": "not_captured",
+        "format": "text"
+      },
+      "status": {
+        "value": "uncertain",
+        "observed_at": "2026-10-31T12:00:00+00:00",
+        "evidence": "recorded delivery outcome",
+        "delivered": false
+      },
+      "attempt_count": 1,
+      "attempts": {
+        "items": [
+          {
+            "id": "delivery:1",
+            "operation_id": "33333333333333333333333333333333",
+            "delivery_id": 1,
+            "queue_id": null,
+            "outcome": "uncertain",
+            "source": "fixture",
+            "recorded_at": "2026-10-31T12:00:00+00:00",
+            "settled_at": null
+          }
+        ],
+        "next_cursor": null
+      },
+      "lifecycle": {
+        "items": [
+          {
+            "id": "event:1",
+            "kind": "accepted",
+            "time": "2026-10-31T12:00:00+00:00",
+            "time_basis": "recorded",
+            "outcome": null,
+            "attempt_id": null,
+            "source": "fixture"
+          },
+          {
+            "id": "event:2",
+            "kind": "attempt",
+            "time": "2026-10-31T12:00:00+00:00",
+            "time_basis": "observed",
+            "outcome": "uncertain",
+            "attempt_id": "delivery:1",
+            "source": "fixture"
+          }
+        ],
+        "next_cursor": null
+      },
+      "relations": [],
+      "relations_truncated": false,
+      "conversation": {
+        "supported": true,
+        "kind": "interaction",
+        "artifact_id": "33333333333333333333333333333333",
+        "recipients": [
+          {
+            "kind": "agent",
+            "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "name": "researcher",
+            "name_at_capture": "researcher",
+            "attribution": "credential_bound",
+            "retired": false
+          }
+        ],
+        "reason": null,
+        "total": 0,
+        "last_entry_at": null
+      },
+      "conversation_entry": null
+    }
+  ],
+  "next_cursor": null,
+  "snapshot": "fixture-not-a-live-cursor",
+  "coverage": {
+    "since": "2026-10-31T11:00:00+00:00",
+    "until": "2026-10-31T13:00:00+00:00",
+    "capture_started_at": "2026-10-31T12:00:00+00:00",
+    "retained_from": "2026-10-31T12:00:00+00:00",
+    "body_retained_from": null,
+    "as_of": "2026-10-31T12:00:00+00:00",
+    "completeness": "partial",
+    "reasons": [
+      "window_precedes_capture",
+      "illustrative_fixture"
+    ],
+    "declared_scope": [
+      "backbone_messages",
+      "steers",
+      "artifact_conversations",
+      "owner_questions"
+    ],
+    "truncated": false,
+    "state_history": "observed_partial",
+    "message_intervals": [],
+    "quiet_scope": "capture_enabled_backbone_paths"
+  }
+}

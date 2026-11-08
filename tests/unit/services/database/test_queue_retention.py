@@ -223,3 +223,46 @@ async def test_pending_direct_message_survives_service_database_restart(tmp_path
         ]
     finally:
         await second.stop()
+
+
+async def test_a_failed_interaction_event_never_fails_the_expiry_sweep(db):
+    first = await db.queue.enqueue(session_name="app", message="one", delivery_kind="comment")
+    second = await db.queue.enqueue(session_name="app", message="two", delivery_kind="comment")
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE message_queue SET enqueued_at='2020-01-01T00:00:00.000000Z'")
+        )
+    with patch(
+        "agent_backbone.services.database._queue_repo.event", side_effect=RuntimeError("busy")
+    ):
+        expired = await db.queue.expire_pending(max_age_minutes=30)
+    assert sorted(row["id"] for row in expired) == sorted([first.id, second.id])
+    codes = [row["code"] for row in await db.diagnostics.query(category="queue")]
+    assert codes.count("queue_expired") == 2
+
+
+async def test_an_expiry_event_points_to_its_delivery_record(db):
+    queued = await db.queue.enqueue(
+        session_name="app", message="old", sender="bell", delivery_kind="comment"
+    )
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE message_queue SET enqueued_at='2020-01-01T00:00:00.000000Z'")
+        )
+    (expired,) = await db.queue.expire_pending(max_age_minutes=30)
+    async with db.engine.begin() as conn:
+        linked = await conn.scalar(
+            text("SELECT delivery_id FROM interaction_events WHERE kind='queue_expired'")
+        )
+    assert linked is not None and linked == expired["delivery_id"]
+    assert queued.id == expired["id"]
+
+
+async def test_a_failed_capture_on_enqueue_never_carries_the_message(db):
+    leak = RuntimeError("INSERT INTO interactions ... 'private text'")
+    with (
+        patch("agent_backbone.services.database._interaction_capture._capture", side_effect=leak),
+        pytest.raises(RuntimeError) as raised,
+    ):
+        await db.queue.enqueue(session_name="app", message="private text", delivery_kind="comment")
+    assert "private text" not in str(raised.value) and raised.value.__suppress_context__

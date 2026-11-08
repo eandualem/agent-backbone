@@ -385,3 +385,29 @@ class TestSettle:
         assert await settle_steers(config, db) == {"handed_off": 1}
         assert (config.state_dir / "context" / "ike" / "42.taken").exists()  # the drain's business
         assert report.delivery_id
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+async def test_interaction_records_original_and_observed_handoff(config, db, working, runtime):
+    working[0].return_value = _profile(SessionIntelligence.AGENT_WORKING, runtime)
+    report = await steer_agent("ike", "Original steer", config, db=db, sender="leo")
+    assert report.outcome == "offered"
+    async with db.engine.begin() as conn:
+        record = (
+            (
+                await conn.execute(
+                    text("SELECT * FROM interactions WHERE operation_id=:op"),
+                    {"op": report.operation_id},
+                )
+            )
+            .mappings()
+            .one()
+        )
+    assert record["body"] == "Original steer"
+    assert take_context(config.state_dir, "ike", launch_id="L1")
+    # The settling boundary records hook receipt; it never asserts incorporation.
+    await db.deliveries.settle(report.delivery_id, "handed_off", expected="offered")
+    detail = await db.interactions.detail(record["id"])
+    assert detail["status"]["value"] == "handed_off"
+    assert detail["lifecycle"]["items"][-1]["time_basis"] == "observed"
+    assert detail["attempt_count"] == 1

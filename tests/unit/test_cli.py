@@ -878,9 +878,34 @@ class TestTell:
             "from_entity": "me",
             "message": "hello world",
             "priority": False,
+            "interaction": {"actor": "owner"},
         }
         assert kwargs["headers"] == {"Authorization": "Bearer k"}
         assert json.loads(capsys.readouterr().out)["ok"] is True
+
+    def test_agent_credential_never_claims_owner_attribution(self, monkeypatch, capsys):
+        from agent_backbone.config import agent_api_key
+
+        monkeypatch.setenv("BACKBONE_API_KEY", "k")
+        assert _run(["init"]) == 0
+        capsys.readouterr()
+        monkeypatch.setenv("BACKBONE_API_KEY", agent_api_key("k"))
+        monkeypatch.delenv("BACKBONE_AGENT", raising=False)
+
+        class _Resp:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {"ok": True, "session": "a", "outcome": "delivered"}
+
+        client = AsyncMock()
+        client.request = AsyncMock(return_value=_Resp())
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=None)
+        with patch("httpx.AsyncClient", return_value=client):
+            assert _run(["tell", "a", "hello", "--from", "me"]) == 0
+        assert "interaction" not in client.request.await_args.kwargs["json"]
 
     def test_malformed_200_payload_is_an_error_not_a_traceback(self, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_API_KEY", "k")

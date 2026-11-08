@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from agent_backbone.models import RETIREMENT_REASONS, RETRYABLE_OUTCOMES
 from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
+from agent_backbone.services.database._interaction_capture import event
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 
@@ -52,7 +53,28 @@ class DeliveryRepo(Repo):
                     "created_at": now_iso(),
                 },
             )
-            return result.scalar_one()
+            delivery_id = result.scalar_one()
+            row = (
+                (
+                    await conn.execute(
+                        text("SELECT * FROM deliveries WHERE id=:id"), {"id": delivery_id}
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            await event(
+                conn,
+                row["operation_id"],
+                "attempt",
+                outcome=outcome,
+                source=source,
+                at=row["created_at"],
+                delivery_id=delivery_id,
+                # SQLite may reuse a pruned delivery id; the operation keeps the key unique.
+                key=f"delivery:{row['operation_id']}:{delivery_id}",
+            )
+            return delivery_id
 
     async def claim(
         self,
@@ -117,6 +139,16 @@ class DeliveryRepo(Repo):
                 },
             )
             row = result.fetchone()
+            if row:
+                await event(
+                    conn,
+                    operation_id,
+                    "attempt",
+                    outcome="attempting",
+                    source=source,
+                    delivery_id=row._mapping["id"],
+                    key=f"delivery:{operation_id}:{row._mapping['id']}",
+                )
             return row._mapping["id"] if row else None
 
     async def finalize(
@@ -128,7 +160,7 @@ class DeliveryRepo(Repo):
     ) -> None:
         """Finalize a claimed delivery attempt."""
         async with self._tx() as conn:
-            await conn.execute(
+            changed = await conn.execute(
                 text(
                     """UPDATE deliveries SET outcome = :outcome,
                        operation_id = COALESCE(:operation_id, operation_id)
@@ -136,6 +168,25 @@ class DeliveryRepo(Repo):
                 ),
                 {"id": delivery_id, "outcome": outcome, "operation_id": operation_id},
             )
+            row = (
+                (
+                    await conn.execute(
+                        text("SELECT * FROM deliveries WHERE id=:id"), {"id": delivery_id}
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if row and changed.rowcount > 0:
+                await event(
+                    conn,
+                    row["operation_id"],
+                    "attempt_settled",
+                    outcome=outcome,
+                    source=row["source"],
+                    delivery_id=delivery_id,
+                    key=f"finalize:{row['operation_id']}:{delivery_id}:{outcome}",
+                )
 
     async def settle(self, delivery_id: int, outcome: str, *, expected: str) -> bool:
         """Move a delivery from ``expected`` to ``outcome`` (a steer's
@@ -149,6 +200,26 @@ class DeliveryRepo(Repo):
                 ),
                 {"id": delivery_id, "outcome": outcome, "expected": expected, "at": now_iso()},
             )
+            if result.rowcount > 0:
+                row = (
+                    (
+                        await conn.execute(
+                            text("SELECT * FROM deliveries WHERE id=:id"), {"id": delivery_id}
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                await event(
+                    conn,
+                    row["operation_id"],
+                    "handoff" if outcome == "handed_off" else "attempt_settled",
+                    outcome=outcome,
+                    source=row["source"],
+                    at=row["settled_at"],
+                    delivery_id=delivery_id,
+                    key=f"settle:{row['operation_id']}:{delivery_id}:{outcome}",
+                )
             return result.rowcount > 0
 
     async def reclaim_stale(
@@ -264,6 +335,16 @@ class DeliveryRepo(Repo):
                 },
             )
             row = result.mappings().first()
+            if row is not None:
+                await event(
+                    conn,
+                    row["operation_id"],
+                    "retired_" + outcome,
+                    outcome=outcome,
+                    source=row["source"],
+                    delivery_id=delivery_id,
+                    key=f"retire:{row['operation_id']}:{delivery_id}:{outcome}",
+                )
         if row is not None:
             await DiagnosticRepo(self._engine).record(
                 category="delivery",

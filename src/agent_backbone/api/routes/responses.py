@@ -1,6 +1,6 @@
 """Explicit answers, separate from authored progress reports."""
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from pydantic import BaseModel
 
 from agent_backbone.api.deps import get_db
@@ -62,11 +62,19 @@ async def schema():
 
 @router.post("", response_model=ResponsePublication, operation_id="publish_response")
 async def publish_response(
-    publication: PublishResponse, response: Response, db: BackboneDB = Depends(get_db)
+    publication: PublishResponse,
+    response: Response,
+    request: Request,
+    db: BackboneDB = Depends(get_db),
 ):
     """The trusted local client supplies the author, question and correction link."""
     try:
-        record, created = await db.reports.publish(publication)
+        record, created = await db.reports.publish(
+            publication,
+            interaction_registration=getattr(request.state, "credential_registration", None)
+            if getattr(request.state, "credential_agent", None) == publication.agent
+            else None,
+        )
     except KeyError as exc:
         raise HTTPException(404, "agent is not registered") from exc
     except ReportForbidden as exc:
