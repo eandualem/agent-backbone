@@ -308,15 +308,48 @@ async def _default_provider(registry, reservation):
     return provider
 
 
-def cmd_up(args: argparse.Namespace) -> int:
+PROFILE_WAIT_SECONDS = 10
+"""How often a refused ``up`` under a service manager looks for its profile again."""
+
+
+def _under_service_manager() -> bool:
+    """launchd names the job in XPC_SERVICE_NAME; systemd sets INVOCATION_ID."""
+    from agent_backbone.cli.service import LABEL
+
+    return os.environ.get("XPC_SERVICE_NAME") == LABEL or bool(os.environ.get("INVOCATION_ID"))
+
+
+def _default_profile(data_dir: Path):
+    """The Default profile, or a refusal. Under a service manager the refusal is
+    logged once and ``up`` waits for ``backbone init`` instead of exiting, which
+    the service would restart every few seconds."""
     from agent_backbone.services.database import default_profile_at
 
+    try:
+        return default_profile_at(data_dir)
+    except ValueError as exc:
+        if not _under_service_manager():
+            raise
+        print(
+            f"error: {exc}; waiting for it, checking every {PROFILE_WAIT_SECONDS} s",
+            file=sys.stderr,
+            flush=True,
+        )
+    while True:
+        time.sleep(PROFILE_WAIT_SECONDS)
+        try:
+            return default_profile_at(data_dir)
+        except ValueError:
+            continue
+
+
+def cmd_up(args: argparse.Namespace) -> int:
     _clear_inherited_signal_mask()
     # A quoted `~/…` reaches us unexpanded; a detached run starts elsewhere.
     log_file = args.log_file.expanduser().resolve() if args.log_file else None
     try:
         # Before anything can create a database or report a detached start.
-        registry, reservation = default_profile_at(resolve_data_dir())
+        registry, reservation = _default_profile(resolve_data_dir())
         config = asyncio.run(_common.load_config())
         if args.detach:
             _common.pin_default_terminal()
