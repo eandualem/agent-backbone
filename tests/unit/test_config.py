@@ -129,7 +129,12 @@ class TestSessionSecretKeys:
         assert len(keys) == len(set(keys))
 
     def test_without_a_data_dir_falls_back_to_the_known_names(self):
-        assert session_secret_keys(None) == SECRET_ENV_KEYS
+        assert session_secret_keys(None) == (*SECRET_ENV_KEYS, "BACKBONE_DATABASE_URL")
+
+    def test_a_retired_database_url_is_still_stripped(self, tmp_path):
+        # A tmux server started while it was set still holds the old password.
+        assert "BACKBONE_DATABASE_URL" in session_secret_keys(tmp_path)
+        assert "BACKBONE_DATABASE_URL" not in SECRET_ENV_KEYS  # not offered as a setting
 
 
 class TestValidateSetting:

@@ -1082,7 +1082,9 @@ def session_secret_keys(data_dir: Path | str | None) -> tuple[str, ...]:
     agent sessions, with no blocklist to keep in sync. Names only; the
     values are never read here.
     """
-    keys = dict.fromkeys(SECRET_ENV_KEYS)
+    # No longer a setting, but a tmux server started while it was set still
+    # holds the old PostgreSQL URL and its password: keep stripping it.
+    keys = dict.fromkeys((*SECRET_ENV_KEYS, "BACKBONE_DATABASE_URL"))
     if data_dir is not None:
         keys.update(dict.fromkeys(env_file_keys(Path(data_dir) / ".env")))
     return tuple(keys)
