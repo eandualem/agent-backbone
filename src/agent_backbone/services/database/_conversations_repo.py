@@ -45,6 +45,7 @@ from agent_backbone.services.database.models import (
     CurrentPlanORM,
     DiagnosticORM,
     DocumentORM,
+    InteractionORM,
     MessageQueueORM,
     ObservedSourceORM,
     ObservedVersionORM,
@@ -57,6 +58,7 @@ _A = AgentORM.__table__
 _D = DocumentORM.__table__
 _DG = DiagnosticORM.__table__
 _E = ConversationEntryORM.__table__
+_I = InteractionORM.__table__
 _P = CurrentPlanORM.__table__
 _Q = MessageQueueORM.__table__
 _R = ReportORM.__table__
@@ -690,6 +692,21 @@ class ConversationRepo(Repo):
                     and_(_E.c.kind.in_(("response", "report")), _E.c.artifact_id.in_(authored)),
                     and_(_E.c.kind.in_(OBSERVED), _E.c.artifact_id.in_(maintained)),
                     and_(_E.c.kind == "plan", _E.c.artifact_id == agent_id),
+                    # An interaction's verified participants, as its conversation reads them.
+                    and_(
+                        _E.c.kind == "interaction",
+                        _E.c.artifact_id.in_(
+                            select(_I.c.id).where(
+                                or_(
+                                    _I.c.recipient_id == agent_id,
+                                    and_(
+                                        _I.c.sender_id == agent_id,
+                                        ~_I.c.sender.contains('"attribution": "unverified"'),
+                                    ),
+                                )
+                            )
+                        ),
+                    ),
                     and_(
                         _E.c.kind == "sheet",
                         _E.c.artifact_id.in_(

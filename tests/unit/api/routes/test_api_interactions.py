@@ -146,6 +146,10 @@ async def test_owner_bound_identity_and_conversation_access(
         json={"request_id": "ask", "recipient": "bell", "text": "Why this handoff?"},
     )
     assert question.status_code == 201, question.text
+    # The other verified participant finds the discussion, not only the one addressed.
+    ike = {"Authorization": "Bearer " + agent_api_key(TEST_API_KEY, await identity(db, "ike"))}
+    listed = await api_client.get("/api/conversations", headers=ike)
+    assert row["id"] in [item["artifact_id"] for item in listed.json()["items"]], listed.text
     replay = await api_client.post(
         path + "/messages",
         headers=auth_headers,
