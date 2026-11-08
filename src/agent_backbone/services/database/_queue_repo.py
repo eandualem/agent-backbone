@@ -661,6 +661,7 @@ class QueueRepo(Repo):
                     source=row["source"],
                     at=row.get("delivered_at") or now_iso(),
                     queue_id=row["id"],
+                    delivery_id=delivery_id,
                 )
         except Exception:
             # A fixed, rate-limited warning: the exception can carry SQL bound values.

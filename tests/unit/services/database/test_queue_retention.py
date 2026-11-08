@@ -239,3 +239,20 @@ async def test_a_failed_interaction_event_never_fails_the_expiry_sweep(db):
     assert sorted(row["id"] for row in expired) == sorted([first.id, second.id])
     codes = [row["code"] for row in await db.diagnostics.query(category="queue")]
     assert codes.count("queue_expired") == 2
+
+
+async def test_an_expiry_event_points_to_its_delivery_record(db):
+    queued = await db.queue.enqueue(
+        session_name="app", message="old", sender="bell", delivery_kind="comment"
+    )
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE message_queue SET enqueued_at='2020-01-01T00:00:00.000000Z'")
+        )
+    (expired,) = await db.queue.expire_pending(max_age_minutes=30)
+    async with db.engine.begin() as conn:
+        linked = await conn.scalar(
+            text("SELECT delivery_id FROM interaction_events WHERE kind='queue_expired'")
+        )
+    assert linked is not None and linked == expired["delivery_id"]
+    assert queued.id == expired["id"]
