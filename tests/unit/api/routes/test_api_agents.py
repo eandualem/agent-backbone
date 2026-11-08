@@ -496,6 +496,33 @@ class TestStopAgent:
         )
         assert resp.json() == {"ok": True, "session": "newbie"}
 
+    async def test_an_id_bound_stop_reads_inbox_only_from_the_durable_row(
+        self, api_client, auth_headers, tmux_svc, api_app
+    ):
+        db = api_app.state.db
+        await db.agents.upsert(
+            "postbox",
+            dir="/fixture/postbox",
+            unattended=False,
+            runtime="codex",
+            model=None,
+            repo="",
+            tags=[],
+            env={},
+            description="",
+            inbox_only=True,
+        )
+        assert "postbox" not in api_app.state.config.agents
+        rows = await db.agents.list()
+        current = next(r["report_identity"] for r in rows if r["name"] == "postbox")
+        resp = await api_client.post(
+            "/api/agents/postbox/stop",
+            params={"expected_registration_id": current},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400 and "no session to stop" in resp.json()["detail"]
+        tmux_svc.stop_session.assert_not_awaited()
+
     async def test_the_registration_is_checked_under_the_cross_process_guard(
         self, api_client, auth_headers, tmux_svc, api_app, monkeypatch
     ):
