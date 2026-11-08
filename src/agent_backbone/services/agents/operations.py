@@ -205,7 +205,24 @@ async def relink_skills(
     return evidence
 
 
-async def stop_agent_session(config: BackboneConfig, name: str) -> bool:
+async def _refuse_changed_registration(
+    db: BackboneDB | None, name: str, expected_registration_id: str | None
+) -> None:
+    """Under the caller's lifecycle lock: refuse when the agent's durable
+    registration is not the one the caller selected."""
+    if expected_registration_id is not None and (
+        db is None or not await db.agents.registration_matches(name, expected_registration_id)
+    ):
+        raise ValueError("agent registration changed")
+
+
+async def stop_agent_session(
+    config: BackboneConfig,
+    name: str,
+    *,
+    expected_registration_id: str | None = None,
+    db: BackboneDB | None = None,
+) -> bool:
     """Stop an agent's tmux session. The backbone's own session is refused
     (``ValueError``) on every surface — API, CLI, Telegram — from here."""
     if name == config.backbone.session_name:
@@ -215,16 +232,24 @@ async def stop_agent_session(config: BackboneConfig, name: str) -> bool:
         # A session with its name is not the agent's: never stop it on its behalf.
         raise ValueError(f"'{name}' is inbox-only: it has no session to stop")
     async with lifecycle_lock(name):
+        await _refuse_changed_registration(db, name, expected_registration_id)
         return await launch.stop_agent(name)
 
 
-async def forget_agent(store: AgentStore, name: str) -> bool:
+async def forget_agent(
+    store: AgentStore,
+    name: str,
+    *,
+    expected_registration_id: str | None = None,
+    db: BackboneDB | None = None,
+) -> bool:
     """Remove an agent from the backbone. A running session is refused
     (``RuntimeError``): stop it first. Returns False for an unknown name.
 
     Holds the agent's lifecycle lock, so a start in progress finishes first
     and the session check right before the delete sees it."""
     async with lifecycle_lock(name):
+        await _refuse_changed_registration(db, name, expected_registration_id)
         if await session_exists(name):
             raise RuntimeError(f"'{name}' is running — stop it first")
         return await store.forget(name)

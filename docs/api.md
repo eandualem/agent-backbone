@@ -221,7 +221,11 @@ lists every case, and `resume_selection` in the start's diagnostic records
 
 ### `POST /api/agents/{name}/stop`
 
-Stops a registered agent. An unregistered tmux session returns 404.
+Stops a registered agent. An unregistered tmux session returns 404. Pass the
+`registration_id` you selected as `expected_registration_id` to stop only that
+registration: it is checked under the agent's lifecycle lock, malformed values
+return 422, and a changed registration returns 409 `registration_changed`
+without stopping anything. Without it, stop works by name as before.
 
 ### `POST /api/agents/{name}/restart`
 
@@ -379,6 +383,8 @@ returns 409. External GitHub labels and scripts are not changed. See the
 ### `POST /api/agents/{name}/watch` · `/unwatch` `{"repo": "acme/web"}` · `DELETE /api/agents/{name}`
 
 Watch / stop watching a repository; forget a stopped agent (409 if running).
+`DELETE` takes the same optional `expected_registration_id` as stop: a changed
+registration returns 409 `registration_changed` and nothing is removed.
 
 ### `POST /api/agents/{name}/subscribe` `{"source": "gmail", "filter": "from:alerts@example.com", "priority": "high"}` · `/unsubscribe` `{"id": 3}`
 

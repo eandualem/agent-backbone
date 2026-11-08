@@ -427,6 +427,26 @@ class TestStopAgent:
         resp = await api_client.post("/api/agents/ike/stop", headers=auth_headers)
         assert resp.status_code == 400
 
+    async def test_stop_and_forget_refuse_a_changed_registration(
+        self, api_client, auth_headers, tmux_svc, api_app
+    ):
+        rows = await api_app.state.db.agents.list()
+        current = next(row["report_identity"] for row in rows if row["name"] == "ike")
+        other = "0" * 32 if current != "0" * 32 else "1" * 32
+        for method, path in (("POST", "/api/agents/ike/stop"), ("DELETE", "/api/agents/ike")):
+            resp = await api_client.request(
+                method, path, params={"expected_registration_id": other}, headers=auth_headers
+            )
+            assert resp.status_code == 409
+            assert resp.json()["detail"]["code"] == "registration_changed"
+        tmux_svc.stop_session.assert_not_awaited()
+        assert await api_app.state.db.agents.registration_matches("ike", current)
+        query = {"expected_registration_id": current}
+        resp = await api_client.post("/api/agents/ike/stop", params=query, headers=auth_headers)
+        assert resp.json() == {"ok": True, "session": "ike"}
+        resp = await api_client.delete("/api/agents/ike", params=query, headers=auth_headers)
+        assert resp.json()["ok"]
+
 
 class TestAgentOutput:
     async def test_a_page_of_messages_with_navigation(self, api_client, auth_headers, tmux_svc):

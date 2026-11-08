@@ -461,14 +461,20 @@ async def start_known_agent(
 @router.post("/agents/{session}/stop", response_model=AgentStopResponse)
 async def stop_agent(
     session: str,
+    expected_registration_id: str | None = Query(default=None, pattern=r"^[a-f0-9]{32}$"),
     config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
     feed: SessionFeed = Depends(get_feed),
 ):
     """Stop an agent tmux session (never the backbone's own)."""
     registered_agent_or_404(config, session)
     try:
-        ok = await stop_agent_session(config, session)
+        ok = await stop_agent_session(
+            config, session, expected_registration_id=expected_registration_id, db=db
+        )
     except ValueError as exc:
+        if str(exc) == "agent registration changed":
+            raise _registration_changed() from None
         raise HTTPException(status_code=400, detail=str(exc)) from None
     if ok:
         await feed.refresh_and_emit()
@@ -700,10 +706,21 @@ async def unsubscribe(
 
 
 @router.delete("/agents/{name}", dependencies=[Depends(require_operator)])
-async def forget_agent(name: str, store: AgentStore = Depends(get_agent_store)):
+async def forget_agent(
+    name: str,
+    expected_registration_id: str | None = Query(default=None, pattern=r"^[a-f0-9]{32}$"),
+    store: AgentStore = Depends(get_agent_store),
+    db: BackboneDB = Depends(get_db),
+):
     """Forget an agent (its session must be stopped first)."""
     try:
-        removed = await forget_agent_op(store, name)
+        removed = await forget_agent_op(
+            store, name, expected_registration_id=expected_registration_id, db=db
+        )
+    except ValueError as exc:
+        if str(exc) == "agent registration changed":
+            raise _registration_changed() from None
+        raise
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     if not removed:
