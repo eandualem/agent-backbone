@@ -538,11 +538,18 @@ class InteractionRepo(Repo):
             )
             if row is None:
                 return None
-            high = (
-                self._decode(cursor)["high"]
-                if cursor
-                else await conn.scalar(select(func.max(_E.c.id))) or 0
-            )
+            if cursor:
+                data = self._decode(cursor)
+                # Another projection's cursor is refused before its fields are read.
+                if (
+                    data.get("kind") != kind
+                    or data.get("interaction") != interaction_id
+                    or not isinstance(data.get("high"), int)
+                ):
+                    raise ValueError("Cursor belongs to another interaction or projection")
+                high = data["high"]
+            else:
+                high = await conn.scalar(select(func.max(_E.c.id))) or 0
             events = await self._events(conn, interaction_id, high)
             items = (
                 self._attempts(events)

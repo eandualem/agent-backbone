@@ -211,6 +211,13 @@ async def test_lifecycle_overlap_cursor_scope_and_frozen_snapshot(
     first = await api_client.get("/api/interactions", headers=auth_headers, params=params)
     assert first.status_code == 200, first.text
     assert first.json()["next_cursor"]
+    for subpage in ("attempts", "events"):  # a history cursor is refused, never a 500
+        wrong = await api_client.get(
+            f"/api/interactions/{row['id']}/{subpage}",
+            headers=auth_headers,
+            params={"cursor": first.json()["next_cursor"]},
+        )
+        assert wrong.status_code == 422, wrong.text
     await send(api_client, auth_headers, message="after snapshot")
     second = await api_client.get(
         "/api/interactions",
