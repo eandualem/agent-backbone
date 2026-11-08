@@ -13,6 +13,14 @@ _CHECK = InteractionCaptureCheckpointORM.__table__
 MAX_GAP_SECONDS = 120
 
 
+def _shift(value: str, seconds: int) -> str:
+    """Widen a window bound, staying at the bound past representable time (year 1 or 9999)."""
+    try:
+        return format_iso(parse_iso(value) + timedelta(seconds=seconds))
+    except OverflowError:
+        return value
+
+
 async def checkpoint(conn, recorder_id):
     at = now_iso()
     previous = (
@@ -64,8 +72,8 @@ async def checkpoint(conn, recorder_id):
 
 async def message_intervals(conn, since, until, snapshot):
     # One bounded predecessor can support a span beginning before the window.
-    low = format_iso(parse_iso(since) - timedelta(seconds=MAX_GAP_SECONDS))
-    high = min(snapshot["at"], format_iso(parse_iso(until) + timedelta(seconds=MAX_GAP_SECONDS)))
+    low = _shift(since, -MAX_GAP_SECONDS)
+    high = min(snapshot["at"], _shift(until, MAX_GAP_SECONDS))
     # Time-adjacent checkpoints certify a span only if they were also recorded one after the
     # other: a wall-clock rollback must not join checkpoints that were not consecutive.
     earlier = _CHECK.alias("earlier")
@@ -143,8 +151,8 @@ async def state_spans(conn, agent_id, since, until, high, *, after=None, limit=2
         "until": until,
         "high": high,
         "limit": limit + 1,
-        "low": format_iso(parse_iso(since) - timedelta(seconds=MAX_GAP_SECONDS)),
-        "upper": format_iso(parse_iso(until) + timedelta(seconds=MAX_GAP_SECONDS)),
+        "low": _shift(since, -MAX_GAP_SECONDS),
+        "upper": _shift(until, MAX_GAP_SECONDS),
     }
     if after:
         where_after = " AND (at > :after_at OR (at=:after_at AND id>:after_id))"

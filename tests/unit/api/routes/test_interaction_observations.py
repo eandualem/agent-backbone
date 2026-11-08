@@ -393,3 +393,14 @@ async def test_registered_samples_are_not_kept_with_diagnostics_off(api_app):
     async with db.engine.begin() as conn:
         count = await conn.scalar(text("SELECT COUNT(*) FROM registered_state_observations"))
     assert count == 0
+
+
+async def test_a_window_at_the_end_of_time_is_answered(api_app):
+    db = api_app.state.db
+    end = "9999-12-31T23:59:59.000000Z"
+    summary = await db.interactions.summary(since="9999-12-31T23:00:00.000000Z", until=end)
+    assert summary["coverage"]["until"] == end
+    spans = await db.interactions.state_spans(
+        agent_id=await identity(db, "ike"), since="9999-12-31T23:00:00.000000Z", until=end
+    )
+    assert spans["items"] == []
