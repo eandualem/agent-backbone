@@ -762,19 +762,15 @@ async def safe_deliver(
             await db.signing.attempt(operation_id, begun=True)
         await check_before_effect(guard)
         if db is not None and requeue:
-            try:
-                await db.interactions.capture(
-                    operation_id=operation_id,
-                    message=message,
-                    sender=sender,
-                    recipient=session_name,
-                    kind=kind,
-                    source=source,
-                    metadata=interaction,
-                )
-            except Exception:
-                # The database error can carry the message body: never chain it to a log.
-                raise RuntimeError("interaction capture failed before delivery") from None
+            await db.interactions.capture(
+                operation_id=operation_id,
+                message=message,
+                sender=sender,
+                recipient=session_name,
+                kind=kind,
+                source=source,
+                metadata=interaction,
+            )
         pasted_at = time.time()
         note_submission(config.state_dir, session_name)
         try:

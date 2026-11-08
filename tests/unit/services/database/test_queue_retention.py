@@ -256,3 +256,13 @@ async def test_an_expiry_event_points_to_its_delivery_record(db):
         )
     assert linked is not None and linked == expired["delivery_id"]
     assert queued.id == expired["id"]
+
+
+async def test_a_failed_capture_on_enqueue_never_carries_the_message(db):
+    leak = RuntimeError("INSERT INTO interactions ... 'private text'")
+    with (
+        patch("agent_backbone.services.database._interaction_capture._capture", side_effect=leak),
+        pytest.raises(RuntimeError) as raised,
+    ):
+        await db.queue.enqueue(session_name="app", message="private text", delivery_kind="comment")
+    assert "private text" not in str(raised.value) and raised.value.__suppress_context__

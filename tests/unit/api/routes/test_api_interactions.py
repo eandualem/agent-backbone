@@ -307,7 +307,8 @@ async def test_failed_retry_keeps_original_and_capture_failure_prevents_paste(
     assert len(await records(api_app.state.db)) == 1
     transport[1].reset_mock()
     monkeypatch.setattr(
-        api_app.state.db.interactions, "capture", AsyncMock(side_effect=OSError("full"))
+        "agent_backbone.services.database._interaction_capture._capture",
+        AsyncMock(side_effect=OSError("full")),
     )
     with pytest.raises(RuntimeError, match="interaction capture failed"):
         await send(api_client, auth_headers, message="new independent message")
@@ -673,6 +674,33 @@ async def test_a_reused_delivery_id_keeps_its_own_attempt(db):
     assert sorted(row.operation_id for row in rows) == ["op-first", "op-second"]
 
 
+async def test_a_reused_delivery_id_keeps_its_own_final_outcome(db):
+    claims = []
+    for operation in ("op-first", "op-second"):
+        await db.interactions.capture(
+            operation_id=operation, message="hi", sender="bell", recipient="ike"
+        )
+        claimed = await db.deliveries.claim(
+            issue_number=7,
+            target_entity="ike",
+            session_name="ike",
+            source="test",
+            operation_id=operation,
+        )
+        await db.deliveries.finalize(claimed, "delivered")
+        claims.append(claimed)
+        async with db.engine.begin() as conn:  # retention removed every delivery row
+            await conn.execute(text("DELETE FROM deliveries"))
+    assert claims[0] == claims[1]
+    async with db.engine.begin() as conn:
+        rows = (
+            await conn.execute(
+                text("SELECT operation_id FROM interaction_events WHERE outcome='delivered'")
+            )
+        ).fetchall()
+    assert sorted(row.operation_id for row in rows) == ["op-first", "op-second"]
+
+
 async def test_retiring_a_registration_ends_its_queued_interactions(api_app):
     db = api_app.state.db
     queued = await db.queue.enqueue(
@@ -708,7 +736,10 @@ async def test_a_failed_capture_never_logs_the_message(
     api_app, api_client, auth_headers, transport, monkeypatch, caplog
 ):
     leak = RuntimeError("INSERT INTO interactions ... 'Original body'")
-    monkeypatch.setattr(api_app.state.db.interactions, "capture", AsyncMock(side_effect=leak))
+    monkeypatch.setattr(
+        "agent_backbone.services.database._interaction_capture._capture",
+        AsyncMock(side_effect=leak),
+    )
     with caplog.at_level("DEBUG"), contextlib.suppress(RuntimeError):
         await send(api_client, auth_headers)  # the test client re-raises the 500
     assert "Original body" not in caplog.text
@@ -717,6 +748,7 @@ async def test_a_failed_capture_never_logs_the_message(
 async def test_an_out_of_range_report_relation_is_an_absent_target(
     api_app, api_client, auth_headers, transport
 ):
-    huge = {"type": "from_report", "target": {"kind": "report", "id": str(2**63)}}
-    resp = await send(api_client, auth_headers, interaction={"relations": [huge]})
-    assert resp.status_code == 422, resp.text
+    for number in (2**31, 2**63):  # past PostgreSQL's int4 and past SQLite's integer
+        huge = {"type": "from_report", "target": {"kind": "report", "id": str(number)}}
+        resp = await send(api_client, auth_headers, interaction={"relations": [huge]})
+        assert resp.status_code == 422, resp.text

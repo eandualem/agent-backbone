@@ -185,7 +185,7 @@ class DeliveryRepo(Repo):
                     outcome=outcome,
                     source=row["source"],
                     delivery_id=delivery_id,
-                    key=f"finalize:{delivery_id}:{outcome}",
+                    key=f"finalize:{row['operation_id']}:{delivery_id}:{outcome}",
                 )
 
     async def settle(self, delivery_id: int, outcome: str, *, expected: str) -> bool:
@@ -218,7 +218,7 @@ class DeliveryRepo(Repo):
                     source=row["source"],
                     at=row["settled_at"],
                     delivery_id=delivery_id,
-                    key=f"settle:{delivery_id}:{outcome}",
+                    key=f"settle:{row['operation_id']}:{delivery_id}:{outcome}",
                 )
             return result.rowcount > 0
 
@@ -343,7 +343,7 @@ class DeliveryRepo(Repo):
                     outcome=outcome,
                     source=row["source"],
                     delivery_id=delivery_id,
-                    key=f"retire:{delivery_id}:{outcome}",
+                    key=f"retire:{row['operation_id']}:{delivery_id}:{outcome}",
                 )
         if row is not None:
             await DiagnosticRepo(self._engine).record(

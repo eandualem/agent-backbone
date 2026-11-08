@@ -46,7 +46,18 @@ async def actor(
     }
 
 
-async def capture(
+async def capture(conn, **kwargs) -> str:
+    """Must commit before any external handoff; exact retry retains its original.
+
+    A database error here can carry the message body in its text: it is replaced by a
+    fixed error with the chain cut, so no caller's exception log can expose it."""
+    try:
+        return await _capture(conn, **kwargs)
+    except Exception:
+        raise RuntimeError("interaction capture failed") from None
+
+
+async def _capture(
     conn,
     *,
     operation_id: str,
@@ -57,7 +68,6 @@ async def capture(
     source: str = "",
     metadata: dict | None = None,
 ) -> str:
-    """Must commit before any external handoff; exact retry retains its original."""
     existing = await find_operation(conn, operation_id)
     if existing:
         return existing
