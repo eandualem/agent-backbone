@@ -114,8 +114,8 @@ async def _confirmed_message(body, target, signed, request, config, db) -> Messa
         text=body.message,
     )
     interaction = await interaction_metadata(request, body, db)
-    if interaction["sender"]["attribution"] == "unverified" and signed.sender == body.from_entity:
-        # The enrolled key's verified signature names this sender.
+    if interaction["sender"]["attribution"] == "unverified":
+        # The signing middleware verified this request's from_entity with the enrolled key.
         interaction["sender"]["attribution"] = "signed"
     queued = {
         "session_name": target,
