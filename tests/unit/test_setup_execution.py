@@ -769,6 +769,7 @@ def test_inherited_external_database_does_not_establish_directory_ownership(
     monkeypatch.setattr(onboarding._common, "read_client_config", reader)
     code, result = invoke(tmp_path, capsys, body)
     assert code == 3 and result["code"] == "installation_conflict"
+    assert "PostgreSQL is no longer supported" in result["message"]
     assert list(data.iterdir()) == [data / ".env"]
     assert (data / ".env").read_text() == content
     reader.assert_not_called()

@@ -45,6 +45,10 @@ DEFAULT_PORT = 7120
 SQLITE_FILENAME = "backbone.db"
 
 
+class UnsupportedDatabase(ValueError):
+    """``BACKBONE_DATABASE_URL`` is set: PostgreSQL is no longer supported."""
+
+
 def sqlite_url(data_dir: Path) -> str:
     """The default database URL: a SQLite file in the data directory."""
     return f"sqlite+aiosqlite:///{data_dir / SQLITE_FILENAME}"
@@ -1136,7 +1140,7 @@ def build_config(
     """
     env = load_secrets(data_dir) if env is None else env
     if env.get("BACKBONE_DATABASE_URL"):
-        raise ValueError(
+        raise UnsupportedDatabase(
             "PostgreSQL is no longer supported: remove BACKBONE_DATABASE_URL from the "
             f"environment and from {data_dir / '.env'}. The backbone keeps its data in "
             f"{data_dir / SQLITE_FILENAME}."

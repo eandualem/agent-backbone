@@ -708,8 +708,8 @@ class ConversationRepo(Repo):
                 )
                 query = query.having(or_(func.sum(case((mine, 1), else_=0)) > 0, responsible))
             rows = (await conn.execute(query.order_by(last.desc()).limit(limit + 1))).all()
-        # Counts and the cursor are now captured. Release the writer barrier
-        # before resolving metadata, which may traverse retained response history.
+        # Counts and the cursor are now captured. Resolve metadata, which may
+        # traverse retained response history, in its own transaction.
         items = []
         async with self._tx() as conn:
             for row in rows[:limit]:

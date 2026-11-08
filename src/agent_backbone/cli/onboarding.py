@@ -19,7 +19,7 @@ from time import monotonic
 from pydantic import TypeAdapter, ValidationError
 
 from agent_backbone.cli import _common, service
-from agent_backbone.config import agent_credential, bootstrap_config
+from agent_backbone.config import UnsupportedDatabase, agent_credential, bootstrap_config
 from agent_backbone.fs import AtomicCreateUnsupported
 from agent_backbone.fs import atomic_create_text as _exclusive_file
 from agent_backbone.models import (
@@ -206,6 +206,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
             "environment-only authentication uses the ordinary connection flow.",
             retry="none",
         )
+    except UnsupportedDatabase as exc:
+        record = result(request.action, "installation_conflict", str(exc))
     except (OSError, ValueError, sqlite3.Error):
         record = result(
             request.action,
