@@ -730,6 +730,11 @@ async def test_retiring_a_registration_ends_its_queued_interactions(api_app):
         )
     record = await db.interactions.detail(interaction)
     assert record["status"]["value"] == "registration_retired"
+    async with db.engine.begin() as conn:  # the retirement delivery is linked to its event
+        linked = await conn.scalar(
+            text("SELECT delivery_id FROM interaction_events WHERE outcome='registration_retired'")
+        )
+    assert linked is not None
 
 
 async def test_a_name_moved_mid_request_never_authorizes_another_registration(
@@ -768,7 +773,8 @@ async def test_an_out_of_range_report_relation_is_an_absent_target(
         huge = {"type": "from_report", "target": {"kind": "report", "id": str(number)}}
         resp = await send(api_client, auth_headers, interaction={"relations": [huge]})
         assert resp.status_code == 422, resp.text
-    entry = {"kind": "conversation", "artifact_kind": "report", "id": "1", "entry_id": 2**64}
-    asked = {"type": "asked_in_conversation", "target": entry}
-    resp = await send(api_client, auth_headers, interaction={"relations": [asked]})
-    assert resp.status_code == 422, resp.text
+    for entry_id in (0, 2**64):  # a supplied zero is checked, not treated as omitted
+        entry = {"kind": "conversation", "artifact_kind": "report", "id": "1", "entry_id": entry_id}
+        asked = {"type": "asked_in_conversation", "target": entry}
+        resp = await send(api_client, auth_headers, interaction={"relations": [asked]})
+        assert resp.status_code == 422, resp.text

@@ -380,13 +380,13 @@ class TestIntegrationReply:
         integration = AsyncMock()
         integration.reply_to_agent = AsyncMock(return_value={"telegram": "posted"})
         api_app.state.integrations = integration
-        monkeypatch.setattr(
-            api_app.state.db.interactions, "observe", AsyncMock(side_effect=RuntimeError("busy"))
-        )
+        observe = AsyncMock(side_effect=RuntimeError("busy"))
+        monkeypatch.setattr(api_app.state.db.interactions, "observe", observe)
         resp = await api_client.post(
             "/api/integrations/reply", json={"session": "ike", "text": "hi"}, headers=auth_headers
         )
         assert resp.status_code == 200 and resp.json()["posted"] == {"telegram": True}
+        observe.assert_awaited_once()  # the history write was attempted and failed
 
     async def test_unregistered_agent_404(self, api_client, auth_headers):
         resp = await api_client.post(

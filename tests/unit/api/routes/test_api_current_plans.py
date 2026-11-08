@@ -119,6 +119,12 @@ async def test_feedback_is_atomic_contextual_and_never_redirected(
                 {"id": receipt["operation_id"]},
             )
         assert sender is not None and json.loads(sender)["kind"] == "owner"
+        async with api_app.state.db.engine.begin() as conn:  # the body before its envelope
+            captured = await conn.scalar(
+                text("SELECT body FROM interactions WHERE operation_id=:id"),
+                {"id": receipt["operation_id"]},
+            )
+        assert captured.startswith("Current plan feedback") and "[via:" not in captured
         body.update(request_id=uuid4().hex, base_revision_id=first["revision_id"])
         body["plan"]["plan_id"] = uuid4().hex
         body["plan"]["items"] = []

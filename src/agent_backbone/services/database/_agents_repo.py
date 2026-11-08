@@ -208,7 +208,7 @@ class AgentRepo(Repo):
                     text("SELECT 1 FROM agents WHERE name=:name FOR UPDATE"), {"name": name}
                 )
             # Retain bodies and history, but never hand them to a reused name.
-            await conn.execute(
+            inserted = await conn.execute(
                 text(
                     "INSERT INTO deliveries (operation_id,kind,repo,issue_number,target_entity,"
                     "session_name,outcome,source,preview,created_at,registration_id) "
@@ -216,10 +216,12 @@ class AgentRepo(Repo):
                     "COALESCE(target_entity,session_name),session_name,'expired',"
                     "'registration-retired',substr(message,1,120),:now,registration_id "
                     "FROM message_queue WHERE session_name=:name "
-                    "AND status IN ('pending','in_progress','checkpoint','uncertain')"
+                    "AND status IN ('pending','in_progress','checkpoint','uncertain') "
+                    "RETURNING id, operation_id"
                 ),
                 {"name": name, "now": now_iso()},
             )
+            delivery_of = {row.operation_id: row.id for row in inserted.fetchall()}
             retired = (
                 await conn.execute(
                     text(
@@ -238,6 +240,7 @@ class AgentRepo(Repo):
                     source="registration-retired",
                     at=now_iso(),
                     queue_id=row.id,
+                    delivery_id=delivery_of.get(row.operation_id),
                 )
             await conn.execute(
                 text(

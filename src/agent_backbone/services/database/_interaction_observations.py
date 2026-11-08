@@ -1,7 +1,7 @@
 """Finite capture coverage and registration-bound sampled state; no causal claims."""
 
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 
 from sqlalchemy import func, select, text
@@ -14,11 +14,12 @@ MAX_GAP_SECONDS = 120
 
 
 def _shift(value: str, seconds: int) -> str:
-    """Widen a window bound, staying at the bound past representable time (year 1 or 9999)."""
+    """Widen a window bound, clamped to representable time (year 1 or 9999)."""
     try:
         return format_iso(parse_iso(value) + timedelta(seconds=seconds))
     except OverflowError:
-        return value
+        limit = datetime.max if seconds > 0 else datetime.min
+        return format_iso(limit.replace(tzinfo=UTC))
 
 
 async def checkpoint(conn, recorder_id):
