@@ -22,7 +22,7 @@ A conversation is keyed by the artifact's kind and stable ID:
 | `skill` | Assigned when Backbone first reads the skill ([below](#skills-and-policies)) | The maintainer the operator mapped, if any |
 | `policy` | Assigned when Backbone first reads the policy | The maintainer the operator mapped, if any |
 | `plan` | The agent registration’s `author_id` | That registration |
-| `interaction` | Captured interaction ID | A current verified original participant selected by the owner |
+| `interaction` | Captured interaction ID | The first verified agent captured on it: its sender, otherwise its recipient, retired or not. The owner names the participant each question goes to |
 | `sheet` | `sheet_id` | The workbook’s registered owner |
 
 Responses and reports carry `conversation_id` in their list and show output.

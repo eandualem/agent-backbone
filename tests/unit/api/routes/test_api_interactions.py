@@ -286,7 +286,11 @@ def test_committed_wire_fixtures():
         ("detail", Interaction),
         ("summary", Summary),
     ]:
-        model.model_validate_json((p / f"{name}.fixture.json").read_text())
+        parsed = model.model_validate_json((p / f"{name}.fixture.json").read_text())
+        if name == "summary":  # an untruncated timeline shows every counted interaction
+            for item in parsed.items:
+                if not item.ticks_truncated:
+                    assert len(item.ticks) == item.counts.sent + item.counts.received
         assert (
             json.loads((p / f"{model.__name__}.schema.json").read_text())
             == model.model_json_schema()

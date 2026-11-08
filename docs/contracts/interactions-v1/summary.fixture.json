@@ -43,6 +43,13 @@
       "previous": null,
       "ticks": [
         {
+          "interaction_id": "22222222222222222222222222222222",
+          "direction": "received",
+          "time": "2026-10-31T11:58:00+00:00",
+          "time_basis": "recorded",
+          "delivered": true
+        },
+        {
           "interaction_id": "11111111111111111111111111111111",
           "direction": "sent",
           "time": "2026-10-31T12:00:00+00:00",
