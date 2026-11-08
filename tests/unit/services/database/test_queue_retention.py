@@ -223,3 +223,19 @@ async def test_pending_direct_message_survives_service_database_restart(tmp_path
         ]
     finally:
         await second.stop()
+
+
+async def test_a_failed_interaction_event_never_fails_the_expiry_sweep(db):
+    first = await db.queue.enqueue(session_name="app", message="one", delivery_kind="comment")
+    second = await db.queue.enqueue(session_name="app", message="two", delivery_kind="comment")
+    async with db.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE message_queue SET enqueued_at='2020-01-01T00:00:00.000000Z'")
+        )
+    with patch(
+        "agent_backbone.services.database._queue_repo.event", side_effect=RuntimeError("busy")
+    ):
+        expired = await db.queue.expire_pending(max_age_minutes=30)
+    assert sorted(row["id"] for row in expired) == sorted([first.id, second.id])
+    codes = [row["code"] for row in await db.diagnostics.query(category="queue")]
+    assert codes.count("queue_expired") == 2

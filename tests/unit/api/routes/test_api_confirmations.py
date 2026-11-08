@@ -94,6 +94,8 @@ async def test_a_confirmed_message_is_admitted_once_with_its_marker(
         f"[via:backbone from:{SENDER} owner-confirmed:{confirmation['confirmation_id']}] {TEXT}"
     )
     assert row.operation_id == data["operation_id"] and row.status == "pending"
+    (interaction,) = await _rows(db, "SELECT sender FROM interactions")
+    assert json.loads(interaction.sender)["attribution"] == "signed"
 
 
 @pytest.mark.parametrize(

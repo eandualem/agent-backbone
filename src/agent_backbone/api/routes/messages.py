@@ -113,6 +113,10 @@ async def _confirmed_message(body, target, signed, request, config, db) -> Messa
         kind="message",
         text=body.message,
     )
+    interaction = await interaction_metadata(request, body, db)
+    if interaction["sender"]["attribution"] == "unverified" and signed.sender == body.from_entity:
+        # The enrolled key's verified signature names this sender.
+        interaction["sender"]["attribution"] = "signed"
     queued = {
         "session_name": target,
         "message": envelope(
@@ -122,7 +126,7 @@ async def _confirmed_message(body, target, signed, request, config, db) -> Messa
         "source": "api-messages",
         "sender": body.from_entity,
         "priority": int(body.priority),
-        "interaction": await interaction_metadata(request, body, db),
+        "interaction": interaction,
     }
     outcome, row = await confirmations.admit(
         db, signed, receipt, queued, is_fresh=confirmations.fresh(confirmation, signed)

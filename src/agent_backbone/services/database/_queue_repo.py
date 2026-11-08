@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import uuid
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
 from agent_backbone.services.database._interaction_capture import capture, event
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
+
+log = logging.getLogger(__name__)
 
 _MAX_ENQUEUE_ATTEMPTS = 3
 """Retry a duplicate that completes between conflict detection and receipt lookup."""
@@ -643,23 +646,28 @@ class QueueRepo(Repo):
         self, row, code: str, *, reason: str | None = None, delivery_id: int | None = None
     ) -> None:
         """Persist metadata after completion; diagnostics cannot roll back the queue."""
-        async with self._tx() as conn:
-            await event(
-                conn,
-                row.get("operation_id"),
-                code,
-                outcome=(
-                    "expired"
-                    if code == "queue_expired"
-                    else "delivered"
-                    if reason == "already_delivered"
-                    else "registration_retired"
-                    if reason == "registration_changed"
-                    else "cancelled"
-                ),
-                source=row["source"],
-                at=row.get("delivered_at") or now_iso(),
-                queue_id=row["id"],
+        try:
+            async with self._tx() as conn:
+                await event(
+                    conn,
+                    row.get("operation_id"),
+                    code,
+                    outcome=(
+                        "expired"
+                        if code == "queue_expired"
+                        else "delivered"
+                        if reason == "already_delivered"
+                        else "registration_retired"
+                        if reason == "registration_changed"
+                        else "cancelled"
+                    ),
+                    source=row["source"],
+                    at=row.get("delivered_at") or now_iso(),
+                    queue_id=row["id"],
+                )
+        except Exception:
+            log.warning(
+                "Could not record the interaction event for queue row %s", row["id"], exc_info=True
             )
         await DiagnosticRepo(self._engine).record(
             category="queue",
