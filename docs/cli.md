@@ -106,8 +106,7 @@ Names
 are read directly from the selected SQLite database, including stopped agents;
 the service need not be running. Completion never creates or migrates a database,
 starts an agent or contacts a model provider. Missing or locked data produces no
-names rather than an error in your prompt. PostgreSQL installations currently
-get static command/option completion; name discovery uses local SQLite only.
+names rather than an error in your prompt.
 Directory arguments complete directories, and `--rc-file` completes files.
 Unknown agent names and free-text messages do not fall back to unrelated files.
 

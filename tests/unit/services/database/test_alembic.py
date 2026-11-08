@@ -412,7 +412,7 @@ async def test_old_sqlite_schema_gains_cursor_table_on_restart(tmp_path):
 
 @pytest.mark.parametrize("current_stamp", [False, True])
 async def test_old_schema_gains_new_tables_without_startup_create_all(tmp_path, current_stamp):
-    """The PostgreSQL migration path: no SQLite startup create_all to fill gaps."""
+    """Migrations alone add missing tables, without startup create_all."""
     from sqlalchemy import text
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'old-direct.db'}"

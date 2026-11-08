@@ -197,8 +197,7 @@ whatever you configured on the agent with `agent set env=`:
 It does **not** get the backbone's operator key or service secrets. The inherited
 `BACKBONE_API_KEY`,
 `GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`,
-`GITHUB_APP_PRIVATE_KEY_PATH`, `TELEGRAM_TOKEN`, `BACKBONE_DATABASE_URL`
-(a PostgreSQL URL carries the password) and **every other key assigned in
+`GITHUB_APP_PRIVATE_KEY_PATH`, `TELEGRAM_TOKEN` and **every other key assigned in
 `<data_dir>/.env`** are stripped from the session. The derived collaboration
 key is then supplied separately. Check it
 yourself in any agent's pane:

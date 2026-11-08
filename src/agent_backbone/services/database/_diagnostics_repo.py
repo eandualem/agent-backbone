@@ -9,7 +9,6 @@ import time
 from datetime import UTC, datetime
 
 from sqlalchemy import delete, func, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from agent_backbone.services.database._repo import Repo, diagnostic_mode
@@ -194,8 +193,7 @@ class DiagnosticRepo(Repo):
                     raise ValueError("Invalid diagnostic reference")
             if not operation_id or not category or not code:
                 raise ValueError("Missing diagnostic identity")
-            insert = sqlite_insert if self._engine().dialect.name == "sqlite" else pg_insert
-            stmt = insert(DiagnosticORM).values(**values)
+            stmt = sqlite_insert(DiagnosticORM).values(**values)
             updates = {
                 key: value
                 for key, value in values.items()

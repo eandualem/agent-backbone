@@ -564,7 +564,7 @@ def test_native_notice_tampering_refused_before_snapshot(tmp_path, monkeypatch, 
     elif change == "empty_notices":
         metadata["components"][0] = {**metadata["components"][0], "notices": []}
     elif change == "missing_wheel":
-        metadata["components"] = [c for c in metadata["components"] if c["source_id"] != "asyncpg"]
+        metadata["components"] = [c for c in metadata["components"] if c["source_id"] != "cffi"]
     else:
         metadata["components"] = [
             c
@@ -901,28 +901,26 @@ def test_atomic_publication_moves_source_to_vacant_destination(tmp_path):
     assert (target / "contents").read_text() == "candidate"
 
 
-@pytest.mark.parametrize(
-    "change", [None, "extra_dependency", "constraint", "version", "edge", "marker"]
-)
+@pytest.mark.parametrize("change", [None, "dependency", "constraint", "version", "edge", "marker"])
 def test_project_requirement_changes_require_relocking(tmp_path, change):
     project = PATH.parents[2] / "pyproject.toml"
     lock = PATH.parents[2] / "uv.lock"
     project_text = project.read_text()
     lock_text = lock.read_text()
-    if change == "extra_dependency":
+    if change == "dependency":
         project_text = project_text.replace(
-            'postgres = ["asyncpg>=0.29"]', 'postgres = ["asyncpg>=0.29", "new-driver>=1"]'
+            '"alembic>=1.13",', '"alembic>=1.13",\n    "new-driver>=1",'
         )
     elif change == "constraint":
-        project_text = project_text.replace('"asyncpg>=0.29"', '"asyncpg>=100"')
+        project_text = project_text.replace('"alembic>=1.13"', '"alembic>=100"')
     elif change == "version":
         version = tomllib.loads(project_text)["project"]["version"]
         project_text = project_text.replace(f'version = "{version}"', 'version = "9.9.9"')
     elif change == "edge":
-        lock_text = lock_text.replace('    { name = "asyncpg" },\n', "", 1)
+        lock_text = lock_text.replace('    { name = "alembic" },\n', "", 1)
     elif change == "marker":
         project_text = project_text.replace(
-            '"asyncpg>=0.29"', "\"asyncpg>=0.29; python_version > '3.11'\""
+            '"alembic>=1.13"', "\"alembic>=1.13; python_version > '3.11'\""
         )
     (tmp_path / "pyproject.toml").write_text(project_text)
     (tmp_path / "uv.lock").write_text(lock_text)
@@ -987,14 +985,13 @@ def test_source_verification_detects_archive_transformations(tmp_path):
         engine.verify_source_tree(source, repo, commit, "git", env)
 
 
-@pytest.mark.parametrize("missing", ["asyncpg", "greenlet", "httptools"])
+@pytest.mark.parametrize("missing", ["greenlet", "httptools"])
 def test_source_lock_requires_optional_runtime_dependency_closure(tmp_path, missing):
     rows = [
         '[[package]]\nname="agent-backbone"\nversion="1"\n'
         'dependencies=[{name="sqlalchemy",extra=["asyncio"]},{name="uvicorn",extra=["standard"]}]\n'
-        '[package.optional-dependencies]\npostgres=[{name="asyncpg"}]\n'
     ]
-    names = ["sqlalchemy", "uvicorn", "asyncpg", "greenlet", "httptools"]
+    names = ["sqlalchemy", "uvicorn", "greenlet", "httptools"]
     for name in names:
         row = f'[[package]]\nname="{name}"\nversion="1"\nwheels=[{{hash="sha256:{name}"}}]\n'
         if name == "sqlalchemy":

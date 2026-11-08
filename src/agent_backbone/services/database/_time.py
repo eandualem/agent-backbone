@@ -1,7 +1,7 @@
 """Timestamps as stored in the database: ISO 8601, UTC, microseconds, ``Z`` suffix.
 
 Every column that holds a time is ``Text`` in this format, so rows compare
-lexically in ``WHERE created_at < :cutoff`` on SQLite and PostgreSQL alike.
+lexically in ``WHERE created_at < :cutoff`` on SQLite.
 """
 
 from __future__ import annotations

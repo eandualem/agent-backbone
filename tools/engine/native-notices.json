@@ -158,25 +158,12 @@
       "source_member": "Python-3.13.18/Doc/license.rst"
     },
     {
-      "component": "asyncpg distribution",
-      "declared_license": null,
-      "notice": {
-        "bytes": 11466,
-        "file": "NATIVE-NOTICES.txt",
-        "offset": 77399,
-        "sha256": "d9222d73fdac50992174076efa04f44f6fbcd9d56155a7c7092e98757042a6f6"
-      },
-      "selection": "file",
-      "source_id": "asyncpg",
-      "source_member": "asyncpg-0.31.0/LICENSE"
-    },
-    {
       "component": "cffi distribution",
       "declared_license": null,
       "notice": {
         "bytes": 1123,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 89070,
+        "offset": 77392,
         "sha256": "5ba24ddc57067f9249add644c3afc41a5d6dc37e23433ef759d95df370b0af63"
       },
       "selection": "file",
@@ -189,7 +176,7 @@
       "notice": {
         "bytes": 197,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 90415,
+        "offset": 78737,
         "sha256": "3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb"
       },
       "selection": "file",
@@ -202,7 +189,7 @@
       "notice": {
         "bytes": 11360,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 90841,
+        "offset": 79163,
         "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
       },
       "selection": "file",
@@ -215,7 +202,7 @@
       "notice": {
         "bytes": 1532,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 102427,
+        "offset": 90749,
         "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
       },
       "selection": "file",
@@ -228,7 +215,7 @@
       "notice": {
         "bytes": 1434,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 104172,
+        "offset": 92494,
         "sha256": "769831d6e5dfaf2c20802faccff1fafb4c2025dd8f6253dfa47fcad59d4d0979"
       },
       "selection": "file",
@@ -241,7 +228,7 @@
       "notice": {
         "bytes": 2424,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 105823,
+        "offset": 94145,
         "sha256": "e5ff3c23c110e494cd7d736c10fd96d462457bafeca310840db6527298c7d46b"
       },
       "selection": "file",
@@ -254,7 +241,7 @@
       "notice": {
         "bytes": 1093,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 108462,
+        "offset": 96784,
         "sha256": "f4573e7cb7676745fb5b8d36fa548aa93e391cfb6872ddacd65130c45ea6a92d"
       },
       "selection": "file",
@@ -267,7 +254,7 @@
       "notice": {
         "bytes": 1475,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 109776,
+        "offset": 98098,
         "sha256": "489a8e1108509ed98a37bb983e11e0f7e1d31f0bd8f99a79c8448e7ff37d07ea"
       },
       "selection": "file",
@@ -280,7 +267,7 @@
       "notice": {
         "bytes": 1080,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 111475,
+        "offset": 99797,
         "sha256": "2afdd30d54b4d62b6f488a6bcc1546e84ec5061f13f4209c03d012348783795a"
       },
       "selection": "file",
@@ -293,7 +280,7 @@
       "notice": {
         "bytes": 1101,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 112764,
+        "offset": 101086,
         "sha256": "8d3928f9dc4490fd635707cb88eb26bd764102a7282954307d3e5167a577e8a4"
       },
       "selection": "file",
@@ -306,7 +293,7 @@
       "notice": {
         "bytes": 1100,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 114083,
+        "offset": 102405,
         "sha256": "e862bb5b904fb5513c3e14288d7a25a12eb0ecc7847a0a965d310e9a955e7cb9"
       },
       "selection": "file",
@@ -319,7 +306,7 @@
       "notice": {
         "bytes": 11439,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 115400,
+        "offset": 103722,
         "sha256": "377025287798f9dcd819e1f826fa5fc5e2f382528691ab0528c5cf8c8c282c27"
       },
       "selection": "file",
@@ -332,7 +319,7 @@
       "notice": {
         "bytes": 1105,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 127053,
+        "offset": 115375,
         "sha256": "6dd4c399f26de043d77a2ad7e31db4cb5bf08ea8368b0a42d6e158635cc8ab62"
       },
       "selection": "file",
@@ -345,7 +332,7 @@
       "notice": {
         "bytes": 1091,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 128375,
+        "offset": 116697,
         "sha256": "4fd78355b67ce2677ede9fb6f63a250f377bb7e22088136a5f4699adb4bc069f"
       },
       "selection": "file",
@@ -358,7 +345,7 @@
       "notice": {
         "bytes": 1514,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 129682,
+        "offset": 118004,
         "sha256": "3d6a0c050d8bec52fabad502e45fb25bd02bcadbd70dea34d447b6a0ff4e6da8"
       },
       "selection": "file",
@@ -10134,7 +10121,7 @@
       "notice": {
         "bytes": 10849,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 131426,
+        "offset": 119748,
         "sha256": "e6c204bab9c7970ebe8069e6b68caafbdd992bc508d56bcf38fa2f1e5eef9f43"
       },
       "selection": "file",
@@ -10146,7 +10133,7 @@
       "notice": {
         "bytes": 1150,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 142498,
+        "offset": 130820,
         "sha256": "92d835ee649fdfc82e3a34f66e520e4e526a2a38dfcb14c7c8fbd520506e78df"
       },
       "selection": "file",
@@ -10158,7 +10145,7 @@
       "notice": {
         "bytes": 10848,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 143892,
+        "offset": 132214,
         "sha256": "f44a7d3463f1264dab3e0980529311a6f99c9a2e72d30bf1e944cee2165b48ce"
       },
       "selection": "file",
@@ -10170,7 +10157,7 @@
       "notice": {
         "bytes": 1151,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 154977,
+        "offset": 143299,
         "sha256": "d7e21df75f149a9c8dccbafdd903e4ef53a68fe3c86d92c0bd8e42a5f82b3773"
       },
       "selection": "file",
@@ -10182,7 +10169,7 @@
       "notice": {
         "bytes": 10848,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 156358,
+        "offset": 144680,
         "sha256": "f44a7d3463f1264dab3e0980529311a6f99c9a2e72d30bf1e944cee2165b48ce"
       },
       "selection": "file",
@@ -10194,7 +10181,7 @@
       "notice": {
         "bytes": 1150,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 167429,
+        "offset": 155751,
         "sha256": "92d835ee649fdfc82e3a34f66e520e4e526a2a38dfcb14c7c8fbd520506e78df"
       },
       "selection": "file",
@@ -10206,7 +10193,7 @@
       "notice": {
         "bytes": 100,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 168806,
+        "offset": 157128,
         "sha256": "6fc7e80b75b5999783a328d90976a2585e0956c4a348c3c888453938ceca742d"
       },
       "selection": "file",
@@ -10218,7 +10205,7 @@
       "notice": {
         "bytes": 1282,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 169141,
+        "offset": 157463,
         "sha256": "4a0179c4ef9fb2c7464215c8c48686fe326a3dfcf34752ab41cd91e93a7cac87"
       },
       "selection": "file",
@@ -10230,7 +10217,7 @@
       "notice": {
         "bytes": 7984,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 170653,
+        "offset": 158975,
         "sha256": "65a849b66d8a638bf7a8ec24287c5d4f1ab5a7be4947518a0ad3c3b06eea1ff2"
       },
       "selection": "file",
@@ -10242,7 +10229,7 @@
       "notice": {
         "bytes": 18652,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 178866,
+        "offset": 167188,
         "sha256": "cce5d01fa4a83b794271bd2c28cffdf99afd43c803e6ddefddae39b591ea7448"
       },
       "selection": "file",
@@ -10254,7 +10241,7 @@
       "notice": {
         "bytes": 208,
         "file": "NATIVE-NOTICES.txt",
-        "offset": 197755,
+        "offset": 186077,
         "sha256": "2a67a60bbfb33759d67d645ff131b8e6d6bc4cafc232d751fcac3eda4d314cc8"
       },
       "selection": "file",
@@ -10264,9 +10251,9 @@
   ],
   "files": [
     {
-      "bytes": 197964,
+      "bytes": 186286,
       "path": "NATIVE-NOTICES.txt",
-      "sha256": "7cc311531f00527a77bb9a8baf3f1a8397ddbc7bfa633eabbc05d2c42da253fc"
+      "sha256": "1ac889967323fd8e18be0621c031eeefb883bfb87c9fe74d5865400d2b03c67b"
     },
     {
       "bytes": 574584,
@@ -10663,14 +10650,6 @@
   "schema_version": 1,
   "scope": "Conservative source notice inventory; source correspondence is not an upstream wheel build attestation. Rust locks include build, development and other-target packages.",
   "sources": [
-    {
-      "filename": "asyncpg-0.31.0.tar.gz",
-      "id": "asyncpg",
-      "name": "asyncpg",
-      "sha256": "c989386c83940bfbd787180f2b1519415e2d3d6277a70d9d0f0145ac73500735",
-      "url": "https://files.pythonhosted.org/packages/fe/cc/d18065ce2380d80b1bcce927c24a2642efd38918e33fd724bc4bca904877/asyncpg-0.31.0.tar.gz",
-      "version": "0.31.0"
-    },
     {
       "filename": "cffi-2.0.0.tar.gz",
       "id": "cffi",
@@ -13238,13 +13217,6 @@
   ],
   "target": "aarch64-apple-darwin",
   "wheels": [
-    {
-      "filename": "asyncpg-0.31.0-cp313-cp313-macosx_11_0_arm64.whl",
-      "name": "asyncpg",
-      "sha256": "54a64f91839ba59008eccf7aad2e93d6e3de688d796f35803235ea1c4898ae1e",
-      "source_id": "asyncpg",
-      "version": "0.31.0"
-    },
     {
       "filename": "cffi-2.0.0-cp313-cp313-macosx_11_0_arm64.whl",
       "name": "cffi",

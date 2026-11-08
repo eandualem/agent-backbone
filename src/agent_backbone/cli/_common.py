@@ -195,11 +195,8 @@ class Direct:
 
     async def _check_profile(self) -> None:
         """Only `init` and setup, which create the first profile, run without one."""
-        from agent_backbone.config import sqlite_url
         from agent_backbone.services.database import check_new_default, default_profile_at
 
-        if self._boot.database_url != sqlite_url(self._boot.data_dir):
-            raise ValueError("A profile uses its own SQLite database; unset BACKBONE_DATABASE_URL")
         check = check_new_default if self._bootstrap else default_profile_at
         await asyncio.to_thread(check, self._boot.data_dir)
 
@@ -266,9 +263,7 @@ async def read_client_config(
     data_dir: str | Path | None = None, *, strict: bool = False, operator_file: bool = False
 ) -> BackboneConfig:
     """Read existing address and logging policy without creating or repairing a database."""
-    from sqlalchemy import text
     from sqlalchemy.engine import make_url
-    from sqlalchemy.ext.asyncio import create_async_engine
 
     if operator_file and (
         "BACKBONE_AGENT_CREDENTIAL" in os.environ
@@ -299,30 +294,18 @@ async def read_client_config(
         )
     try:
         url = make_url(boot.database_url)
-        if url.get_backend_name() == "sqlite":
-            if not url.database or url.database == ":memory:":
-                return boot
+        if not url.database or url.database == ":memory:":
+            return boot
 
-            def sqlite_settings():
-                uri = Path(url.database).expanduser().resolve().as_uri() + "?mode=ro"
-                conn = sqlite3.connect(uri, uri=True, timeout=1)
-                try:
-                    return conn.execute(_CLIENT_SETTINGS_SQL).fetchall()
-                finally:
-                    conn.close()
-
-            rows = await asyncio.to_thread(sqlite_settings)
-        else:
-            engine = create_async_engine(boot.database_url)
+        def sqlite_settings():
+            uri = Path(url.database).expanduser().resolve().as_uri() + "?mode=ro"
+            conn = sqlite3.connect(uri, uri=True, timeout=1)
             try:
-
-                async def server_settings():
-                    async with engine.connect() as conn:
-                        return (await conn.execute(text(_CLIENT_SETTINGS_SQL))).fetchall()
-
-                rows = await asyncio.wait_for(server_settings(), timeout=3)
+                return conn.execute(_CLIENT_SETTINGS_SQL).fetchall()
             finally:
-                await engine.dispose()
+                conn.close()
+
+        rows = await asyncio.to_thread(sqlite_settings)
         settings = {}
         for key, value in rows:
             try:
@@ -349,9 +332,7 @@ async def read_client_config(
 
 async def _read_config() -> BackboneConfig:
     """Existing full configuration for inspection, without schema repair or creation."""
-    from sqlalchemy import text
     from sqlalchemy.engine import make_url
-    from sqlalchemy.ext.asyncio import create_async_engine
 
     from agent_backbone.config import agents_from_rows, build_config
 
@@ -383,39 +364,27 @@ async def _read_config() -> BackboneConfig:
         "SELECT id, agent_name, source, query, priority FROM agent_subscriptions "
         "ORDER BY agent_name, id"
     )
-    if url.get_backend_name() == "sqlite":
-        if not url.database or url.database == ":memory:":
-            return boot
-        path = Path(url.database).expanduser().resolve()
-        if not path.exists():
-            return boot
+    if not url.database or url.database == ":memory:":
+        return boot
+    path = Path(url.database).expanduser().resolve()
+    if not path.exists():
+        return boot
 
-        def read_sqlite():
-            conn = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)
-            conn.row_factory = sqlite3.Row
-            try:
-                conn.execute("BEGIN")
-                found = [[dict(row) for row in conn.execute(query)] for query in queries]
-                try:
-                    found.append([dict(row) for row in conn.execute(optional)])
-                except sqlite3.OperationalError:
-                    found.append([])
-                return found
-            finally:
-                conn.close()
-
-        rows = await asyncio.to_thread(read_sqlite)
-    else:
-        engine = create_async_engine(boot.database_url)
+    def read_sqlite():
+        conn = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)
+        conn.row_factory = sqlite3.Row
         try:
-            async with engine.connect() as conn:
-                rows = [(await conn.execute(text(query))).mappings().all() for query in queries]
-                try:
-                    rows.append((await conn.execute(text(optional))).mappings().all())
-                except Exception:
-                    rows.append([])
+            conn.execute("BEGIN")
+            found = [[dict(row) for row in conn.execute(query)] for query in queries]
+            try:
+                found.append([dict(row) for row in conn.execute(optional)])
+            except sqlite3.OperationalError:
+                found.append([])
+            return found
         finally:
-            await engine.dispose()
+            conn.close()
+
+    rows = await asyncio.to_thread(read_sqlite)
     settings = {row["key"]: json.loads(row["value"]) for row in rows[0]}
     agents = []
     for row in rows[1]:

@@ -1,5 +1,5 @@
 .PHONY: help install up down status doctor lint format format-check fix test test-file smoke cov check build clean \
-        db-up db-down db-upgrade db-migrate db-history db-current db-downgrade
+        db-upgrade db-migrate db-history db-current db-downgrade
 
 .DEFAULT_GOAL := help
 
@@ -69,13 +69,7 @@ check: lint format-check test ## Full quality check (CI equivalent)
 build: ## Build wheel + sdist
 	uv build
 
-# ─── Database (optional PostgreSQL) ──────────────────────
-
-db-up: ## Start PostgreSQL via docker compose (optional; SQLite is the default)
-	docker compose up -d
-
-db-down: ## Stop PostgreSQL
-	docker compose down
+# ─── Database ────────────────────────────────────────────
 
 db-upgrade: ## Run Alembic migrations to head
 	uv run alembic upgrade head

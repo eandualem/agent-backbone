@@ -24,8 +24,8 @@ GitHub's release asset host; validation happens before following each redirect.
 The application builder supplies the locked tmux binary, its `BUILD.json` and license notices.
 The lock names their exact filenames and hashes. CPython notices in `notices/`
 come from the full upstream archive identified in `python-notices.json`, whose
-install-only archive is also pinned. Runtime wheels follow `uv.lock`, including
-the optional PostgreSQL driver; build tools are separately pinned.
+install-only archive is also pinned. Runtime wheels follow `uv.lock`; build
+tools are separately pinned.
 The source commit must contain matching runtime wheel versions/hashes in `uv.lock`, with the complete
 runtime dependency closure including selected extras.
 The project's root requirements, version, extras and dependency edges must also
@@ -71,7 +71,7 @@ reviewed inputs and native verification; this lock does not claim their support.
 
 `--target` selects a lock before the command, for example
 `python3 -I -B tools/engine/build.py --target x86_64-unknown-linux-gnu fetch --inputs /path/to/cache`.
-The three prepared locks pin all 44 runtime wheels, seven build wheels and the
+The three prepared locks pin all 43 runtime wheels, seven build wheels and the
 published CPython asset digest. A digest from the release API is not a local
 download or execution receipt. The locks retain null tmux binary/build/notice
 hashes and list the missing inputs; there is no placeholder hash or fallback to
@@ -126,7 +126,7 @@ This verifies the entire archive hash, reads `python/PYTHON.json`, compares all
 binary samples. The wheel notice inventory covers license texts provided by each
 wheel. Additional native notices are retained in `licenses/native/`, with a
 hashed `native-notices.json` index. This index is bound to the exact Python
-archive and all 13 native wheel inputs; changing those inputs requires updating
+archive and all 12 native wheel inputs; changing those inputs requires updating
 the source correspondence. The builder validates each retained notice and each
 component's byte range before taking its private tooling snapshot.
 
@@ -154,7 +154,7 @@ source comparison offline:
 python3 -I -B tools/engine/verify_native_sources.py /path/to/source-cache
 ```
 
-This checks all 320 source files by hash, all 585 notice excerpts byte-for-byte,
+This checks all 319 source files by hash, all 584 notice excerpts byte-for-byte,
 and every registry package/checksum against the four source Cargo locks. Wheel
 source and crate license/NOTICE membership, source versions and supplemental
 notice commit/repository correspondence are checked too. Declared PKG-INFO

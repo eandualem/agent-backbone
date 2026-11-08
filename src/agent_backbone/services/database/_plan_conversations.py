@@ -105,8 +105,8 @@ async def artifact(conn, author_id: str, revision_ids=()) -> dict | None:
     """Load the latest metadata and only the particular revisions a write references."""
     if not re.fullmatch(r"[0-9a-f]{32}", author_id):
         return None
-    # One statement sees one publication snapshot at PostgreSQL READ COMMITTED.
-    # Pin subsequent immutable-event reads to its latest revision sequence.
+    # One statement sees one publication snapshot. Pin subsequent
+    # immutable-event reads to its latest revision sequence.
     seed = select(literal(author_id).label("identity")).subquery()
     last_id = (
         select(func.max(_E.c.id))

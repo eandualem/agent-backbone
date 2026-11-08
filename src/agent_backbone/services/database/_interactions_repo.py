@@ -7,7 +7,7 @@ import hmac
 import json
 import secrets
 
-from sqlalchemy import and_, case, exists, func, or_, select, text, update
+from sqlalchemy import and_, case, exists, func, or_, select, update
 
 from agent_backbone.models import RETIREMENT_REASONS
 from agent_backbone.services.database import _interaction_observations as observations
@@ -74,15 +74,6 @@ class InteractionRepo(Repo):
             if snapshot.get("window") != [since, until] or snapshot.get("kind") != "snapshot":
                 raise ValueError("Snapshot belongs to a different time window")
         else:
-            if conn.dialect.name == "postgresql":
-                # Drain earlier sequence allocations before freezing the watermark.
-                await conn.execute(
-                    text(
-                        "LOCK TABLE interactions, interaction_events, "
-                        "registered_state_observations, "
-                        "interaction_capture_checkpoints IN SHARE MODE"
-                    )
-                )
             snapshot = {
                 "kind": "snapshot",
                 "window": [since, until],
@@ -753,7 +744,7 @@ class InteractionRepo(Repo):
                         number = int(target["id"])
                     except ValueError:
                         number = -1
-                    if not 0 <= number < 2**31:  # beyond reports.id (int4 on PostgreSQL): absent
+                    if not 0 <= number < 2**31:  # beyond a 32-bit reports.id: absent
                         number = -1
                     row = (
                         (await conn.execute(select(reports).where(reports.c.id == number)))

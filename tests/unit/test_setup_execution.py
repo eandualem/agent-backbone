@@ -774,19 +774,6 @@ def test_inherited_external_database_does_not_establish_directory_ownership(
     reader.assert_not_called()
 
 
-async def test_explicit_external_database_still_uses_readonly_existing_flow(tmp_path, monkeypatch):
-    data = tmp_path / "existing"
-    data.mkdir()
-    url = "postgresql+asyncpg://localhost/backbone"
-    (data / ".env").write_text("BACKBONE_API_KEY=operator-key\nBACKBONE_DATABASE_URL=" + url + "\n")
-    boot = onboarding.bootstrap_config(data)
-    reader = AsyncMock(return_value=boot)
-    monkeypatch.setattr(onboarding._common, "read_client_config", reader)
-    assert await onboarding._inspect_existing(boot) is boot
-    reader.assert_awaited_once_with(data, strict=True, operator_file=True)
-    assert list(data.iterdir()) == [data / ".env"]
-
-
 @pytest.mark.parametrize("finished", [False, True])
 def test_fresh_retry_never_follows_an_inherited_external_database(
     tmp_path, capsys, offline, monkeypatch, finished
