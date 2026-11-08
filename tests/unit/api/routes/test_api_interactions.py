@@ -606,3 +606,37 @@ async def test_issue_retirement_is_a_recorded_terminal_event(
     assert detail["status"]["value"] == "issue_closed"
     assert not detail["status"]["delivered"]
     assert detail["lifecycle"]["items"][-1]["kind"] == "retired_issue_closed"
+
+
+async def test_a_reused_delivery_id_keeps_its_own_attempt(db):
+    for operation in ("op-first", "op-second"):
+        await db.interactions.capture(
+            operation_id=operation, message="hi", sender="bell", recipient="ike"
+        )
+    first = await db.deliveries.record(
+        issue_number=None,
+        target_entity="ike",
+        session_name="ike",
+        outcome="delivered",
+        kind="direct_message",
+        operation_id="op-first",
+    )
+    async with db.engine.begin() as conn:  # retention removed every delivery row
+        await conn.execute(text("DELETE FROM deliveries"))
+    second = await db.deliveries.record(
+        issue_number=None,
+        target_entity="ike",
+        session_name="ike",
+        outcome="delivered",
+        kind="direct_message",
+        operation_id="op-second",
+    )
+    assert second == first
+    async with db.engine.begin() as conn:
+        rows = (
+            await conn.execute(
+                text("SELECT operation_id FROM interaction_events WHERE delivery_id=:id"),
+                {"id": second},
+            )
+        ).fetchall()
+    assert sorted(row.operation_id for row in rows) == ["op-first", "op-second"]

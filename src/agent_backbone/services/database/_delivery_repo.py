@@ -71,7 +71,8 @@ class DeliveryRepo(Repo):
                 source=source,
                 at=row["created_at"],
                 delivery_id=delivery_id,
-                key=f"delivery:{delivery_id}",
+                # SQLite may reuse a pruned delivery id; the operation keeps the key unique.
+                key=f"delivery:{row['operation_id']}:{delivery_id}",
             )
             return delivery_id
 
@@ -146,7 +147,7 @@ class DeliveryRepo(Repo):
                     outcome="attempting",
                     source=source,
                     delivery_id=row._mapping["id"],
-                    key=f"delivery:{row._mapping['id']}",
+                    key=f"delivery:{operation_id}:{row._mapping['id']}",
                 )
             return row._mapping["id"] if row else None
 

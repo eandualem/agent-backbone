@@ -159,6 +159,24 @@ async def test_capture_gaps_never_certify_a_quiet_window(api_app, gap):
     assert result["coverage"]["message_intervals"] == []
 
 
+async def test_a_clock_rollback_never_joins_checkpoints_out_of_recording_order(api_app):
+    db = api_app.state.db
+    for minute in (2, 0, 1):  # the clock went back after the first checkpoint
+        await checkpoint(db, minute)
+    result = await db.interactions.summary(since=at(0), until=at(2))
+    assert result["coverage"]["message_intervals"] == []
+
+
+async def test_a_clock_rollback_never_joins_state_samples(api_app):
+    db = api_app.state.db
+    agent = await identity(db, "ike")
+    # The clock went back after the first sample: busy at 2, then idle at 0, busy at 1.
+    for minute, state in ((2, "busy"), (0, "idle"), (1, "busy")):
+        await sample(db, "ike", agent, minute, state=state)
+    spans = await db.interactions.state_spans(agent_id=agent, since=at(0), until=at(3))
+    assert all(span["basis"] == "point_observation" for span in spans["items"])
+
+
 async def test_legacy_pending_and_retention_do_not_certify_coverage(api_app):
     db = api_app.state.db
     await checkpoint(db, 0)

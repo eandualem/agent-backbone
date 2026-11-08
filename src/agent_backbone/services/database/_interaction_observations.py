@@ -4,7 +4,7 @@ import json
 from datetime import timedelta
 from itertools import pairwise
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from agent_backbone.services.database._time import format_iso, now_iso, parse_iso
 from agent_backbone.services.database.models import InteractionCaptureCheckpointORM
@@ -66,10 +66,19 @@ async def message_intervals(conn, since, until, snapshot):
     # One bounded predecessor can support a span beginning before the window.
     low = format_iso(parse_iso(since) - timedelta(seconds=MAX_GAP_SECONDS))
     high = min(snapshot["at"], format_iso(parse_iso(until) + timedelta(seconds=MAX_GAP_SECONDS)))
+    # Time-adjacent checkpoints certify a span only if they were also recorded one after the
+    # other: a wall-clock rollback must not join checkpoints that were not consecutive.
+    earlier = _CHECK.alias("earlier")
+    previous_id = (
+        select(func.max(earlier.c.id))
+        .where(earlier.c.recorder_id == _CHECK.c.recorder_id, earlier.c.id < _CHECK.c.id)
+        .scalar_subquery()
+        .label("previous_id")
+    )
     rows = (
         (
             await conn.execute(
-                select(_CHECK)
+                select(_CHECK, previous_id)
                 .where(
                     _CHECK.c.id <= snapshot.get("checkpoint_high", 0),
                     _CHECK.c.at >= low,
@@ -94,6 +103,7 @@ async def message_intervals(conn, since, until, snapshot):
             first["reason"]
             or last["reason"]
             or first["recorder_id"] != last["recorder_id"]
+            or last["previous_id"] != first["id"]
             or not 0 < seconds <= MAX_GAP_SECONDS
         ):
             continue
@@ -122,7 +132,7 @@ async def message_intervals(conn, since, until, snapshot):
 async def state_spans(conn, agent_id, since, until, high, *, after=None, limit=200):
     # The window function sees adjacent real samples, including the bounded
     # predecessor/successor. A changed state, recorder or large gap stays unknown.
-    fields = ["at", "id", "state", "reason", "recorder_id"]
+    fields = ["at", "id", "state", "reason", "recorder_id", "previous_id"]
     following = ",".join(
         f"LEAD({f}) OVER (PARTITION BY agent_id ORDER BY at,id) AS next_{f}" for f in fields
     )
@@ -143,9 +153,12 @@ async def state_spans(conn, agent_id, since, until, high, *, after=None, limit=2
         (
             await conn.execute(
                 text(f"""
-        WITH samples AS (SELECT *, {following} FROM registered_state_observations
-          WHERE (CAST(:agent AS TEXT) IS NULL OR agent_id=:agent)
-          AND id<=:high AND at>=:low AND at<=:upper)
+        WITH base AS (SELECT o.*, (SELECT MAX(p.id) FROM registered_state_observations p
+            WHERE p.agent_id=o.agent_id AND p.recorder_id=o.recorder_id AND p.id<o.id)
+            AS previous_id FROM registered_state_observations o
+          WHERE (CAST(:agent AS TEXT) IS NULL OR o.agent_id=:agent)
+          AND o.id<=:high AND o.at>=:low AND o.at<=:upper),
+        samples AS (SELECT *, {following} FROM base)
         SELECT * FROM samples WHERE at < :until
           AND (at>=:since OR next_at>:since) {where_after}
         ORDER BY at,id LIMIT :limit
@@ -163,6 +176,8 @@ async def state_spans(conn, agent_id, since, until, high, *, after=None, limit=2
         paired = (
             row["next_at"] is not None
             and row["recorder_id"] == row["next_recorder_id"]
+            # Recorded one after the other: a wall-clock rollback never joins samples.
+            and row["next_previous_id"] == row["id"]
             and row["state"] == row["next_state"]
             and row["reason"] == row["next_reason"]
             and 0
