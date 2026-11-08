@@ -261,6 +261,7 @@ async def test_unknown_actor_does_not_certify_quiet_but_preserves_known_prefix(a
     c = (await db.interactions.summary(since=at(0), until=at(3)))["coverage"]
     assert c["completeness"] == "partial"
     assert "unverified_actor_attribution" in c["reasons"]
+    assert c["capture_started_at"] == at(0)  # the gap never replaces the capture boundary
     assert [(i["since"], i["until"]) for i in c["message_intervals"]] == [
         (at(0), at(1)),
         (at(1, 30), at(3)),

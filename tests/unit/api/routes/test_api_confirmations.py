@@ -373,6 +373,7 @@ async def test_a_null_confirmation_is_an_ordinary_signed_request(
     assert first.status_code == 200
     assert again.status_code == 409 and again.json()["detail"]["reason"] == "nonce_reused"
     assert deliver.await_count == 1
+    assert deliver.await_args.kwargs["interaction"]["sender"]["attribution"] == "signed"
 
 
 async def test_an_old_confirmation_still_recovers_its_receipt(

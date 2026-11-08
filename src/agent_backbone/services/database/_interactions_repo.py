@@ -149,12 +149,12 @@ class InteractionRepo(Repo):
             for item in ambiguous:
                 actors = [json.loads(item[column]) for column in ("sender", "recipient")]
                 if any(a["kind"] == "unknown" or a["attribution"] == "unverified" for a in actors):
-                    start, end = (
+                    gap_start, gap_end = (
                         max(since, item["accepted_at"]),
                         min(until, item["ended_at"] or until),
                     )
-                    if start < end:
-                        gaps.append((start, end))
+                    if gap_start < gap_end:
+                        gaps.append((gap_start, gap_end))
             if gaps:
                 reasons.append("unverified_actor_attribution")
                 intervals = observations.exclude_intervals(intervals, gaps)
