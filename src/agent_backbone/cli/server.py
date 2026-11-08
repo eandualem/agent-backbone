@@ -330,22 +330,21 @@ def _default_profile(data_dir: Path, *, wait: bool = True):
     the service would restart every few seconds."""
     from agent_backbone.services.database import default_profile_at
 
-    try:
-        return default_profile_at(data_dir)
-    except ValueError as exc:
-        if not wait or not _under_service_manager():
-            raise
-        print(
-            f"error: {exc}; waiting for it, checking every {PROFILE_WAIT_SECONDS} s",
-            file=sys.stderr,
-            flush=True,
-        )
+    shown = None
     while True:
-        time.sleep(PROFILE_WAIT_SECONDS)
         try:
             return default_profile_at(data_dir)
-        except ValueError:
-            continue
+        except ValueError as exc:
+            if shown is None and (not wait or not _under_service_manager()):
+                raise
+            if str(exc) != shown:  # once per distinct refusal, not every check
+                shown = str(exc)
+                print(
+                    f"error: {exc}; waiting for it, checking every {PROFILE_WAIT_SECONDS} s",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        time.sleep(PROFILE_WAIT_SECONDS)
 
 
 def cmd_up(args: argparse.Namespace) -> int:

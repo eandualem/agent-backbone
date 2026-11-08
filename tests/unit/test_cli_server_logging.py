@@ -433,14 +433,17 @@ def test_a_refused_up_under_a_service_waits_for_its_profile(monkeypatch, capsys)
     monkeypatch.setenv("XPC_SERVICE_NAME", "dev.agent-backbone")
     monkeypatch.setattr(server.os, "getppid", lambda: 1)  # started by launchd itself
     found = (object(), object())
-    lookup = MagicMock(side_effect=[ValueError("No profile at /d"), ValueError("still"), found])
+    refusals = ["No profile at /d", "No profile at /d", "Unreadable registry"]
+    lookup = MagicMock(side_effect=[*map(ValueError, refusals), found])
     with (
         patch("agent_backbone.services.database.default_profile_at", lookup),
         patch.object(server.time, "sleep") as sleep,
     ):
         assert server._default_profile(Path("/d")) is found
-    assert sleep.call_count == 2
-    assert capsys.readouterr().err.count("No profile at /d") == 1  # one line, not a loop
+    assert sleep.call_count == 3
+    err = capsys.readouterr().err
+    assert err.count("No profile at /d") == 1  # one line, not a loop
+    assert err.count("Unreadable registry") == 1  # a changed refusal is shown
 
 
 def test_a_refused_up_in_a_terminal_still_exits(monkeypatch):
