@@ -152,6 +152,21 @@ async def test_owner_bound_identity_and_conversation_access(
         json={"request_id": "ask", "recipient": "bell", "text": "Why this handoff?"},
     )
     assert replay.status_code == 200
+    # Redelivery moves the question's entry to a new operation aliased to the original.
+    from agent_backbone.services.database._interaction_capture import event
+
+    question_op = (await records(db))[1]["operation_id"]
+    async with db.engine.begin() as conn:
+        original = await conn.scalar(
+            text("SELECT id FROM interactions WHERE operation_id=:op"), {"op": question_op}
+        )
+        await event(
+            conn, "redelivered-op", "attempt", outcome="attempting", interaction_id=original
+        )
+        await conn.execute(
+            text("UPDATE conversation_entries SET operation_id='redelivered-op' WHERE id=:id"),
+            {"id": question.json()["entry"]["id"]},
+        )
     reply = await api_client.post(
         path + "/messages",
         headers=headers,

@@ -19,7 +19,13 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import Text, and_, case, func, insert, not_, or_, select, text, update
 
 from agent_backbone.services.database._conversation_events import append_revision
-from agent_backbone.services.database._interaction_capture import actor, capture, event, owner
+from agent_backbone.services.database._interaction_capture import (
+    actor,
+    capture,
+    event,
+    find_operation,
+    owner,
+)
 from agent_backbone.services.database._interaction_conversations import (
     artifact as interaction_artifact,
 )
@@ -936,13 +942,8 @@ class ConversationRepo(Repo):
                         select(_E.c.operation_id).where(_E.c.id == in_reply_to)
                     )
                     if parent_op:
-                        from agent_backbone.services.database.models import InteractionORM
-
-                        parent_id = await conn.scalar(
-                            select(InteractionORM.id).where(
-                                InteractionORM.operation_id == parent_op
-                            )
-                        )
+                        # A redelivered owner message keeps its original interaction.
+                        parent_id = await find_operation(conn, parent_op)
                         if parent_id:
                             relations.append(
                                 {
