@@ -770,6 +770,8 @@ class InteractionRepo(Repo):
                         _C.c.kind == target.get("artifact_kind"), _C.c.artifact_id == target["id"]
                     )
                     if target.get("entry_id"):
+                        if not 0 < target["entry_id"] < 2**63:  # past an int8 id: absent
+                            raise ValueError("Relation target is absent or not accessible")
                         query = query.where(_C.c.id == target["entry_id"])
                     if not operator:
                         query = query.where(

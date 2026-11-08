@@ -678,7 +678,11 @@ async def test_a_reused_delivery_id_keeps_its_own_attempt(db):
     assert sorted(row.operation_id for row in rows) == ["op-first", "op-second"]
 
 
-async def test_a_reused_delivery_id_keeps_its_own_final_outcome(db):
+@pytest.mark.parametrize(
+    ("step", "outcome"),
+    [("finalize", "delivered"), ("settle", "handed_off"), ("retire", "issue_closed")],
+)
+async def test_a_reused_delivery_id_keeps_its_own_final_outcome(db, step, outcome):
     claims = []
     for operation in ("op-first", "op-second"):
         await db.interactions.capture(
@@ -691,7 +695,14 @@ async def test_a_reused_delivery_id_keeps_its_own_final_outcome(db):
             source="test",
             operation_id=operation,
         )
-        await db.deliveries.finalize(claimed, "delivered")
+        if step == "finalize":
+            await db.deliveries.finalize(claimed, "delivered")
+        elif step == "settle":
+            await db.deliveries.finalize(claimed, "offered")
+            assert await db.deliveries.settle(claimed, "handed_off", expected="offered")
+        else:
+            await db.deliveries.finalize(claimed, "delivery_failed")
+            await db.deliveries.retire(claimed, "issue_closed")
         claims.append(claimed)
         async with db.engine.begin() as conn:  # retention removed every delivery row
             await conn.execute(text("DELETE FROM deliveries"))
@@ -699,7 +710,8 @@ async def test_a_reused_delivery_id_keeps_its_own_final_outcome(db):
     async with db.engine.begin() as conn:
         rows = (
             await conn.execute(
-                text("SELECT operation_id FROM interaction_events WHERE outcome='delivered'")
+                text("SELECT operation_id FROM interaction_events WHERE outcome=:outcome"),
+                {"outcome": outcome},
             )
         ).fetchall()
     assert sorted(row.operation_id for row in rows) == ["op-first", "op-second"]
@@ -756,3 +768,7 @@ async def test_an_out_of_range_report_relation_is_an_absent_target(
         huge = {"type": "from_report", "target": {"kind": "report", "id": str(number)}}
         resp = await send(api_client, auth_headers, interaction={"relations": [huge]})
         assert resp.status_code == 422, resp.text
+    entry = {"kind": "conversation", "artifact_kind": "report", "id": "1", "entry_id": 2**64}
+    asked = {"type": "asked_in_conversation", "target": entry}
+    resp = await send(api_client, auth_headers, interaction={"relations": [asked]})
+    assert resp.status_code == 422, resp.text

@@ -231,6 +231,23 @@ async def test_a_refused_steer_keeps_its_settled_failure(api_client, auth_header
     assert (await db.interactions.detail(interaction.id))["status"]["value"] == "failed"
 
 
+async def test_a_confirmed_steer_keeps_its_validated_relations(
+    api_client, auth_headers, api_app, key
+):
+    db = api_app.state.db
+    earlier = await db.interactions.capture(
+        operation_id="earlier", message="question", sender="ike", recipient=SENDER
+    )
+    link = {"type": "reply_to", "target": {"kind": "interaction", "id": earlier}}
+    body = {**_body(_confirmation()), "interaction": {"relations": [link]}}
+    offered = AsyncMock(return_value=SteerReport("offered", "ike", delivery_id=1))
+    with patch("agent_backbone.api.routes.messages.steer_agent", offered):
+        resp, _ = await _send(api_client, auth_headers, db, key, body, path="/api/steer")
+    assert resp.status_code == 200, resp.text
+    (row,) = await _rows(db, "SELECT relations FROM interactions WHERE operation_id != 'earlier'")
+    assert [r["target"]["id"] for r in json.loads(row.relations)] == [earlier]
+
+
 async def test_a_refused_steer_commits_no_receipt(api_client, auth_headers, api_app, key):
     db = api_app.state.db
     confirmation = _confirmation()

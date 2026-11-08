@@ -647,6 +647,7 @@ class SigningRepo(Repo):
         receipt: dict,
         queue: dict | None,
         fresh: bool = True,
+        interaction: dict | None = None,
     ) -> tuple[str, dict | None]:
         """Commit a confirmation in one transaction: the nonce, the receipt and,
         for a message, its queued delivery.
@@ -731,7 +732,9 @@ class SigningRepo(Repo):
                 recipient=receipt["delivered_to"],
                 kind=receipt["kind"],
                 source="owner_confirmation",
+                # A steer has no queue row: its validated metadata comes on its own.
                 metadata=(queue or {}).get("interaction")
+                or interaction
                 or {
                     "original_target": receipt["recipient"],
                     "sender": await actor(conn, receipt["sender"], attribution="signed"),

@@ -216,7 +216,12 @@ async def steer(
                 text=body.message,
             )
             _, row = await confirmations.admit(
-                db, signed, receipt, None, is_fresh=confirmations.fresh(confirmation, signed)
+                db,
+                signed,
+                receipt,
+                None,
+                is_fresh=confirmations.fresh(confirmation, signed),
+                interaction=interaction,
             )
         except HTTPException as exc:
             await confirmations.audit_refusal(
