@@ -404,3 +404,12 @@ async def test_a_window_at_the_end_of_time_is_answered(api_app):
         agent_id=await identity(db, "ike"), since="9999-12-31T23:00:00.000000Z", until=end
     )
     assert spans["items"] == []
+
+
+def test_window_bounds_before_year_1000_stay_four_digit():
+    from datetime import UTC, datetime
+
+    from agent_backbone.services.database._time import format_iso, parse_iso
+
+    early = format_iso(datetime(5, 1, 1, tzinfo=UTC))
+    assert early == "0005-01-01T00:00:00.000000Z" and parse_iso(early).year == 5
