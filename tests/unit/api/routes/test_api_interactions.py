@@ -640,3 +640,18 @@ async def test_a_reused_delivery_id_keeps_its_own_attempt(db):
             )
         ).fetchall()
     assert sorted(row.operation_id for row in rows) == ["op-first", "op-second"]
+
+
+async def test_retiring_a_registration_ends_its_queued_interactions(api_app):
+    db = api_app.state.db
+    queued = await db.queue.enqueue(
+        session_name="ike", message="still waiting", sender="bell", delivery_kind="direct_message"
+    )
+    assert await db.agents.delete("ike")
+    async with db.engine.begin() as conn:
+        interaction = await conn.scalar(
+            text("SELECT id FROM interactions WHERE operation_id=:op"),
+            {"op": queued.operation_id},
+        )
+    record = await db.interactions.detail(interaction)
+    assert record["status"]["value"] == "registration_retired"

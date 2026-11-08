@@ -374,6 +374,20 @@ class TestIntegrationReply:
         )
         assert resp.status_code == 503
 
+    async def test_a_posted_reply_stays_posted_when_history_fails(
+        self, api_client, api_app, auth_headers, monkeypatch
+    ):
+        integration = AsyncMock()
+        integration.reply_to_agent = AsyncMock(return_value={"telegram": "posted"})
+        api_app.state.integrations = integration
+        monkeypatch.setattr(
+            api_app.state.db.interactions, "observe", AsyncMock(side_effect=RuntimeError("busy"))
+        )
+        resp = await api_client.post(
+            "/api/integrations/reply", json={"session": "ike", "text": "hi"}, headers=auth_headers
+        )
+        assert resp.status_code == 200 and resp.json()["posted"] == {"telegram": True}
+
     async def test_unregistered_agent_404(self, api_client, auth_headers):
         resp = await api_client.post(
             "/api/integrations/reply", json={"session": "stray", "text": "hi"}, headers=auth_headers

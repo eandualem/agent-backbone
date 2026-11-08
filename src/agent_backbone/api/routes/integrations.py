@@ -70,12 +70,16 @@ async def reply_to_humans(
         },
     )
     results = await integrations.reply_to_agent(body.session, body.text)
-    await db.interactions.observe(
-        operation,
-        "integration_delivery",
-        outcome="delivered" if any(v == "posted" for v in results.values()) else "failed",
-        source="integration-reply",
-    )
+    try:
+        await db.interactions.observe(
+            operation,
+            "integration_delivery",
+            outcome="delivered" if any(v == "posted" for v in results.values()) else "failed",
+            source="integration-reply",
+        )
+    except Exception:
+        # The reply already reached the person: a history write never turns it into a failure.
+        log.warning("Integration reply was sent but its history event was not recorded")
     posted = {name: outcome == "posted" for name, outcome in results.items()}
     if not any(posted.values()):
         failed = sorted(name for name, outcome in results.items() if outcome == "failed")
