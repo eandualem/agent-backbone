@@ -1,5 +1,6 @@
 """Current checklists are authored data with atomic updates and feedback context."""
 
+import json
 from copy import deepcopy
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -111,6 +112,12 @@ async def test_feedback_is_atomic_contextual_and_never_redirected(
         assert queued["registration_id"] == identity
         assert "Check the change" in queued["message"] and first["revision_id"] in queued["message"]
         assert receipt["delivery"]["queued"]
+        async with api_app.state.db.engine.begin() as conn:  # captured with its queue row
+            sender = await conn.scalar(
+                text("SELECT sender FROM interactions WHERE operation_id=:id"),
+                {"id": receipt["operation_id"]},
+            )
+        assert sender is not None and json.loads(sender)["kind"] == "owner"
         body.update(request_id=uuid4().hex, base_revision_id=first["revision_id"])
         body["plan"]["plan_id"] = uuid4().hex
         body["plan"]["items"] = []

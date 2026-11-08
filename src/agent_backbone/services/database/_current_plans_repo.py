@@ -11,6 +11,7 @@ from sqlalchemy import delete, insert, select, update
 from sqlalchemy.exc import IntegrityError
 
 from agent_backbone.models import CurrentPlanFeedback, PublishCurrentPlan
+from agent_backbone.services.database._interaction_capture import capture, event, owner
 from agent_backbone.services.database._plan_conversations import artifact as plan_artifact
 from agent_backbone.services.database._plan_conversations import published, record_revision
 from agent_backbone.services.database._repo import Repo
@@ -298,6 +299,24 @@ class CurrentPlanRepo(Repo):
                         dedup_key="current-plan-feedback:" + receipt["feedback_id"],
                         priority=0,
                     )
+                )
+                # Captured with its queue row, as enqueue does: the drain never captures.
+                await capture(
+                    conn,
+                    operation_id=receipt["operation_id"],
+                    message=message,
+                    sender=body.author or "operator",
+                    recipient=target,
+                    source="current-plan-feedback",
+                    metadata={"sender": owner()} if body.author is None else None,
+                )
+                await event(
+                    conn,
+                    receipt["operation_id"],
+                    "queued",
+                    outcome="pending",
+                    source="current-plan-feedback",
+                    time_basis="recorded",
                 )
                 await self._save_receipt(conn, actor, body.request_id, digest, receipt)
                 return receipt
