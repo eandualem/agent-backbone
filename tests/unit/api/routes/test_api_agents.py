@@ -446,6 +446,9 @@ class TestStopAgent:
         assert resp.json() == {"ok": True, "session": "ike"}
         resp = await api_client.delete("/api/agents/ike", params=query, headers=auth_headers)
         assert resp.json()["ok"]
+        # A selection of the forgotten registration is answered as changed, as inspect does.
+        resp = await api_client.post("/api/agents/ike/stop", params=query, headers=auth_headers)
+        assert resp.status_code == 409 and resp.json()["detail"]["code"] == "registration_changed"
 
 
 class TestAgentOutput:
