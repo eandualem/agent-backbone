@@ -753,6 +753,8 @@ class InteractionRepo(Repo):
                         number = int(target["id"])
                     except ValueError:
                         number = -1
+                    if not 0 <= number < 2**63:  # beyond a database integer: absent, never a 500
+                        number = -1
                     row = (
                         (await conn.execute(select(reports).where(reports.c.id == number)))
                         .mappings()

@@ -708,3 +708,11 @@ async def test_a_failed_capture_never_logs_the_message(
     with caplog.at_level("DEBUG"), contextlib.suppress(RuntimeError):
         await send(api_client, auth_headers)  # the test client re-raises the 500
     assert "Original body" not in caplog.text
+
+
+async def test_an_out_of_range_report_relation_is_an_absent_target(
+    api_app, api_client, auth_headers, transport
+):
+    huge = {"type": "from_report", "target": {"kind": "report", "id": str(2**63)}}
+    resp = await send(api_client, auth_headers, interaction={"relations": [huge]})
+    assert resp.status_code == 422, resp.text
