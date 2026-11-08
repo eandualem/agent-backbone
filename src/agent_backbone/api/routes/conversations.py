@@ -251,6 +251,7 @@ async def conversations(
         kind=kind,
         keys=keys,
         reader=_reader(request, agent),
+        reader_registration=getattr(request.state, "credential_registration", None),
         include_interactions=request.state.credential_role == "operator"
         or bool(getattr(request.state, "credential_registration", None)),
         after=_cursor(after, "c"),
@@ -288,6 +289,7 @@ async def conversation(
             kind,
             artifact_id,
             reader=_reader(request, agent),
+            reader_registration=getattr(request.state, "credential_registration", None),
             before=_cursor(before, "e"),
             after=_cursor(after, "e"),
             limit=limit,

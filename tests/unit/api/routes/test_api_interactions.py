@@ -655,3 +655,19 @@ async def test_retiring_a_registration_ends_its_queued_interactions(api_app):
         )
     record = await db.interactions.detail(interaction)
     assert record["status"]["value"] == "registration_retired"
+
+
+async def test_a_name_moved_mid_request_never_authorizes_another_registration(
+    api_app, api_client, transport, monkeypatch
+):
+    from agent_backbone.services.database import _conversations_repo
+
+    db = api_app.state.db
+    bell, ike = await identity(db, "bell"), await identity(db, "ike")
+    headers = {"Authorization": "Bearer " + agent_api_key(TEST_API_KEY, bell)}
+    assert (await send(api_client, headers)).status_code == 200
+    path = "/api/conversations/interaction/" + (await records(db))[0]["id"]
+    assert (await api_client.get(path, headers=headers)).status_code == 200
+    # Between authentication and the read, the name resolves to another participant.
+    monkeypatch.setattr(_conversations_repo, "_registration", AsyncMock(return_value=ike))
+    assert (await api_client.get(path, headers=headers)).status_code == 403
