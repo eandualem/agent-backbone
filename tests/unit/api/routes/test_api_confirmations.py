@@ -444,7 +444,7 @@ async def test_a_case_variant_sender_is_never_recorded_as_signed(
             "/api/messages", headers={**auth_headers, **signed}, content=raw
         )
     assert resp.status_code == 200, resp.text
-    assert deliver.await_args.kwargs["interaction"]["sender"]["attribution"] != "signed"
+    assert deliver.await_args.kwargs["interaction"]["sender"]["attribution"] == "unverified"
 
 
 async def test_signed_plan_feedback_from_a_case_twin_is_not_signed(
@@ -478,7 +478,7 @@ async def test_signed_plan_feedback_from_a_case_twin_is_not_signed(
         resp = await api_client.post(path, headers={**auth_headers, **signed}, content=raw)
     assert resp.status_code == 200, resp.text
     (row,) = await _rows(db, "SELECT sender FROM interactions")
-    assert json.loads(row.sender)["attribution"] != "signed"
+    assert json.loads(row.sender)["attribution"] == "unverified"
 
 
 async def test_an_old_confirmation_still_recovers_its_receipt(
