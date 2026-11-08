@@ -436,7 +436,10 @@ async def test_a_case_variant_sender_is_never_recorded_as_signed(
     deliver = AsyncMock(return_value=DeliveryReport(DeliveryOutcome.DELIVERED))
     variant = {**MESSAGE, "from_entity": SENDER.upper(), "owner_confirmation": None}
     with patch("agent_backbone.api.routes.messages.safe_deliver", deliver):
-        raw, signed = await _signed(api_app.state.db, key, "POST", "/api/messages", variant)
+        # Header and body both carry the variant: only the enrolled name is signed.
+        raw, signed = await _signed(
+            api_app.state.db, key, "POST", "/api/messages", variant, sender=SENDER.upper()
+        )
         resp = await api_client.post(
             "/api/messages", headers={**auth_headers, **signed}, content=raw
         )

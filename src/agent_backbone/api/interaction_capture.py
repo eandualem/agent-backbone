@@ -3,6 +3,18 @@
 from fastapi import HTTPException
 
 
+async def signed_as(request, db, name: str) -> bool:
+    """Whether this request was signed by the key enrolled under exactly ``name``.
+
+    The middleware matches names case-insensitively, and case-twin registrations can
+    exist: only the name recorded at enrollment may receive signed attribution."""
+    signed = getattr(request.state, "signed_sender", None)
+    if signed is None:
+        return False
+    enrolled = await db.signing.enrollment(signed.sender_key)
+    return enrolled is not None and enrolled["sender"] == name
+
+
 async def metadata(request, body, db):
     supplied = body.interaction
     operator = request.state.credential_role == "operator"
@@ -14,10 +26,7 @@ async def metadata(request, body, db):
     if registration and name != body.from_entity:
         raise HTTPException(403, "Sender does not match the agent credential")
     sender = await db.interactions.attribution(body.from_entity, registration, owner_origin)
-    signed = getattr(request.state, "signed_sender", None)
-    if sender["attribution"] == "unverified" and signed and signed.sender == body.from_entity:
-        # Verified by an enrolled key. Only an exact name: case-twin registrations can
-        # exist, and the actor lookup above is exact, so a variant could name the other.
+    if sender["attribution"] == "unverified" and await signed_as(request, db, body.from_entity):
         sender["attribution"] = "signed"
     try:
         relations = await db.interactions.validate_relations(

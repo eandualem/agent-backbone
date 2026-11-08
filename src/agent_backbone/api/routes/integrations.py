@@ -8,6 +8,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from agent_backbone.api.deps import get_config, get_db, get_integrations, registered_agent_or_404
+from agent_backbone.api.interaction_capture import signed_as
 from agent_backbone.api.models import IntegrationReplyRequest, IntegrationReplyResponse
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.integrations import Integrations
@@ -51,9 +52,8 @@ async def reply_to_humans(
         raise HTTPException(403, "Sender does not match credential")
     operation = uuid.uuid4().hex
     sender = await db.interactions.attribution(body.session, registration)
-    signed = getattr(request.state, "signed_sender", None)
-    if sender["attribution"] == "unverified" and signed and signed.sender == body.session:
-        sender["attribution"] = "signed"  # verified, by its exact name (case twins exist)
+    if sender["attribution"] == "unverified" and await signed_as(request, db, body.session):
+        sender["attribution"] = "signed"
     await db.interactions.capture(
         operation_id=operation,
         message=body.text,
