@@ -235,8 +235,13 @@ async def stop_agent_session(
     async with lifecycle_lock(name), guard:
         # A stale selection is answered as such before any other refusal.
         await _refuse_changed_registration(db, name, expected_registration_id)
-        spec = config.agents.get(name)
-        if spec is not None and spec.inbox_only:
+        if expected_registration_id is not None:  # the durable row, as just checked
+            rows = await db.agents.list()
+            inbox_only = any(row["name"] == name and row["inbox_only"] for row in rows)
+        else:
+            spec = config.agents.get(name)
+            inbox_only = spec is not None and spec.inbox_only
+        if inbox_only:
             # A session with its name is not the agent's: never stop it on its behalf.
             raise ValueError(f"'{name}' is inbox-only: it has no session to stop")
         return await launch.stop_agent(name)

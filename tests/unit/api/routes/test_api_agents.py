@@ -450,6 +450,52 @@ class TestStopAgent:
         resp = await api_client.post("/api/agents/ike/stop", params=query, headers=auth_headers)
         assert resp.status_code == 409 and resp.json()["detail"]["code"] == "registration_changed"
 
+    async def test_a_stale_inbox_only_stop_is_answered_as_changed(
+        self, api_client, auth_headers, tmux_svc, api_app
+    ):
+        from dataclasses import replace
+
+        from agent_backbone.config import AgentsConfig
+
+        config = api_app.state.config
+        ike = replace(config.agents.get("ike"), inbox_only=True)
+        specs = {**config.agents.specs, "ike": ike}
+        api_app.state.config = replace(config, agents=AgentsConfig(specs))
+        resp = await api_client.post(
+            "/api/agents/ike/stop",
+            params={"expected_registration_id": "0" * 32},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 409 and resp.json()["detail"]["code"] == "registration_changed"
+        tmux_svc.stop_session.assert_not_awaited()
+
+    async def test_a_current_registration_missing_from_the_snapshot_is_stopped(
+        self, api_client, auth_headers, tmux_svc, api_app
+    ):
+        """Registered by another process: the durable row decides, not the snapshot."""
+        db = api_app.state.db
+        await db.agents.upsert(
+            "newbie",
+            dir="/fixture/new",
+            unattended=False,
+            runtime="codex",
+            model=None,
+            repo="",
+            tags=[],
+            env={},
+            description="",
+        )
+        assert "newbie" not in api_app.state.config.agents
+        current = next(
+            r["report_identity"] for r in await db.agents.list() if r["name"] == "newbie"
+        )
+        resp = await api_client.post(
+            "/api/agents/newbie/stop",
+            params={"expected_registration_id": current},
+            headers=auth_headers,
+        )
+        assert resp.json() == {"ok": True, "session": "newbie"}
+
     async def test_the_registration_is_checked_under_the_cross_process_guard(
         self, api_client, auth_headers, tmux_svc, api_app, monkeypatch
     ):

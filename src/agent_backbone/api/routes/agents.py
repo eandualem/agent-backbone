@@ -467,9 +467,10 @@ async def stop_agent(
     feed: SessionFeed = Depends(get_feed),
 ):
     """Stop an agent tmux session (never the backbone's own)."""
-    if expected_registration_id is not None and config.agents.get(session) is None:
-        raise _registration_changed()  # as inspect: a forgotten selection is a changed one
-    registered_agent_or_404(config, session)
+    if expected_registration_id is None:
+        registered_agent_or_404(config, session)
+    # With an ID the durable registration decides, under the lock: a forgotten
+    # selection is a changed one, and a newer one need not be in this snapshot yet.
     try:
         ok = await stop_agent_session(
             config, session, expected_registration_id=expected_registration_id, db=db
