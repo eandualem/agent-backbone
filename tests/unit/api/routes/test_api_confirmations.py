@@ -209,6 +209,8 @@ async def test_a_refused_steer_commits_no_receipt(api_client, auth_headers, api_
         )
     assert resp.json()["outcome"] == "refused" and resp.json()["receipt"] is None
     assert await db.signing.receipt(confirmation["confirmation_id"]) is None
+    (interaction,) = await _rows(db, "SELECT id FROM interactions")
+    assert (await db.interactions.detail(interaction.id))["status"]["value"] == "cancelled"
 
 
 async def test_delivered_at_comes_from_the_delivery_record(
@@ -317,6 +319,8 @@ async def test_a_reset_revokes_what_the_old_key_confirmed(
     assert receipt["status"] == "revoked"
     (row,) = await _rows(db, "SELECT status, delivered_at FROM message_queue")
     assert row.status == "expired" and row.delivered_at is not None  # retention removes it
+    (interaction,) = await _rows(db, "SELECT id FROM interactions")
+    assert (await db.interactions.detail(interaction.id))["status"]["value"] == "expired"
     assert not await db.queue.still_leased(queue_id)  # the drain won't deliver its copy
     # The sender reconciles it with the new key: the feed says it was revoked.
     signed = await _signed_query(db, replacement, [], epoch=epoch + 1)

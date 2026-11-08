@@ -120,6 +120,27 @@ async def _revoke_epoch(conn, sender_key: str, epoch: int, at: str) -> None:
         ),
         params,
     )
+    expiring = (
+        await conn.execute(
+            text(
+                "SELECT id, operation_id FROM message_queue"
+                " WHERE status IN ('pending', 'in_progress')"
+                " AND operation_id IN (SELECT operation_id"
+                f" FROM signing_receipts WHERE status = 'revoked' {scope})"
+            ),
+            params,
+        )
+    ).fetchall()
+    for row in expiring:  # their captured interactions end with the queue row
+        await event(
+            conn,
+            row.operation_id,
+            "completed",
+            outcome="expired",
+            source="key-reset",
+            at=params["at"],
+            queue_id=row.id,
+        )
     await conn.execute(
         text(
             "UPDATE message_queue SET status = 'expired', delivered_at = :at"
@@ -897,14 +918,17 @@ class SigningRepo(Repo):
         """Forget a confirmation that was never offered (a refused steer), for
         the request holding its claim."""
         async with self._tx() as conn:
-            await conn.execute(
+            operation = await conn.scalar(
                 text(
                     "DELETE FROM signing_receipts WHERE confirmation_id = :c"
                     " AND delivered_at IS NULL AND offer_token = :t"
                     " AND (offer_state IS NULL OR offer_state IN ('claiming', 'failed'))"
+                    " RETURNING operation_id"
                 ),
                 {"c": confirmation_id, "t": token},
             )
+            # The refused steer's captured interaction ends here, never left pending.
+            await event(conn, operation, "completed", outcome="cancelled", source="steer-refused")
 
     async def receipt(self, confirmation_id: str) -> dict | None:
         async with self._tx() as conn:
