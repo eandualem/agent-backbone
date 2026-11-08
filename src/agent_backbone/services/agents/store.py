@@ -433,10 +433,16 @@ class AgentStore:
         return await self.update(name, tags=changed)
 
     @serialized_mutation
-    async def forget(self, name: str) -> bool:
+    async def forget(self, name: str, *, expected_registration_id: str | None = None) -> bool:
         from agent_backbone.services.terminal import session_exists
 
         async with profile_lock(self._data_dir):
+            # Checked again under the cross-process guard: a direct CLI process
+            # may have replaced the registration since the caller's check.
+            if expected_registration_id is not None and not (
+                await self._db.agents.registration_matches(name, expected_registration_id)
+            ):
+                raise ValueError("agent registration changed")
             if await session_exists(name):
                 raise RuntimeError(f"'{name}' is running — stop it first")
             guarded = project_claims(self.config.data_dir) is not None

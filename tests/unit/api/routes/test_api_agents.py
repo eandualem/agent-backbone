@@ -450,6 +450,41 @@ class TestStopAgent:
         resp = await api_client.post("/api/agents/ike/stop", params=query, headers=auth_headers)
         assert resp.status_code == 409 and resp.json()["detail"]["code"] == "registration_changed"
 
+    async def test_the_registration_is_checked_under_the_cross_process_guard(
+        self, api_client, auth_headers, tmux_svc, api_app, monkeypatch
+    ):
+        """A direct CLI process cannot replace the registration between the
+        check and the stop or forget: the shared profile lock is held."""
+        import fcntl
+        import os
+
+        from agent_backbone.services.agents.credentials import _open_profile_lock
+
+        agents = api_app.state.db.agents
+        current = next(r["report_identity"] for r in await agents.list() if r["name"] == "ike")
+        check = agents.registration_matches
+        held = []
+
+        async def probe(name, identity):
+            fd = _open_profile_lock(api_app.state.config.data_dir)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held.append(False)
+            except BlockingIOError:
+                held.append(True)
+            finally:
+                os.close(fd)
+            return await check(name, identity)
+
+        monkeypatch.setattr(agents, "registration_matches", probe)
+        query = {"expected_registration_id": current}
+        resp = await api_client.post("/api/agents/ike/stop", params=query, headers=auth_headers)
+        assert resp.json() == {"ok": True, "session": "ike"}
+        resp = await api_client.delete("/api/agents/ike", params=query, headers=auth_headers)
+        assert resp.json()["ok"]
+        # Stop checks once under the guard; forget checks first, then again under it.
+        assert held == [True, False, True]
+
 
 class TestAgentOutput:
     async def test_a_page_of_messages_with_navigation(self, api_client, auth_headers, tmux_svc):

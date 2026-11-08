@@ -9,12 +9,14 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.agents import launch
 from agent_backbone.services.agents._locks import lifecycle_lock
 from agent_backbone.services.agents._validation import validate_agent_spec
+from agent_backbone.services.agents.credentials import profile_lock
 from agent_backbone.services.agents.launch import StartResult
 from agent_backbone.services.agents.store import check_agent_tags, refuse_case_twin
 from agent_backbone.services.runtimes import (
@@ -227,7 +229,10 @@ async def stop_agent_session(
     (``ValueError``) on every surface — API, CLI, Telegram — from here."""
     if name == config.backbone.session_name:
         raise ValueError("refusing to stop the backbone's own session")
-    async with lifecycle_lock(name):
+    # Direct CLI processes have their own lifecycle locks; the shared profile
+    # guard keeps another process from replacing the registration before the stop.
+    guard = profile_lock(config.data_dir) if expected_registration_id is not None else nullcontext()
+    async with lifecycle_lock(name), guard:
         # A stale selection is answered as such before any other refusal.
         await _refuse_changed_registration(db, name, expected_registration_id)
         spec = config.agents.get(name)
@@ -253,7 +258,7 @@ async def forget_agent(
         await _refuse_changed_registration(db, name, expected_registration_id)
         if await session_exists(name):
             raise RuntimeError(f"'{name}' is running — stop it first")
-        return await store.forget(name)
+        return await store.forget(name, expected_registration_id=expected_registration_id)
 
 
 async def start_resolved(
