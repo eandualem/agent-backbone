@@ -11,6 +11,7 @@ from sqlalchemy import delete, insert, select, update
 from sqlalchemy.exc import IntegrityError
 
 from agent_backbone.models import CurrentPlanFeedback, PublishCurrentPlan
+from agent_backbone.services.database._interaction_capture import actor as capture_actor
 from agent_backbone.services.database._interaction_capture import capture, event, owner
 from agent_backbone.services.database._plan_conversations import artifact as plan_artifact
 from agent_backbone.services.database._plan_conversations import published, record_revision
@@ -215,7 +216,7 @@ class CurrentPlanRepo(Repo):
             "stale_after_seconds": 86400,
         }
 
-    async def feedback(self, author_id, feedback, wrap_message):
+    async def feedback(self, author_id, feedback, wrap_message, *, credential_registration=None):
         body = CurrentPlanFeedback.model_validate(feedback.model_dump())
         digest = _digest({"feedback": body.model_dump(), "author_id": author_id})
         actor = None
@@ -308,7 +309,18 @@ class CurrentPlanRepo(Repo):
                     sender=body.author or "operator",
                     recipient=target,
                     source="current-plan-feedback",
-                    metadata={"sender": owner()} if body.author is None else None,
+                    metadata={
+                        "sender": owner()
+                        if body.author is None
+                        else await capture_actor(
+                            conn,
+                            body.author,
+                            registration=sender,
+                            attribution="credential_bound"
+                            if credential_registration == sender
+                            else "unverified",
+                        )
+                    },
                 )
                 await event(
                     conn,

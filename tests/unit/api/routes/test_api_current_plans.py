@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from agent_backbone.config import agent_api_key
 from agent_backbone.models import CURRENT_PLAN_BODY_BYTES
+from tests.conftest import TEST_API_KEY
 from tests.report_support import author
 
 
@@ -199,3 +200,35 @@ async def test_auth_validation_conflicts_and_feedback_privileges(api_app, api_cl
             f"/api/current-plans/{identity}/feedback", headers=auth_headers, json=feedback
         )
     ).status_code == 422
+
+
+async def test_bound_agent_feedback_records_a_verified_sender(api_app, api_client, auth_headers):
+    identity = (await discover(api_client, auth_headers))["author_id"]
+    body = publication(identity)
+    first = (await api_client.post("/api/current-plans", headers=auth_headers, json=body)).json()[
+        "receipt"
+    ]
+    await author(api_app.state.db, "bell")
+    async with api_app.state.db.engine.begin() as conn:
+        bell = await conn.scalar(text("SELECT report_identity FROM agents WHERE name='bell'"))
+    feedback = {
+        "author": "bell",
+        "request_id": uuid4().hex,
+        "observed_plan_id": first["plan_id"],
+        "observed_revision_id": first["revision_id"],
+        "item_ids": [body["plan"]["items"][0]["item_id"]],
+        "kind": "question",
+        "text": "Which step is next?",
+    }
+    headers = {"Authorization": "Bearer " + agent_api_key(TEST_API_KEY, bell)}
+    with patch("agent_backbone.api.routes.current_plans.deliver_now", AsyncMock()):
+        sent = await api_client.post(
+            f"/api/current-plans/{identity}/feedback", headers=headers, json=feedback
+        )
+    assert sent.status_code == 200, sent.text
+    async with api_app.state.db.engine.begin() as conn:
+        sender = await conn.scalar(
+            text("SELECT sender FROM interactions WHERE operation_id=:id"),
+            {"id": sent.json()["operation_id"]},
+        )
+    assert json.loads(sender)["attribution"] == "credential_bound"

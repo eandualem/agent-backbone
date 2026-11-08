@@ -927,8 +927,20 @@ class SigningRepo(Repo):
                 ),
                 {"c": confirmation_id, "t": token},
             )
-            # The refused steer's captured interaction ends here, never left pending.
-            await event(conn, operation, "completed", outcome="cancelled", source="steer-refused")
+            # The refused steer's captured interaction ends here, never left pending, unless
+            # its offer already settled with a more precise outcome (failed, not_taken).
+            settled = operation and await conn.scalar(
+                text(
+                    "SELECT 1 FROM interaction_events WHERE operation_id = :op"
+                    " AND outcome IS NOT NULL"
+                    " AND outcome NOT IN ('pending', 'attempting', 'offered')"
+                ),
+                {"op": operation},
+            )
+            if not settled:
+                await event(
+                    conn, operation, "completed", outcome="cancelled", source="steer-refused"
+                )
 
     async def receipt(self, confirmation_id: str) -> dict | None:
         async with self._tx() as conn:

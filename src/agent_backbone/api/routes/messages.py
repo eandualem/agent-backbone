@@ -203,6 +203,9 @@ async def steer(
     else:
         try:
             confirmations.check(confirmation, body.message, signed)
+            # Validated before admission: a refused attribution leaves no receipt, no
+            # captured interaction and no held offer.
+            interaction = await interaction_metadata(request, body, db)
             receipt = confirmations.receipt_fields(
                 confirmation,
                 signed=signed,
@@ -220,8 +223,6 @@ async def steer(
                 db, exc, sender=body.from_entity, path="/api/steer", target=body.target_session
             )
             raise
-        # Validated before the claim: a refused attribution must not hold the offer.
-        interaction = await interaction_metadata(request, body, db)
         token = await db.signing.claim_offer(confirmation.confirmation_id, int(time.time()))
         if token is None:
             # Offered once already, or an earlier request is offering it now:

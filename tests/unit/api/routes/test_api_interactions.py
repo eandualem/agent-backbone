@@ -291,6 +291,10 @@ def test_committed_wire_fixtures():
             for item in parsed.items:
                 if not item.ticks_truncated:
                     assert len(item.ticks) == item.counts.sent + item.counts.received
+                start = parsed.coverage.capture_started_at
+                assert all(tick.time >= start for tick in item.ticks)  # nothing predates capture
+                order = [(tick.time, tick.interaction_id) for tick in item.ticks]
+                assert order == sorted(order, reverse=True)  # newest first, as summary emits
         assert (
             json.loads((p / f"{model.__name__}.schema.json").read_text())
             == model.model_json_schema()

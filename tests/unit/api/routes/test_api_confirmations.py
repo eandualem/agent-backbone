@@ -208,12 +208,27 @@ async def test_a_refused_steer_attribution_never_holds_the_offer(
     bad = {**_body(confirmation), "interaction": {"relations": [absent]}}
     resp, _ = await _send(api_client, auth_headers, db, key, bad, path="/api/steer")
     assert resp.status_code == 422, resp.text
+    assert await db.signing.receipt(confirmation["confirmation_id"]) is None  # nothing admitted
+    assert await _rows(db, "SELECT id FROM interactions") == []
     offered = AsyncMock(return_value=SteerReport("offered", "ike", delivery_id=1))
     with patch("agent_backbone.api.routes.messages.steer_agent", offered):
         resp, _ = await _send(
             api_client, auth_headers, db, key, _body(confirmation), path="/api/steer"
         )
     assert resp.json()["outcome"] == "offered", resp.text
+
+
+async def test_a_refused_steer_keeps_its_settled_failure(api_client, auth_headers, api_app, key):
+    db = api_app.state.db
+
+    async def failed_offer(*args, operation_id, **kwargs):
+        await db.interactions.observe(operation_id, "attempt", outcome="failed", source="steer")
+        return SteerReport("refused", "ike", "offer_not_written")
+
+    with patch("agent_backbone.api.routes.messages.steer_agent", side_effect=failed_offer):
+        await _send(api_client, auth_headers, db, key, _body(_confirmation()), path="/api/steer")
+    (interaction,) = await _rows(db, "SELECT id FROM interactions")
+    assert (await db.interactions.detail(interaction.id))["status"]["value"] == "failed"
 
 
 async def test_a_refused_steer_commits_no_receipt(api_client, auth_headers, api_app, key):

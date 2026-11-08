@@ -50,6 +50,9 @@ async def reply_to_humans(
     if registration and request.state.credential_agent != body.session:
         raise HTTPException(403, "Sender does not match credential")
     operation = uuid.uuid4().hex
+    sender = await db.interactions.attribution(body.session, registration)
+    if sender["attribution"] == "unverified" and getattr(request.state, "signed_sender", None):
+        sender["attribution"] = "signed"  # the signing middleware verified body.session
     await db.interactions.capture(
         operation_id=operation,
         message=body.text,
@@ -58,7 +61,7 @@ async def reply_to_humans(
         kind="message",
         source="integration-reply",
         metadata={
-            "sender": await db.interactions.attribution(body.session, registration),
+            "sender": sender,
             "recipient": {
                 "kind": "owner",
                 "id": "owner",

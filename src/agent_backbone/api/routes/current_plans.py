@@ -98,7 +98,10 @@ async def feedback(
         await require_operator(request)
     signed = getattr(request.state, "signed_sender", None)
     receipt = await db.current_plans.feedback(
-        author_id, body, lambda sender, text: envelope(sender, text, relay=signed is not None)
+        author_id,
+        body,
+        lambda sender, text: envelope(sender, text, relay=signed is not None),
+        credential_registration=getattr(request.state, "credential_registration", None),
     )
     target = await db.current_plans.recipient(author_id)
     if target is not None:
