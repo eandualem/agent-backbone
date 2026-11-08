@@ -447,6 +447,40 @@ async def test_a_case_variant_sender_is_never_recorded_as_signed(
     assert deliver.await_args.kwargs["interaction"]["sender"]["attribution"] != "signed"
 
 
+async def test_signed_plan_feedback_from_a_case_twin_is_not_signed(
+    api_client, auth_headers, api_app, key
+):
+    """Both spellings registered, the key enrolled for one: feedback signed as the
+    other, in header and body, is never recorded as signed."""
+    from tests.report_support import author
+    from tests.unit.api.routes.test_api_current_plans import discover, publication
+
+    db = api_app.state.db
+    plan = (await discover(api_client, auth_headers))["author_id"]
+    body = publication(plan)
+    first = (await api_client.post("/api/current-plans", headers=auth_headers, json=body)).json()[
+        "receipt"
+    ]
+    await author(db, SENDER)
+    await author(db, SENDER.upper())  # an older registry can hold both spellings
+    feedback = {
+        "author": SENDER.upper(),
+        "request_id": uuid.uuid4().hex,
+        "observed_plan_id": first["plan_id"],
+        "observed_revision_id": first["revision_id"],
+        "item_ids": [body["plan"]["items"][0]["item_id"]],
+        "kind": "question",
+        "text": "Which step is next?",
+    }
+    path = f"/api/current-plans/{plan}/feedback"
+    raw, signed = await _signed(db, key, "POST", path, feedback, sender=SENDER.upper())
+    with patch("agent_backbone.api.routes.current_plans.deliver_now", AsyncMock()):
+        resp = await api_client.post(path, headers={**auth_headers, **signed}, content=raw)
+    assert resp.status_code == 200, resp.text
+    (row,) = await _rows(db, "SELECT sender FROM interactions")
+    assert json.loads(row.sender)["attribution"] != "signed"
+
+
 async def test_an_old_confirmation_still_recovers_its_receipt(
     api_client, auth_headers, api_app, key, drain, monkeypatch
 ):
