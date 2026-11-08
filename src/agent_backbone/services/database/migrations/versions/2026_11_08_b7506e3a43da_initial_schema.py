@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 4b1986efd0bf
+Revision ID: b7506e3a43da
 Revises:
-Create Date: 2026-11-08 02:34:20.616671
+Create Date: 2026-11-08 11:34:28.213679
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "4b1986efd0bf"
+revision: str = "b7506e3a43da"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -380,6 +380,9 @@ def upgrade() -> None:
         sqlite_autoincrement=True,
     )
     with op.batch_alter_table("interaction_capture_checkpoints", schema=None) as batch_op:
+        batch_op.create_index(
+            "idx_interaction_checkpoints_recorder", ["recorder_id", "id"], unique=False
+        )
         batch_op.create_index("idx_interaction_checkpoints_time", ["at", "id"], unique=False)
 
     op.create_table(
@@ -579,6 +582,9 @@ def upgrade() -> None:
     with op.batch_alter_table("registered_state_observations", schema=None) as batch_op:
         batch_op.create_index(
             "idx_registered_state_agent_time", ["agent_id", "at", "id"], unique=False
+        )
+        batch_op.create_index(
+            "idx_registered_state_recorder", ["agent_id", "recorder_id", "id"], unique=False
         )
 
     op.create_table(
@@ -985,6 +991,7 @@ def downgrade() -> None:
 
     op.drop_table("reports")
     with op.batch_alter_table("registered_state_observations", schema=None) as batch_op:
+        batch_op.drop_index("idx_registered_state_recorder")
         batch_op.drop_index("idx_registered_state_agent_time")
 
     op.drop_table("registered_state_observations")
@@ -1043,6 +1050,7 @@ def downgrade() -> None:
     op.drop_table("interaction_coverage")
     with op.batch_alter_table("interaction_capture_checkpoints", schema=None) as batch_op:
         batch_op.drop_index("idx_interaction_checkpoints_time")
+        batch_op.drop_index("idx_interaction_checkpoints_recorder")
 
     op.drop_table("interaction_capture_checkpoints")
     op.drop_table("fleet_snapshots")

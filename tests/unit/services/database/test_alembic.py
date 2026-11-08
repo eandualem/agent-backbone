@@ -69,6 +69,8 @@ _EXPECTED_TABLES = {
 _EXPECTED_INDEXES = {
     "idx_registered_state_agent_time",
     "idx_interaction_checkpoints_time",
+    "idx_interaction_checkpoints_recorder",
+    "idx_registered_state_recorder",
     "idx_interactions_sender",
     "idx_interactions_recipient",
     "idx_interaction_events_time",

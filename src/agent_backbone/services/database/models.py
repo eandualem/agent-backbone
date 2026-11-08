@@ -1065,6 +1065,8 @@ class RegisteredStateObservationORM(Base):
     evidence: Mapped[str] = mapped_column(Text, nullable=False)
     __table_args__ = (
         Index("idx_registered_state_agent_time", "agent_id", "at", "id"),
+        # Finds a sample's previous recording by the same recorder (state spans).
+        Index("idx_registered_state_recorder", "agent_id", "recorder_id", "id"),
         {"sqlite_autoincrement": True},
     )
 
@@ -1079,5 +1081,7 @@ class InteractionCaptureCheckpointORM(Base):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     __table_args__ = (
         Index("idx_interaction_checkpoints_time", "at", "id"),
+        # Finds a checkpoint's previous recording by the same recorder (coverage).
+        Index("idx_interaction_checkpoints_recorder", "recorder_id", "id"),
         {"sqlite_autoincrement": True},
     )
