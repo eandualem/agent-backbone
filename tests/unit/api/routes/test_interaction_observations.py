@@ -384,3 +384,12 @@ async def test_session_feed_captures_identity_before_read_and_rejects_stale_regi
         assert ids == [current] and current != old
     finally:
         await feed.close()
+
+
+async def test_registered_samples_are_not_kept_with_diagnostics_off(api_app):
+    db = api_app.state.db
+    await db.settings.set("diagnostics.mode", "off")
+    await sample(db, "ike", await identity(db, "ike"), 0)
+    async with db.engine.begin() as conn:
+        count = await conn.scalar(text("SELECT COUNT(*) FROM registered_state_observations"))
+    assert count == 0

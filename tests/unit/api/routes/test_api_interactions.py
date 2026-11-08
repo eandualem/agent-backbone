@@ -1,5 +1,6 @@
 """Captured communication and owner discussion without model or terminal calls."""
 
+import contextlib
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -671,3 +672,13 @@ async def test_a_name_moved_mid_request_never_authorizes_another_registration(
     # Between authentication and the read, the name resolves to another participant.
     monkeypatch.setattr(_conversations_repo, "_registration", AsyncMock(return_value=ike))
     assert (await api_client.get(path, headers=headers)).status_code == 403
+
+
+async def test_a_failed_capture_never_logs_the_message(
+    api_app, api_client, auth_headers, transport, monkeypatch, caplog
+):
+    leak = RuntimeError("INSERT INTO interactions ... 'Original body'")
+    monkeypatch.setattr(api_app.state.db.interactions, "capture", AsyncMock(side_effect=leak))
+    with caplog.at_level("DEBUG"), contextlib.suppress(RuntimeError):
+        await send(api_client, auth_headers)  # the test client re-raises the 500
+    assert "Original body" not in caplog.text

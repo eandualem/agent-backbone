@@ -97,6 +97,8 @@ class StateHistoryRepo(Repo):
         """
         at = now_iso()
         async with self._tx() as conn:
+            if await diagnostic_mode(conn) == "off":
+                return
             for name, state, reason in states:
                 identity = registrations.get(name)
                 if not identity:
