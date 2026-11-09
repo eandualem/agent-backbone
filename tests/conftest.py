@@ -155,7 +155,14 @@ def isolated_backbone_environment(monkeypatch):
     A test that needs one sets it itself.
     """
     for key in list(os.environ):
-        if key.startswith("BACKBONE_") or key in ("TMUX", "TMUX_PANE"):
+        # A login service's own variables too: `up` must not think it was started by one.
+        if key.startswith("BACKBONE_") or key in (
+            "TMUX",
+            "TMUX_PANE",
+            "XPC_SERVICE_NAME",
+            "INVOCATION_ID",
+            "MANAGERPID",
+        ):
             monkeypatch.delenv(key)
 
 

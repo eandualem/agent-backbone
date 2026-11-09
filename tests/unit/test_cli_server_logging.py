@@ -6,6 +6,7 @@ import logging
 import logging.config
 import re
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -424,3 +425,49 @@ async def test_socketio_dependency_handlers_follow_capture_policy(
         await sio.eio._trigger_event("message", "synthetic-sid", "INVALID", run_async=False)
         assert "Traceback" in controlled.getvalue() and "invalid literal" in controlled.getvalue()
         assert not direct.getvalue()
+
+
+def test_a_refused_up_under_a_service_waits_for_its_profile(monkeypatch, capsys):
+    from agent_backbone.cli import server
+
+    monkeypatch.setenv("XPC_SERVICE_NAME", "dev.agent-backbone")
+    monkeypatch.setattr(server.os, "getppid", lambda: 1)  # started by launchd itself
+    found = (object(), object())
+    refusals = ["No profile at /d", "No profile at /d", "Unreadable registry"]
+    lookup = MagicMock(side_effect=[*map(ValueError, refusals), found])
+    with (
+        patch("agent_backbone.services.database.default_profile_at", lookup),
+        patch.object(server.time, "sleep") as sleep,
+    ):
+        assert server._default_profile(Path("/d")) is found
+    assert sleep.call_count == 3
+    err = capsys.readouterr().err
+    assert err.count("No profile at /d") == 1  # one line, not a loop
+    assert err.count("Unreadable registry") == 1  # a changed refusal is shown
+
+
+def test_a_refused_up_in_a_terminal_still_exits(monkeypatch):
+    from agent_backbone.cli import server
+
+    monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    lookup = MagicMock(side_effect=ValueError("No profile at /d"))
+    with (
+        patch("agent_backbone.services.database.default_profile_at", lookup),
+        pytest.raises(ValueError),
+    ):
+        server._default_profile(Path("/d"))
+
+
+@pytest.mark.parametrize("detach", [False, True])
+def test_a_shell_beneath_the_service_or_a_detached_start_never_waits(monkeypatch, detach):
+    from agent_backbone.cli import server
+
+    monkeypatch.setenv("XPC_SERVICE_NAME", "dev.agent-backbone")  # inherited in a pane
+    monkeypatch.setattr(server.os, "getppid", lambda: 1 if detach else 4242)
+    lookup = MagicMock(side_effect=ValueError("No profile at /d"))
+    with (
+        patch("agent_backbone.services.database.default_profile_at", lookup),
+        pytest.raises(ValueError),
+    ):
+        server._default_profile(Path("/d"), wait=not detach)
