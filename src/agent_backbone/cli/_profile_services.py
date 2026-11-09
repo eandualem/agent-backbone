@@ -84,8 +84,13 @@ class ProviderServices:
                         ]
                     ),
                 ],
-                # The Default profile uses the person's own environment.
-                env={**os.environ, "BACKBONE_DATA_DIR": str(root)}
+                # The Default profile uses the person's own environment, with the
+                # credential the handshake presents, not a different exported key.
+                env={
+                    **os.environ,
+                    "BACKBONE_DATA_DIR": str(root),
+                    "BACKBONE_API_KEY": binding.credential,
+                }
                 if default
                 else {
                     **{k: os.environ[k] for k in ("LANG", "LC_ALL") if k in os.environ},
@@ -99,14 +104,23 @@ class ProviderServices:
             )
         finally:
             os.close(log)
-        deadline = time.monotonic() + START_SECONDS
-        while time.monotonic() < deadline and process.poll() is None:
-            if _answers(binding):
-                return
-            time.sleep(_POLL_SECONDS)
-        if process.poll() is None:
-            process.terminate()
-        raise ValueError("Provider did not start")
+        try:
+            deadline = time.monotonic() + START_SECONDS
+            while time.monotonic() < deadline and process.poll() is None:
+                if _answers(binding):
+                    return
+                time.sleep(_POLL_SECONDS)
+            raise ValueError("Provider did not start")
+        except BaseException:
+            # Every failed start ends and reaps the process it spawned.
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(STOP_SECONDS)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            raise
 
     def stop(self, reservation) -> None:
         """Signal only the process the kernel reports behind this verified endpoint."""

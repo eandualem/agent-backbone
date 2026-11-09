@@ -440,7 +440,8 @@ can be Default. `backbone up` serves it, and refuses when no profile exists.
 Default serves its identity on both its port and its socket. It installs no captured
 runtime environments, so its agents use the person's CLI sign-ins; schema-2 setup and the
 bound runtime catalog report those runtimes unavailable there, and the app uses schema 1
-for Default. Start launches `backbone up` if nothing answers. Stop signals that process,
+for Default. Start launches `backbone up` if nothing answers, with the `BACKBONE_API_KEY`
+from the profile's `.env`, and ends that process if it never answers. Stop signals that process,
 and a service manager may start it again.
 
 A shell on Default is a login shell in the host environment, without the installation's
