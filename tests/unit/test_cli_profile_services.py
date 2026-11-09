@@ -216,6 +216,20 @@ def test_a_failed_handshake_after_spawn_ends_and_reaps_the_process(created, monk
     popen.return_value.wait.assert_called_once()
 
 
+def test_a_provider_that_ignores_terminate_is_killed_and_reaped(created, monkeypatch):
+    registry, receipt = created
+    monkeypatch.setattr(module, "_answers", lambda binding: False)
+    monkeypatch.setattr(module, "START_SECONDS", 0)
+    popen = MagicMock()
+    popen.return_value.poll.return_value = None
+    popen.return_value.wait.side_effect = [subprocess.TimeoutExpired("up", 60), 0]
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    with pytest.raises(ValueError, match="did not start"):
+        ProviderServices(registry).start(registry.ready_reservation(receipt["profile_id"]))
+    popen.return_value.kill.assert_called_once()
+    assert popen.return_value.wait.call_count == 2
+
+
 def test_the_default_profile_reads_its_own_credential(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
