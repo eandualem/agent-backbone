@@ -254,6 +254,16 @@ in-process replacement, `backbone service restart` restarts the installed
 login service and carries the Linux session risk above. `backbone upgrade`
 carries that risk when the login service is installed; otherwise it cycles
 the detached backbone session.
+
+**Upgrading from 0.4.x to 0.5.** 0.5 runs every installation as a profile, and
+`backbone up` refuses to start until `backbone init` has registered the
+existing data directory as the Default profile. The application installer
+does this once and restarts the service for you. If you upgrade with `pip`,
+`pipx`, `uv` or `backbone upgrade` instead: stop the service, run
+`backbone init` once, then start it. Until then the login service logs the
+refusal once and waits, starting by itself when `init` has run. Agents,
+settings and history are kept. PostgreSQL is no longer supported: unset
+`BACKBONE_DATABASE_URL` first (see [configuration](configuration.md)).
 A development checkout switched to another branch is left alone — that is
 development, not an upgrade; the restart happens when the branch the
 backbone started on moves.
