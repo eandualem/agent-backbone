@@ -172,7 +172,7 @@ async def test_forget_removes_a_stopped_agent():
     store.forget.return_value = True
     with patch(f"{_OPS}.session_exists", new_callable=AsyncMock, return_value=False):
         assert await forget_agent(store, "ike") is True
-    store.forget.assert_awaited_once_with("ike")
+    store.forget.assert_awaited_once_with("ike", expected_registration_id=None)
 
 
 async def test_forget_waits_for_a_start_in_progress_and_then_refuses():

@@ -577,6 +577,12 @@ has become null on an unregistered row. Capture and recheck registration immedia
 before returning list, inspect or context results. A change during inspection must
 also refuse the response. Binding/authentication refusals keep their existing order.
 
+`POST /api/agents/{name}/stop` and `DELETE /api/agents/{name}` accept the same
+optional `expected_registration_id`. It is checked under the agent's lifecycle
+lock, so a registration replaced after inspection is never stopped or removed:
+the request returns the same `registration_changed` 409. Omitting it keeps the
+name-only behavior.
+
 The context response echoes tuple, name, runtime and registration. Consumers validate
 all of them and the retained selection generation before applying deferred results.
 Replacement requires fresh explicit selection, never an automatic target refresh.

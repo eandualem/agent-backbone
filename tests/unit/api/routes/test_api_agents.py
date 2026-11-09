@@ -427,6 +427,137 @@ class TestStopAgent:
         resp = await api_client.post("/api/agents/ike/stop", headers=auth_headers)
         assert resp.status_code == 400
 
+    async def test_stop_and_forget_refuse_a_changed_registration(
+        self, api_client, auth_headers, tmux_svc, api_app
+    ):
+        rows = await api_app.state.db.agents.list()
+        current = next(row["report_identity"] for row in rows if row["name"] == "ike")
+        other = "0" * 32 if current != "0" * 32 else "1" * 32
+        for method, path in (("POST", "/api/agents/ike/stop"), ("DELETE", "/api/agents/ike")):
+            resp = await api_client.request(
+                method, path, params={"expected_registration_id": other}, headers=auth_headers
+            )
+            assert resp.status_code == 409
+            assert resp.json()["detail"]["code"] == "registration_changed"
+        tmux_svc.stop_session.assert_not_awaited()
+        assert await api_app.state.db.agents.registration_matches("ike", current)
+        query = {"expected_registration_id": current}
+        resp = await api_client.post("/api/agents/ike/stop", params=query, headers=auth_headers)
+        assert resp.json() == {"ok": True, "session": "ike"}
+        resp = await api_client.delete("/api/agents/ike", params=query, headers=auth_headers)
+        assert resp.json()["ok"]
+        # A selection of the forgotten registration is answered as changed, as inspect does.
+        resp = await api_client.post("/api/agents/ike/stop", params=query, headers=auth_headers)
+        assert resp.status_code == 409 and resp.json()["detail"]["code"] == "registration_changed"
+
+    async def test_a_stale_inbox_only_stop_is_answered_as_changed(
+        self, api_client, auth_headers, tmux_svc, api_app
+    ):
+        from dataclasses import replace
+
+        from agent_backbone.config import AgentsConfig
+
+        config = api_app.state.config
+        ike = replace(config.agents.get("ike"), inbox_only=True)
+        specs = {**config.agents.specs, "ike": ike}
+        api_app.state.config = replace(config, agents=AgentsConfig(specs))
+        resp = await api_client.post(
+            "/api/agents/ike/stop",
+            params={"expected_registration_id": "0" * 32},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 409 and resp.json()["detail"]["code"] == "registration_changed"
+        tmux_svc.stop_session.assert_not_awaited()
+
+    async def test_a_current_registration_missing_from_the_snapshot_is_stopped(
+        self, api_client, auth_headers, tmux_svc, api_app
+    ):
+        """Registered by another process: the durable row decides, not the snapshot."""
+        db = api_app.state.db
+        await db.agents.upsert(
+            "newbie",
+            dir="/fixture/new",
+            unattended=False,
+            runtime="codex",
+            model=None,
+            repo="",
+            tags=[],
+            env={},
+            description="",
+        )
+        assert "newbie" not in api_app.state.config.agents
+        current = next(
+            r["report_identity"] for r in await db.agents.list() if r["name"] == "newbie"
+        )
+        resp = await api_client.post(
+            "/api/agents/newbie/stop",
+            params={"expected_registration_id": current},
+            headers=auth_headers,
+        )
+        assert resp.json() == {"ok": True, "session": "newbie"}
+
+    async def test_an_id_bound_stop_reads_inbox_only_from_the_durable_row(
+        self, api_client, auth_headers, tmux_svc, api_app
+    ):
+        db = api_app.state.db
+        await db.agents.upsert(
+            "postbox",
+            dir="/fixture/postbox",
+            unattended=False,
+            runtime="codex",
+            model=None,
+            repo="",
+            tags=[],
+            env={},
+            description="",
+            inbox_only=True,
+        )
+        assert "postbox" not in api_app.state.config.agents
+        rows = await db.agents.list()
+        current = next(r["report_identity"] for r in rows if r["name"] == "postbox")
+        resp = await api_client.post(
+            "/api/agents/postbox/stop",
+            params={"expected_registration_id": current},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400 and "no session to stop" in resp.json()["detail"]
+        tmux_svc.stop_session.assert_not_awaited()
+
+    async def test_the_registration_is_checked_under_the_cross_process_guard(
+        self, api_client, auth_headers, tmux_svc, api_app, monkeypatch
+    ):
+        """A direct CLI process cannot replace the registration between the
+        check and the stop or forget: the shared profile lock is held."""
+        import fcntl
+        import os
+
+        from agent_backbone.services.agents.credentials import _open_profile_lock
+
+        agents = api_app.state.db.agents
+        current = next(r["report_identity"] for r in await agents.list() if r["name"] == "ike")
+        check = agents.registration_matches
+        held = []
+
+        async def probe(name, identity):
+            fd = _open_profile_lock(api_app.state.config.data_dir)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held.append(False)
+            except BlockingIOError:
+                held.append(True)
+            finally:
+                os.close(fd)
+            return await check(name, identity)
+
+        monkeypatch.setattr(agents, "registration_matches", probe)
+        query = {"expected_registration_id": current}
+        resp = await api_client.post("/api/agents/ike/stop", params=query, headers=auth_headers)
+        assert resp.json() == {"ok": True, "session": "ike"}
+        resp = await api_client.delete("/api/agents/ike", params=query, headers=auth_headers)
+        assert resp.json()["ok"]
+        # Stop checks once under the guard; forget checks first, then again under it.
+        assert held == [True, False, True]
+
 
 class TestAgentOutput:
     async def test_a_page_of_messages_with_navigation(self, api_client, auth_headers, tmux_svc):
