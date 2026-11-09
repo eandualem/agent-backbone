@@ -294,6 +294,23 @@ async def _watch_first_run(name, config, runtime, since, settled):
         await settled(name)
 
 
+class FirstRunWatches:
+    """Cancel first-run watches at shutdown, before the work they hand over stops."""
+
+    async def start(self):
+        pass
+
+    async def stop(self):
+        while _watches:
+            for task in tuple(_watches):
+                task.cancel()
+            await asyncio.wait(tuple(_watches))
+            await asyncio.sleep(0)
+
+    async def health_check(self):
+        return {"healthy": True}
+
+
 def _watch_ended(task):
     _watches.discard(task)
     if not task.cancelled() and (error := task.exception()) is not None:

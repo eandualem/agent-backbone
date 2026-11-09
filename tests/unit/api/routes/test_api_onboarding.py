@@ -212,3 +212,27 @@ async def test_compatibility_batch_survives_client_cancellation_and_drains_worke
     # Results are shared only while in flight; a later request observes changes.
     await asyncio.gather(agents.list_runtimes(request, check_setup=True), return_exceptions=True)
     assert sorted(calls) == ["other", "other", "slow", "slow"]
+
+
+async def test_the_first_run_hand_over_is_owned_api_work(monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from agent_backbone.api.background import ApiTasks
+
+    deliver = AsyncMock()
+    monkeypatch.setattr(onboarding, "deliver_now", deliver)
+    tasks = ApiTasks()
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(api_tasks=tasks, github=None)),
+        state=SimpleNamespace(profile_provider=None),
+    )
+    store, db = SimpleNamespace(config=object()), object()
+    settled = onboarding._settled(request, store, db)
+    await settled("guide")
+    deliver.assert_awaited_once_with(store.config, db, None, "guide")
+    await tasks.stop()  # after shutdown starts, nothing new is handed over
+    with pytest.raises(HTTPException):
+        await settled("guide")
+    deliver.assert_awaited_once()

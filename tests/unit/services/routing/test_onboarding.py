@@ -207,6 +207,21 @@ async def test_setup_returns_while_the_first_run_is_still_watched(scenario, db, 
     settled.assert_not_awaited()
 
 
+async def test_shutdown_cancels_a_first_run_watch_still_waiting(scenario, db, monkeypatch):
+    settled = AsyncMock()
+
+    async def watch(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(onboarding, "wait_until_ready", watch)
+    body, store, _ = scenario
+    await onboarding.first_agent(body, store.config, store, db, settled=settled)
+    (running,) = onboarding._watches
+    await onboarding.FirstRunWatches().stop()
+    assert running.cancelled() and not onboarding._watches
+    settled.assert_not_awaited()
+
+
 async def test_first_run_watch_hands_over_the_greeting_past_a_screen(scenario, monkeypatch):
     onboarding.wait_until_ready.side_effect = [("waiting_for_human", []), ("ready", [])]
     monkeypatch.setattr(onboarding.asyncio, "sleep", AsyncMock())

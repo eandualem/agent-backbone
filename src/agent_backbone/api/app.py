@@ -434,6 +434,10 @@ async def lifespan(app: FastAPI):
     )
     lifecycle.register("integrations", app.state.integrations)
     lifecycle.register("api-tasks", app.state.api_tasks)
+    from agent_backbone.services.routing.onboarding import FirstRunWatches
+
+    # Stops first (reverse order), so a watch hands nothing new to api-tasks.
+    lifecycle.register("first-run-watches", FirstRunWatches())
     app.state.sources = build_sources(lambda: app.state.config)
 
     provider_db, provider_store = app.state.db, app.state.agent_store
