@@ -63,10 +63,20 @@ class TestInit:
         out = capsys.readouterr().out
         assert "export BACKBONE_DATA_DIR=" in out and str(tmp_path / "custom") in out
 
-    def test_init_refuses_an_external_database_first(self, tmp_path, monkeypatch, capsys):
+    def test_init_checks_the_directory_it_initializes(self, tmp_path, capsys):
+        url = "BACKBONE_DATABASE_URL=postgresql+asyncpg://db/backbone\n"
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / ".env").write_text(url)  # the default directory
+        assert _run(["init", "--data-dir", str(tmp_path / "other")]) == 0
+        (tmp_path / "third").mkdir()
+        (tmp_path / "third" / ".env").write_text(url)
+        assert _run(["init", "--data-dir", str(tmp_path / "third")]) == 1
+        assert "PostgreSQL is no longer supported" in capsys.readouterr().err
+
+    def test_init_refuses_a_database_url_first(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("BACKBONE_DATABASE_URL", "postgresql+asyncpg://db/backbone")
         assert _run(["init"]) == 1
-        assert "BACKBONE_DATABASE_URL" in capsys.readouterr().out
+        assert "PostgreSQL is no longer supported" in capsys.readouterr().err
         assert not (tmp_path / "data").exists()
 
     def test_default_init_prints_no_export_hint(self, _isolated_data_dir, capsys):

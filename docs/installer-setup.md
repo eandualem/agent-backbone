@@ -23,9 +23,8 @@ Credentials are never input fields or output events. The app connects with the
 existing installation's operator credential from its local secret file, ignoring
 an unrelated operator key inherited from the invoking process. Setup issues no new app credential. Environment-only installations keep their
 ordinary connection flow; this installer interface requires the local operator
-file. An external database URL must also be declared literally in that installation's
-`.env`, matching the effective URL; an inherited database URL alone does not prove
-that the selected directory is an installation. For `service: "none"`, start a later daemon without an unrelated
+file. Setup refuses a set `BACKBONE_DATABASE_URL` with `installation_conflict` and a
+message saying PostgreSQL is no longer supported. For `service: "none"`, start a later daemon without an unrelated
 `BACKBONE_API_KEY` environment override so it uses that same file.
 
 ### Optional setup compatibility checks

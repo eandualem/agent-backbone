@@ -270,12 +270,11 @@ class QueueRepo(Repo):
         one notice per party that grows, not a stream. A notice already out for
         delivery is left alone and a new one opens behind it, with its own
         identity so identical text cannot fold into the one being delivered."""
-        lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
         found = await conn.execute(
             text(
                 "SELECT id, message FROM message_queue WHERE session_name = :session "
                 "AND source = :source AND target_entity = :target "
-                "AND status = 'pending' ORDER BY id DESC LIMIT 1" + lock
+                "AND status = 'pending' ORDER BY id DESC LIMIT 1"
             ),
             {"session": session_name, "source": source, "target": target_entity},
         )
@@ -336,7 +335,6 @@ class QueueRepo(Repo):
         ``already_queued`` (every line is already in a batch).
         """
         async with self._tx() as conn:
-            lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
             # A poll replayed before its events were marked processed must not
             # list an event twice: drop lines a batch of this session already
             # holds, recently delivered ones included.
@@ -407,7 +405,7 @@ class QueueRepo(Repo):
                     text(
                         "SELECT id, operation_id, message FROM message_queue "
                         "WHERE session_name = :session AND delivery_kind = :kind "
-                        "AND priority = 0 AND status = 'pending' ORDER BY id DESC LIMIT 1" + lock
+                        "AND priority = 0 AND status = 'pending' ORDER BY id DESC LIMIT 1"
                     ),
                     {"session": session_name, "kind": SUBSCRIPTION_KIND},
                 )
@@ -516,14 +514,12 @@ class QueueRepo(Repo):
         first, then high-priority subscription batches, then oldest first."""
         async with self._tx() as conn:
             now = now_iso()
-            lock = "FOR UPDATE SKIP LOCKED" if conn.dialect.name == "postgresql" else ""
-            sql = f"""UPDATE message_queue SET status='in_progress', leased_at=:now
+            sql = """UPDATE message_queue SET status='in_progress', leased_at=:now
                      WHERE id IN (
                          SELECT id FROM message_queue
                          WHERE session_name=:session AND status='pending'
                          ORDER BY source = :brief DESC, priority DESC, enqueued_at ASC
                          LIMIT :lim
-                         {lock}
                      ) RETURNING *"""
             result = await conn.execute(
                 text(sql),
@@ -892,7 +888,6 @@ class QueueRepo(Repo):
             )
             rows = [dict(r) for r in held.mappings()]
             params["limit"] = max(0, limit - len(rows))
-            lock = "FOR UPDATE SKIP LOCKED" if conn.dialect.name == "postgresql" else ""
             claimed = await conn.execute(
                 text(
                     "UPDATE message_queue SET status='checkpoint', leased_at=NULL "
@@ -900,8 +895,7 @@ class QueueRepo(Repo):
                     "WHERE session_name=:session AND status='pending' "
                     "AND delivery_kind IN "
                     + kinds
-                    + " ORDER BY enqueued_at,id LIMIT :limit "
-                    + lock
+                    + " ORDER BY enqueued_at,id LIMIT :limit"
                     + ") RETURNING *"
                 ),
                 params,

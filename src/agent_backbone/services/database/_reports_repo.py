@@ -181,9 +181,8 @@ class ReportRepo(Repo):
         supersedes = publication.supersedes_id if response else None
         content = json.dumps(payload.model_dump(), sort_keys=True, ensure_ascii=False)
         async with self._tx() as conn:
-            # This acquires the author row lock on PostgreSQL, and the writer lock
-            # on SQLite. Concurrent publications/forget cannot race the identity,
-            # idempotency check, or per-author rate bound.
+            # This acquires SQLite's writer lock. Concurrent publications/forget
+            # cannot race the identity, idempotency check, or per-author rate bound.
             author = (
                 (
                     await conn.execute(

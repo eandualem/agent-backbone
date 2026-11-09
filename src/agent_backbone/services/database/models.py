@@ -311,7 +311,6 @@ class SwarmORM(Base):
             "repo",
             "issue_number",
             unique=True,
-            postgresql_where=text("status = 'active'"),
             sqlite_where=text("status = 'active'"),
         ),
     )
@@ -402,10 +401,6 @@ class DeliveryORM(Base):
             "issue_number",
             "session_name",
             unique=True,
-            postgresql_where=text(
-                "kind = 'issue' AND issue_number IS NOT NULL"
-                " AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
-            ),
             sqlite_where=text(
                 "kind = 'issue' AND issue_number IS NOT NULL"
                 " AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
@@ -492,7 +487,6 @@ class AgentTransitionORM(Base):
             "uq_transitions_open",
             "agent_name",
             unique=True,
-            postgresql_where=text("status = 'pending'"),
             sqlite_where=text("status = 'pending'"),
         ),
         {"sqlite_autoincrement": True},
@@ -580,7 +574,6 @@ class MessageQueueORM(Base):
         Index(
             "idx_mq_leased",
             "leased_at",
-            postgresql_where=text("status = 'in_progress'"),
             sqlite_where=text("status = 'in_progress'"),
         ),
         Index(
@@ -589,11 +582,6 @@ class MessageQueueORM(Base):
             "repo",
             "issue_number",
             unique=True,
-            postgresql_where=text(
-                "delivery_kind = 'issue' "
-                "AND status IN ('pending','in_progress','checkpoint','uncertain') "
-                "AND issue_number IS NOT NULL"
-            ),
             sqlite_where=text(
                 "delivery_kind = 'issue' "
                 "AND status IN ('pending','in_progress','checkpoint','uncertain') "
@@ -609,10 +597,6 @@ class MessageQueueORM(Base):
             "session_name",
             "dedup_key",
             unique=True,
-            postgresql_where=text(
-                "delivery_kind != 'issue' "
-                "AND status IN ('pending','in_progress','checkpoint','uncertain')"
-            ),
             sqlite_where=text(
                 "delivery_kind != 'issue' "
                 "AND status IN ('pending','in_progress','checkpoint','uncertain')"
@@ -785,7 +769,6 @@ class SigningTransitionORM(Base):
             "uq_signing_transitions_pending",
             "sender_key",
             unique=True,
-            postgresql_where=text("status = 'pending'"),
             sqlite_where=text("status = 'pending'"),
         ),
     )

@@ -50,7 +50,7 @@ def test_create_publishes_a_ready_private_profile_once(operations, monkeypatch):
     assert (receipt["status"], receipt["error"]) == ("succeeded", None)
     assert operations.apply(request()) == operations.lookup("create-a") == receipt
     assert len(operations.registry.list()["items"]) == 1
-    assert not ambient.exists()
+    assert not ambient.exists()  # an ambient database URL is ignored
 
     record = operations.registry.show(receipt["profile_id"])
     binding = record["binding"]

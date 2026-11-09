@@ -281,7 +281,15 @@ async def _up_detached(config: BackboneConfig, log_file: Path | None = None) -> 
     if log_file is not None:
         command += ["--log-file", str(log_file)]
     env = {"BACKBONE_DATA_DIR": str(config.data_dir)}
-    ok = await start_session(session, working_dir=str(Path.cwd()), command=command, environment=env)
+    # A tmux server started while BACKBONE_DATABASE_URL was set still holds it,
+    # and the backbone now refuses to start with it: never hand it on.
+    ok = await start_session(
+        session,
+        working_dir=str(Path.cwd()),
+        command=command,
+        environment=env,
+        scrub=("BACKBONE_DATABASE_URL",),
+    )
     if ok:
         print(f"backbone started in tmux session '{session}' (attach: tmux attach -t {session})")
         from agent_backbone.cli.service import state as service_state

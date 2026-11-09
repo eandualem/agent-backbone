@@ -2,7 +2,7 @@
 
 Two modes:
 1. Dev CLI: ``uv run alembic …`` from the repo — resolves the database URL from
-   the data directory / ``BACKBONE_DATABASE_URL`` and creates an async engine.
+   the data directory (``BACKBONE_DATA_DIR``) and creates an async engine.
 2. Runtime: ``BackboneDB._run_migrations()`` injects a connection via
    ``config.attributes["connection"]`` and points script_location here.
 """

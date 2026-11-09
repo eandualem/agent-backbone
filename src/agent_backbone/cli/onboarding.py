@@ -16,11 +16,10 @@ from contextlib import closing
 from pathlib import Path
 from time import monotonic
 
-from dotenv import dotenv_values
 from pydantic import TypeAdapter, ValidationError
 
 from agent_backbone.cli import _common, service
-from agent_backbone.config import agent_credential, bootstrap_config, sqlite_url
+from agent_backbone.config import UnsupportedDatabase, agent_credential, bootstrap_config
 from agent_backbone.fs import AtomicCreateUnsupported
 from agent_backbone.fs import atomic_create_text as _exclusive_file
 from agent_backbone.models import (
@@ -207,6 +206,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
             "environment-only authentication uses the ordinary connection flow.",
             retry="none",
         )
+    except UnsupportedDatabase as exc:
+        record = result(request.action, "installation_conflict", str(exc))
     except (OSError, ValueError, sqlite3.Error):
         record = result(
             request.action,
@@ -460,21 +461,12 @@ def _owned_file(receipt, path, text):
 async def _inspect_existing(boot):
     # Validate before creating even a receipt in a directory that may be unrelated.
     # Neither path initializes, repairs or migrates the installation database.
-    if boot.database_url != sqlite_url(boot.data_dir):
-        declared = dotenv_values(boot.env_path, interpolate=False).get("BACKBONE_DATABASE_URL")
-        if declared != boot.database_url:
-            raise SetupReceiptError(
-                "installation_conflict",
-                "The external database must be declared in this installation's .env file; "
-                "environment-only configuration uses the ordinary connection flow.",
-            )
     config = await _common.read_client_config(boot.data_dir, strict=True, operator_file=True)
-    if boot.database_url == sqlite_url(boot.data_dir):
-        with closing(
-            sqlite3.connect((boot.data_dir / "backbone.db").as_uri() + "?mode=ro", uri=True)
-        ) as db:
-            db.execute("SELECT key FROM settings LIMIT 1").fetchall()
-            db.execute("SELECT name FROM agents LIMIT 1").fetchall()
+    with closing(
+        sqlite3.connect((boot.data_dir / "backbone.db").as_uri() + "?mode=ro", uri=True)
+    ) as db:
+        db.execute("SELECT key FROM settings LIMIT 1").fetchall()
+        db.execute("SELECT name FROM agents LIMIT 1").fetchall()
     return config
 
 
@@ -485,10 +477,6 @@ async def _initialize(request: SetupInitialize, output):
     data_dir = Path(request.data_dir)
     boot = bootstrap_config(data_dir)
     existing = boot.env_path.is_file() or (data_dir / "backbone.db").exists()
-    if not existing and boot.database_url != sqlite_url(data_dir):
-        raise SetupReceiptError(
-            "installation_conflict", "Fresh setup requires its own local database."
-        )
     receipt = SetupReceipt(data_dir, request.model_dump())
     recorded_request = receipt.path.is_file() and not receipt.path.is_symlink()
     if existing and not recorded_request:
@@ -496,14 +484,7 @@ async def _initialize(request: SetupInitialize, output):
     # Validate request and credential ownership under the existing receipt lock,
     # without creating or changing receipts.
     if recorded_request:
-        with receipt.inspect_existing() as record:
-            if record.get("fresh") and boot.database_url != sqlite_url(data_dir):
-                raise SetupReceiptError(
-                    "installation_conflict",
-                    "Fresh setup retries require their own local database.",
-                )
-            if boot.database_url != sqlite_url(data_dir):
-                await _inspect_existing(boot)
+        with receipt.inspect_existing():
             check_new_default(data_dir)
     else:
         check_new_default(data_dir)
@@ -527,10 +508,6 @@ async def _initialize(request: SetupInitialize, output):
                 )
             fresh = not existing
             receipt.save(fresh=fresh)
-        if fresh and boot.database_url != sqlite_url(data_dir):
-            raise SetupReceiptError(
-                "installation_conflict", "Fresh setup retries require their own local database."
-            )
         output.step("preflight", "completed")
         if "preflight" not in receipt.record["completed_steps"]:
             receipt.completed("preflight")

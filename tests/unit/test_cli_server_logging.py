@@ -83,6 +83,8 @@ async def test_a_detached_backbone_keeps_its_log_file(tmp_path):
         assert await _up_detached(make_config(tmp_path), tmp_path / "backbone.log") == 0
     command = start.call_args.kwargs["command"]
     assert command[-3:] == ["up", "--log-file", str(tmp_path / "backbone.log")]
+    # A tmux server may still hold the retired URL; the backbone would refuse it.
+    assert "BACKBONE_DATABASE_URL" in start.call_args.kwargs["scrub"]
 
 
 def test_a_quoted_home_path_is_expanded_before_logging_starts(tmp_path, monkeypatch):

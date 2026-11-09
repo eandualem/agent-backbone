@@ -132,8 +132,6 @@ Documents, author IDs, revision links, permanent retry keys and the admission
 counter live in the SQL database, separate from report pruning. Back up and
 restore the **whole database**, including `documents`, `document_storage` and
 `agents`; a directory of exported HTML is not a database backup. Use SQLite's
-online backup API (or stop all writers before a file copy), and use your
-PostgreSQL installation's consistent database backup/restore procedure.
+online backup API (or stop all writers before a file copy).
 Preserve the existing installation's authentication/signing configuration when
-restoring it. SQLite backup restoration and retries are tested; no provider-hosted
-PostgreSQL restoration is claimed by those tests.
+restoring it. SQLite backup restoration and retries are tested.

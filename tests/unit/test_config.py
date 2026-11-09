@@ -129,12 +129,12 @@ class TestSessionSecretKeys:
         assert len(keys) == len(set(keys))
 
     def test_without_a_data_dir_falls_back_to_the_known_names(self):
-        assert session_secret_keys(None) == SECRET_ENV_KEYS
+        assert session_secret_keys(None) == (*SECRET_ENV_KEYS, "BACKBONE_DATABASE_URL")
 
-    def test_database_url_is_a_secret(self, tmp_path):
-        # A PostgreSQL URL carries the password; it arrives via the process
-        # environment (not .env), so only the known-names list catches it.
+    def test_a_retired_database_url_is_still_stripped(self, tmp_path):
+        # A tmux server started while it was set still holds the old password.
         assert "BACKBONE_DATABASE_URL" in session_secret_keys(tmp_path)
+        assert "BACKBONE_DATABASE_URL" not in SECRET_ENV_KEYS  # not offered as a setting
 
 
 class TestValidateSetting:
@@ -206,10 +206,15 @@ class TestBuildConfig:
         assert config.security.allow_remote_plan_control is True
         assert config.settings["backbone.port"] == 7999
 
-    def test_database_url_env_override(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("BACKBONE_DATABASE_URL", "sqlite+aiosqlite:///x.db")
-        config = build_config(tmp_path, settings=effective_settings({}), agents=AgentsConfig())
-        assert config.database_url == "sqlite+aiosqlite:///x.db"
+    @pytest.mark.parametrize("where", ["environment", ".env"])
+    def test_a_database_url_is_refused(self, monkeypatch, tmp_path, where):
+        url = "postgresql+asyncpg://db/backbone"
+        if where == ".env":
+            (tmp_path / ".env").write_text(f"BACKBONE_DATABASE_URL={url}\n")
+        else:
+            monkeypatch.setenv("BACKBONE_DATABASE_URL", url)
+        with pytest.raises(ValueError, match="PostgreSQL is no longer supported"):
+            build_config(tmp_path, settings=effective_settings({}), agents=AgentsConfig())
 
     def test_intake_off_disables_github(self, monkeypatch, tmp_path):
         monkeypatch.setenv("GITHUB_TOKEN", "ghp")

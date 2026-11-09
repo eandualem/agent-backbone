@@ -124,14 +124,6 @@
       "version": "4.12.1"
     },
     {
-      "filename": "asyncpg-0.31.0-cp313-cp313-macosx_10_13_x86_64.whl",
-      "name": "asyncpg",
-      "sha256": "c204fab1b91e08b0f47e90a75d1b3c62174dab21f670ad6c5d0f243a228f015b",
-      "size": 661111,
-      "url": "https://files.pythonhosted.org/packages/95/11/97b5c2af72a5d0b9bc3fa30cd4b9ce22284a9a943a150fdc768763caf035/asyncpg-0.31.0-cp313-cp313-macosx_10_13_x86_64.whl",
-      "version": "0.31.0"
-    },
-    {
       "filename": "bidict-0.23.1-py3-none-any.whl",
       "name": "bidict",
       "sha256": "5dae8d4d79b552a71cbabc7deb25dfe8ce710b17ff41711e13010ead2abfc3e5",
