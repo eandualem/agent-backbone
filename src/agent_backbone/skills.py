@@ -377,11 +377,17 @@ def _copy_tree(directory_fd: int, target: Path, relative: Path, totals: list[int
     if len(relative.parts) >= _COPY_MAX_DEPTH:
         raise ValueError(f"the skill folder is nested too deeply at {relative}")
     target.mkdir(mode=0o700)
+    # Stop listing once the entry bound is passed; sort only what was kept.
+    items = []
     with os.scandir(directory_fd) as entries:
-        items = sorted(entries, key=lambda entry: entry.name)
+        for entry in entries:
+            if entry.name == ".git":
+                continue
+            items.append(entry)
+            if totals[0] + len(items) > _COPY_MAX_ENTRIES:
+                raise ValueError(f"the skill folder has more than {_COPY_MAX_ENTRIES} entries")
+    items.sort(key=lambda entry: entry.name)
     for entry in items:
-        if entry.name == ".git":
-            continue
         path = relative / entry.name
         totals[0] += 1
         if totals[0] > _COPY_MAX_ENTRIES:

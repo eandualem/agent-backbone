@@ -778,3 +778,53 @@ async def test_an_out_of_range_report_relation_is_an_absent_target(
         asked = {"type": "asked_in_conversation", "target": entry}
         resp = await send(api_client, auth_headers, interaction={"relations": [asked]})
         assert resp.status_code == 422, resp.text
+
+
+async def test_a_name_moved_before_a_reply_never_saves_it_as_another_registration(
+    api_app, api_client, transport, monkeypatch
+):
+    from agent_backbone.services.database import _conversations_repo
+
+    db = api_app.state.db
+    bell, ike = await identity(db, "bell"), await identity(db, "ike")
+    headers = {"Authorization": "Bearer " + agent_api_key(TEST_API_KEY, bell)}
+    assert (await send(api_client, headers)).status_code == 200
+    path = "/api/conversations/interaction/" + (await records(db))[0]["id"] + "/messages"
+    # Between authentication and the write, the name resolves to another participant.
+    monkeypatch.setattr(_conversations_repo, "_identity", AsyncMock(return_value=ike))
+    reply = await api_client.post(
+        path, headers=headers, json={"author": "bell", "request_id": "moved", "text": "Hi"}
+    )
+    assert reply.status_code == 403
+    assert reply.json()["error"] == "registration_changed"
+
+
+async def test_a_retry_reusing_a_pruned_delivery_id_is_its_own_attempt(db):
+    await db.interactions.capture(
+        operation_id="op-retry", message="hi", sender="bell", recipient="ike"
+    )
+    delivery_ids = []
+    for outcome in ("delivery_failed", "delivered"):
+        delivery = await db.deliveries.record(
+            issue_number=None,
+            target_entity="ike",
+            session_name="ike",
+            outcome=outcome,
+            kind="direct_message",
+            operation_id="op-retry",  # a retry keeps its operation
+        )
+        delivery_ids.append(delivery)
+        async with db.engine.begin() as conn:  # retention removed every delivery row
+            await conn.execute(text("DELETE FROM deliveries"))
+    assert delivery_ids[0] == delivery_ids[1]
+    async with db.engine.begin() as conn:
+        interaction = await conn.scalar(
+            text("SELECT id FROM interactions WHERE operation_id='op-retry'")
+        )
+    detail = await db.interactions.detail(interaction)
+    attempts = detail["attempts"]["items"]
+    assert [a["outcome"] for a in attempts] == ["delivery_failed", "delivered"]
+    assert len({a["id"] for a in attempts}) == 2
+    assert [e["attempt_id"] for e in detail["lifecycle"]["items"] if e["attempt_id"]] == [
+        a["id"] for a in attempts
+    ]

@@ -1070,6 +1070,10 @@ def load_secrets(data_dir: Path) -> dict[str, str]:
         # Never recover operator secrets after a runtime filters key variables.
         return environment
     merged = {key: value for key, value in dotenv_values(data_dir / ".env").items() if value}
+    # The operator key is literal text, as a profile binding reads it: no ${...} expansion.
+    literal = dotenv_values(data_dir / ".env", interpolate=False).get("BACKBONE_API_KEY")
+    if literal:
+        merged["BACKBONE_API_KEY"] = literal
     merged.update(os.environ)
     return merged
 

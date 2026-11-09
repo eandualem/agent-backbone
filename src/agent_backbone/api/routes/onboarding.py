@@ -80,10 +80,20 @@ async def cancel_first_agent_request(
 
 def _settled(request, store, db):
     """Deliver what is queued for a new agent once it reaches its prompt."""
-    github = getattr(request.app.state, "github", None)
+    state = request.app.state
+    github = getattr(state, "github", None)
+    provider = getattr(request.state, "profile_provider", None)
 
     async def settled(name):
-        await deliver_now(store.config, db, github, name)
+        # The watch outlives the request: deliver as owned API work, under the
+        # request's provider guard, which shutdown drains before the database.
+        task = state.api_tasks.create(
+            lambda: deliver_now(store.config, db, github, name),
+            config=store.config,
+            db=db,
+            provider=provider,
+        )
+        await asyncio.shield(task)
 
     return settled
 
