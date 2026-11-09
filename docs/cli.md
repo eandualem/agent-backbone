@@ -262,8 +262,11 @@ does this once and restarts the service for you. If you upgrade with `pip`,
 `pipx`, `uv` or `backbone upgrade` instead: stop the service, run
 `backbone init` once, then start it. Until then the login service logs the
 refusal once and waits, starting by itself when `init` has run. Agents,
-settings and history are kept. PostgreSQL is no longer supported: unset
-`BACKBONE_DATABASE_URL` first (see [configuration](configuration.md)).
+settings and history in the SQLite database are kept. PostgreSQL is no longer
+supported, and its records are not copied to SQLite: unset
+`BACKBONE_DATABASE_URL` to continue with a SQLite database, and keep the old
+installation until you have moved what you need (see
+[configuration](configuration.md)).
 A development checkout switched to another branch is left alone — that is
 development, not an upgrade; the restart happens when the branch the
 backbone started on moves.
