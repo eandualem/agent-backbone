@@ -412,3 +412,21 @@ async def test_copy_is_bounded(api_client, auth_headers, store, tmp_path):
         )
     assert response.status_code == 422 and "exceeds" in response.json()["detail"]
     assert not (store / "mine").exists()
+
+
+async def test_copy_refuses_a_large_folder_while_listing_it(
+    api_client, auth_headers, store, tmp_path
+):
+    source = _skill(tmp_path / "anywhere", "mine")
+    for index in range(5):
+        (source / f"file-{index}").write_text("x")
+    with (
+        patch("agent_backbone.skills._COPY_MAX_ENTRIES", 3),
+        patch("agent_backbone.skills._copy_file") as copy_file,
+    ):
+        response = await api_client.post(
+            "/api/skills", headers=auth_headers, json={"path": str(source), "mode": "copy"}
+        )
+    assert response.status_code == 422 and "more than 3 entries" in response.json()["detail"]
+    copy_file.assert_not_called()  # refused before any entry was processed
+    assert not (store / "mine").exists()
