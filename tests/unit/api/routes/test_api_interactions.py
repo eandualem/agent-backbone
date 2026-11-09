@@ -797,3 +797,34 @@ async def test_a_name_moved_before_a_reply_never_saves_it_as_another_registratio
     )
     assert reply.status_code == 403
     assert reply.json()["error"] == "registration_changed"
+
+
+async def test_a_retry_reusing_a_pruned_delivery_id_is_its_own_attempt(db):
+    await db.interactions.capture(
+        operation_id="op-retry", message="hi", sender="bell", recipient="ike"
+    )
+    delivery_ids = []
+    for outcome in ("delivery_failed", "delivered"):
+        delivery = await db.deliveries.record(
+            issue_number=None,
+            target_entity="ike",
+            session_name="ike",
+            outcome=outcome,
+            kind="direct_message",
+            operation_id="op-retry",  # a retry keeps its operation
+        )
+        delivery_ids.append(delivery)
+        async with db.engine.begin() as conn:  # retention removed every delivery row
+            await conn.execute(text("DELETE FROM deliveries"))
+    assert delivery_ids[0] == delivery_ids[1]
+    async with db.engine.begin() as conn:
+        interaction = await conn.scalar(
+            text("SELECT id FROM interactions WHERE operation_id='op-retry'")
+        )
+    detail = await db.interactions.detail(interaction)
+    attempts = detail["attempts"]["items"]
+    assert [a["outcome"] for a in attempts] == ["delivery_failed", "delivered"]
+    assert len({a["id"] for a in attempts}) == 2
+    assert [e["attempt_id"] for e in detail["lifecycle"]["items"] if e["attempt_id"]] == [
+        a["id"] for a in attempts
+    ]
