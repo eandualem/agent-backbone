@@ -259,7 +259,9 @@ the detached backbone session.
 existing data directory as the Default profile. The application installer
 does this once and restarts the service for you. If you upgrade with `pip`,
 `pipx`, `uv` or `backbone upgrade` instead: stop the service, run
-`backbone init` once, then start it. Until then the login service logs the
+`backbone init` once, then start it. If the installation uses a custom data
+directory, run `backbone init --data-dir DIR` with the service's directory
+(or export the same `BACKBONE_DATA_DIR`), so `init` registers that directory. Until then the login service logs the
 refusal once and waits, starting by itself when `init` has run. Agents,
 settings and history in the SQLite database are kept. PostgreSQL is no longer
 supported, and its records are not copied to SQLite: unset
