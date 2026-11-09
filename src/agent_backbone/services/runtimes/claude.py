@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from pathlib import Path
 from types import MappingProxyType
 
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.hooks.install import save_settings
+from agent_backbone.services.runtimes._environment import (
+    environment_value,
+    inherited_environment,
+)
 from agent_backbone.services.runtimes._pane import sanitize_pane_content, sgr_attributes
 from agent_backbone.services.runtimes._usage import count
 from agent_backbone.services.runtimes.base import (
@@ -108,7 +111,38 @@ def pre_trust_directory(directory: Path | str, *, claude_config: Path | None = N
 
 
 class ClaudeCode(Runtime):
+    def account_args(self, action):
+        commands = {
+            "status": ["auth", "status", "--json"],
+            "login": ["auth", "login"],
+            "logout": ["auth", "logout"],
+        }
+        if action not in commands:
+            return super().account_args(action)
+        return commands[action]
+
+    def account_state(self, done):
+        try:
+            signed_in = json.loads(done.stdout).get("loggedIn")
+        except (ValueError, AttributeError):
+            return "unavailable"
+        if signed_in is True:
+            return "authenticated"
+        return "not_authenticated" if signed_in is False else "unavailable"
+
+    def native_environment_values(self, root):
+        return {"CLAUDE_CONFIG_DIR": str(root / "claude")}
+
+    native_files = (
+        "claude/.claude.json",
+        "claude/.credentials.json",
+        "claude/settings.json",
+        "claude/settings.local.json",
+    )
+
     setup_hooks = True
+    runs_in_profiles = True
+    profile_sign_in = True
 
     supports_exact_resume = True
     id = "claude"
@@ -232,8 +266,16 @@ class ClaudeCode(Runtime):
     plan_approve_keys = ("1",)
     plan_reject_keys = ("Escape",)
 
-    def pre_trust(self, directory: Path | str) -> None:
-        pre_trust_directory(directory)
+    def pre_trust(self, directory: Path | str, *, env: dict[str, str] | None = None) -> None:
+        if env is None and not self.environment():
+            pre_trust_directory(directory)
+            return
+        env = self.environment(env)
+        config_dir = environment_value(env, "CLAUDE_CONFIG_DIR")
+        config = (Path(config_dir).expanduser() if config_dir else agent_home(env)) / ".claude.json"
+        if not config.is_absolute():
+            config = Path(directory) / config
+        pre_trust_directory(directory, claude_config=self.check_native_path(config))
 
     @staticmethod
     def _unnumbered_dialog(pane_content: str) -> bool:
@@ -366,6 +408,8 @@ class ClaudeCode(Runtime):
     def hook_settings_path(self, project_dir: Path | None) -> Path:
         if project_dir is not None:
             return Path(project_dir).expanduser() / ".claude" / "settings.json"
+        if env := self.environment():
+            return self.check_native_path(Path(env["CLAUDE_CONFIG_DIR"]) / "settings.json")
         return Path("~/.claude/settings.json").expanduser()
 
     def hook_launch_args(
@@ -441,32 +485,29 @@ class ClaudeCode(Runtime):
         return command
 
     def user_instructions(self, env, project=None):
+        env = self.environment(env)
         home = Path(
-            env.get("CLAUDE_CONFIG_DIR")
-            or os.environ.get("CLAUDE_CONFIG_DIR")
-            or agent_home(env) / ".claude"
+            environment_value(env, "CLAUDE_CONFIG_DIR") or agent_home(env) / ".claude"
         ).expanduser()
         # User memory and user-level rules (2.1.283); a rule with `paths` loads
         # once the session reads a matching file, so it may reach it too.
         candidates = [home / "CLAUDE.md", *sorted((home / "rules").rglob("*.md"))]
-        return [path for path in candidates if has_text(path)]
+        return [path for path in candidates if has_text(self.check_native_path(path))]
 
     def user_skill_dirs(self, env):
+        env = self.environment(env)
         home = Path(
-            env.get("CLAUDE_CONFIG_DIR")
-            or os.environ.get("CLAUDE_CONFIG_DIR")
-            or agent_home(env) / ".claude"
+            environment_value(env, "CLAUDE_CONFIG_DIR") or agent_home(env) / ".claude"
         ).expanduser()
         # 2.1.294: claude.ai-synced skills sit nested under skills/synced/<id>/.
         return [home / "skills"]
 
     def native_memory(self, env, project=None):
+        env = self.environment(env)
         home = Path(
-            env.get("CLAUDE_CONFIG_DIR")
-            or os.environ.get("CLAUDE_CONFIG_DIR")
-            or agent_home(env) / ".claude"
+            environment_value(env, "CLAUDE_CONFIG_DIR") or agent_home(env) / ".claude"
         ).expanduser()
-        layers = [home / "settings.json"]
+        layers = [self.check_native_path(home / "settings.json")]
         if project is not None:
             # 2.1.283 keeps local settings at the canonical git root (a
             # worktree's main checkout), after the directory's own legacy file,
@@ -480,7 +521,7 @@ class ClaudeCode(Runtime):
                 layers.append(canonical / ".claude/settings.local.json")
         # 2.1.283: a settings file's `env` applies over the process environment,
         # and the variables decide before `autoMemoryEnabled` (a later layer wins).
-        variables, enabled = {**os.environ, **env}, True
+        variables, enabled = inherited_environment(env), True
         for path in layers:
             settings = _json_object(path)
             if isinstance(settings.get("env"), dict):
@@ -501,14 +542,15 @@ class ClaudeCode(Runtime):
     usage_supported = True
 
     def usage_paths(self, session_id: str, env: dict[str, str]) -> list[Path]:
+        env = self.environment(env)
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session_id):
             return []
         home = Path(
-            env.get("CLAUDE_CONFIG_DIR")
-            or os.environ.get("CLAUDE_CONFIG_DIR")
-            or agent_home(env) / ".claude"
+            environment_value(env, "CLAUDE_CONFIG_DIR") or agent_home(env) / ".claude"
         ).expanduser()
-        return sorted(home.glob(f"projects/*/{session_id}.jsonl"))
+        return [
+            self.check_native_path(p) for p in sorted(home.glob(f"projects/*/{session_id}.jsonl"))
+        ]
 
     transcript_supported = True
 
@@ -545,8 +587,9 @@ class ClaudeCode(Runtime):
     def usage_children(
         self, path: Path, session_id: str, env: dict[str, str]
     ) -> list[tuple[str, Path]]:
+        env = self.environment(env)
         return [
-            (session_id + "/" + p.stem, p)
+            (session_id + "/" + p.stem, self.check_native_path(p))
             for p in sorted((path.parent / path.stem / "subagents").glob("agent-*.jsonl"))
         ]
 

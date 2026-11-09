@@ -39,13 +39,12 @@ SetupPath = Annotated[str, Field(min_length=1, max_length=4096), AfterValidator(
 SetupRuntime = Annotated[str, Field(min_length=1, max_length=40, pattern=r"^[a-z][a-z0-9-]*$")]
 
 
-class SetupBase(BaseModel):
+class SetupRequestBase(BaseModel):
     """Transient operator input, never a required file in an agent's repository."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal[1]
     request_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
-    data_dir: SetupPath
 
     @field_validator("schema_version", mode="before")
     @classmethod
@@ -53,6 +52,10 @@ class SetupBase(BaseModel):
         if type(value) is not int:
             raise ValueError("schema_version must be an integer")
         return value
+
+
+class SetupBase(SetupRequestBase):
+    data_dir: SetupPath
 
 
 class SetupInitialize(SetupBase):
@@ -88,19 +91,23 @@ class SetupAgent(BaseModel):
     brief: SetupTemplateBrief | SetupCustomBrief
 
 
-class SetupFirstAgent(SetupBase):
+class SetupFirstAgentFields(BaseModel):
     action: Literal["first_agent"]
     hooks: list[SetupRuntime] = Field(min_length=1, max_length=7)
     agent: SetupAgent
     start_greeting: bool
 
     @model_validator(mode="after")
-    def selected_hooks(self) -> SetupFirstAgent:
+    def selected_hooks(self) -> SetupFirstAgentFields:
         if len(set(self.hooks)) != len(self.hooks):
             raise ValueError("hooks must contain unique runtime IDs")
         if self.agent.runtime not in self.hooks:
             raise ValueError("hooks must include the selected agent runtime")
         return self
+
+
+class SetupFirstAgent(SetupBase, SetupFirstAgentFields):
+    pass
 
 
 class SetupCancelFirstAgent(SetupFirstAgent):
@@ -114,6 +121,36 @@ class SetupCancelFirstAgent(SetupFirstAgent):
 
 SetupRequest = Annotated[
     SetupInitialize | SetupFirstAgent | SetupCancelFirstAgent, Field(discriminator="action")
+]
+
+
+SetupBindingID = Annotated[str, Field(min_length=1, pattern=r"^[\x21-\x7e]+$")]
+
+
+class BoundSetupFirstAgent(SetupRequestBase, SetupFirstAgentFields):
+    """Bound setup input; the provider owns all data and native root locators.
+
+    Separate from legacy SetupRequest and resolved through local discovery. A
+    project directory is a work location, never provider-selection authority.
+    """
+
+    schema_version: Literal[2]
+    profile_id: SetupBindingID
+    expected_installation_id: SetupBindingID
+    expected_lifecycle_id: SetupBindingID
+
+
+class BoundSetupCancelFirstAgent(BoundSetupFirstAgent):
+    """Cancel only the exact normalized action and its full captured binding."""
+
+    action: Literal["cancel_first_agent"]
+
+    def original(self) -> BoundSetupFirstAgent:
+        return BoundSetupFirstAgent.model_validate({**self.model_dump(), "action": "first_agent"})
+
+
+BoundSetupRequest = Annotated[
+    BoundSetupFirstAgent | BoundSetupCancelFirstAgent, Field(discriminator="action")
 ]
 
 

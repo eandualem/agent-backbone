@@ -1,0 +1,888 @@
+{
+  "$defs": {
+    "Actor": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "agent",
+            "owner",
+            "external",
+            "unknown"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Id"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "name_at_capture": {
+          "title": "Name At Capture",
+          "type": "string"
+        },
+        "attribution": {
+          "enum": [
+            "credential_bound",
+            "operator_asserted",
+            "signed",
+            "unverified",
+            "system"
+          ],
+          "title": "Attribution",
+          "type": "string"
+        },
+        "retired": {
+          "default": false,
+          "title": "Retired",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "name",
+        "name_at_capture",
+        "attribution"
+      ],
+      "title": "Actor",
+      "type": "object"
+    },
+    "Attempt": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "operation_id": {
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "delivery_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Delivery Id"
+        },
+        "queue_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Queue Id"
+        },
+        "outcome": {
+          "title": "Outcome",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "recorded_at": {
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "settled_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Settled At"
+        }
+      },
+      "required": [
+        "id",
+        "operation_id",
+        "delivery_id",
+        "queue_id",
+        "outcome",
+        "source",
+        "recorded_at",
+        "settled_at"
+      ],
+      "title": "Attempt",
+      "type": "object"
+    },
+    "AttemptPage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Attempt"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next Cursor"
+        }
+      },
+      "required": [
+        "items",
+        "next_cursor"
+      ],
+      "title": "AttemptPage",
+      "type": "object"
+    },
+    "Body": {
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "enum": [
+            "full",
+            "excerpt",
+            "unavailable"
+          ],
+          "title": "Level",
+          "type": "string"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Text"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        },
+        "format": {
+          "default": "text",
+          "enum": [
+            "text",
+            "json"
+          ],
+          "title": "Format",
+          "type": "string"
+        }
+      },
+      "required": [
+        "level",
+        "text",
+        "reason"
+      ],
+      "title": "Body",
+      "type": "object"
+    },
+    "ConversationCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "supported": {
+          "title": "Supported",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "interaction",
+          "default": "interaction",
+          "title": "Kind",
+          "type": "string"
+        },
+        "artifact_id": {
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "recipients": {
+          "items": {
+            "$ref": "#/$defs/Actor"
+          },
+          "title": "Recipients",
+          "type": "array"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        },
+        "total": {
+          "title": "Total",
+          "type": "integer"
+        },
+        "last_entry_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Entry At"
+        }
+      },
+      "required": [
+        "supported",
+        "artifact_id",
+        "recipients",
+        "reason",
+        "total",
+        "last_entry_at"
+      ],
+      "title": "ConversationCapability",
+      "type": "object"
+    },
+    "ConversationEntryMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "artifact_id": {
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "entry_id": {
+          "title": "Entry Id",
+          "type": "integer"
+        },
+        "entry_kind": {
+          "title": "Entry Kind",
+          "type": "string"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "author_type": {
+          "title": "Author Type",
+          "type": "string"
+        },
+        "author_id": {
+          "title": "Author Id",
+          "type": "string"
+        },
+        "author_name": {
+          "title": "Author Name",
+          "type": "string"
+        },
+        "recipient_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Recipient Id"
+        },
+        "recipient_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Recipient Name"
+        },
+        "in_reply_to": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "In Reply To"
+        },
+        "anchor": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Anchor"
+        },
+        "anchored_interaction_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Anchored Interaction Id"
+        }
+      },
+      "required": [
+        "kind",
+        "artifact_id",
+        "entry_id",
+        "entry_kind",
+        "created_at",
+        "author_type",
+        "author_id",
+        "author_name",
+        "recipient_id",
+        "recipient_name",
+        "in_reply_to",
+        "anchor",
+        "anchored_interaction_id"
+      ],
+      "title": "ConversationEntryMetadata",
+      "type": "object"
+    },
+    "Coverage": {
+      "additionalProperties": false,
+      "properties": {
+        "since": {
+          "title": "Since",
+          "type": "string"
+        },
+        "until": {
+          "title": "Until",
+          "type": "string"
+        },
+        "capture_started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Capture Started At"
+        },
+        "retained_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Retained From"
+        },
+        "body_retained_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Retained From"
+        },
+        "as_of": {
+          "title": "As Of",
+          "type": "string"
+        },
+        "completeness": {
+          "enum": [
+            "partial",
+            "complete_within_declared_scope",
+            "unavailable"
+          ],
+          "title": "Completeness",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        },
+        "declared_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Declared Scope",
+          "type": "array"
+        },
+        "truncated": {
+          "title": "Truncated",
+          "type": "boolean"
+        },
+        "state_history": {
+          "const": "observed_partial",
+          "default": "observed_partial",
+          "title": "State History",
+          "type": "string"
+        },
+        "message_intervals": {
+          "items": {
+            "$ref": "#/$defs/MessageCoverageInterval"
+          },
+          "title": "Message Intervals",
+          "type": "array"
+        },
+        "quiet_scope": {
+          "const": "capture_enabled_backbone_paths",
+          "default": "capture_enabled_backbone_paths",
+          "title": "Quiet Scope",
+          "type": "string"
+        }
+      },
+      "required": [
+        "since",
+        "until",
+        "capture_started_at",
+        "retained_from",
+        "as_of",
+        "completeness",
+        "reasons",
+        "declared_scope",
+        "truncated"
+      ],
+      "title": "Coverage",
+      "type": "object"
+    },
+    "EventPage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/LifecycleEvent"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next Cursor"
+        }
+      },
+      "required": [
+        "items",
+        "next_cursor"
+      ],
+      "title": "EventPage",
+      "type": "object"
+    },
+    "Interaction": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "operation_id": {
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "accepted_at": {
+          "title": "Accepted At",
+          "type": "string"
+        },
+        "last_event_at": {
+          "title": "Last Event At",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "sender": {
+          "$ref": "#/$defs/Actor"
+        },
+        "recipient": {
+          "$ref": "#/$defs/Actor"
+        },
+        "original_target": {
+          "title": "Original Target",
+          "type": "string"
+        },
+        "preview": {
+          "title": "Preview",
+          "type": "string"
+        },
+        "body": {
+          "$ref": "#/$defs/Body"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "attempt_count": {
+          "title": "Attempt Count",
+          "type": "integer"
+        },
+        "attempts": {
+          "$ref": "#/$defs/AttemptPage"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/EventPage"
+        },
+        "relations": {
+          "items": {
+            "$ref": "#/$defs/Relation"
+          },
+          "title": "Relations",
+          "type": "array"
+        },
+        "relations_truncated": {
+          "default": false,
+          "title": "Relations Truncated",
+          "type": "boolean"
+        },
+        "conversation": {
+          "$ref": "#/$defs/ConversationCapability"
+        },
+        "conversation_entry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationEntryMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "operation_id",
+        "accepted_at",
+        "last_event_at",
+        "kind",
+        "sender",
+        "recipient",
+        "original_target",
+        "preview",
+        "body",
+        "status",
+        "attempt_count",
+        "attempts",
+        "lifecycle",
+        "relations",
+        "conversation"
+      ],
+      "title": "Interaction",
+      "type": "object"
+    },
+    "LifecycleEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "time": {
+          "title": "Time",
+          "type": "string"
+        },
+        "time_basis": {
+          "enum": [
+            "recorded",
+            "observed",
+            "legacy"
+          ],
+          "title": "Time Basis",
+          "type": "string"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Outcome"
+        },
+        "attempt_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Attempt Id"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "time",
+        "time_basis",
+        "outcome",
+        "attempt_id",
+        "source"
+      ],
+      "title": "LifecycleEvent",
+      "type": "object"
+    },
+    "MessageCoverageInterval": {
+      "additionalProperties": false,
+      "properties": {
+        "since": {
+          "title": "Since",
+          "type": "string"
+        },
+        "until": {
+          "title": "Until",
+          "type": "string"
+        },
+        "completeness": {
+          "const": "complete_within_declared_scope",
+          "title": "Completeness",
+          "type": "string"
+        }
+      },
+      "required": [
+        "since",
+        "until",
+        "completeness"
+      ],
+      "title": "MessageCoverageInterval",
+      "type": "object"
+    },
+    "Relation": {
+      "additionalProperties": false,
+      "properties": {
+        "source_interaction_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Interaction Id"
+        },
+        "type": {
+          "enum": [
+            "reply_to",
+            "corrects",
+            "for_owner_request",
+            "asked_in_conversation",
+            "from_report"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/RelationTarget"
+        },
+        "recorded_at": {
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "provenance": {
+          "title": "Provenance",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "target",
+        "recorded_at",
+        "provenance"
+      ],
+      "title": "Relation",
+      "type": "object"
+    },
+    "RelationTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "interaction",
+            "report",
+            "conversation",
+            "owner_request"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "artifact_kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Kind"
+        },
+        "entry_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Entry Id"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "title": "RelationTarget",
+      "type": "object"
+    },
+    "Status": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "string"
+        },
+        "observed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Observed At"
+        },
+        "evidence": {
+          "title": "Evidence",
+          "type": "string"
+        },
+        "delivered": {
+          "title": "Delivered",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "value",
+        "observed_at",
+        "evidence",
+        "delivered"
+      ],
+      "title": "Status",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/Interaction"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "next_cursor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Next Cursor"
+    },
+    "snapshot": {
+      "title": "Snapshot",
+      "type": "string"
+    },
+    "coverage": {
+      "$ref": "#/$defs/Coverage"
+    }
+  },
+  "required": [
+    "items",
+    "next_cursor",
+    "snapshot",
+    "coverage"
+  ],
+  "title": "InteractionPage",
+  "type": "object"
+}

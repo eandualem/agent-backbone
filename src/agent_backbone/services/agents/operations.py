@@ -9,12 +9,14 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from agent_backbone.services.agents import launch
 from agent_backbone.services.agents._locks import lifecycle_lock
 from agent_backbone.services.agents._validation import validate_agent_spec
+from agent_backbone.services.agents.credentials import profile_lock
 from agent_backbone.services.agents.launch import StartResult
 from agent_backbone.services.agents.store import check_agent_tags, refuse_case_twin
 from agent_backbone.services.runtimes import (
@@ -205,29 +207,63 @@ async def relink_skills(
     return evidence
 
 
-async def stop_agent_session(config: BackboneConfig, name: str) -> bool:
+async def _refuse_changed_registration(
+    db: BackboneDB | None, name: str, expected_registration_id: str | None
+) -> None:
+    """Under the caller's lifecycle lock: refuse when the agent's durable
+    registration is not the one the caller selected."""
+    if expected_registration_id is not None and (
+        db is None or not await db.agents.registration_matches(name, expected_registration_id)
+    ):
+        raise ValueError("agent registration changed")
+
+
+async def stop_agent_session(
+    config: BackboneConfig,
+    name: str,
+    *,
+    expected_registration_id: str | None = None,
+    db: BackboneDB | None = None,
+) -> bool:
     """Stop an agent's tmux session. The backbone's own session is refused
     (``ValueError``) on every surface — API, CLI, Telegram — from here."""
     if name == config.backbone.session_name:
         raise ValueError("refusing to stop the backbone's own session")
-    spec = config.agents.get(name)
-    if spec is not None and spec.inbox_only:
-        # A session with its name is not the agent's: never stop it on its behalf.
-        raise ValueError(f"'{name}' is inbox-only: it has no session to stop")
-    async with lifecycle_lock(name):
+    # Direct CLI processes have their own lifecycle locks; the shared profile
+    # guard keeps another process from replacing the registration before the stop.
+    guard = profile_lock(config.data_dir) if expected_registration_id is not None else nullcontext()
+    async with lifecycle_lock(name), guard:
+        # A stale selection is answered as such before any other refusal.
+        await _refuse_changed_registration(db, name, expected_registration_id)
+        if expected_registration_id is not None:  # the durable row, as just checked
+            rows = await db.agents.list()
+            inbox_only = any(row["name"] == name and row["inbox_only"] for row in rows)
+        else:
+            spec = config.agents.get(name)
+            inbox_only = spec is not None and spec.inbox_only
+        if inbox_only:
+            # A session with its name is not the agent's: never stop it on its behalf.
+            raise ValueError(f"'{name}' is inbox-only: it has no session to stop")
         return await launch.stop_agent(name)
 
 
-async def forget_agent(store: AgentStore, name: str) -> bool:
+async def forget_agent(
+    store: AgentStore,
+    name: str,
+    *,
+    expected_registration_id: str | None = None,
+    db: BackboneDB | None = None,
+) -> bool:
     """Remove an agent from the backbone. A running session is refused
     (``RuntimeError``): stop it first. Returns False for an unknown name.
 
     Holds the agent's lifecycle lock, so a start in progress finishes first
     and the session check right before the delete sees it."""
     async with lifecycle_lock(name):
+        await _refuse_changed_registration(db, name, expected_registration_id)
         if await session_exists(name):
             raise RuntimeError(f"'{name}' is running — stop it first")
-        return await store.forget(name)
+        return await store.forget(name, expected_registration_id=expected_registration_id)
 
 
 async def start_resolved(

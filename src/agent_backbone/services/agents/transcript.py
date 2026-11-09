@@ -16,11 +16,11 @@ after it, so nothing is silently dropped.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from agent_backbone.base import run_thread
 from agent_backbone.services.agents._file_reader import read_launch_session, read_state_file
 from agent_backbone.services.runtimes import get_runtime, sanitize_pane_content
 from agent_backbone.services.terminal import capture_pane, query_environment_var, session_exists
@@ -97,9 +97,10 @@ def locate_transcript(
     stamped = []
     for p in candidates:
         try:
+            rt.check_native_path(p)
             if p.is_file():
                 stamped.append((p.stat().st_mtime, p))
-        except OSError:  # archived or removed while we looked
+        except (OSError, ValueError):  # archived or removed while we looked
             continue
     if not stamped:
         return None, rt, "", [f"no transcript file found for session {session_id}"]
@@ -144,6 +145,7 @@ def read_messages(
     ending at or before that offset. Forwards (``since``): the first ``limit``
     messages starting at or after it, up to ``end``. Returns
     ``(messages, more_before, more_after, evidence)``."""
+    rt.check_native_path(path)
     page = rt.transcript_page(path, session_id, limit=limit, since=since, before=before, end=end)
     if page is not None:
         return (*page, [])
@@ -232,13 +234,13 @@ async def output_page(
     live_runtime = await query_environment_var(name, "BACKBONE_RUNTIME") if online else None
     evidence: list[str] = []
     if not screen:
-        path, rt, session_id, why = await asyncio.to_thread(
+        path, rt, session_id, why = await run_thread(
             locate_transcript, config, name, live_runtime, online=online
         )
         evidence.extend(why)
         if path is not None:
             try:
-                messages, more_before, more_after, notes = await asyncio.to_thread(
+                messages, more_before, more_after, notes = await run_thread(
                     read_messages,
                     path,
                     rt,

@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextvars import copy_context
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from starlette.responses import JSONResponse
 
 from agent_backbone.api.auth import require_operator
 from agent_backbone.api.deps import (
@@ -41,6 +43,7 @@ from agent_backbone.api.models import (
     UnsubscribeRequest,
     WatchRequest,
 )
+from agent_backbone.api.profile_binding import PROFILE_HEADERS
 from agent_backbone.api.session_updates import SessionFeed
 from agent_backbone.config import AgentSpec, BackboneConfig
 from agent_backbone.services.agents import (
@@ -140,9 +143,15 @@ async def rename_agent(
 
 
 @router.get("/agents", response_model=ListEnvelope[EnrichedAgent])
-async def list_agents(feed: SessionFeed = Depends(get_feed)):
+async def list_agents(
+    request: Request, feed: SessionFeed = Depends(get_feed), db: BackboneDB = Depends(get_db)
+):
     """Known agents (plus other live tmux sessions) with live state."""
     agents = await feed.snapshot()
+    if any(header in request.headers for header in PROFILE_HEADERS):
+        current = {row["name"]: row["report_identity"] for row in await db.agents.list()}
+        if any(current.get(agent.name) != agent.registration_id for agent in agents):
+            raise _registration_changed()
     return ListEnvelope(items=agents, total=len(agents))
 
 
@@ -204,14 +213,33 @@ def get_agent_instructions(name: str, config: BackboneConfig = Depends(get_confi
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _registration_changed():
+    return HTTPException(
+        status_code=409,
+        detail={"code": "registration_changed", "message": "Agent registration does not match."},
+    )
+
+
 @router.get("/agents/{name}/inspect", response_model=AgentInspectResponse)
 async def inspect_agent(
     name: str,
+    request: Request,
+    expected_registration_id: str | None = Query(default=None, pattern=r"^[a-f0-9]{32}$"),
     config: BackboneConfig = Depends(get_config),
     db: BackboneDB = Depends(get_db),
 ):
     """Everything the backbone knows about an agent, with the evidence behind it."""
+    spec = config.agents.get(name)
+    if expected_registration_id is not None and (
+        spec is None or spec.registration_id != expected_registration_id
+    ):
+        raise _registration_changed()
     spec = registered_agent_or_404(config, name)
+    bound = getattr(request.state, "profile_provider", None) is not None
+    if (bound or expected_registration_id is not None) and not await db.agents.registration_matches(
+        name, spec.registration_id
+    ):
+        raise _registration_changed()
     # An inbox-only agent has no session: one with its name is not its own.
     online = not (spec is not None and spec.inbox_only) and await session_exists(name)
     profile = await get_session_intelligence(name, config)
@@ -243,7 +271,12 @@ async def inspect_agent(
         agent_profile_readiness(config, registration) if registration else "unavailable"
     )
 
+    if (bound or expected_registration_id is not None) and not await db.agents.registration_matches(
+        name, spec.registration_id
+    ):
+        raise _registration_changed()
     return AgentInspectResponse(
+        registration_id=spec.registration_id,
         credential_profile=credential_profile,
         name=name,
         known=spec is not None,
@@ -274,10 +307,30 @@ async def inspect_agent(
     )
 
 
+async def _runtime_setup_check(runtime):
+    # Task cancellation cannot stop a running executor function. Keep the batch
+    # (and its provider reservation) alive until that function actually exits.
+    worker = asyncio.get_running_loop().run_in_executor(
+        None, copy_context().run, runtime.setup_compatibility
+    )
+    cancelled = False
+    while not worker.done():
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            break
+    if cancelled:
+        worker.exception()  # Observe a failure even when cancellation wins.
+        raise asyncio.CancelledError
+    return worker.result()
+
+
 async def _runtime_setup_checks():
     # Drain every worker before allowing another batch, including on failure.
     values = await asyncio.gather(
-        *(asyncio.to_thread(rt.setup_compatibility) for rt in RUNTIMES.values()),
+        *(_runtime_setup_check(rt) for rt in RUNTIMES.values()),
         return_exceptions=True,
     )
     for value in values:
@@ -287,16 +340,28 @@ async def _runtime_setup_checks():
 
 
 @router.get("/runtimes", response_model=list[RuntimeInfo])
-async def list_runtimes(request: Request, check_setup: bool = False):
+async def list_runtimes(
+    request: Request, check_setup: bool = False, schema_version: int = Query(default=1, ge=1, le=2)
+):
     """Supported runtimes and whether their binary is installed."""
+    if schema_version == 2:
+        from agent_backbone.api.runtime_catalog import bound_catalog
+
+        await require_operator(request)
+        if not check_setup:
+            raise HTTPException(status_code=422, detail="Schema 2 requires check_setup=true")
+        return JSONResponse(await bound_catalog(request))
     checks = {}
     if check_setup:
         await require_operator(request)
         task = getattr(request.app.state, "runtime_setup_checks", None)
         if task is None or task.done():
-            task = asyncio.create_task(_runtime_setup_checks())
-            # Observe failures even if all clients disconnect before completion.
-            task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+            task = request.app.state.api_tasks.create(
+                _runtime_setup_checks,
+                config=request.app.state.config,
+                db=request.app.state.db,
+                provider=getattr(request.state, "profile_provider", None),
+            )
             request.app.state.runtime_setup_checks = task
         # Disconnecting clients must not free capacity while workers still run.
         checks = await asyncio.shield(task)
@@ -396,14 +461,23 @@ async def start_known_agent(
 @router.post("/agents/{session}/stop", response_model=AgentStopResponse)
 async def stop_agent(
     session: str,
+    expected_registration_id: str | None = Query(default=None, pattern=r"^[a-f0-9]{32}$"),
     config: BackboneConfig = Depends(get_config),
+    db: BackboneDB = Depends(get_db),
     feed: SessionFeed = Depends(get_feed),
 ):
     """Stop an agent tmux session (never the backbone's own)."""
-    registered_agent_or_404(config, session)
+    if expected_registration_id is None:
+        registered_agent_or_404(config, session)
+    # With an ID the durable registration decides, under the lock: a forgotten
+    # selection is a changed one, and a newer one need not be in this snapshot yet.
     try:
-        ok = await stop_agent_session(config, session)
+        ok = await stop_agent_session(
+            config, session, expected_registration_id=expected_registration_id, db=db
+        )
     except ValueError as exc:
+        if str(exc) == "agent registration changed":
+            raise _registration_changed() from None
         raise HTTPException(status_code=400, detail=str(exc)) from None
     if ok:
         await feed.refresh_and_emit()
@@ -635,10 +709,21 @@ async def unsubscribe(
 
 
 @router.delete("/agents/{name}", dependencies=[Depends(require_operator)])
-async def forget_agent(name: str, store: AgentStore = Depends(get_agent_store)):
+async def forget_agent(
+    name: str,
+    expected_registration_id: str | None = Query(default=None, pattern=r"^[a-f0-9]{32}$"),
+    store: AgentStore = Depends(get_agent_store),
+    db: BackboneDB = Depends(get_db),
+):
     """Forget an agent (its session must be stopped first)."""
     try:
-        removed = await forget_agent_op(store, name)
+        removed = await forget_agent_op(
+            store, name, expected_registration_id=expected_registration_id, db=db
+        )
+    except ValueError as exc:
+        if str(exc) == "agent registration changed":
+            raise _registration_changed() from None
+        raise
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     if not removed:

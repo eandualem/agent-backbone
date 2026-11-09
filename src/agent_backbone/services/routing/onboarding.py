@@ -8,15 +8,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import replace
+import time
 from pathlib import Path
 from uuid import uuid4
 
+from agent_backbone.base import run_thread
 from agent_backbone.config import AgentSpec
 from agent_backbone.fs import AtomicCreateUnsupported, atomic_create_text
 from agent_backbone.git import detect_repo
 from agent_backbone.models import (
     SUCCESS_OUTCOMES,
+    BoundSetupFirstAgent,
     SetupCancelFirstAgent,
     SetupFirstAgent,
     SetupTemplateBrief,
@@ -29,9 +31,10 @@ from agent_backbone.services.agents import (
     profile_lock,
     start_agent,
     validate_agent_spec,
+    wait_until_ready,
 )
-from agent_backbone.services.database import SetupReceipt, SetupReceiptError
-from agent_backbone.services.routing import envelope, safe_deliver
+from agent_backbone.services.database import BoundSetupReceipt, SetupReceipt, SetupReceiptError
+from agent_backbone.services.routing import DeliveryRefused, envelope, safe_deliver
 from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.terminal import query_environment_var, session_exists
 from agent_backbone.skills import read_store, select_skills
@@ -44,6 +47,15 @@ GREETING = (
     "coordinate specialist agents, then ask what I want to accomplish first. "
     "Wait for my answer before creating agents, changing projects or making commitments."
 )
+
+# Setup ends once the CLI is running: what it shows next is the person's to answer.
+# A CLI that cannot start quits within moments (Codex 0.160.0: under two seconds).
+STARTED_SECONDS = 3.0
+# How long the prompt is watched for behind first-run screens. After that the
+# delivery-retry job hands over anything still queued.
+FIRST_RUN_SECONDS = 600.0
+
+_watches: set[asyncio.Task] = set()
 
 # Keep the original core-v1 prerequisites valid when new defaults are added.
 # Existing installations retain their assignments and may have a pending request.
@@ -125,14 +137,28 @@ def _matches_registration(current, spec, registration):
     )
 
 
-async def first_agent(request: SetupFirstAgent, config, store, db):
+async def first_agent(
+    request: SetupFirstAgent | BoundSetupFirstAgent,
+    config,
+    store,
+    db,
+    *,
+    check_effect=None,
+    check_admission=None,
+    settled=None,
+):
     """Run once or reconcile the same explicit request; API authentication is upstream."""
-    if Path(request.data_dir) != config.data_dir.resolve():
+    bound = isinstance(request, BoundSetupFirstAgent)
+    if bound and check_effect is None:
+        raise ValueError("Bound setup requires provider effect checks")
+    if not bound and Path(request.data_dir) != config.data_dir.resolve():
         return setup_result(
             "first_agent", "installation_conflict", "This service owns a different data directory."
         )
     try:
-        with SetupReceipt(config.data_dir, request.model_dump()) as receipt:
+        await _check(check_admission or check_effect)
+        receipt_type = BoundSetupReceipt if bound else SetupReceipt
+        with receipt_type(config.data_dir, request.model_dump()) as receipt:
             if receipt.cancelled:
                 return setup_result(
                     "first_agent",
@@ -141,11 +167,20 @@ async def first_agent(request: SetupFirstAgent, config, store, db):
                     status="failed",
                     retry="new_request",
                 )
+            await _check(check_effect)
             receipt.save(agent_name=request.agent.name)
             async with lifecycle_lock(request.agent.name):
-                return await _first(request, receipt, store, db)
+                await _check(check_effect)
+                return await _first(
+                    request, receipt, store, db, check_effect=check_effect, settled=settled
+                )
     except SetupReceiptError as exc:
-        return setup_result("first_agent", exc.code, str(exc))
+        return setup_result(
+            "first_agent",
+            exc.code,
+            str(exc),
+            retry="none" if bound and exc.reason == "receipt_capacity" else None,
+        )
     except AtomicCreateUnsupported:
         return setup_result(
             "first_agent",
@@ -164,7 +199,7 @@ async def first_agent(request: SetupFirstAgent, config, store, db):
         )
 
 
-async def cancel_first_agent(request: SetupCancelFirstAgent, config):
+async def cancel_first_agent(request: SetupCancelFirstAgent, config, *, check_effect=None):
     """Atomically retire an input before effects, including a not-yet-sent input.
 
     First-agent holds this same nonblocking file lock through all effects. A
@@ -172,12 +207,17 @@ async def cancel_first_agent(request: SetupCancelFirstAgent, config):
     No runtime probing, replay, agent deletion or terminal stop is involved.
     """
     action = request.action
-    if Path(request.data_dir) != config.data_dir.resolve():
+    bound = isinstance(request, BoundSetupFirstAgent)
+    if bound and check_effect is None:
+        raise ValueError("Bound setup requires provider effect checks")
+    if not bound and Path(request.data_dir) != config.data_dir.resolve():
         return setup_result(
             action, "installation_conflict", "This service owns a different data directory."
         )
     try:
-        with SetupReceipt(config.data_dir, request.original().model_dump()) as receipt:
+        await _check(check_effect)
+        receipt_type = BoundSetupReceipt if bound else SetupReceipt
+        with receipt_type(config.data_dir, request.original().model_dump()) as receipt:
             if not receipt.cancelled:
                 # Preflight can only write these fields. Fail closed for any
                 # later or unfamiliar evidence, even an incomplete step.
@@ -206,7 +246,12 @@ async def cancel_first_agent(request: SetupCancelFirstAgent, config):
                 data={"cancelled_request_id": request.request_id, "can_start_new_request": True},
             )
     except SetupReceiptError as exc:
-        return setup_result(action, exc.code, str(exc))
+        return setup_result(
+            action,
+            exc.code,
+            str(exc),
+            retry="none" if bound and exc.reason == "receipt_capacity" else None,
+        )
     except Exception as exc:
         log.error(
             "Setup cancellation failed request=%s error=%s", request.request_id, type(exc).__name__
@@ -218,8 +263,47 @@ async def cancel_first_agent(request: SetupCancelFirstAgent, config):
         )
 
 
-async def _first(request, receipt, store, db):
-    await store.refresh()
+async def _check(check_effect):
+    if check_effect is not None:
+        await check_effect()
+
+
+async def _watch_first_run(name, config, runtime, since, settled):
+    """Clear the ``starting`` marker at the prompt, then hand over a queued greeting."""
+    deadline = time.monotonic() + FIRST_RUN_SECONDS
+    while (remaining := deadline - time.monotonic()) > 0:
+        outcome, _ = await wait_until_ready(
+            name,
+            state_dir=config.state_dir,
+            runtime=runtime,
+            timeout=remaining,
+            stale_threshold=config.timing.stale_threshold_seconds,
+            since=since,
+        )
+        if outcome == "ready":
+            break
+        if outcome != "waiting_for_human":
+            return
+        await asyncio.sleep(1)
+    else:
+        return
+    if settled is not None:
+        await settled(name)
+        # Delivery holds a message for the grace period after an idle hook.
+        await asyncio.sleep(config.timing.grace_period_seconds + 1)
+        await settled(name)
+
+
+def _watch_ended(task):
+    _watches.discard(task)
+    if not task.cancelled() and (error := task.exception()) is not None:
+        log.warning("First-run watch ended early (%s)", type(error).__name__)
+
+
+async def _first(request, receipt, store, db, *, check_effect=None, settled=None):
+    await _check(check_effect)
+    await store.refresh(**({"check_effect": check_effect} if check_effect is not None else {}))
+    await _check(check_effect)
     config = store.config
     spec = AgentSpec(
         name=request.agent.name,
@@ -228,8 +312,9 @@ async def _first(request, receipt, store, db):
         model=request.agent.model,
         repo=await detect_repo(Path(request.agent.directory)),
     )
+    await _check(check_effect)
     if receipt.record.get("result", {}).get("status") == "completed":
-        return await _completed_replay(receipt, config, store)
+        return await _completed_replay(receipt, config, store, check_effect=check_effect)
     try:
         validate_agent_spec(spec)
     except ValueError:
@@ -248,6 +333,7 @@ async def _first(request, receipt, store, db):
             "use its documented agent-start flow.",
             retry="new_request",
         )
+    await _check(check_effect)
     selected = RUNTIMES[spec.runtime]
     if not selected.available():
         return _answer(
@@ -258,8 +344,9 @@ async def _first(request, receipt, store, db):
     if not any(
         receipt.record.get(key)
         for key in ("registration_id", "registration_pending", "launch_operation")
-    ) and (error := await asyncio.to_thread(selected.setup_error)):
+    ) and (error := await run_thread(selected.setup_error)):
         return _answer(receipt, "runtime_permission", error)
+    await _check(check_effect)
     path = spec.path
     if path.resolve() != path or (path.exists() and not path.is_dir()):
         return _answer(
@@ -302,17 +389,40 @@ async def _first(request, receipt, store, db):
             )
     if not path.is_dir() and not request.agent.create_directory:
         return _answer(receipt, "agent_conflict", "The selected agent directory does not exist.")
+    await _check(check_effect)
     receipt.completed("preflight")
     if "hooks" not in receipt.record["completed_steps"]:
         for rt in runtimes:
+            await _check(check_effect)
             rt.prepare_setup_hooks(config.data_dir, config.state_dir)
         receipt.completed("hooks")
+    await _check(check_effect)
     brief_path = _brief_file(receipt, brief)
     if not registration:
+        await _check(check_effect)
         path.mkdir(parents=True, exist_ok=True)
         receipt.save(registration_pending=True)
+
+        def registered(created):
+            receipt.save(registration_id=created.registration_id, registration_pending=False)
+            receipt.completed("agent")
+
         try:
-            spec = await store.register(spec, only_new=True)
+            spec = await store.register(
+                spec,
+                only_new=True,
+                **(
+                    {"check_effect": check_effect, "on_registered": registered}
+                    if check_effect is not None
+                    else {}
+                ),
+            )
+        except SetupReceiptError:
+            # Bound registration records its committed identity before any later
+            # effect check. A refusal without that receipt preceded the insert.
+            if check_effect is not None and not receipt.record.get("registration_id"):
+                receipt.save(registration_pending=False)
+            raise
         except AgentRegistrationConflict as exc:
             if exc.registration_id is not None:
                 receipt.save(registration_id=exc.registration_id, registration_pending=False)
@@ -333,20 +443,28 @@ async def _first(request, receipt, store, db):
             return _answer(
                 receipt, "agent_conflict", "An agent already owns this name or directory."
             )
+        # Preserve the committed identity before a later admission/native check
+        # can fail. This records the original effect; it does not authorize another.
         receipt.save(registration_id=spec.registration_id, registration_pending=False)
         receipt.completed("agent")
+        await _check(check_effect)
         config = store.config
-    # Turn off workspace pre-trust for this explicit interactive first launch.
-    # Other launch settings and each adapter's sandbox/dialog behavior remain intact.
-    config = replace(config, launch=replace(config.launch, pre_trust=False))
     operation = receipt.record.get("launch_operation")
     if operation is None:
         if await session_exists(spec.name):
             return _answer(receipt, "agent_conflict", "An existing terminal was preserved.")
+        await _check(check_effect)
         operation = uuid4().hex
         receipt.save(launch_operation=operation)
+        launched_at = time.time()
         started = await start_agent(
-            spec, config, db=db, brief_file=brief_path, wait=True, operation_id=operation
+            spec,
+            config,
+            db=db,
+            brief_file=brief_path,
+            wait=False,
+            operation_id=operation,
+            **({"check_effect": check_effect} if check_effect is not None else {}),
         )
         if not started.ok:
             return _answer(
@@ -355,14 +473,23 @@ async def _first(request, receipt, store, db):
                 "The launch did not complete; it will not be repeated automatically.",
                 ready="exited",
             )
+        await _check(check_effect)
         await store.touch_started(spec.name)
+        watch = asyncio.create_task(
+            _watch_first_run(spec.name, config, spec.runtime, launched_at, settled)
+        )
+        _watches.add(watch)
+        watch.add_done_callback(_watch_ended)
+        await asyncio.sleep(STARTED_SECONDS)
+        await _check(check_effect)
     # A lost launch response is reconciled from the exact operation and registration,
     # never from the presence of a same-name terminal alone.
     if not await session_exists(spec.name):
         return _answer(
             receipt,
             "launch_failed",
-            "The recorded launch has exited; setup will not restart it.",
+            "The CLI exited right after starting, so the agent is not running. Run the CLI "
+            "in a terminal in the agent's folder to see why, then start the agent again.",
             ready="exited",
         )
     actual_operation = await query_environment_var(spec.name, "BACKBONE_OPERATION_ID")
@@ -375,6 +502,7 @@ async def _first(request, receipt, store, db):
         or (receipt.record.get("launch_id") not in (None, launch))
     ):
         return _answer(receipt, "agent_conflict", "The terminal does not match this setup launch.")
+    await _check(check_effect)
     receipt.save(launch_id=launch)
     receipt.completed("launch")
     snapshot = await agent_state(config, spec.name)
@@ -385,22 +513,7 @@ async def _first(request, receipt, store, db):
             receipt.record["result"],
             data={**receipt.record["result"]["data"], "evidence": evidence},
         )
-    if snapshot.state.value == "waiting_for_human":
-        return _answer(
-            receipt,
-            "runtime_permission",
-            "Continue in the agent terminal, then retry this request.",
-            ready="waiting_for_human",
-            evidence=evidence,
-        )
-    if snapshot.state.value != "idle":
-        return _answer(
-            receipt,
-            "launch_timeout",
-            "The runtime is not confirmed ready; inspect its terminal.",
-            ready="timeout",
-            evidence=evidence,
-        )
+    await _check(check_effect)
     receipt.completed("ready")
     if request.start_greeting and receipt.record.get("greeting_delivery_id") is None:
         # Other CLI processes do not share lifecycle_lock. Keep the profile
@@ -415,7 +528,8 @@ async def _first(request, receipt, store, db):
             ):
                 if await query_environment_var(spec.name, key) != receipt.record.get(field):
                     return _answer(receipt, "agent_conflict", "The greeting launch changed.")
-            accepted = await _greet(receipt, spec, config, db)
+            await _check(check_effect)
+            accepted = await _greet(receipt, spec, config, db, check_effect=check_effect)
         if not accepted:
             return _answer(
                 receipt,
@@ -424,20 +538,24 @@ async def _first(request, receipt, store, db):
                 ready="ready",
                 evidence=evidence,
             )
+        await _check(check_effect)
         receipt.completed("greeting")
     final = _answer(
         receipt,
         "agent_ready",
-        "Agent started; any greeting receipt records submission only.",
+        "Agent started; it may show its own first-run screens in its terminal. "
+        "Any greeting receipt records submission only.",
         ready="ready",
         completed=True,
         evidence=evidence,
     )
+    await _check(check_effect)
     receipt.save(result=final)
     return final
 
 
-async def _completed_replay(receipt, config, store):
+async def _completed_replay(receipt, config, store, *, check_effect=None):
+    await _check(check_effect)
     name = receipt.record["agent_name"]
     current = store.agents.get(name)
     if current is None or current.registration_id != receipt.record.get("registration_id"):
@@ -467,6 +585,7 @@ async def _completed_replay(receipt, config, store):
                 retry="none",
             )
     snapshot = await agent_state(config, name)
+    await _check(check_effect)
     return dict(
         receipt.record["result"],
         data={
@@ -476,7 +595,8 @@ async def _completed_replay(receipt, config, store):
     )
 
 
-async def _greet(receipt, spec, config, db):
+async def _greet(receipt, spec, config, db, *, check_effect=None):
+    await _check(check_effect)
     operation = receipt.record.get("greeting_operation")
     message = envelope("setup", GREETING)
     if operation:
@@ -484,6 +604,7 @@ async def _greet(receipt, spec, config, db):
         held = await db.queue.held_receipt(
             spec.name, message, "setup", operation, "", None, "direct_message"
         )
+        await _check(check_effect)
         # A queued uncertain delivery is not confirmation. Keep it for inspection.
         delivered = next((row for row in rows if row["outcome"] in SUCCESS_OUTCOMES), None)
         if delivered:
@@ -500,18 +621,26 @@ async def _greet(receipt, spec, config, db):
         return False
     operation = uuid4().hex
     receipt.save(greeting_operation=operation)
-    report = await safe_deliver(
-        spec.name,
-        message,
-        config,
-        db=db,
-        source="setup",
-        sender="setup",
-        source_key=operation,
-        delivery_kind="direct_message",
-        operation_id=operation,
-        once=True,
-    )
+    try:
+        report = await safe_deliver(
+            spec.name,
+            message,
+            config,
+            db=db,
+            source="setup",
+            sender="setup",
+            source_key=operation,
+            delivery_kind="direct_message",
+            operation_id=operation,
+            once=True,
+            **({"check_effect": check_effect} if check_effect is not None else {}),
+        )
+    except DeliveryRefused as exc:
+        # This invocation has proof that neither a paste nor queue admission
+        # was attempted. Preserve all other failures as potentially submitted.
+        receipt.save(greeting_operation=None)
+        raise exc.cause from exc
+    await _check(check_effect)
     if (
         not report.unconfirmed
         and report.delivery_id is not None

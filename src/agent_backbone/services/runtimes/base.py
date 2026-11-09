@@ -26,7 +26,13 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
 
+from agent_backbone.base import check_before_effect
 from agent_backbone.hooks import install as hooks
+from agent_backbone.services.runtimes._environment import (
+    NativeEnvironment,
+    native_environment,
+    native_runtime_uncaptured,
+)
 from agent_backbone.services.runtimes._pane import (
     DIALOG_CURSOR_RE,
     DIALOG_OPTION_RE,
@@ -58,6 +64,8 @@ _FALLBACK_DIRS = (
     Path.home() / ".npm-global" / "bin",
 )
 
+ACCOUNT_STATUS_SECONDS = 5
+"""OpenCode starts a private server for its status: over 2 seconds on a first run."""
 # A version as a word of its own: ``v2.1.284`` is 2.1.284, never 1.284.
 _VERSION = re.compile(r"(?<![\w.])v?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?)(?![\w.-])")
 
@@ -372,8 +380,107 @@ class Runtime:
 
     # --- launch --------------------------------------------------------------
 
+    def environment(self, overrides: Mapping[str, str] | None = None) -> Mapping[str, str]:
+        """Use the process-pinned context, or preserve legacy environment semantics."""
+        captured = native_environment(self.id)
+        if captured is None:
+            return dict(overrides or {})
+        return captured.overlay(overrides or {})
+
+    def check_native_path(self, path: Path) -> Path:
+        """Refuse stale ledger paths or symlinks outside the captured native tree."""
+        if captured := native_environment(self.id):
+            captured.check_path(path)
+        return path
+
+    def account_args(self, action: str) -> list[str]:
+        raise ValueError("Native account action is unavailable for this runtime")
+
+    def account_invocation(self, action: str) -> tuple[list[str], NativeEnvironment]:
+        """An internal native invocation, never an ambient account fallback.
+
+        The lifecycle owner must check its identity fence before executing this.
+        Sign-in sessions run login and the account status route runs status; nothing runs logout.
+        """
+        captured = native_environment(self.id)
+        if captured is None or captured.executable is None:
+            raise ValueError("Native account action requires a captured environment")
+        return [captured.executable, *self.account_args(action)], captured
+
+    def account_state(self, done: subprocess.CompletedProcess) -> str:
+        """Classify this CLI's own status result; anything unrecognized is unavailable."""
+        return "unavailable"
+
+    def observed_authentication(self) -> str:
+        """The CLI's own status in this profile. Shows a stored sign-in, not a working account."""
+        if self.authentication != "unknown":
+            return self.authentication
+        try:
+            command, environment = self.account_invocation("status")
+            done = subprocess.run(
+                command,
+                env=dict(environment),
+                cwd=environment["HOME"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=ACCOUNT_STATUS_SECONDS,
+                check=False,
+            )
+        except (ValueError, OSError, subprocess.SubprocessError):
+            return "unavailable"
+        return self.account_state(done)
+
+    def native_environment_values(self, root: Path) -> dict[str, str]:
+        """Adapter-owned store locations; unsupported adapters fail closed."""
+        raise ValueError("Isolated native environment is unavailable for this runtime")
+
+    native_files: tuple[str, ...] = ()
+    """Mutable account/configuration files relative to the captured native root.
+
+    Rechecked without reading contents on every captured-context access. This is
+    path ownership only; settings that invoke external helpers need separate checks.
+    """
+
+    def capture_environment(self, root: Path) -> NativeEnvironment:
+        """Capture native locators and binary before installing a process context.
+
+        This does not create directories, configure accounts, or authorize startup.
+        Only locale values and executable search paths are inherited.
+        """
+        root = Path(root)
+        values = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL") if key in os.environ}
+        values.update(
+            {
+                "HOME": str(root / "home"),
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_DATA_HOME": str(root / "data"),
+                "XDG_STATE_HOME": str(root / "state"),
+                "XDG_CACHE_HOME": str(root / "cache"),
+                "XDG_RUNTIME_DIR": str(root / "run"),
+                "TMPDIR": str(root / "tmp"),
+                "TMP": str(root / "tmp"),
+                "TEMP": str(root / "tmp"),
+            }
+        )
+        native = self.native_environment_values(root)
+        for value in native.values():
+            if not Path(value).is_absolute() or not Path(value).resolve().is_relative_to(root):
+                raise ValueError("Native store escapes the runtime root")
+        values.update(self.default_env)
+        values.update(native)
+        executable = self.resolve_binary()
+        if self.binary is not None and executable is None:
+            raise ValueError("Native runtime executable is unavailable")
+        return NativeEnvironment(root, executable, values, frozenset(native), self.native_files)
+
     def resolve_binary(self) -> str | None:
         """Find this runtime now, including any adapter-specific install location."""
+        if native_runtime_uncaptured(self.id):
+            return None  # Never the host's.
+        if captured := native_environment(self.id):
+            return captured.executable
         return resolve_command(self.binary) if self.binary else None
 
     def available(self) -> bool:
@@ -399,6 +506,11 @@ class Runtime:
                 errors="replace",
                 timeout=10,
                 check=False,
+                **(
+                    {"env": dict(captured), "cwd": captured.root}
+                    if (captured := native_environment(self.id)) is not None
+                    else {}
+                ),
             )
         except subprocess.TimeoutExpired:
             return None, "timeout"
@@ -460,8 +572,8 @@ class Runtime:
         ``project`` as for ``user_instructions``."""
         return None
 
-    def pre_trust(self, directory: Path | str) -> None:
-        """Answer the runtime's folder-trust dialog ahead of launch, if it has one."""
+    def pre_trust(self, directory: Path | str, *, env: dict[str, str] | None = None) -> None:
+        """Prepare folder trust in the same native environment as the child process."""
 
     def launch_env(self, model: str | None, effort: str | None = None) -> dict[str, str]:
         """Extra environment the session needs (runtimes that take the model or
@@ -479,13 +591,13 @@ class Runtime:
         """How the backbone learns this runtime's state (for ``backbone runtimes``)."""
         return "hooks + terminal" if self.hook_script else "terminal"
 
-    def discovery(self) -> dict:
+    def discovery(self, *, bound_available: bool | None = None) -> dict:
         """Read-only onboarding metadata; no process launch, login or model call."""
         supported = self.unattended_args is not None
         return {
             "id": self.id,
             "display_name": self.display_name,
-            "available": self.available(),
+            "available": self.available() if bound_available is None else bound_available,
             "setup_supported": self.setup_hooks,
             "reports_state": self.reports_state,
             "models": list(self.models),
@@ -498,6 +610,29 @@ class Runtime:
             "authentication": self.authentication,
         }
 
+    def bound_discovery(self, environment: NativeEnvironment | None) -> dict:
+        """Observe only a provider-owned context; missing context never probes the host."""
+        if environment is None:
+            item = self.discovery(bound_available=False)
+            item["setup_supported"] = False
+            item["authentication"] = "unavailable" if self.setup_hooks else "unsupported"
+            item["setup_compatibility"] = {
+                "compatible": False,
+                "reason": "runtime_permission" if self.setup_hooks else "unsupported",
+                "message": "Runtime setup observation requires an owned native environment.",
+                "path": None,
+                "version": None,
+                "version_error": "unavailable",
+            }
+            return item
+        if native_environment(self.id) != environment:
+            raise ValueError("Native runtime context does not match")
+        item = self.discovery()
+        item["setup_compatibility"] = self.setup_compatibility()
+        if native_environment(self.id) != environment:
+            raise ValueError("Native runtime context does not match")
+        return item
+
     def hook_launch_args(
         self, data_dir: Path | str | None, state_dir: Path | str | None
     ) -> list[str]:
@@ -506,6 +641,12 @@ class Runtime:
 
     setup_hooks = False
     """Whether the finite installer can prepare isolated launch hooks."""
+
+    runs_in_profiles = False
+    """Whether agents of this runtime may run in an isolated profile."""
+
+    profile_sign_in = False
+    """Whether an isolated profile can run this CLI's own sign-in and status."""
 
     def setup_error(self) -> str | None:
         """Return a deterministic installer preflight refusal, before registration."""
@@ -683,6 +824,7 @@ class Runtime:
         when the binary is missing, or when ``unattended`` is asked of a
         runtime without such a switch.
         """
+        env = self.environment(env)
         self.check_unattended(unattended)  # a shell has no switch either
         if self.binary is None:
             return None
@@ -1098,7 +1240,7 @@ class Runtime:
         """Read a bounded chunk from this runtime's usage source."""
         from agent_backbone.services.runtimes._usage import read_jsonl
 
-        return read_jsonl(path, offset, state, self.parse_usage)
+        return read_jsonl(self.check_native_path(path), offset, state, self.parse_usage)
 
     def parse_usage(self, record: dict, state: dict):
         """Project one source record into numeric usage, updating an opaque cursor."""
@@ -1186,16 +1328,18 @@ class Runtime:
                     return True
         return False
 
-    async def deliver_message(self, session_name: str, message: str) -> bool:
+    async def deliver_message(self, session_name: str, message: str, *, check_effect=None) -> bool:
         """Paste a message and submit it according to runtime-specific rules."""
-        if not await paste_message(session_name, message):
+        options = {"check_effect": check_effect} if check_effect is not None else {}
+        await check_before_effect(check_effect)
+        if not await paste_message(session_name, message, **options):
             return False
 
         if self.paste_settle_seconds > 0:
             await asyncio.sleep(self.paste_settle_seconds)
 
         try:
-            state = await self._submit(session_name)
+            state = await self._submit(session_name, **options)
         except Exception as exc:
             raise SubmissionUnconfirmed("Could not confirm pasted text") from exc
 
@@ -1215,10 +1359,12 @@ class Runtime:
         )
         raise SubmissionUnconfirmed(f"Pasted text has state {state}")
 
-    async def _submit(self, session_name: str) -> str:
+    async def _submit(self, session_name: str, *, check_effect=None) -> str:
         """Submit once, then observe; repeating Enter can interrupt an active turn."""
         state = "submitted"
-        if not await press_submit(session_name):
+        if not await press_submit(
+            session_name, **({"check_effect": check_effect} if check_effect is not None else {})
+        ):
             return "failed"
         for _attempt in range(self.submission_checks):
             await asyncio.sleep(_SUBMIT_RECHECK_DELAY_SECONDS)

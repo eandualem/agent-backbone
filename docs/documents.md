@@ -67,7 +67,9 @@ API-key trust model. Names alone are never proof of authorship.
 {"author":"app","request_id":"overview-v1","title":"Overview","html":"<h1>Overview</h1>","supersedes_id":null}
 ```
 
-`author` is a registered agent name. `request_id` is 1–128 characters from
+`author` is a registered agent name, or the reserved name `operator` for a person's own
+document. Only an operator credential can use `operator`, no signature is involved, and
+it is refused with 409 if an agent has that name. `request_id` is 1–128 characters from
 `A–Z`, `a–z`, `0–9`, `_`, `.`, `:`, `-`. `supersedes_id` is optional/null or a
 positive signed 64-bit integer. Unknown fields and type coercions are rejected.
 Success is HTTP 201 for a new revision or 200 for an identical retry:
@@ -130,8 +132,6 @@ Documents, author IDs, revision links, permanent retry keys and the admission
 counter live in the SQL database, separate from report pruning. Back up and
 restore the **whole database**, including `documents`, `document_storage` and
 `agents`; a directory of exported HTML is not a database backup. Use SQLite's
-online backup API (or stop all writers before a file copy), and use your
-PostgreSQL installation's consistent database backup/restore procedure.
+online backup API (or stop all writers before a file copy).
 Preserve the existing installation's authentication/signing configuration when
-restoring it. SQLite backup restoration and retries are tested; no provider-hosted
-PostgreSQL restoration is claimed by those tests.
+restoring it. SQLite backup restoration and retries are tested.

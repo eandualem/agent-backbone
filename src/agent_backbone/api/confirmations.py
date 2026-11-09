@@ -87,7 +87,13 @@ def receipt_fields(
 
 
 async def admit(
-    db, signed: SignedSender, receipt: dict, queue: dict | None, *, is_fresh: bool
+    db,
+    signed: SignedSender,
+    receipt: dict,
+    queue: dict | None,
+    *,
+    is_fresh: bool,
+    interaction: dict | None = None,
 ) -> tuple[str, dict]:
     """Commit the confirmation; ``(outcome, receipt row)``. Refuses a reused
     nonce or a confirmation id taken by a different confirmation (409), a key
@@ -100,6 +106,7 @@ async def admit(
         receipt=receipt,
         queue=queue,
         fresh=is_fresh,
+        interaction=interaction,
     )
     if outcome == "epoch_changed":
         raise refuse(403, "key_epoch_unknown", "the key was reset; sign with the current key")

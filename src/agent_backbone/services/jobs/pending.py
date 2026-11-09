@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from agent_backbone.base import run_thread
 from agent_backbone.models import SUCCESS_OUTCOMES, DeliveryOutcome
 from agent_backbone.services.agents import (
     AgentState,
@@ -60,10 +60,10 @@ async def deliver_pending_issues(
                     row["name"]: row["report_identity"] for row in await db.agents.list()
                 }
             if receipts is None:
-                receipts = await asyncio.to_thread(
+                receipts = await run_thread(
                     lambda: tuple(read_comment_receipts(config.action_log_path))
                 )
-            if await asyncio.to_thread(
+            if await run_thread(
                 has_commented_on_issue,
                 issue_number,
                 name,

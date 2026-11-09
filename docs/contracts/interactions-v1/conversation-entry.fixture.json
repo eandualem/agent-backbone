@@ -1,0 +1,17 @@
+{
+  "kind": "interaction",
+  "artifact_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "entry_id": 501,
+  "entry_kind": "message",
+  "created_at": "2026-10-31T10:02:00.000000Z",
+  "author_type": "owner",
+  "author_id": "",
+  "author_name": "owner",
+  "recipient_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "recipient_name": "coordinator",
+  "in_reply_to": null,
+  "anchor": {
+    "revision_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "anchored_interaction_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}

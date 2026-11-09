@@ -1,0 +1,1089 @@
+{
+  "contract_revision": 2,
+  "wire_schema_version": 1,
+  "discovery": {
+    "list": {
+      "schema_version": 1,
+      "items": [
+        {
+          "profile_id": "profile-a",
+          "display_name": "Work",
+          "kind": "isolated",
+          "state": "ready"
+        }
+      ]
+    },
+    "show_ready": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "display_name": "Work",
+      "kind": "isolated",
+      "state": "ready",
+      "binding": {
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1",
+        "endpoint": {
+          "kind": "unix",
+          "path": "/example/profiles/a/run/api.sock"
+        },
+        "credential_reference": {
+          "kind": "dotenv",
+          "path": "/example/profiles/a/.env",
+          "key": "BACKBONE_API_KEY"
+        },
+        "tmux": {
+          "socket_path": "/example/profiles/a/tmux/server.sock"
+        }
+      },
+      "git_identity": "none"
+    },
+    "show_creating": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "display_name": "Work",
+      "kind": "isolated",
+      "state": "creating",
+      "binding": null,
+      "git_identity": "none"
+    },
+    "registry_absent": {
+      "schema_version": 1,
+      "error": {
+        "code": "registry_absent",
+        "message": "No profiles exist yet."
+      }
+    },
+    "registry_unavailable": {
+      "schema_version": 1,
+      "error": {
+        "code": "registry_unavailable",
+        "message": "Registry error."
+      }
+    }
+  },
+  "identity": {
+    "schema_version": 1,
+    "profile_id": "profile-a",
+    "installation_id": "installation-a",
+    "lifecycle_id": "lifecycle-a1",
+    "baseline_version": "baseline-example-v1",
+    "tmux": {
+      "socket_path": "/example/profiles/a/tmux/server.sock"
+    }
+  },
+  "request_headers": {
+    "X-Backbone-Profile-ID": "profile-a",
+    "X-Backbone-Installation-ID": "installation-a",
+    "X-Backbone-Lifecycle-ID": "lifecycle-a1"
+  },
+  "socket_auth": {
+    "profile_id": "profile-a",
+    "installation_id": "installation-a",
+    "lifecycle_id": "lifecycle-a1"
+  },
+  "lifecycle": {
+    "create": {
+      "schema_version": 1,
+      "request_id": "operation-create-a",
+      "action": "create",
+      "display_name": "Work",
+      "baseline_version": "baseline-example-v1"
+    },
+    "start": {
+      "schema_version": 1,
+      "request_id": "operation-start-a",
+      "action": "start",
+      "profile_id": "profile-a",
+      "expected_installation_id": "installation-a",
+      "expected_lifecycle_id": "lifecycle-a1"
+    },
+    "stop": {
+      "schema_version": 1,
+      "request_id": "operation-stop-a",
+      "action": "stop",
+      "profile_id": "profile-a",
+      "expected_installation_id": "installation-a",
+      "expected_lifecycle_id": "lifecycle-a1"
+    },
+    "pending": {
+      "schema_version": 1,
+      "request_id": "operation-start-a",
+      "action": "start",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "status": "pending",
+      "error": null
+    },
+    "succeeded": {
+      "schema_version": 1,
+      "request_id": "operation-start-a",
+      "action": "start",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "status": "succeeded",
+      "error": null
+    },
+    "failed": {
+      "schema_version": 1,
+      "request_id": "operation-start-a",
+      "action": "start",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "status": "failed",
+      "error": {
+        "code": "binding_mismatch",
+        "message": "Profile binding does not match."
+      }
+    },
+    "create_pending": {
+      "schema_version": 1,
+      "request_id": "operation-create-a",
+      "action": "create",
+      "profile_id": null,
+      "installation_id": null,
+      "lifecycle_id": null,
+      "status": "pending",
+      "error": null
+    },
+    "create_reserved_pending": {
+      "schema_version": 1,
+      "request_id": "operation-create-a",
+      "action": "create",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "status": "pending",
+      "error": null
+    },
+    "stop_succeeded": {
+      "schema_version": 1,
+      "request_id": "operation-stop-a",
+      "action": "stop",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "status": "succeeded",
+      "error": null
+    }
+  },
+  "http_errors": {
+    "binding_required": {
+      "status": 409,
+      "body": {
+        "detail": {
+          "code": "binding_required",
+          "message": "Profile binding is required."
+        }
+      }
+    },
+    "binding_mismatch": {
+      "status": 409,
+      "body": {
+        "detail": {
+          "code": "binding_mismatch",
+          "message": "Profile binding does not match."
+        }
+      }
+    }
+  },
+  "binding_cases": [
+    {
+      "name": "matching",
+      "serving_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "expected_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "legacy_eligible_identity": null,
+      "outcome": "allow",
+      "display_name": "Work"
+    },
+    {
+      "name": "ordinary_restart",
+      "serving_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "expected_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "legacy_eligible_identity": null,
+      "outcome": "allow",
+      "display_name": "Work"
+    },
+    {
+      "name": "other_profile",
+      "serving_identity": {
+        "profile_id": "profile-b",
+        "installation_id": "installation-b",
+        "lifecycle_id": "lifecycle-b1"
+      },
+      "expected_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "legacy_eligible_identity": null,
+      "outcome": "binding_mismatch",
+      "display_name": "Work"
+    },
+    {
+      "name": "replacement",
+      "serving_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a2"
+      },
+      "expected_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "legacy_eligible_identity": null,
+      "outcome": "binding_mismatch",
+      "display_name": "Work"
+    },
+    {
+      "name": "isolated_missing",
+      "serving_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "expected_identity": {},
+      "legacy_eligible_identity": null,
+      "outcome": "binding_required",
+      "display_name": "Work"
+    },
+    {
+      "name": "partial",
+      "serving_identity": {
+        "profile_id": "profile-a",
+        "installation_id": "installation-a",
+        "lifecycle_id": "lifecycle-a1"
+      },
+      "expected_identity": {
+        "profile_id": "profile-a"
+      },
+      "legacy_eligible_identity": null,
+      "outcome": "binding_mismatch",
+      "display_name": "Work"
+    },
+    {
+      "name": "default_profile",
+      "serving_identity": {
+        "profile_id": "profile-legacy",
+        "installation_id": "installation-legacy",
+        "lifecycle_id": "lifecycle-legacy1"
+      },
+      "expected_identity": {},
+      "legacy_eligible_identity": {
+        "profile_id": "profile-legacy",
+        "installation_id": "installation-legacy",
+        "lifecycle_id": "lifecycle-legacy1"
+      },
+      "outcome": "allow",
+      "display_name": "Default"
+    },
+    {
+      "name": "legacy_renamed",
+      "serving_identity": {
+        "profile_id": "profile-legacy",
+        "installation_id": "installation-legacy",
+        "lifecycle_id": "lifecycle-legacy1"
+      },
+      "expected_identity": {},
+      "legacy_eligible_identity": {
+        "profile_id": "profile-legacy",
+        "installation_id": "installation-legacy",
+        "lifecycle_id": "lifecycle-legacy1"
+      },
+      "outcome": "allow",
+      "display_name": "Archive"
+    },
+    {
+      "name": "another_named_default",
+      "serving_identity": {
+        "profile_id": "profile-b",
+        "installation_id": "installation-b",
+        "lifecycle_id": "lifecycle-b1"
+      },
+      "expected_identity": {},
+      "legacy_eligible_identity": {
+        "profile_id": "profile-legacy",
+        "installation_id": "installation-legacy",
+        "lifecycle_id": "lifecycle-legacy1"
+      },
+      "outcome": "binding_required",
+      "display_name": "Default"
+    },
+    {
+      "name": "replaced_legacy",
+      "serving_identity": {
+        "profile_id": "profile-legacy",
+        "installation_id": "installation-legacy",
+        "lifecycle_id": "lifecycle-legacy2"
+      },
+      "expected_identity": {},
+      "legacy_eligible_identity": {
+        "profile_id": "profile-legacy",
+        "installation_id": "installation-legacy",
+        "lifecycle_id": "lifecycle-legacy1"
+      },
+      "outcome": "binding_required",
+      "display_name": "Default"
+    }
+  ],
+  "socket_errors": {
+    "binding_required": {
+      "event": "connect_error",
+      "payload": {
+        "message": "Profile binding is required.",
+        "data": {
+          "code": "binding_required"
+        }
+      }
+    },
+    "binding_mismatch": {
+      "event": "connect_error",
+      "payload": {
+        "message": "Profile binding does not match.",
+        "data": {
+          "code": "binding_mismatch"
+        }
+      }
+    }
+  },
+  "operation_lookup_unknown": {
+    "exit_code": 1,
+    "body": {
+      "schema_version": 1,
+      "request_id": "operation-unknown",
+      "error": {
+        "code": "operation_not_found",
+        "message": "Profile operation was not found."
+      }
+    }
+  },
+  "extension_revision": 1,
+  "setup": {
+    "first_agent": {
+      "schema_version": 2,
+      "request_id": "setup-a1",
+      "action": "first_agent",
+      "profile_id": "profile-a",
+      "expected_installation_id": "installation-a",
+      "expected_lifecycle_id": "lifecycle-a1",
+      "hooks": [
+        "codex"
+      ],
+      "agent": {
+        "name": "worker",
+        "directory": "/example/project",
+        "create_directory": false,
+        "runtime": "codex",
+        "model": null,
+        "brief": {
+          "text": "Project work"
+        }
+      },
+      "start_greeting": false
+    },
+    "cancel_first_agent": {
+      "schema_version": 2,
+      "request_id": "setup-a1",
+      "action": "cancel_first_agent",
+      "profile_id": "profile-a",
+      "expected_installation_id": "installation-a",
+      "expected_lifecycle_id": "lifecycle-a1",
+      "hooks": [
+        "codex"
+      ],
+      "agent": {
+        "name": "worker",
+        "directory": "/example/project",
+        "create_directory": false,
+        "runtime": "codex",
+        "model": null,
+        "brief": {
+          "text": "Project work"
+        }
+      },
+      "start_greeting": false
+    },
+    "cancellation_result": {
+      "schema_version": 2,
+      "request_id": "setup-a1",
+      "seq": 1,
+      "type": "result",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "action": "cancel_first_agent",
+      "status": "completed",
+      "code": "request_cancelled",
+      "message": "This setup request is cancelled; a new request may be submitted.",
+      "retry": "new_request",
+      "completed_steps": [],
+      "data": {
+        "cancelled_request_id": "setup-a1",
+        "can_start_new_request": true
+      }
+    },
+    "progress": {
+      "schema_version": 2,
+      "request_id": "setup-a1",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "action": "first_agent",
+      "seq": 1,
+      "type": "step",
+      "step": "hooks",
+      "status": "completed"
+    },
+    "result": {
+      "schema_version": 2,
+      "request_id": "setup-a1",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "action": "first_agent",
+      "seq": 2,
+      "type": "result",
+      "status": "completed",
+      "code": "agent_ready",
+      "message": "Agent started; it may show its own first-run screens in its terminal. Any greeting receipt records submission only.",
+      "retry": "none",
+      "completed_steps": [
+        "preflight",
+        "hooks",
+        "agent",
+        "launch",
+        "ready"
+      ],
+      "data": {
+        "agent_name": "worker",
+        "launch_id": "launch-a1",
+        "ready": "ready",
+        "greeting_delivery_id": null,
+        "evidence": []
+      }
+    },
+    "failed_before_resolution": {
+      "schema_version": 2,
+      "request_id": "setup-a1",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "action": "first_agent",
+      "seq": 1,
+      "type": "result",
+      "status": "failed",
+      "code": "binding_mismatch",
+      "message": "Profile binding does not match.",
+      "retry": "none",
+      "completed_steps": [],
+      "data": {}
+    },
+    "cancellation_unsafe": {
+      "schema_version": 2,
+      "request_id": "setup-a1",
+      "seq": 1,
+      "type": "result",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "action": "cancel_first_agent",
+      "status": "action_required",
+      "code": "cancellation_unsafe",
+      "message": "Setup may have made changes; the request and any agent were preserved.",
+      "retry": "none",
+      "completed_steps": [
+        "hooks"
+      ],
+      "data": {}
+    },
+    "cancelled_original_result": {
+      "schema_version": 2,
+      "request_id": "setup-a1",
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "action": "first_agent",
+      "seq": 1,
+      "type": "result",
+      "status": "failed",
+      "code": "request_cancelled",
+      "message": "This setup request was cancelled; choose a new request ID.",
+      "retry": "new_request",
+      "completed_steps": [],
+      "data": {}
+    }
+  },
+  "runtime_catalog": {
+    "command": [
+      "backbone",
+      "runtimes",
+      "--json",
+      "--check-setup",
+      "--profile",
+      "profile-a",
+      "--expected-installation-id",
+      "installation-a",
+      "--expected-lifecycle-id",
+      "lifecycle-a1"
+    ],
+    "empty": {
+      "schema_version": 2,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "items": []
+    },
+    "catalog": {
+      "schema_version": 2,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "items": [
+        {
+          "id": "codex",
+          "display_name": "Codex",
+          "available": true,
+          "setup_supported": true,
+          "reports_state": "hooks + terminal",
+          "models": [],
+          "efforts": [],
+          "unattended": {
+            "supported": true,
+            "args": [
+              "-a",
+              "never",
+              "-s",
+              "workspace-write"
+            ],
+            "sandboxed": true
+          },
+          "authentication": "not_authenticated",
+          "setup_compatibility": {
+            "compatible": true,
+            "reason": "compatible",
+            "message": "The selected runtime meets setup prerequisites; authentication is unverified.",
+            "path": "/example/bin/codex",
+            "version": "0.160.0",
+            "version_error": null
+          }
+        }
+      ]
+    },
+    "authentication_cases": [
+      {
+        "name": "signed_out",
+        "authentication": "not_authenticated"
+      },
+      {
+        "name": "probe_unavailable",
+        "authentication": "unavailable"
+      },
+      {
+        "name": "probe_unsupported",
+        "authentication": "unsupported"
+      }
+    ]
+  },
+  "runtime_context": {
+    "path": "/api/agents/worker/runtime-context?expected_registration_id=1234567890abcdef1234567890abcdef",
+    "available": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "agent_name": "worker",
+      "registration_id": "1234567890abcdef1234567890abcdef",
+      "runtime": "codex",
+      "permissions": {
+        "status": "available",
+        "files": [
+          {
+            "scope": "runtime",
+            "display_path": "config.toml",
+            "state": "read"
+          },
+          {
+            "scope": "project",
+            "display_path": ".codex/config.toml",
+            "state": "missing"
+          }
+        ],
+        "allow": [],
+        "deny": [],
+        "ask": [],
+        "modes": [
+          {
+            "name": "approval_policy",
+            "value": "on-request"
+          }
+        ],
+        "error": null
+      }
+    },
+    "registration_changed": {
+      "body": {
+        "detail": {
+          "code": "registration_changed",
+          "message": "Agent registration does not match."
+        }
+      },
+      "status": 409
+    },
+    "registration_pattern": "^[a-f0-9]{32}$",
+    "bound_list_member_fields": {
+      "registered": {
+        "registration_id": "1234567890abcdef1234567890abcdef"
+      },
+      "unregistered": {
+        "registration_id": null
+      }
+    },
+    "bound_inspect_fields": {
+      "registered": {
+        "registration_id": "1234567890abcdef1234567890abcdef"
+      },
+      "unregistered": {
+        "registration_id": null
+      }
+    },
+    "registration_cases": [
+      {
+        "name": "fresh_inspect",
+        "endpoint": "inspect",
+        "query": {},
+        "registered_id": "1234567890abcdef1234567890abcdef",
+        "outcome": "allow"
+      },
+      {
+        "name": "retained_inspect",
+        "endpoint": "inspect",
+        "query": {
+          "expected_registration_id": "1234567890abcdef1234567890abcdef"
+        },
+        "registered_id": "1234567890abcdef1234567890abcdef",
+        "outcome": "allow"
+      },
+      {
+        "name": "required_context",
+        "endpoint": "runtime-context",
+        "query": {},
+        "registered_id": "1234567890abcdef1234567890abcdef",
+        "outcome": "invalid_request"
+      },
+      {
+        "name": "matching_context",
+        "endpoint": "runtime-context",
+        "query": {
+          "expected_registration_id": "1234567890abcdef1234567890abcdef"
+        },
+        "registered_id": "1234567890abcdef1234567890abcdef",
+        "outcome": "allow"
+      },
+      {
+        "name": "empty_inspect",
+        "endpoint": "inspect",
+        "query": {
+          "expected_registration_id": ""
+        },
+        "registered_id": "1234567890abcdef1234567890abcdef",
+        "outcome": "invalid_request"
+      },
+      {
+        "name": "malformed_context",
+        "endpoint": "runtime-context",
+        "query": {
+          "expected_registration_id": "not-a-registration"
+        },
+        "registered_id": "1234567890abcdef1234567890abcdef",
+        "outcome": "invalid_request"
+      },
+      {
+        "name": "changed_inspect",
+        "endpoint": "inspect",
+        "query": {
+          "expected_registration_id": "1234567890abcdef1234567890abcdef"
+        },
+        "registered_id": "abcdef1234567890abcdef1234567890",
+        "outcome": "registration_changed"
+      },
+      {
+        "name": "changed_context",
+        "endpoint": "runtime-context",
+        "query": {
+          "expected_registration_id": "1234567890abcdef1234567890abcdef"
+        },
+        "registered_id": "abcdef1234567890abcdef1234567890",
+        "outcome": "registration_changed"
+      },
+      {
+        "name": "unregistered_inspect",
+        "endpoint": "inspect",
+        "query": {},
+        "registered_id": null,
+        "outcome": "allow"
+      },
+      {
+        "name": "unregistered_context",
+        "endpoint": "runtime-context",
+        "query": {
+          "expected_registration_id": "1234567890abcdef1234567890abcdef"
+        },
+        "registered_id": null,
+        "outcome": "registration_changed"
+      },
+      {
+        "name": "retained_inspect_now_unregistered",
+        "endpoint": "inspect",
+        "query": {
+          "expected_registration_id": "1234567890abcdef1234567890abcdef"
+        },
+        "registered_id": null,
+        "outcome": "registration_changed"
+      }
+    ],
+    "missing": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "agent_name": "worker",
+      "registration_id": "1234567890abcdef1234567890abcdef",
+      "runtime": "codex",
+      "permissions": {
+        "status": "unavailable",
+        "files": [
+          {
+            "scope": "runtime",
+            "display_path": "config.toml",
+            "state": "missing"
+          }
+        ],
+        "allow": [],
+        "deny": [],
+        "ask": [],
+        "modes": [],
+        "error": {
+          "code": "unavailable",
+          "message": "Runtime permission metadata is unavailable."
+        }
+      }
+    },
+    "invalid": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "agent_name": "worker",
+      "registration_id": "1234567890abcdef1234567890abcdef",
+      "runtime": "codex",
+      "permissions": {
+        "status": "unavailable",
+        "files": [
+          {
+            "scope": "runtime",
+            "display_path": "config.toml",
+            "state": "invalid"
+          }
+        ],
+        "allow": [],
+        "deny": [],
+        "ask": [],
+        "modes": [],
+        "error": {
+          "code": "unavailable",
+          "message": "Runtime permission metadata is unavailable."
+        }
+      }
+    },
+    "unreadable": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "agent_name": "worker",
+      "registration_id": "1234567890abcdef1234567890abcdef",
+      "runtime": "codex",
+      "permissions": {
+        "status": "unavailable",
+        "files": [
+          {
+            "scope": "runtime",
+            "display_path": "config.toml",
+            "state": "unreadable"
+          }
+        ],
+        "allow": [],
+        "deny": [],
+        "ask": [],
+        "modes": [],
+        "error": {
+          "code": "unavailable",
+          "message": "Runtime permission metadata is unavailable."
+        }
+      }
+    },
+    "unsupported": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "agent_name": "worker",
+      "registration_id": "1234567890abcdef1234567890abcdef",
+      "runtime": "unknown",
+      "permissions": {
+        "status": "unsupported",
+        "files": [],
+        "allow": [],
+        "deny": [],
+        "ask": [],
+        "modes": [],
+        "error": {
+          "code": "unsupported",
+          "message": "Runtime permission inspection is unsupported."
+        }
+      }
+    },
+    "redaction_case": {
+      "input_permission": "shell: EXAMPLE_TOKEN=synthetic-sensitive-value command",
+      "outcome": "omit_credential_bearing_value",
+      "returned_fields": {
+        "allow": [],
+        "deny": [],
+        "ask": [],
+        "modes": [],
+        "files": [],
+        "status": "unavailable",
+        "error": {
+          "code": "unavailable",
+          "message": "Runtime permission metadata is unavailable."
+        }
+      }
+    }
+  },
+  "sessions": {
+    "shell_request": {
+      "schema_version": 1,
+      "shell_id": "0123456789ab",
+      "cwd": "/example/project"
+    },
+    "shell_request_home": {
+      "schema_version": 1,
+      "shell_id": "0123456789ab",
+      "cwd": null
+    },
+    "shell_response": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "shell_id": "0123456789ab",
+      "session": "shell-0123456789ab",
+      "created": true
+    },
+    "shell_refusals": {
+      "invalid_cwd": {
+        "status": 422,
+        "body": {
+          "detail": {
+            "code": "invalid_cwd",
+            "message": "The directory must be an absolute existing path."
+          }
+        }
+      },
+      "shell_unavailable": {
+        "status": 503,
+        "body": {
+          "detail": {
+            "code": "shell_unavailable",
+            "message": "The terminal session could not be started."
+          }
+        }
+      }
+    },
+    "sign_in_request": {
+      "schema_version": 1,
+      "runtime": "codex"
+    },
+    "sign_in_response": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "runtime": "codex",
+      "session": "sign-in-codex",
+      "created": true
+    },
+    "shell_reused": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "shell_id": "0123456789ab",
+      "session": "shell-0123456789ab",
+      "created": false
+    },
+    "sign_in_reused": {
+      "schema_version": 1,
+      "profile_id": "profile-a",
+      "installation_id": "installation-a",
+      "lifecycle_id": "lifecycle-a1",
+      "runtime": "codex",
+      "session": "sign-in-codex",
+      "created": false
+    },
+    "account_status_query": "/api/profile/accounts/status?runtime=codex",
+    "account_status_response": {
+      "schema_version": 1,
+      "runtime": "codex",
+      "authentication": "authenticated"
+    },
+    "sign_in_refusals": {
+      "runtime_unavailable": {
+        "status": 422,
+        "body": {
+          "detail": {
+            "code": "runtime_unavailable",
+            "message": "This runtime cannot be signed in here."
+          }
+        }
+      },
+      "runtime_not_installed": {
+        "status": 422,
+        "body": {
+          "detail": {
+            "code": "runtime_unavailable",
+            "message": "This runtime is not installed."
+          }
+        }
+      },
+      "shell_unavailable": {
+        "status": 503,
+        "body": {
+          "detail": {
+            "code": "shell_unavailable",
+            "message": "The terminal session could not be started."
+          }
+        }
+      },
+      "default_keeps_sign_ins": {
+        "status": 422,
+        "body": {
+          "detail": {
+            "code": "runtime_unavailable",
+            "message": "Default keeps its existing CLI sign-ins; manage them with the CLI in a terminal."
+          }
+        }
+      }
+    },
+    "invalid_request": {
+      "status": 422,
+      "body": {
+        "detail": {
+          "code": "invalid_request",
+          "message": "The request is not valid."
+        }
+      }
+    }
+  },
+  "skills_copy": {
+    "route": "POST /api/skills",
+    "credential": "operator",
+    "request": {
+      "path": "/absolute/folder/my-skill",
+      "name": null,
+      "tags": [
+        "all"
+      ],
+      "replace": false,
+      "mode": "copy",
+      "actor": "app"
+    },
+    "succeeded_status": 200,
+    "succeeded_fields": [
+      "name",
+      "path",
+      "description",
+      "tags",
+      "relinked",
+      "warnings"
+    ],
+    "refusals": [
+      {
+        "case": "a symbolic link at the folder or inside it",
+        "status": 422
+      },
+      {
+        "case": "a special file inside it",
+        "status": 422
+      },
+      {
+        "case": "no SKILL.md, a relative path or one containing ..",
+        "status": 422
+      },
+      {
+        "case": "over 2,000 entries, 50 MB or 16 levels",
+        "status": 422
+      },
+      {
+        "case": "overlaps the skills store",
+        "status": 422
+      },
+      {
+        "case": "name taken without replace",
+        "status": 422
+      },
+      {
+        "case": "an agent credential",
+        "status": 403
+      }
+    ],
+    "note": "The folder stays in place. A .git directory is left behind. 422 detail is text to show the person."
+  },
+  "operator_document": {
+    "route": "POST /api/documents",
+    "credential": "operator",
+    "request": {
+      "author": "operator",
+      "request_id": "overview-v1",
+      "title": "Overview",
+      "html": "<h1>Overview</h1>",
+      "supersedes_id": null
+    },
+    "succeeded_status": 201,
+    "retry_status": 200,
+    "record_fields": {
+      "author_name": "operator",
+      "agent_name": null
+    },
+    "refusals": [
+      {
+        "case": "an agent credential",
+        "status": 403
+      },
+      {
+        "case": "an agent is named operator",
+        "status": 409
+      }
+    ],
+    "note": "No signature. Records use the existing DocumentMetadata shape."
+  }
+}

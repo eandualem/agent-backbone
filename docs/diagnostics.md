@@ -46,10 +46,6 @@ it. There is no log-collection service or universal secret-scrubbing guarantee.
 | Existing records | Still readable; ordinary retention applies | Same | Same |
 
 The running service picks up API setting changes without restarting agents.
-In developer `--reload` mode, the separate reload supervisor keeps the policy
-it was launched with, including `-v`; API updates reach the service child, not
-that supervisor. Relaunch the developer command after changing modes to apply
-the new policy to the supervisor and subsequent child startup output.
 Each new CLI invocation reads the installation policy; scoped agent clients use
 an authenticated API read. If that read is unavailable, the CLI suppresses logs
 and still reports command results. `backbone -v COMMAND` is a separate explicit
@@ -399,9 +395,7 @@ SQLite startup verifies the definitions of Backbone-owned indexes as well as
 required tables, columns and the migration stamp. This repairs an upgrade where
 an older process loaded the new migration stamp while retaining old model
 metadata. A current stamp alone does not prove queue conflict indexes are correct.
-Matching schemas avoid rebuilds; operator-added indexes are left in place. This
-additional DDL comparison is SQLite-specific; PostgreSQL continues to use the
-existing revision and required-table/column repair path.
+Matching schemas avoid rebuilds; operator-added indexes are left in place.
 
 Usage collection records `usage_registration_failed` separately from
 `usage_source_failed`, scoped to the agent and runtime. Registration conflicts

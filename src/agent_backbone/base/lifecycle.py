@@ -53,7 +53,7 @@ class LifecycleManager:
     async def stop_all(self, *, reason: str = "Stopping") -> None:
         """Stop all started components in reverse order.
 
-        Logs errors but continues stopping remaining components.
+        A failed stop retains the component and its dependencies for retry.
         """
         for name in reversed(self._started):
             component = self._components[name]
@@ -62,7 +62,8 @@ class LifecycleManager:
                 await component.stop()
             except Exception:
                 _log.exception("Error stopping component: %s", name)
-        self._started.clear()
+                raise
+            self._started.remove(name)
 
     async def health(self) -> dict:
         """Aggregate health from all registered components.

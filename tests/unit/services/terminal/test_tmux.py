@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -720,3 +720,147 @@ def test_modified_launch_environment_is_refused_before_exec(tmp_path, tamper):
         assert not path.exists()
     else:
         assert path.is_symlink() and target.read_bytes() == original
+
+
+async def test_complete_environment_drops_server_only_values_and_attach_import(tmp_path):
+    from agent_backbone.services.terminal import _sessions
+
+    launch = None
+
+    async def run(*args, **kwargs):
+        nonlocal launch
+        if "show-environment" in args:
+            return (
+                0,
+                b'HOST_TOKEN="host-secret\nsecond=value"; export HOST_TOKEN;\n'
+                b'HOME="/host"; export HOME;\n',
+                b"",
+            )
+        if "source-file" in args:
+            launch = kwargs["stdin_data"].decode()
+        return 0, b"", b""
+
+    with (
+        patch.object(_sessions, "session_exists", return_value=False),
+        patch.object(_sessions, "tmux_server_socket", return_value=str(tmp_path / "tmux.sock")),
+        patch.object(_sessions, "_run_tmux", side_effect=run) as tmux,
+    ):
+        assert await start_session(
+            "isolated",
+            command=["/usr/bin/env"],
+            environment={"HOME": str(tmp_path), "TMPDIR": str(tmp_path)},
+            inherit_environment=False,
+        )
+    assert "host-secret" not in launch
+    assert "second=value" not in launch
+    assert '"-E"' in launch
+    assert "os.environ.clear()" in launch
+    calls = [call.args for call in tmux.await_args_list]
+    assert ("set-environment", "-t", "=isolated:", "-r", "HOST_TOKEN") in calls
+    assert ("set-option", "-t", "=isolated:", "update-environment", "") in calls
+    assert len(list(tmp_path.glob("backbone-env-*.json"))) == 1
+
+
+@pytest.mark.parametrize("term", [None, "explicit-term"])
+def test_complete_environment_loader_preserves_only_pane_metadata(tmp_path, term):
+    from agent_backbone.services.terminal._sessions import _ISOLATED_LOAD_AND_EXEC
+
+    env_file = tmp_path / "env.json"
+    payload = json.dumps(
+        {"HOME": "/captured", "TMUX": "wrong-server", **({"TERM": term} if term else {})}
+    ).encode()
+    env_file.write_bytes(payload)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            _ISOLATED_LOAD_AND_EXEC,
+            str(env_file),
+            hashlib.sha256(payload).hexdigest(),
+            str(len(payload)),
+            "/usr/bin/env",
+        ],
+        env={
+            "HOME": "/host",
+            "SSH_AUTH_SOCK": "/host/socket",
+            "TMUX": "/private/server,1,0",
+            "TMUX_PANE": "%2",
+            "TERM": "screen",
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert set(result.stdout.splitlines()) == {
+        "HOME=/captured",
+        "TMUX=/private/server,1,0",
+        "TMUX_PANE=%2",
+        f"TERM={term or 'screen'}",
+    }
+    assert not env_file.exists()
+
+
+@pytest.mark.parametrize("boundary", ["session_probe", "environment_probe"])
+async def test_start_guard_refuses_before_launch_file_after_terminal_reads(
+    tmp_path, monkeypatch, boundary
+):
+    from agent_backbone.services.terminal import _sessions
+
+    valid = True
+
+    async def check():
+        if not valid:
+            raise ValueError("authority changed")
+
+    async def exists(name):
+        nonlocal valid
+        if boundary == "session_probe":
+            valid = False
+        return False
+
+    async def run(*args, **kwargs):
+        nonlocal valid
+        assert "show-environment" in args
+        valid = False
+        return 0, b"", b""
+
+    monkeypatch.setattr(_sessions, "session_exists", exists)
+    monkeypatch.setattr(_sessions, "_run_tmux", AsyncMock(side_effect=run))
+    monkeypatch.setattr(_sessions, "tmux_server_socket", lambda: str(tmp_path / "tmux.sock"))
+    create_file = MagicMock()
+    monkeypatch.setattr(_sessions.tempfile, "mkstemp", create_file)
+    with pytest.raises(ValueError, match="authority changed"):
+        await start_session(
+            "guide",
+            command=["inert-cli"],
+            environment={"TMPDIR": str(tmp_path)},
+            inherit_environment=False,
+            check_effect=check,
+        )
+    create_file.assert_not_called()
+    assert _sessions._run_tmux.await_count == (boundary == "environment_probe")
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [b"no server running on /tmp/s", b"error connecting to /tmp/s (No such file or directory)"],
+)
+async def test_strict_list_reads_no_server_as_no_sessions(stderr):
+    from unittest.mock import AsyncMock, patch
+
+    from agent_backbone.services.terminal import _sessions
+
+    with patch.object(_sessions, "_run_tmux", AsyncMock(return_value=(1, b"", stderr))):
+        assert await _sessions.list_sessions(strict=True) == []
+
+
+async def test_strict_list_still_reports_an_unavailable_server():
+    from unittest.mock import AsyncMock, patch
+
+    from agent_backbone.services.terminal import _sessions
+
+    denied = (1, b"", b"error connecting to /tmp/s (Operation not permitted)")
+    with patch.object(_sessions, "_run_tmux", AsyncMock(return_value=denied)):
+        with pytest.raises(RuntimeError, match="not permitted"):
+            await _sessions.list_sessions(strict=True)

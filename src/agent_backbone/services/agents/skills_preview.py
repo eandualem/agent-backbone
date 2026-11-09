@@ -83,7 +83,7 @@ def _repository(spec: AgentSpec, rt, owned: dict[str, list[str]]) -> list[dict]:
     ]
 
 
-def _skill_dirs_under(folder: Path) -> list[Path]:
+def _skill_dirs_under(folder: Path, runtime=None) -> list[Path]:
     """Every directory below ``folder`` holding a ``SKILL.md``, at any depth.
 
     Linked directories are followed, as the CLIs follow them, each real
@@ -91,6 +91,9 @@ def _skill_dirs_under(folder: Path) -> list[Path]:
     found: list[Path] = []
     seen: set[str] = set()
     for root, dirs, files in os.walk(folder, followlinks=True):
+        if runtime is not None:
+            runtime.check_native_path(Path(root))
+            runtime.check_native_path(Path(root) / "SKILL.md")
         real = os.path.realpath(root)
         if real in seen:
             dirs[:] = []
@@ -101,7 +104,7 @@ def _skill_dirs_under(folder: Path) -> list[Path]:
     return sorted(found)
 
 
-def _user_level(folders: list[Path]) -> list[dict]:
+def _user_level(folders: list[Path], runtime=None) -> list[dict]:
     """The skills in the user-level directories this CLI loads in every project.
 
     The CLIs search these at any depth (synced and system skills sit nested)."""
@@ -109,7 +112,7 @@ def _user_level(folders: list[Path]) -> list[dict]:
         _entry(skill_dir, directory=str(folder))
         for folder in folders
         if folder.is_dir()
-        for skill_dir in _skill_dirs_under(folder)
+        for skill_dir in _skill_dirs_under(folder, runtime)
     ]
 
 
@@ -134,7 +137,7 @@ def skills_preview(spec: AgentSpec, config: BackboneConfig, *, runtime: str | No
         "skills": [],
         "repository": _repository(spec, rt, owned),
         "user_directories": [str(folder) for folder in user_dirs],
-        "user": _user_level(user_dirs),
+        "user": _user_level(user_dirs, rt),
         "notices": [PLUGIN_NOTICE] if rt.skill_dirs else [],
     }
     if store is None:

@@ -16,16 +16,17 @@ from contextlib import closing
 from pathlib import Path
 from time import monotonic
 
-from dotenv import dotenv_values
 from pydantic import TypeAdapter, ValidationError
 
 from agent_backbone.cli import _common, service
-from agent_backbone.config import agent_credential, bootstrap_config, sqlite_url
+from agent_backbone.config import UnsupportedDatabase, agent_credential, bootstrap_config
 from agent_backbone.fs import AtomicCreateUnsupported
 from agent_backbone.fs import atomic_create_text as _exclusive_file
 from agent_backbone.models import (
     SETUP_BODY_BYTES,
     SETUP_CANCEL_BODY_BYTES,
+    BoundSetupFirstAgent,
+    BoundSetupRequest,
     SetupCancelFirstAgent,
     SetupFirstAgent,
     SetupInitialize,
@@ -40,6 +41,7 @@ from agent_backbone.templates import core_starter_content
 
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 ADAPTER = TypeAdapter(SetupRequest)
+BOUND_ADAPTER = TypeAdapter(BoundSetupRequest)
 _READINESS_SECONDS = 30.0
 
 
@@ -60,16 +62,20 @@ def add_setup_parser(sub) -> None:
 class Output:
     def __init__(self, request_id):
         self.request_id, self.seq = request_id, 0
+        self.binding = None
+        self.action = None
 
     def emit(self, kind, **data):
         self.seq += 1
         print(
             json.dumps(
                 {
-                    "schema_version": 1,
+                    "schema_version": 2 if self.binding is not None else 1,
                     "request_id": self.request_id,
                     "seq": self.seq,
                     "type": kind,
+                    **(self.binding or {}),
+                    **({"action": self.action} if self.binding is not None else {}),
                     **data,
                 }
             ),
@@ -102,7 +108,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         if args.validate:
             print("--validate requires --file", file=sys.stderr)
             return 2
-        print(json.dumps(ADAPTER.json_schema()))
+        print(json.dumps(TypeAdapter(SetupRequest | BoundSetupRequest).json_schema()))
         return 0
     if not args.jsonl:
         print("--file requires --jsonl", file=sys.stderr)
@@ -118,11 +124,27 @@ def cmd_setup(args: argparse.Namespace) -> int:
         if len(raw) > SETUP_CANCEL_BODY_BYTES:
             raise ValueError("request too large")
         data = json.loads(raw, object_pairs_hook=_unique_object)
-        if len(raw) > SETUP_BODY_BYTES and (
+        bound_input = (
+            isinstance(data, dict)
+            and type(data.get("schema_version")) is int
+            and data["schema_version"] == 2
+        )
+        too_large = len(raw) > SETUP_BODY_BYTES and (
             not isinstance(data, dict) or data.get("action") != "cancel_first_agent"
-        ):
+        )
+        if too_large and not bound_input:
             raise ValueError("request too large")
         if isinstance(data, dict):
+            if bound_input:
+                output.binding = {
+                    key: data.get(source) if isinstance(data.get(source), str) else None
+                    for key, source in (
+                        ("profile_id", "profile_id"),
+                        ("installation_id", "expected_installation_id"),
+                        ("lifecycle_id", "expected_lifecycle_id"),
+                    )
+                }
+                output.action = data.get("action")
             if isinstance(data.get("request_id"), str) and _REQUEST_ID.fullmatch(
                 data["request_id"]
             ):
@@ -132,7 +154,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 and not args.validate
             ):
                 action = data["action"]
-        request = ADAPTER.validate_python(data)
+        # Capture recognizable schema-2 identity before validation can refuse the
+        # encoding or the stricter first-agent body limit.
+        if output.binding is not None:
+            data = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
+        if too_large:
+            raise ValueError("request too large")
+        request = (BOUND_ADAPTER if output.binding is not None else ADAPTER).validate_python(data)
     except (OSError, ValueError, ValidationError, RecursionError):
         return output.finish(
             result(
@@ -157,6 +185,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
     output.step("preflight", "running")
     try:
         _operator_environment()
+        if isinstance(request, BoundSetupFirstAgent):
+            return output.finish(asyncio.run(_execute_bound(request, raw, output)))
         _safe_directory(Path(request.data_dir))
         record = asyncio.run(_execute(request, output))
     except SetupReceiptError as exc:
@@ -176,6 +206,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
             "environment-only authentication uses the ordinary connection flow.",
             retry="none",
         )
+    except UnsupportedDatabase as exc:
+        record = result(request.action, "installation_conflict", str(exc))
     except (OSError, ValueError, sqlite3.Error):
         record = result(
             request.action,
@@ -189,6 +221,40 @@ def cmd_setup(args: argparse.Namespace) -> int:
             "Setup stopped without confirming the result; retry the same request.",
         )
     return output.finish(record)
+
+
+async def _execute_bound(request, raw, output):
+    from agent_backbone.cli._profile_client import Refused, resolve_binding
+    from agent_backbone.cli._profile_setup import PendingSetup
+
+    try:
+        binding = resolve_binding(
+            (request.profile_id, request.expected_installation_id, request.expected_lifecycle_id),
+            setup_request=request.model_dump(),
+        )
+        body = await PendingSetup.capture(binding, raw).execute()
+    except Refused as exc:
+        if exc.reason == "receipt_capacity":
+            return result(
+                request.action,
+                exc.code,
+                "Profile setup receipt capacity reached; existing request IDs remain usable.",
+                retry="none",
+            )
+        messages = {
+            "operator_required": "Run setup from a local operator process.",
+            "binding_mismatch": "Profile binding does not match.",
+            "credential_unavailable": "The captured profile credential is unavailable.",
+            "service_unavailable": "The captured profile service is unavailable.",
+            "invalid_request": "Invalid setup request; use --schema.",
+            "outcome_unknown": "No result was confirmed; retain and retry the same request.",
+            "request_conflict": "This request ID already belongs to different input.",
+            "installation_conflict": "The original setup connection receipt is unavailable.",
+        }
+        return result(request.action, exc.code, messages[exc.code])
+    for step in body["completed_steps"]:
+        output.step(step, "completed")
+    return body
 
 
 def _operator_environment():
@@ -395,36 +461,33 @@ def _owned_file(receipt, path, text):
 async def _inspect_existing(boot):
     # Validate before creating even a receipt in a directory that may be unrelated.
     # Neither path initializes, repairs or migrates the installation database.
-    if boot.database_url != sqlite_url(boot.data_dir):
-        declared = dotenv_values(boot.env_path, interpolate=False).get("BACKBONE_DATABASE_URL")
-        if declared != boot.database_url:
-            raise SetupReceiptError(
-                "installation_conflict",
-                "The external database must be declared in this installation's .env file; "
-                "environment-only configuration uses the ordinary connection flow.",
-            )
     config = await _common.read_client_config(boot.data_dir, strict=True, operator_file=True)
-    if boot.database_url == sqlite_url(boot.data_dir):
-        with closing(
-            sqlite3.connect((boot.data_dir / "backbone.db").as_uri() + "?mode=ro", uri=True)
-        ) as db:
-            db.execute("SELECT key FROM settings LIMIT 1").fetchall()
-            db.execute("SELECT name FROM agents LIMIT 1").fetchall()
+    with closing(
+        sqlite3.connect((boot.data_dir / "backbone.db").as_uri() + "?mode=ro", uri=True)
+    ) as db:
+        db.execute("SELECT key FROM settings LIMIT 1").fetchall()
+        db.execute("SELECT name FROM agents LIMIT 1").fetchall()
     return config
 
 
 async def _initialize(request: SetupInitialize, output):
+    from agent_backbone.config import PROFILE_REGISTRY_PATH
+    from agent_backbone.services.database import check_new_default, create_default_profile
+
     data_dir = Path(request.data_dir)
     boot = bootstrap_config(data_dir)
     existing = boot.env_path.is_file() or (data_dir / "backbone.db").exists()
-    if not existing and boot.database_url != sqlite_url(data_dir):
-        raise SetupReceiptError(
-            "installation_conflict", "Fresh setup requires its own local database."
-        )
     receipt = SetupReceipt(data_dir, request.model_dump())
     recorded_request = receipt.path.is_file() and not receipt.path.is_symlink()
     if existing and not recorded_request:
         await _inspect_existing(boot)
+    # Validate request and credential ownership under the existing receipt lock,
+    # without creating or changing receipts.
+    if recorded_request:
+        with receipt.inspect_existing():
+            check_new_default(data_dir)
+    else:
+        check_new_default(data_dir)
     if (
         not existing
         and data_dir.exists()
@@ -445,10 +508,6 @@ async def _initialize(request: SetupInitialize, output):
                 )
             fresh = not existing
             receipt.save(fresh=fresh)
-        if fresh and boot.database_url != sqlite_url(data_dir):
-            raise SetupReceiptError(
-                "installation_conflict", "Fresh setup retries require their own local database."
-            )
         output.step("preflight", "completed")
         if "preflight" not in receipt.record["completed_steps"]:
             receipt.completed("preflight")
@@ -539,7 +598,7 @@ async def _initialize(request: SetupInitialize, output):
                 )
             receipt.save(database_started=True)
             config = bootstrap_config(data_dir)
-            async with _common.Direct(config) as direct:
+            async with _common.Direct(config, bootstrap=True) as direct:
                 if "backbone.port" not in await direct.db.settings.all():
                     await direct.store.set_setting("backbone.port", config.backbone.port)
             receipt.completed("data")
@@ -554,7 +613,7 @@ async def _initialize(request: SetupInitialize, output):
                         "starter_conflict", "A starter path redirects outside the installation."
                     )
                 _owned_file(receipt, target, text)
-            async with _common.Direct(bootstrap_config(data_dir)) as direct:
+            async with _common.Direct(bootstrap_config(data_dir), bootstrap=True) as direct:
                 for key, value in {
                     "agents.shared_policy": profile["policies"],
                     "skills.store": str(data_dir / "skills"),
@@ -568,6 +627,18 @@ async def _initialize(request: SetupInitialize, output):
                         await direct.store.set_setting(key, value)
             receipt.completed("starters")
             output.step("starters", "completed")
+        if "profile" not in receipt.record["completed_steps"]:
+            output.step("profile", "running")
+            async with _common.Direct(bootstrap_config(data_dir), bootstrap=True) as direct:
+                await direct.db.signing.audience()
+            try:
+                create_default_profile(
+                    Path(PROFILE_REGISTRY_PATH).expanduser(), data_dir, request.starter_profile
+                )
+            except ValueError as exc:
+                raise SetupReceiptError("installation_conflict", str(exc)) from exc
+            receipt.completed("profile")
+            output.step("profile", "completed")
         if request.service == "user" and "service" not in receipt.record["completed_steps"]:
             output.step("service", "running")
             definition = receipt.record["service_definition"]

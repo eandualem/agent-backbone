@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -322,4 +323,92 @@ async def test_import_rejects_ancestor_swapped_after_authorization(
     )
     assert response.status_code == 422
     assert (outside / "SKILL.md").read_bytes() == original
+    assert not (store / "mine").exists()
+
+
+async def test_copy_takes_a_skill_from_any_folder_and_leaves_it(
+    api_client, auth_headers, store, tmp_path
+):
+    source = _skill(tmp_path / "anywhere", "mine")
+    (source / "scripts").mkdir()
+    (source / "scripts" / "run.sh").write_text("#!/bin/sh\n")
+    (source / "scripts" / "run.sh").chmod(0o4755)
+    (source / "scripts" / "private.txt").write_text("private\n")
+    (source / "scripts" / "private.txt").chmod(0o600)
+    (source / "scripts").chmod(0o700)
+    (source / ".git").mkdir()
+    (source / ".git" / "config").write_text("private\n")
+    original = (source / "SKILL.md").read_text()
+    with patch(f"{_OPS}.relink_skills", AsyncMock(return_value=[])):
+        response = await api_client.post(
+            "/api/skills",
+            headers=auth_headers,
+            json={"path": str(source), "tags": ["all"], "mode": "copy"},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["name"] == "mine"
+    assert (source / "SKILL.md").read_text() == original
+    assert 'backbone-tags: "all"' in (store / "mine" / "SKILL.md").read_text()
+    assert (store / "mine" / "scripts" / "run.sh").stat().st_mode & 0o7777 == 0o755
+    assert (store / "mine" / "scripts" / "private.txt").stat().st_mode & 0o7777 == 0o600
+    assert (store / "mine" / "scripts").stat().st_mode & 0o7777 == 0o700
+    assert not (store / "mine" / ".git").exists()
+
+
+@pytest.mark.parametrize("case", ["inner_link", "inner_dir_link", "folder_link", "fifo"])
+async def test_copy_refuses_links_and_special_files(
+    api_client, auth_headers, store, tmp_path, case
+):
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    (secret / "token").write_text("private\n")
+    source = _skill(tmp_path / "anywhere", "mine")
+    path = source
+    if case == "inner_link":
+        (source / "token").symlink_to(secret / "token")
+    elif case == "inner_dir_link":
+        (source / "nested").mkdir()
+        (source / "nested" / "out").symlink_to(secret)
+    elif case == "folder_link":
+        path = tmp_path / "linked"
+        path.symlink_to(source)
+    else:
+        os.mkfifo(source / "pipe")
+    response = await api_client.post(
+        "/api/skills", headers=auth_headers, json={"path": str(path), "mode": "copy"}
+    )
+    assert response.status_code == 422
+    assert not (store / "mine").exists() and not (store / "linked").exists()
+    assert source.is_dir()
+    assert not list(api_client._transport.app.state.config.data_dir.glob(".skill-copy-*"))
+
+
+@pytest.mark.parametrize("case", ["relative", "parent", "no_skill", "inside_store", "holds_store"])
+async def test_copy_refuses_what_is_not_a_skill_folder(
+    api_client, auth_headers, store, tmp_path, case
+):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    path = {
+        "relative": "plain",
+        "parent": f"{plain}/../plain",
+        "no_skill": str(plain),
+        "inside_store": str(store / "shared"),
+        "holds_store": str(tmp_path),
+    }[case]
+    response = await api_client.post(
+        "/api/skills", headers=auth_headers, json={"path": path, "mode": "copy"}
+    )
+    assert response.status_code == 422
+    assert (store / "shared" / "SKILL.md").is_file()
+
+
+async def test_copy_is_bounded(api_client, auth_headers, store, tmp_path):
+    source = _skill(tmp_path / "anywhere", "mine")
+    (source / "large").write_bytes(b"x" * 64)
+    with patch("agent_backbone.skills._COPY_MAX_BYTES", 32):
+        response = await api_client.post(
+            "/api/skills", headers=auth_headers, json={"path": str(source), "mode": "copy"}
+        )
+    assert response.status_code == 422 and "exceeds" in response.json()["detail"]
     assert not (store / "mine").exists()

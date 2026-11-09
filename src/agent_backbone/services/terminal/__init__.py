@@ -22,6 +22,7 @@ from agent_backbone.services.terminal._core import (
 from agent_backbone.services.terminal._foreground import foreground_commands
 from agent_backbone.services.terminal._memory import process_memory
 from agent_backbone.services.terminal._pty import PtyManager, PtySession
+from agent_backbone.services.terminal._server import pin_tmux_server, tmux_server_socket
 from agent_backbone.services.terminal._sessions import (
     SESSION_FORMAT_STR,
     access_error,
@@ -50,6 +51,7 @@ __all__ = [
     "list_sessions",
     "list_sessions_rich",
     "paste_message",
+    "pin_tmux_server",
     "press_escape",
     "press_submit",
     "process_memory",
@@ -62,5 +64,6 @@ __all__ = [
     "set_window_size_mode",
     "start_session",
     "stop_session",
+    "tmux_server_socket",
     "window_viewers",
 ]

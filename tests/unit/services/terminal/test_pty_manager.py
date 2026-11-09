@@ -8,6 +8,8 @@ import json
 import logging
 import os
 import signal
+import subprocess
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -271,6 +273,163 @@ class TestPtySession:
 
 
 class TestConcurrentPtyLifecycle:
+    async def test_failed_cleanup_can_retry_after_pid_file_is_repaired(self, tmp_path):
+        pid_file = tmp_path / "pty-pids.txt"
+        manager = PtyManager(pid_file)
+        session = PtySession("app", pid_file)
+        manager._sessions[("sid", "app")] = session
+        session._process = MagicMock(pid=999)
+        session.master_fd = 42
+        pid_file.write_bytes(b"\xff")
+        with patch(f"{_PTY}.os.close") as close:
+            with pytest.raises(UnicodeDecodeError):
+                await manager.remove("sid", "app")
+            assert manager._sessions[("sid", "app")] is session
+            close.assert_not_called()
+            pid_file.write_text("")
+            await manager.remove("sid", "app")
+            assert manager.get("sid", "app") is None
+            assert session.master_fd is None
+            close.assert_called_once_with(42)
+
+    @pytest.mark.parametrize("failure", [subprocess.TimeoutExpired("tmux", 1), OSError("busy")])
+    async def test_live_process_keeps_cleanup_retryable(self, failure):
+        manager = PtyManager()
+        session = PtySession("app")
+        proc = MagicMock(pid=999)
+        proc.wait.side_effect = failure
+        proc.poll.return_value = None
+        session._process = proc
+        session.master_fd = 42
+        manager._sessions[("sid", "app")] = session
+        with patch(f"{_PTY}.os.close") as close, patch(f"{_PTY}._unrecord_pid") as unrecord:
+            with pytest.raises(type(failure)):
+                await manager.remove("sid", "app")
+            assert manager._sessions[("sid", "app")] is session
+            assert session._process is proc
+            assert manager.get("sid", "app") is None
+            close.assert_not_called()
+            unrecord.assert_not_called()
+            proc.wait.side_effect = None
+            await manager.remove("sid", "app")
+            assert ("sid", "app") not in manager._sessions
+            close.assert_called_once_with(42)
+            unrecord.assert_called_once_with(None, 999)
+
+    async def test_partial_start_remains_tracked_when_cleanup_fails(self):
+        manager = PtyManager()
+        with (
+            patch.object(PtySession, "start", side_effect=RuntimeError("partial start")),
+            patch.object(PtySession, "cleanup", side_effect=OSError("cleanup failed")),
+        ):
+            with pytest.raises(OSError, match="cleanup failed"):
+                await manager.create("sid", "app")
+        assert ("sid", "app") in manager._sessions
+        await manager.remove("sid", "app")
+
+    async def test_partial_start_retires_process_after_pid_record_failure(self):
+        manager = PtyManager()
+        proc = MagicMock(pid=999)
+        with (
+            patch(f"{_PTY}.os.openpty", return_value=(42, 43)),
+            patch(f"{_PTY}.fcntl.ioctl"),
+            patch(f"{_PTY}.os.close") as close,
+            patch(f"{_PTY}.subprocess.Popen", return_value=proc),
+            patch(f"{_PTY}._record_pid", side_effect=OSError("pid record failed")),
+            patch(f"{_PTY}._unrecord_pid") as unrecord,
+        ):
+            with pytest.raises(OSError, match="pid record failed"):
+                await manager.create("sid", "app")
+            proc.send_signal.assert_called_once_with(signal.SIGTERM)
+            proc.wait.assert_called_once_with(timeout=2)
+            unrecord.assert_called_once_with(None, 999)
+            assert [call.args for call in close.call_args_list] == [(43,), (42,)]
+            assert not manager._sessions
+
+    @pytest.mark.parametrize("stage", ["termination", "executor_shutdown"])
+    async def test_cancelled_cleanup_waits_for_workers_and_concurrent_callers(self, stage):
+        session = PtySession("app")
+        proc = MagicMock(pid=999)
+        session._process = proc
+        session.master_fd = 42
+        entered, release = asyncio.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+
+        def blocked_worker(*args, **kwargs):
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5), "test did not release cleanup worker"
+
+        target = (
+            patch.object(session, "_terminate_process", side_effect=blocked_worker)
+            if stage == "termination"
+            else patch.object(session._executor, "shutdown", side_effect=blocked_worker)
+        )
+        with target as worker, patch(f"{_PTY}.os.close") as close:
+            first = asyncio.create_task(session.cleanup())
+            second = None
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                first.cancel()
+                await asyncio.sleep(0)
+                first.cancel()  # Repeated cancellation cannot abandon the thread.
+                second = asyncio.create_task(session.cleanup())
+                await asyncio.sleep(0)
+                assert not first.done()
+                assert not second.done()
+                assert session.master_fd == 42
+                if stage == "termination":
+                    assert session._process is proc
+                close.assert_not_called()
+            finally:
+                release.set()
+                results = await asyncio.gather(
+                    first, *([second] if second else []), return_exceptions=True
+                )
+            assert isinstance(results[0], asyncio.CancelledError)
+            assert results[1] is None
+            assert session.master_fd is None
+            assert session._process is None
+            close.assert_called_once_with(42)
+            worker.assert_called_once()
+            await session.cleanup()  # A completed cleanup is idempotent.
+            close.assert_called_once_with(42)
+
+    @pytest.mark.parametrize("operation", ["create", "remove"])
+    async def test_cancelled_manager_operation_retains_session_until_cleanup(self, operation):
+        manager = PtyManager()
+        old = PtySession("app")
+        manager._sessions[("sid", "app")] = old
+        old._process = MagicMock(pid=999)
+        entered, release = asyncio.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+
+        def terminate(proc):
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5), "test did not release termination"
+
+        with patch.object(old, "_terminate_process", side_effect=terminate):
+            first = asyncio.create_task(getattr(manager, operation)("sid", "app"))
+            shutdown = None
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                first.cancel()
+                await asyncio.sleep(0)
+                assert manager._sessions[("sid", "app")] is old
+                assert manager.get("sid", "app") is None
+                if operation == "remove":
+                    shutdown = asyncio.create_task(manager.cleanup_all())
+                    await asyncio.sleep(0)
+                    assert not shutdown.done()
+                assert not first.done()
+            finally:
+                release.set()
+                results = await asyncio.gather(
+                    first, *([shutdown] if shutdown else []), return_exceptions=True
+                )
+            assert isinstance(results[0], asyncio.CancelledError)
+            assert all(result is None for result in results[1:])
+            assert manager.get("sid", "app") is None
+
     @pytest.mark.parametrize("operation", ["create", "remove", "cleanup_all"])
     async def test_replacement_cleanup_serializes_same_key_operations(self, operation):
         manager = PtyManager()
@@ -285,7 +444,7 @@ class TestConcurrentPtyLifecycle:
         created = []
 
         def new_session(*args):
-            session = MagicMock(cleanup=AsyncMock())
+            session = MagicMock(cleanup=AsyncMock(), _cleanup_task=None)
             created.append(session)
             return session
 
@@ -409,6 +568,24 @@ class TestPtyManager:
             await mgr.cleanup_all()
             assert mgr.get("sid1", "a") is None
             assert mgr.get("sid2", "b") is None
+
+    async def test_cleanup_all_reports_failure_and_keeps_session_for_retry(self, caplog):
+        mgr = PtyManager()
+        with patch.object(PtySession, "start"):
+            failed = await mgr.create("sid1", "a")
+            await mgr.create("sid2", "b")
+        with (
+            caplog.at_level(logging.INFO, logger=_PTY),
+            patch.object(failed, "cleanup", side_effect=OSError("busy")),
+        ):
+            with pytest.raises(ExceptionGroup, match="PTY cleanup failed"):
+                await mgr.cleanup_all()
+            assert mgr._sessions[("sid1", "a")] is failed
+            assert ("sid2", "b") not in mgr._sessions
+            assert "Failed to clean up 1 PTY session(s)" in caplog.text
+            assert "All PTY sessions cleaned up" not in caplog.text
+        await mgr.cleanup_all()
+        assert not mgr._sessions
 
 
 class TestIncrementalDecoder:
@@ -589,17 +766,16 @@ class TestFullCleanupOrdering:
         mock_proc.pid = 999
         session._process = mock_proc
 
-        # Mock the reader task
-        mock_task = MagicMock()
-        mock_task.done.return_value = False
-        session._reader_task = mock_task
-
         call_order: list[str] = []
 
-        def track_cancel():
-            call_order.append("cancel_reader")
+        async def reader():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                call_order.append("cancel_reader")
 
-        mock_task.cancel = track_cancel
+        session._reader_task = asyncio.create_task(reader())
+        await asyncio.sleep(0)
 
         original_terminate = PtySession._terminate_process
 

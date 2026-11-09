@@ -22,7 +22,9 @@ from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
 from agent_backbone.services.database._documents_repo import DocumentRepo
 from agent_backbone.services.database._events_repo import EventRepo
 from agent_backbone.services.database._fleet_repo import FleetSnapshotRepo
+from agent_backbone.services.database._interactions_repo import InteractionRepo
 from agent_backbone.services.database._outbox_repo import OutboxRepo
+from agent_backbone.services.database._profile_identity_repo import ProfileIdentityRepo
 from agent_backbone.services.database._queue_repo import QueueRepo
 from agent_backbone.services.database._reports_repo import ReportRepo
 from agent_backbone.services.database._settings_repo import SettingRepo
@@ -58,11 +60,10 @@ _DROPPED_COLUMNS = {"deliveries": ("flow_run_id",), "message_queue": ("content_h
 def _repair_columns(sync_conn) -> None:
     """Rename, add and drop columns so a re-stamped database matches the model.
 
-    PostgreSQL supports all three statements. SQLite gained ``RENAME COLUMN``
-    in 3.25 and ``DROP COLUMN`` in 3.35; on an older system library the
-    rename falls back to add-and-copy and the dead column is left in place
-    (nullable and unused) rather than failing the start. Column *types* and
-    nullability are never altered.
+    SQLite gained ``RENAME COLUMN`` in 3.25 and ``DROP COLUMN`` in 3.35; on an
+    older system library the rename falls back to add-and-copy and the dead
+    column is left in place (nullable and unused) rather than failing the
+    start. Column *types* and nullability are never altered.
     """
     from sqlalchemy import inspect
 
@@ -225,6 +226,7 @@ class BackboneDB:
         self._engine: AsyncEngine | None = None
         engine = lambda: self.engine  # noqa: E731 — the repos read the live engine
         self.deliveries = DeliveryRepo(engine)
+        self.interactions = InteractionRepo(engine)
         self.queue = QueueRepo(engine)
         self.reports = ReportRepo(engine)
         self.documents = DocumentRepo(engine)
@@ -245,6 +247,7 @@ class BackboneDB:
         self.fleet = FleetSnapshotRepo(engine)
         self.usage = UsageRepo(engine)
         self.signing = SigningRepo(engine)
+        self.profile_identity = ProfileIdentityRepo(engine)
 
     @property
     def url(self) -> str:
@@ -263,16 +266,14 @@ class BackboneDB:
     # --- LifecycleAware methods ---
 
     async def start(self) -> None:
-        """Connect, create the schema (SQLite) and run migrations (persistent databases)."""
+        """Connect, create the schema and run migrations (persistent databases)."""
         self._engine = build_engine(self._url)
         async with self._engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         log.info("Database connected: %s", redact_url(self._url))
-        # PostgreSQL: Alembic owns the schema. SQLite: create_all is safe and
-        # needed for fresh files / in-memory databases.
-        if "postgresql" not in self._url:
-            async with self._engine.begin() as conn:
-                await conn.run_sync(metadata.create_all)
+        # create_all is safe and needed for fresh files / in-memory databases.
+        async with self._engine.begin() as conn:
+            await conn.run_sync(metadata.create_all)
         if not self._is_memory:
             await self._run_migrations()
         async with self._engine.begin() as conn:
@@ -395,8 +396,6 @@ class BackboneDB:
                         or not _sqlite_indexes_current(sync_conn)
                     ):
                         # Complete current schemas avoid all index rebuilds.
-                        # PostgreSQL also needs any missing tables here; it
-                        # does not run SQLite's startup create_all shortcut.
                         metadata.create_all(
                             sync_conn,
                             tables=[

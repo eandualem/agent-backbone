@@ -387,7 +387,9 @@ async def test_a_tick_that_escalates_to_it_hints_its_inbox(config, db):
         patch(f"{mon}.drain_message_queue", AsyncMock(return_value={})),
         patch(f"{esc.__name__}.notify_humans", AsyncMock(return_value=True)),
     ):
-        await monitor_agents(config, db, None, on_change=lambda: hint_inboxes(state))
+        await monitor_agents(
+            config, db, None, on_change=lambda: hint_inboxes(state.config, state.db, state.feed)
+        )
     sio.emit.assert_any_await(
         INBOX_PENDING_EVENT, {"session": "ike", "pending": 1}, namespace=SESSIONS_NAMESPACE
     )

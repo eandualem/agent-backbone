@@ -30,6 +30,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
     )
     app.state.db = SimpleNamespace(
         deliveries=SimpleNamespace(prune=AsyncMock(return_value=2)),
+        interactions=SimpleNamespace(prune=AsyncMock(return_value=12)),
         events=SimpleNamespace(prune=AsyncMock(return_value=3)),
         state_history=SimpleNamespace(prune=AsyncMock(return_value=10)),
         queue=SimpleNamespace(
@@ -61,6 +62,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
         app.state.config = replace(config, timing=replace(config.timing, delivery_retention_days=9))
         assert await job.args[2]() == {
             "deliveries": 2,
+            "interactions": 12,
             "events": 3,
             "state_history": 10,
             "queue": 4,
@@ -73,6 +75,7 @@ async def test_prune_job_uses_live_delivery_retention_for_queue(tmp_path):
         }
     for repo in (
         app.state.db.deliveries,
+        app.state.db.interactions,
         app.state.db.events,
         app.state.db.queue,
         app.state.db.diagnostics,

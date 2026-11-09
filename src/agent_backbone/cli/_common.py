@@ -42,11 +42,22 @@ def api_url(config: BackboneConfig, path: str) -> str:
     return f"{scheme}://{host}:{config.backbone.port}{path}"
 
 
+_PROFILE_SHELL_HEADERS = {
+    "BACKBONE_PROFILE_ID": "X-Backbone-Profile-Id",
+    "BACKBONE_INSTALLATION_ID": "X-Backbone-Installation-Id",
+    "BACKBONE_LIFECYCLE_ID": "X-Backbone-Lifecycle-Id",
+}
+
+
 def headers(config: BackboneConfig) -> dict[str, str]:
     result = {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
     if config.client_registration:
         result["X-Backbone-Client-Agent"] = config.client_agent
         result["X-Backbone-Client-Registration"] = config.client_registration
+    # Set only in a shell the profile's provider opened.
+    for variable, header in _PROFILE_SHELL_HEADERS.items():
+        if value := os.environ.get(variable):
+            result[header] = value
     return result
 
 
@@ -157,8 +168,9 @@ def is_agent_client(key: str) -> bool:
 class Direct:
     """Direct database access for when the backbone is not running."""
 
-    def __init__(self, config: BackboneConfig) -> None:
+    def __init__(self, config: BackboneConfig, *, bootstrap: bool = False) -> None:
         self._boot = config
+        self._bootstrap = bootstrap
         self.db = None
         self.store = None
         self.config = config
@@ -171,6 +183,7 @@ class Direct:
         from agent_backbone.services.agents import AgentStore
         from agent_backbone.services.database import BackboneDB
 
+        await self._check_profile()
         self.db = BackboneDB(self._boot.database_url)
         await self.db.start()
         self.store = AgentStore(self.db, self._boot.data_dir)
@@ -179,6 +192,35 @@ class Direct:
 
     async def __aexit__(self, *exc: Any) -> None:
         await self.db.stop()
+
+    async def _check_profile(self) -> None:
+        """Only `init` and setup, which create the first profile, run without one."""
+        from agent_backbone.services.database import check_new_default, default_profile_at
+
+        check = check_new_default if self._bootstrap else default_profile_at
+        await asyncio.to_thread(check, self._boot.data_dir)
+
+
+def pin_default_terminal() -> None:
+    """Local terminal commands use the tmux server Default recorded, not the caller's.
+
+    Agents run there whichever tmux server the command is typed in; an isolated
+    profile's shell is already on that profile's own server.
+    """
+    from agent_backbone.config import resolve_data_dir
+    from agent_backbone.services.database import default_profile_at
+    from agent_backbone.services.terminal import pin_tmux_server
+
+    if os.environ.get("BACKBONE_PROFILE_ID"):
+        return
+    try:
+        _, reservation = default_profile_at(resolve_data_dir())
+    except (ValueError, OSError):
+        return
+    socket = reservation.binding.tmux_socket
+    # tmux makes this directory itself unless a socket is named, and a restart clears /tmp.
+    socket.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    pin_tmux_server(socket)
 
 
 def print_json(data: Any) -> None:
@@ -221,9 +263,7 @@ async def read_client_config(
     data_dir: str | Path | None = None, *, strict: bool = False, operator_file: bool = False
 ) -> BackboneConfig:
     """Read existing address and logging policy without creating or repairing a database."""
-    from sqlalchemy import text
     from sqlalchemy.engine import make_url
-    from sqlalchemy.ext.asyncio import create_async_engine
 
     if operator_file and (
         "BACKBONE_AGENT_CREDENTIAL" in os.environ
@@ -254,30 +294,18 @@ async def read_client_config(
         )
     try:
         url = make_url(boot.database_url)
-        if url.get_backend_name() == "sqlite":
-            if not url.database or url.database == ":memory:":
-                return boot
+        if not url.database or url.database == ":memory:":
+            return boot
 
-            def sqlite_settings():
-                uri = Path(url.database).expanduser().resolve().as_uri() + "?mode=ro"
-                conn = sqlite3.connect(uri, uri=True, timeout=1)
-                try:
-                    return conn.execute(_CLIENT_SETTINGS_SQL).fetchall()
-                finally:
-                    conn.close()
-
-            rows = await asyncio.to_thread(sqlite_settings)
-        else:
-            engine = create_async_engine(boot.database_url)
+        def sqlite_settings():
+            uri = Path(url.database).expanduser().resolve().as_uri() + "?mode=ro"
+            conn = sqlite3.connect(uri, uri=True, timeout=1)
             try:
-
-                async def server_settings():
-                    async with engine.connect() as conn:
-                        return (await conn.execute(text(_CLIENT_SETTINGS_SQL))).fetchall()
-
-                rows = await asyncio.wait_for(server_settings(), timeout=3)
+                return conn.execute(_CLIENT_SETTINGS_SQL).fetchall()
             finally:
-                await engine.dispose()
+                conn.close()
+
+        rows = await asyncio.to_thread(sqlite_settings)
         settings = {}
         for key, value in rows:
             try:
@@ -304,9 +332,7 @@ async def read_client_config(
 
 async def _read_config() -> BackboneConfig:
     """Existing full configuration for inspection, without schema repair or creation."""
-    from sqlalchemy import text
     from sqlalchemy.engine import make_url
-    from sqlalchemy.ext.asyncio import create_async_engine
 
     from agent_backbone.config import agents_from_rows, build_config
 
@@ -338,39 +364,27 @@ async def _read_config() -> BackboneConfig:
         "SELECT id, agent_name, source, query, priority FROM agent_subscriptions "
         "ORDER BY agent_name, id"
     )
-    if url.get_backend_name() == "sqlite":
-        if not url.database or url.database == ":memory:":
-            return boot
-        path = Path(url.database).expanduser().resolve()
-        if not path.exists():
-            return boot
+    if not url.database or url.database == ":memory:":
+        return boot
+    path = Path(url.database).expanduser().resolve()
+    if not path.exists():
+        return boot
 
-        def read_sqlite():
-            conn = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)
-            conn.row_factory = sqlite3.Row
-            try:
-                conn.execute("BEGIN")
-                found = [[dict(row) for row in conn.execute(query)] for query in queries]
-                try:
-                    found.append([dict(row) for row in conn.execute(optional)])
-                except sqlite3.OperationalError:
-                    found.append([])
-                return found
-            finally:
-                conn.close()
-
-        rows = await asyncio.to_thread(read_sqlite)
-    else:
-        engine = create_async_engine(boot.database_url)
+    def read_sqlite():
+        conn = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)
+        conn.row_factory = sqlite3.Row
         try:
-            async with engine.connect() as conn:
-                rows = [(await conn.execute(text(query))).mappings().all() for query in queries]
-                try:
-                    rows.append((await conn.execute(text(optional))).mappings().all())
-                except Exception:
-                    rows.append([])
+            conn.execute("BEGIN")
+            found = [[dict(row) for row in conn.execute(query)] for query in queries]
+            try:
+                found.append([dict(row) for row in conn.execute(optional)])
+            except sqlite3.OperationalError:
+                found.append([])
+            return found
         finally:
-            await engine.dispose()
+            conn.close()
+
+    rows = await asyncio.to_thread(read_sqlite)
     settings = {row["key"]: json.loads(row["value"]) for row in rows[0]}
     agents = []
     for row in rows[1]:

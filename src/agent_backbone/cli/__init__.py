@@ -55,6 +55,7 @@ from agent_backbone.cli.documents import add_document_parsers
 from agent_backbone.cli.fleet import add_fleet_parser
 from agent_backbone.cli.instructions import add_instruction_commands
 from agent_backbone.cli.onboarding import add_setup_parser
+from agent_backbone.cli.profiles import add_profiles_parser
 from agent_backbone.cli.reports import add_report_parsers
 from agent_backbone.cli.responses import add_response_parsers
 from agent_backbone.cli.server import cmd_config, cmd_down, cmd_up
@@ -92,6 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True, title="commands", metavar="COMMAND")
 
     add_setup_parser(sub)
+    add_profiles_parser(sub)
 
     p = sub.add_parser("init", help="create the data directory, .env and database")
     p.add_argument(
@@ -107,6 +109,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("runtimes", help="supported runtimes, whether installed, example model ids")
     p.add_argument("--json", action="store_true", help="versioned runtime discovery for setup")
+    p.add_argument("--profile", help="capture this profile for operator runtime discovery")
+    p.add_argument("--expected-installation-id")
+    p.add_argument("--expected-lifecycle-id")
     p.add_argument(
         "--check-setup",
         action="store_true",
@@ -152,7 +157,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("up", help="run the backbone")
     p.add_argument("--detach", "-d", action="store_true", help="run inside a tmux session")
-    p.add_argument("--reload", action="store_true", help="auto-reload on code changes (dev)")
     p.add_argument(
         "--log-file",
         type=Path,
@@ -622,17 +626,18 @@ def main(argv: list[str] | None = None) -> None:
     )
     logging.basicConfig(level=logging.WARNING, handlers=[handler])
     logging.getLogger("agent_backbone").setLevel(logging.DEBUG)
-    if args.command not in {"runtimes", "setup"}:
+    if args.command not in {"runtimes", "setup", "profiles"}:
         try:
             set_log_mode(asyncio.run(read_log_mode()))
         except (ValueError, OSError):
             set_log_mode("off")  # Command output still reports failures.
     # Adapter discovery is usable before an installation or account exists.
     # It reads no installation secrets and offers no administrative operation.
-    if args.command in {"runtimes", "setup"}:
+    if args.command in {"runtimes", "setup", "profiles"}:
         sys.exit(args.func(args))
     try:
-        client_key = bootstrap_config().api_key
+        # `init --data-dir` checks the directory it initializes, not the default one.
+        client_key = bootstrap_config(getattr(args, "data_dir", None)).api_key
     except ValueError as exc:
         parser.exit(1, f"{exc}\n")
     if is_agent_client(client_key):

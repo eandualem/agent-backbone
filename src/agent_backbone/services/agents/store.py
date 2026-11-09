@@ -18,6 +18,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from agent_backbone.base import check_before_effect
 from agent_backbone.config import (
     SOURCES,
     SUBSCRIPTION_PRIORITIES,
@@ -31,6 +32,10 @@ from agent_backbone.config import (
 from agent_backbone.git import detect_repo
 from agent_backbone.hooks.backbone_state import CONTEXT_DIR
 from agent_backbone.services.agents._locks import lifecycle_lock, serialized_mutation
+from agent_backbone.services.agents._project_ownership import (
+    claim_project_directories,
+    project_claims,
+)
 from agent_backbone.services.agents._validation import validate_agent_spec, validate_repo
 from agent_backbone.services.agents.credentials import _provision_agent_profiles, profile_lock
 from agent_backbone.services.terminal import session_exists
@@ -165,33 +170,45 @@ class AgentStore:
             self._config = build_config(self._data_dir, settings={}, agents=AgentsConfig())
         return self._config
 
-    async def refresh(self) -> BackboneConfig:
+    def owns_storage(self, db: BackboneDB, data_dir: Path) -> bool:
+        """Whether this store still owns the caller's captured database and root."""
+        return self._db is db and self._data_dir == data_dir
+
+    async def refresh(self, *, check_effect=None) -> BackboneConfig:
         """Re-read settings and agents from the database and publish."""
         async with self._lock:
+            await check_before_effect(check_effect)
             if self._credential_endpoint is not None:
                 try:
                     async with profile_lock(self._data_dir):
-                        registrations = await self._refresh_snapshot()
+                        registrations = await self._refresh_snapshot(check_effect=check_effect)
                         host, port = self._credential_endpoint
                         active_config = replace(
                             self._config,
                             backbone=replace(self._config.backbone, host=host, port=port),
                         )
+                        await check_before_effect(check_effect)
                         _provision_agent_profiles(active_config, registrations)
                 except (OSError, ValueError):
+                    if check_effect is not None:
+                        raise
                     log.warning("Could not provision agent credential profiles", exc_info=True)
-                    await self._refresh_snapshot()
+                    await self._refresh_snapshot(check_effect=check_effect)
             else:
-                await self._refresh_snapshot()
+                await self._refresh_snapshot(check_effect=check_effect)
+        await check_before_effect(check_effect)
         if self._on_change is not None:
             result = self._on_change(self._config)
             if asyncio.iscoroutine(result):
                 await result
         return self._config
 
-    async def _refresh_snapshot(self) -> list[dict]:
-        self._settings = await self._db.settings.all()
+    async def _refresh_snapshot(self, *, check_effect=None) -> list[dict]:
+        settings = await self._db.settings.all()
+        await check_before_effect(check_effect)
         registrations = await self._db.agents.list()
+        await check_before_effect(check_effect)
+        self._settings = settings
         self._agents = agents_from_rows(registrations)
         self._config = build_config(self._data_dir, settings=self._settings, agents=self._agents)
         return registrations
@@ -279,11 +296,25 @@ class AgentStore:
                     return await self.register(current.with_watches(*watches))
 
     @serialized_mutation
-    async def register(self, spec: AgentSpec, *, only_new: bool = False) -> AgentSpec:
+    async def register(
+        self, spec: AgentSpec, *, only_new: bool = False, check_effect=None, on_registered=None
+    ) -> AgentSpec:
         """Insert or update an agent and publish the new snapshot."""
         validate_agent_spec(spec)
-        async with profile_lock(self._data_dir):
-            agents = agents_from_rows(await self._db.agents.list())
+        if on_registered is not None and not only_new:
+            raise ValueError("A registration receipt requires a new-only registration")
+        db, data_dir = self._db, self._data_dir
+
+        async def check():
+            await check_before_effect(check_effect)
+            if not self.owns_storage(db, data_dir):
+                raise ValueError("Agent store ownership changed")
+
+        await check()
+        async with profile_lock(data_dir):
+            await check()
+            agents = agents_from_rows(await db.agents.list())
+            await check()
             if only_new and any(
                 other.name.casefold() == spec.name.casefold()
                 or other.path.resolve() == spec.path.resolve()
@@ -294,7 +325,8 @@ class AgentStore:
             await _refuse_running_inbox_only(
                 spec.name, spec.inbox_only and not (current and current.inbox_only)
             )
-            await self._db.agents.upsert(
+            await check()
+            await db.agents.upsert(
                 spec.name,
                 dir=spec.dir,
                 runtime=spec.runtime,
@@ -307,15 +339,20 @@ class AgentStore:
                 unattended=spec.unattended,
                 inbox_only=spec.inbox_only,
             )
+            if on_registered is not None:
+                committed = agents_from_rows(await db.agents.list()).get(spec.name)
+                if committed is None or not committed.registration_id:
+                    raise RuntimeError("The new agent registration could not be read.")
+                # Receipt of an already committed effect survives a later refusal.
+                on_registered(committed)
             for repo in spec.watches:
-                await self._db.agents.add_watch(spec.name, repo)
+                await check()
+                await db.agents.add_watch(spec.name, repo)
             # Capture our insert before another process can replace this name.
-            inserted = (
-                agents_from_rows(await self._db.agents.list()).get(spec.name) if only_new else None
-            )
+            inserted = agents_from_rows(await db.agents.list()).get(spec.name) if only_new else None
             if only_new and (inserted is None or not inserted.registration_id):
                 raise RuntimeError("The new agent registration could not be read.")
-        await self.refresh()
+        await self.refresh(**({"check_effect": check} if check_effect is not None else {}))
         if only_new:
             current = self._agents.get(spec.name)
             if current != inserted:
@@ -396,18 +433,36 @@ class AgentStore:
         return await self.update(name, tags=changed)
 
     @serialized_mutation
-    async def forget(self, name: str) -> bool:
+    async def forget(self, name: str, *, expected_registration_id: str | None = None) -> bool:
         from agent_backbone.services.terminal import session_exists
 
         async with profile_lock(self._data_dir):
+            # Checked again under the cross-process guard: a direct CLI process
+            # may have replaced the registration since the caller's check.
+            if expected_registration_id is not None and not (
+                await self._db.agents.registration_matches(name, expected_registration_id)
+            ):
+                raise ValueError("agent registration changed")
             if await session_exists(name):
                 raise RuntimeError(f"'{name}' is running — stop it first")
-            spec = self._agents.get(name)
+            guarded = project_claims(self.config.data_dir) is not None
+            spec = (
+                agents_from_rows(await self._db.agents.list()).get(name)
+                if guarded
+                else self._agents.get(name)
+            )
+            released = False
+            if guarded and spec is not None:
+                if spec.path.is_dir():
+                    claim_project_directories(self.config.data_dir, (spec.path,))
+                if not self._release_skills(spec.name):
+                    raise ValueError("Could not release the agent's owned project links")
+                released = True
             removed = await self._db.agents.delete(name)
             if removed:
                 # Clear old context before another process can reuse the name.
                 shutil.rmtree(self.config.state_dir / CONTEXT_DIR / name, ignore_errors=True)
-                if spec is not None:
+                if spec is not None and not released:
                     self._release_skills(spec.name)
         await self.refresh()
         return removed
@@ -427,9 +482,28 @@ class AgentStore:
         try:
             # The links live in the checkout the manifest records, which may
             # not be the agent's directory any more (``agent set dir=``).
-            repo = json.loads(manifest.read_text(encoding="utf-8")).get("repo")
+            recorded = json.loads(manifest.read_text(encoding="utf-8"))
+            repo = recorded.get("repo")
+            if project_claims(self.config.data_dir) is not None:
+                if store is None:
+                    previous_store = recorded.get("store")
+                    if (
+                        not isinstance(previous_store, str)
+                        or not Path(previous_store).is_absolute()
+                    ):
+                        return False
+                    store = Path(previous_store)
+                if not isinstance(repo, str) or not isinstance(recorded.get("links"), list):
+                    return False
             if store is not None and isinstance(repo, str):
-                result = materialize(store, Path(repo), (), [], manifest)
+                result = materialize(
+                    store,
+                    Path(repo),
+                    (),
+                    [],
+                    manifest,
+                    claim_projects=project_claims(self.config.data_dir),
+                )
                 if not result.ok:
                     log.warning(
                         "Could not release skill links for %s: %s",

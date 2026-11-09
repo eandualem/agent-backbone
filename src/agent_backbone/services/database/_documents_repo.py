@@ -49,6 +49,11 @@ def _selection(*, body: bool = False):
     ).select_from(_D.outerjoin(_A, _A.c.report_identity == _D.c.author_id))
 
 
+OPERATOR_AUTHOR = "operator"
+"""The reserved author for a person's own documents: never a registered agent."""
+OPERATOR_AUTHOR_ID = "0" * 32
+
+
 class DocumentRepo(Repo):
     async def publish(self, publication: PublishDocument) -> tuple[dict, bool]:
         publication = PublishDocument.model_validate(publication.model_dump())
@@ -61,6 +66,10 @@ class DocumentRepo(Repo):
                 .values(report_identity=func.coalesce(_A.c.report_identity, uuid4().hex))
                 .returning(_A.c.report_identity)
             )
+            if publication.author == OPERATOR_AUTHOR:
+                if identity is not None:
+                    raise DocumentConflict("An agent is named operator; it can't be used here")
+                identity = OPERATOR_AUTHOR_ID
             if identity is None:
                 raise KeyError(publication.author)
             previous = (

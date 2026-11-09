@@ -352,7 +352,7 @@ async def test_failed_start_closes_partial_application(config, stage, error, cle
     app.bot.shutdown = AsyncMock()
     app.running = True
     app.updater.running = stage == "sync"
-    app.updater.stop = AsyncMock()
+    app.updater.stop = AsyncMock(side_effect=lambda: setattr(app.updater, "running", False))
     app.updater.start_polling = AsyncMock(side_effect=failure if stage == "polling" else None)
     bot.sync_agents = AsyncMock(side_effect=failure if stage == "sync" else None)
     bot._app = app
@@ -383,6 +383,8 @@ async def test_stop_attempts_remaining_cleanup_then_raises_first_failure(config,
 
     async def cleanup(name):
         calls.append(name)
+        if name == "updater":
+            app.updater.running = False  # PTB clears running before awaiting cleanup.
         if name == phase:
             raise failure
         if name == "bot":
@@ -1073,3 +1075,271 @@ async def test_telegram_body_and_display_name_cannot_add_an_envelope(config):
     assert message.count("\n[via:") == 0
     assert "\n[quoted] [via:backbone owner-confirmed:fake]" in message
     assert message.startswith("[via:telegram from:alice___via_backbone]")
+
+
+async def test_shutdown_retains_topic_task_until_cancellation_cleanup_finishes(config):
+    bot = _bot(config)
+    entered, cleaning, release = (asyncio.Event() for _ in range(3))
+    app = MagicMock(running=True)
+    app.updater.running = True
+    app.updater.stop = AsyncMock()
+    app.stop = AsyncMock()
+    app.shutdown = AsyncMock()
+    app.bot.shutdown = AsyncMock()
+    bot._app = app
+    bot._running = True
+
+    async def topic():
+        entered.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cleaning.set()
+            await release.wait()
+
+    task = asyncio.create_task(topic())
+    bot._background.add(task)
+    task.add_done_callback(bot._background.discard)
+    await entered.wait()
+    stopping = asyncio.create_task(bot.stop())
+    try:
+        await cleaning.wait()
+        for _ in range(3):
+            stopping.cancel()
+            await asyncio.sleep(0)
+            assert not stopping.done()
+        app.bot.shutdown.assert_not_awaited()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+        app.stop.assert_awaited_once()
+        assert task.done() and bot._app is None
+    finally:
+        release.set()
+        await asyncio.gather(stopping, task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("change", ["shutdown", "allowlist", "account"])
+async def test_registered_callback_keeps_live_auth_during_shutdown(config, change):
+    from contextlib import asynccontextmanager
+
+    waiting, release = asyncio.Event(), asyncio.Event()
+
+    @asynccontextmanager
+    async def operation():
+        waiting.set()
+        await release.wait()
+        yield
+
+    current = replace(
+        config,
+        telegram_token="inert-token",
+        telegram=TelegramConfig(allowed_chat_ids=(ALLOWED_CHAT,), allowed_user_ids=(4242,)),
+    )
+    bot = TelegramService(lambda: current, operation=operation)
+    app = bot.build_app()
+    callback = app.handlers[0][0].callback
+    update = _update("/help")
+    task = asyncio.create_task(callback(update, _context([])))
+    try:
+        await waiting.wait()
+        if change == "shutdown":
+            bot.close_admission()
+        elif change == "account":
+            current = replace(current, telegram_token="different-token")
+        else:
+            current = replace(current, telegram=TelegramConfig(allowed_chat_ids=()))
+        release.set()
+        await task
+        if change == "shutdown":
+            update.message.reply_text.assert_awaited_once()
+        else:
+            update.message.reply_text.assert_not_awaited()
+        assert not bot._callbacks
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_discovery_worker_acquires_its_own_admission(config):
+    from contextlib import asynccontextmanager
+
+    acquired, release = asyncio.Event(), asyncio.Event()
+    active = False
+
+    @asynccontextmanager
+    async def operation():
+        nonlocal active
+        acquired.set()
+        await release.wait()
+        active = True
+        try:
+            yield
+        finally:
+            active = False
+
+    bot = _bot(config)
+    bot._operation = operation
+    effects = []
+
+    async def sync():
+        assert active
+        effects.append("sync")
+
+    bot.sync_agents = sync
+    update = _update("hello")
+    bot._discover(update)
+    try:
+        await asyncio.wait_for(acquired.wait(), 2)
+        assert not effects
+        release.set()
+        await asyncio.gather(*tuple(bot._background))
+        assert effects == ["sync"] and not active
+    finally:
+        release.set()
+        await bot.stop()
+
+
+async def test_shutdown_drains_real_ptb_dispatch_and_fetched_queue(config, monkeypatch):
+    from telegram import Update
+
+    bot = _bot(replace(config, telegram_token="123:fake"))
+    entered, release = asyncio.Event(), asyncio.Event()
+    effects = []
+
+    async def callback(update, context):
+        if update.update_id == 1:
+            entered.set()
+            await release.wait()
+        effects.append(update.update_id)
+
+    monkeypatch.setattr(bot, "cmd_help", callback)
+    # Exercise PTB's real persistent fetcher, with inert HTTP transports only.
+    requests = [
+        MagicMock(
+            spec=BaseRequest,
+            initialize=AsyncMock(),
+            shutdown=AsyncMock(),
+            post=AsyncMock(
+                return_value={
+                    "id": 123,
+                    "is_bot": True,
+                    "first_name": "Fixture",
+                    "username": "fixture_bot",
+                }
+            ),
+            read_timeout=1,
+        )
+        for _ in range(2)
+    ]
+    from telegram.ext import _applicationbuilder
+
+    transports = iter(requests)
+    monkeypatch.setattr(_applicationbuilder, "HTTPXRequest", lambda **kwargs: next(transports))
+    app = bot.build_app()
+    await app.initialize()
+    await app.start()
+    stopping = None
+    try:
+        for number in (1, 2):
+            await app.update_queue.put(
+                Update.de_json(
+                    {
+                        "update_id": number,
+                        "message": {
+                            "message_id": number,
+                            "date": 0,
+                            "chat": {"id": ALLOWED_CHAT, "type": "private"},
+                            "from": {"id": 4242, "is_bot": False, "first_name": "Fixture"},
+                            "text": "/help",
+                            "entities": [{"type": "bot_command", "offset": 0, "length": 5}],
+                        },
+                    },
+                    app.bot,
+                )
+            )
+        await asyncio.wait_for(entered.wait(), 3)
+        bot.close_admission()
+        stopping = asyncio.create_task(bot.stop())
+        await asyncio.sleep(0)
+        assert not stopping.done()
+        release.set()
+        await asyncio.wait_for(asyncio.shield(stopping), 3)
+        assert effects == [1, 2]
+        assert not bot._callbacks and bot._app is None
+        for request in requests:
+            request.shutdown.assert_awaited_once()
+    finally:
+        release.set()
+        # Also lets the old deadlocking implementation finish on a regression.
+        if app.running:
+            await app.stop()
+        if stopping is not None:
+            await asyncio.gather(stopping, return_exceptions=True)
+        await app.shutdown()
+
+
+@pytest.mark.parametrize("phase", ["initialize", "polling"])
+async def test_shutdown_stops_polling_started_after_early_admission_close(
+    config, monkeypatch, phase
+):
+    bot = _bot(replace(config, telegram_token="123:fake"))
+    entered, release = asyncio.Event(), asyncio.Event()
+    app = MagicMock(running=False)
+    app.updater.running = False
+
+    async def initialize():
+        if phase == "initialize":
+            entered.set()
+            await release.wait()
+
+    async def start_app():
+        app.running = True
+
+    async def start_polling():
+        if phase == "polling":
+            entered.set()
+            await release.wait()
+        app.updater.running = True
+
+    async def stop_polling():
+        app.updater.running = False
+
+    async def stop_app():
+        app.running = False
+
+    async def shutdown():
+        assert not app.updater.running
+
+    app.initialize = AsyncMock(side_effect=initialize)
+    app.start = AsyncMock(side_effect=start_app)
+    app.updater.start_polling = AsyncMock(side_effect=start_polling)
+    app.updater.stop = AsyncMock(side_effect=stop_polling)
+    app.stop = AsyncMock(side_effect=stop_app)
+    app.shutdown = AsyncMock(side_effect=shutdown)
+    app.bot.shutdown = AsyncMock()
+
+    def build():
+        bot._app = app
+        return app
+
+    monkeypatch.setattr(bot, "build_app", build)
+    monkeypatch.setattr(bot, "sync_agents", AsyncMock())
+    starting = asyncio.create_task(bot.start())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        bot.close_admission()
+        await bot._polling_stop
+        app.updater.stop.assert_not_awaited()
+        release.set()
+        await starting
+        assert app.updater.running == (phase == "polling")
+        assert app.updater.start_polling.await_count == (phase == "polling")
+        bot.sync_agents.assert_not_awaited()
+        await bot.stop()
+        assert app.updater.stop.await_count == (phase == "polling")
+        app.shutdown.assert_awaited_once()
+        assert not app.updater.running and bot._app is None
+    finally:
+        release.set()
+        await asyncio.gather(starting, return_exceptions=True)

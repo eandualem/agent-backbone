@@ -10,6 +10,7 @@ import pytest
 
 from agent_backbone.cli import build_parser, main, onboarding, service
 from agent_backbone.services.database import SetupReceipt, SetupReceiptError
+from tests.support import reserve_profile
 
 
 def payload(tmp_path, **changes):
@@ -71,7 +72,7 @@ def test_initialize_creates_editable_core_and_retry_preserves_user_edits(tmp_pat
     assert code == 0 and again["code"] == "initialized"
     assert policy.read_text() == "Owner's editable policy\n"
     assert (data / ".env").read_bytes() == before
-    assert result["completed_steps"] == ["preflight", "data", "starters"]
+    assert result["completed_steps"] == ["preflight", "data", "starters", "profile"]
     assert before.decode().strip().split("=", 1)[1] not in json.dumps(result)
     assert (
         before.decode().strip().split("=", 1)[1]
@@ -626,7 +627,7 @@ def test_setup_service_failure_keeps_retry_state_and_emits_diagnostics(
     code, result = invoke(tmp_path, capsys, body)
     assert code == 3 and result["code"] == "service_unavailable"
     assert result["retry"] == "same_request"
-    assert result["completed_steps"] == ["preflight", "data", "starters"]
+    assert result["completed_steps"] == ["preflight", "data", "starters", "profile"]
     assert "exit 1" in result["message"] and "journalctl --user" in result["message"]
     data = Path(body["data_dir"])
     credential = (data / ".env").read_bytes()
@@ -768,22 +769,10 @@ def test_inherited_external_database_does_not_establish_directory_ownership(
     monkeypatch.setattr(onboarding._common, "read_client_config", reader)
     code, result = invoke(tmp_path, capsys, body)
     assert code == 3 and result["code"] == "installation_conflict"
+    assert "PostgreSQL is no longer supported" in result["message"]
     assert list(data.iterdir()) == [data / ".env"]
     assert (data / ".env").read_text() == content
     reader.assert_not_called()
-
-
-async def test_explicit_external_database_still_uses_readonly_existing_flow(tmp_path, monkeypatch):
-    data = tmp_path / "existing"
-    data.mkdir()
-    url = "postgresql+asyncpg://localhost/backbone"
-    (data / ".env").write_text("BACKBONE_API_KEY=operator-key\nBACKBONE_DATABASE_URL=" + url + "\n")
-    boot = onboarding.bootstrap_config(data)
-    reader = AsyncMock(return_value=boot)
-    monkeypatch.setattr(onboarding._common, "read_client_config", reader)
-    assert await onboarding._inspect_existing(boot) is boot
-    reader.assert_awaited_once_with(data, strict=True, operator_file=True)
-    assert list(data.iterdir()) == [data / ".env"]
 
 
 @pytest.mark.parametrize("finished", [False, True])
@@ -1027,3 +1016,44 @@ def test_cancel_cli_accepts_largest_original_request(tmp_path, capsys):
     source.write_bytes(encode() + b" ")
     assert args.func(args) == 2
     assert not (tmp_path / "data").exists()
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_init_and_onboarding_refuse_reservations_before_writes(
+    tmp_path, capsys, existing, offline, monkeypatch
+):
+    from agent_backbone.config import PROFILE_REGISTRY_PATH
+    from agent_backbone.services.database import (
+        ProfileIdentity,
+        ProfileRegistry,
+        ProfileReservation,
+    )
+
+    body = payload(tmp_path)
+    directory = Path(body["data_dir"])
+    registry = ProfileRegistry.create(Path(PROFILE_REGISTRY_PATH).expanduser())
+    reserve_profile(
+        registry,
+        ProfileReservation(
+            ProfileIdentity("profile-a", "installation-a", "lifecycle-a1"),
+            directory,
+            "Work",
+            "baseline-v1",
+        ),
+    )
+    if existing:
+        directory.mkdir()
+        (directory / ".env").write_text("BACKBONE_API_KEY=preserved-test-key\n")
+        with sqlite3.connect(directory / "backbone.db") as conn:
+            conn.execute("CREATE TABLE settings (key TEXT, value TEXT)")
+            conn.execute("CREATE TABLE agents (name TEXT)")
+    before = {p.name: p.read_bytes() for p in directory.iterdir()} if existing else None
+    args = build_parser().parse_args(["init", "--data-dir", str(directory), "--force"])
+    assert args.func(args) == 1
+    assert "reserved profile" in capsys.readouterr().out
+    code, result = invoke(tmp_path, capsys, body)
+    assert code == 3 and result["code"] == "installation_conflict"
+    if existing:
+        assert {p.name: p.read_bytes() for p in directory.iterdir()} == before
+    else:
+        assert not directory.exists()

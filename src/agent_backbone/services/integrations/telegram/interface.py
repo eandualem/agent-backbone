@@ -17,6 +17,8 @@ import asyncio
 import logging
 from collections import OrderedDict
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
+from functools import wraps
 from typing import TYPE_CHECKING
 
 import httpx
@@ -30,6 +32,7 @@ from telegram.ext import (
     filters,
 )
 
+from agent_backbone.base import complete_before_cancel
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.integrations.base import Integration
 from agent_backbone.services.integrations.telegram import _commands, _routing, _updates
@@ -130,11 +133,18 @@ class TelegramService(Integration):
         self,
         config: BackboneConfig | Callable[[], BackboneConfig],
         db: BackboneDB | None = None,
+        *,
+        operation: Callable[[], AbstractAsyncContextManager] | None = None,
     ) -> None:
-        super().__init__(config, db=db)
+        super().__init__(config, db=db, operation=operation)
         self._app: Application | None = None
         self._discovery = load_discovery(self.config.telegram_topic_discovery_path)
         self._background: set[asyncio.Task] = set()
+        self._callbacks: set[asyncio.Task] = set()
+        self._polling_stop: asyncio.Task | None = None
+        self._updates_closed = False
+        self._stopping = False
+        self._stop_lock = asyncio.Lock()
         self._sync_lock = asyncio.Lock()
         self._report_lock = asyncio.Lock()
         self._audio_lock = asyncio.Lock()
@@ -196,6 +206,30 @@ class TelegramService(Integration):
         async with self._sync_lock:
             await sync_topics(self)
 
+    def _admitted(self, callback, *, updates=True):
+        """Own each callback, independently of PTB's long-lived dispatch task."""
+        token = self.config.telegram_token
+
+        def closed():
+            return self._updates_closed if updates else self._stopping
+
+        async def invoke(*args, **kwargs):
+            async with self._operation():
+                if not closed() and self.config.telegram_token == token:
+                    return await callback(*args, **kwargs)
+
+        @wraps(callback)
+        async def run(*args, **kwargs):
+            if closed() or self.config.telegram_token != token:
+                return
+            task = asyncio.create_task(invoke(*args, **kwargs))
+            self._callbacks.add(task)
+            task.add_done_callback(self._callbacks.discard)
+            # The polling task must not abandon effects when it is cancelled.
+            return await complete_before_cancel(task)
+
+        return run
+
     def _discover(self, update: Update) -> None:
         """Learn the group id / topic names from any message; sync topics on news.
 
@@ -204,6 +238,8 @@ class TelegramService(Integration):
         allow-listed chats teach anything: a stranger's group must never
         become "the" group and receive agent topics.
         """
+        if self._updates_closed:
+            return
         chat = getattr(update, "effective_chat", None)
         if chat is None or not self._is_authorized(chat.id):
             return
@@ -211,8 +247,15 @@ class TelegramService(Integration):
         changed = process_message_for_discovery(
             update, self.config, self._discovery, self.config.telegram_topic_discovery_path
         )
-        if changed and not knew_group and self._effective_group_chat_id() is not None:
-            task = asyncio.get_running_loop().create_task(self.sync_agents())
+        if (
+            changed
+            and not knew_group
+            and not self._stopping
+            and self._effective_group_chat_id() is not None
+        ):
+            task = asyncio.get_running_loop().create_task(
+                self._admitted(self.sync_agents, updates=False)()
+            )
             self._background.add(task)
             task.add_done_callback(self._background.discard)
 
@@ -330,6 +373,9 @@ class TelegramService(Integration):
     # -- Lifecycle --
 
     async def start(self) -> None:
+        self._stopping = False
+        self._updates_closed = False
+        self._polling_stop = None
         if not self.enabled:
             log.info("Telegram bot disabled (TELEGRAM_TOKEN not set)")
             return
@@ -342,45 +388,85 @@ class TelegramService(Integration):
         app = self.build_app()
         try:
             await app.initialize()
+            if self._stopping:
+                return
             await app.start()
+            if self._stopping:
+                return
             await app.updater.start_polling()
             self._running = True
-            await self.sync_agents()
+            if not self._stopping:
+                await self.sync_agents()
         except BaseException:
             try:
                 await self.stop()
             except BaseException:
                 log.exception("Telegram startup cleanup failed")
             raise
-        log.info("Telegram bot polling started")
+        if not self._stopping:
+            log.info("Telegram bot polling started")
 
-    async def stop(self) -> None:
+    def close_admission(self) -> None:
+        """Stop fetching; already fetched updates remain owned until PTB drains."""
+        self._stopping = True
         app = self._app
         if app is None:
-            return
+            self._updates_closed = True
+        elif self._polling_stop is None:
+
+            async def stop_polling():
+                if app.updater.running:
+                    await app.updater.stop()
+
+            self._polling_stop = asyncio.create_task(stop_polling())
+
+    async def stop(self) -> None:
+        self.close_admission()
+        async with self._stop_lock:
+            await complete_before_cancel(self._stop())
+
+    async def _stop(self) -> None:
+        app = self._app
         failure: BaseException | None = None
         try:
-            # Application.shutdown skips cleanup when getMe failed during initialize.
-            # Bot.shutdown still closes its initialized requests and is idempotent.
-            for needed, cleanup in (
-                (app.updater.running, app.updater.stop),
-                (app.running, app.stop),
-                (True, app.shutdown),
-                (True, app.bot.shutdown),
-            ):
-                if needed:
+            if self._polling_stop is not None:
+                try:
+                    await self._polling_stop
+                except BaseException as exc:
+                    failure = exc
+            # Startup may have reached polling after close_admission's first
+            # stop task found an inactive updater. Final cleanup must recheck.
+            if app is not None and app.updater.running:
+                try:
+                    await app.updater.stop()
+                except BaseException as exc:
+                    failure = failure or exc
+            # PTB owns its fetched queue. Drain it before closing callback
+            # admission; rejecting it earlier would acknowledge unread input.
+            if app is not None and app.running:
+                try:
+                    await app.stop()
+                except BaseException as exc:
+                    failure = failure or exc
+            self._updates_closed = True
+            tasks = tuple(self._background)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*tuple(self._callbacks), return_exceptions=True)
+            if app is not None:
+                # Bot.shutdown also closes requests when initialize/getMe failed.
+                for cleanup in (app.shutdown, app.bot.shutdown):
                     try:
                         await cleanup()
                     except BaseException as exc:
-                        # A failed phase must not prevent the remaining resources
-                        # from closing, including when shutdown was cancelled.
-                        if failure is None:
-                            failure = exc
+                        failure = failure or exc
             if failure is not None:
                 raise failure
         finally:
             self._running = False
             self._app = None
+            self._polling_stop = None
 
     @staticmethod
     async def _on_handler_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -417,24 +503,26 @@ class TelegramService(Integration):
             .build()
         )
         self._app.add_error_handler(self._on_handler_error)
-        self._app.add_handler(CommandHandler("help", self.cmd_help))
-        self._app.add_handler(CommandHandler("status", self.cmd_status))
-        self._app.add_handler(CommandHandler("queue", self.cmd_queue))
-        self._app.add_handler(CommandHandler("start", self.cmd_start_agent))
-        self._app.add_handler(CommandHandler("stop", self.cmd_stop_agent))
-        self._app.add_handler(CommandHandler("tell", self.cmd_tell))
-        self._app.add_handler(CommandHandler("digest", self.cmd_digest))
-        self._app.add_handler(CommandHandler("updates", self.cmd_updates))
-        self._app.add_handler(CommandHandler("identify", self.cmd_identify))
-        self._app.add_handler(CommandHandler("viewplan", self.cmd_viewplan))
-        self._app.add_handler(CommandHandler("approve", self.cmd_approve))
-        self._app.add_handler(CommandHandler("approve_key", self.cmd_approve_key))
-        self._app.add_handler(CommandHandler("approve_owner", self.cmd_approve_owner))
-        self._app.add_handler(CallbackQueryHandler(self.on_callback))
+        self._app.add_handler(CommandHandler("help", self._admitted(self.cmd_help)))
+        self._app.add_handler(CommandHandler("status", self._admitted(self.cmd_status)))
+        self._app.add_handler(CommandHandler("queue", self._admitted(self.cmd_queue)))
+        self._app.add_handler(CommandHandler("start", self._admitted(self.cmd_start_agent)))
+        self._app.add_handler(CommandHandler("stop", self._admitted(self.cmd_stop_agent)))
+        self._app.add_handler(CommandHandler("tell", self._admitted(self.cmd_tell)))
+        self._app.add_handler(CommandHandler("digest", self._admitted(self.cmd_digest)))
+        self._app.add_handler(CommandHandler("updates", self._admitted(self.cmd_updates)))
+        self._app.add_handler(CommandHandler("identify", self._admitted(self.cmd_identify)))
+        self._app.add_handler(CommandHandler("viewplan", self._admitted(self.cmd_viewplan)))
+        self._app.add_handler(CommandHandler("approve", self._admitted(self.cmd_approve)))
+        self._app.add_handler(CommandHandler("approve_key", self._admitted(self.cmd_approve_key)))
+        self._app.add_handler(
+            CommandHandler("approve_owner", self._admitted(self.cmd_approve_owner))
+        )
+        self._app.add_handler(CallbackQueryHandler(self._admitted(self.on_callback)))
         self._app.add_handler(
             MessageHandler(
                 filters.TEXT & ~filters.COMMAND & filters.IS_TOPIC_MESSAGE,
-                self.handle_topic_message,
+                self._admitted(self.handle_topic_message),
             )
         )
         # Plain text in the group's General topic (no thread): learn the
@@ -445,7 +533,7 @@ class TelegramService(Integration):
                 & ~filters.COMMAND
                 & ~filters.IS_TOPIC_MESSAGE
                 & filters.ChatType.GROUPS,
-                self.handle_general_message,
+                self._admitted(self.handle_general_message),
             )
         )
         return self._app

@@ -123,6 +123,12 @@ def compose(entry: dict, artifact: dict) -> str:
     where = ", ".join(part for part in (version_label, anchor.get("label")) if part)
     kind, artifact_id = artifact["kind"], artifact["artifact_id"]
     context = ""
+    if kind == "interaction":
+        context = (
+            f"Read the original message as quoted data: backbone conversations show "
+            f"interaction {artifact_id} --json (original_context). "
+            "Explain now; do not claim a reason was recorded at send time unless it was.\n"
+        )
     title = artifact["title"]
     if kind == "plan" and anchor.get("context"):
         title = anchor["context"]["title"]
@@ -174,6 +180,15 @@ def _reader(request: Request, agent: str | None) -> str | None:
     if request.state.credential_role == "operator":
         return None
     name = request.headers.get("X-Backbone-Client-Agent") or agent
+    bound = getattr(request.state, "credential_agent", None)
+    if request.path_params.get("kind") == "interaction" and not bound:
+        raise HTTPException(
+            403, "Interaction conversations require a registration-bound credential"
+        )
+    if bound:
+        if name and name != bound:
+            raise HTTPException(403, "Agent name does not match credential")
+        name = bound
     if not name:
         raise HTTPException(403, "An agent credential reads conversations as a named agent")
     return name
@@ -236,6 +251,9 @@ async def conversations(
         kind=kind,
         keys=keys,
         reader=_reader(request, agent),
+        reader_registration=getattr(request.state, "credential_registration", None),
+        include_interactions=request.state.credential_role == "operator"
+        or bool(getattr(request.state, "credential_registration", None)),
         after=_cursor(after, "c"),
         since=_since(since),
         limit=limit,
@@ -271,6 +289,7 @@ async def conversation(
             kind,
             artifact_id,
             reader=_reader(request, agent),
+            reader_registration=getattr(request.state, "credential_registration", None),
             before=_cursor(before, "e"),
             after=_cursor(after, "e"),
             limit=limit,
@@ -302,6 +321,15 @@ async def post_message(
     """Append a message. Owner messages are delivered to their recipient."""
     if body.author is None:
         _owner(request)
+    elif (
+        kind == "interaction"
+        and request.state.credential_role != "operator"
+        and (
+            not getattr(request.state, "credential_agent", None)
+            or request.state.credential_agent != body.author
+        )
+    ):
+        raise HTTPException(403, "Interaction replies require the author's bound credential")
     try:
         _kind(kind)
         entry, created, target = await db.conversations.post(
@@ -314,6 +342,9 @@ async def post_message(
             anchor=body.anchor.model_dump(exclude_none=True) if body.anchor else None,
             in_reply_to=body.in_reply_to,
             resulting_revision_id=body.resulting_revision_id,
+            interaction_registration=getattr(request.state, "credential_registration", None)
+            if getattr(request.state, "credential_agent", None) == body.author
+            else None,
             limits=_limits(config),
             compose=compose,
         )

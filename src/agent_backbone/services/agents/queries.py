@@ -19,6 +19,7 @@ class EnrichedAgent(BaseModel):
 
     name: str
     session: str
+    registration_id: str | None = None
     configured: bool = True
     runtime: str | None = None
     """Runtime the session was launched with (live), else the configured runtime."""
@@ -155,6 +156,7 @@ async def build_enriched_agent(
     return EnrichedAgent(
         name=session,
         session=session,
+        registration_id=spec.registration_id if spec else None,
         configured=spec is not None,
         runtime=runtime,
         model=observed or configured_model,

@@ -1,10 +1,9 @@
-.PHONY: help install dev up down status doctor lint format format-check fix test test-file smoke cov check build clean \
-        db-up db-down db-upgrade db-migrate db-history db-current db-downgrade
+.PHONY: help install up down status doctor lint format format-check fix test test-file smoke cov check build clean \
+        db-upgrade db-migrate db-history db-current db-downgrade
 
 .DEFAULT_GOAL := help
 
 ALL_DIRS := src/ tests/ tools/
-DEV_TMUX_TMPDIR ?= /tmp/backbone-dev-tmux-$(shell id -u)
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage: make \033[36m<target>\033[0m\n\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -20,10 +19,6 @@ clean: ## Remove generated artifacts
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
 # ─── Run ─────────────────────────────────────────────────
-
-dev: ## Run the backbone with auto-reload on its own tmux server
-	mkdir -p "$(DEV_TMUX_TMPDIR)"
-	env -u TMUX -u TMUX_PANE "TMUX_TMPDIR=$(DEV_TMUX_TMPDIR)" uv run backbone up --reload
 
 up: ## Run the backbone detached in a tmux session
 	uv run backbone up --detach
@@ -60,8 +55,11 @@ test: ## Run all tests (SQLite in-memory, no services needed)
 test-file: ## Run a single test file (FILE=tests/unit/test_foo.py)
 	uv run pytest $(FILE) -v
 
-smoke: ## Check real tmux paste, keys, capture and display in a disposable session
+smoke: ## Check real tmux use and the profile flow in disposable sessions
 	uv run python tests/smoke_tmux.py
+	uv run python tests/smoke_tmux.py --pinned
+	uv run python tests/smoke_tmux.py --isolated
+	uv run python tests/smoke_profiles.py
 
 cov: ## Run tests with coverage
 	uv run pytest --cov=src --cov-report=term-missing
@@ -71,13 +69,7 @@ check: lint format-check test ## Full quality check (CI equivalent)
 build: ## Build wheel + sdist
 	uv build
 
-# ─── Database (optional PostgreSQL) ──────────────────────
-
-db-up: ## Start PostgreSQL via docker compose (optional; SQLite is the default)
-	docker compose up -d
-
-db-down: ## Stop PostgreSQL
-	docker compose down
+# ─── Database ────────────────────────────────────────────
 
 db-upgrade: ## Run Alembic migrations to head
 	uv run alembic upgrade head

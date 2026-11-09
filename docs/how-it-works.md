@@ -79,7 +79,10 @@ This page follows real requests through the system. Read
    `ready`, `waiting_for_human`, `exited` or `timeout`.
    Only an explicitly unattended Claude launch carries the bypass consent, in
    its own settings file (step 4). The runtime's bypass flag still controls its
-   mode. Folder trust remains controlled by `agents.pre_trust`.
+   mode. Folder trust remains controlled by `agents.pre_trust`. Trust preparation
+   uses the same native environment as the launched process: explicit
+   `CLAUDE_CONFIG_DIR` and `CODEX_HOME` select their own trust records. OpenCode
+   has no folder-trust file to prepare.
 6. Broadcast a fresh snapshot on Socket.IO `/sessions`.
 
 Startup readiness uses the same state reconciliation as inspection and delivery,
@@ -637,11 +640,14 @@ The readiness wait may time out while native migration continues; Backbone does
 not terminate that migration to meet the readiness deadline.
 
 
+A stop or restart gives in-flight requests 10 seconds to finish, then cancels them; agent
+sessions in tmux are unaffected.
+
 For automatic upgrades, `backbone up` requests Uvicorn’s graceful exit directly
 and re-executes after shutdown completes. External termination still stops the
 process normally. A custom ASGI runner that does not install this shutdown
 callback does not perform Backbone’s automatic restart; its supervisor owns
-restart behavior. `--reload` continues to use Uvicorn’s development reloader.
+restart behavior.
 
 
 

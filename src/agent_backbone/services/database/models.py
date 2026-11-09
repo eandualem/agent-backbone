@@ -9,7 +9,7 @@ numbers.
 
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Index, Integer, LargeBinary, Text, text
+from sqlalchemy import BigInteger, CheckConstraint, Index, Integer, LargeBinary, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agent_backbone.services.database.base import Base
@@ -311,7 +311,6 @@ class SwarmORM(Base):
             "repo",
             "issue_number",
             unique=True,
-            postgresql_where=text("status = 'active'"),
             sqlite_where=text("status = 'active'"),
         ),
     )
@@ -402,10 +401,6 @@ class DeliveryORM(Base):
             "issue_number",
             "session_name",
             unique=True,
-            postgresql_where=text(
-                "kind = 'issue' AND issue_number IS NOT NULL"
-                " AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
-            ),
             sqlite_where=text(
                 "kind = 'issue' AND issue_number IS NOT NULL"
                 " AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
@@ -492,7 +487,6 @@ class AgentTransitionORM(Base):
             "uq_transitions_open",
             "agent_name",
             unique=True,
-            postgresql_where=text("status = 'pending'"),
             sqlite_where=text("status = 'pending'"),
         ),
         {"sqlite_autoincrement": True},
@@ -580,7 +574,6 @@ class MessageQueueORM(Base):
         Index(
             "idx_mq_leased",
             "leased_at",
-            postgresql_where=text("status = 'in_progress'"),
             sqlite_where=text("status = 'in_progress'"),
         ),
         Index(
@@ -589,11 +582,6 @@ class MessageQueueORM(Base):
             "repo",
             "issue_number",
             unique=True,
-            postgresql_where=text(
-                "delivery_kind = 'issue' "
-                "AND status IN ('pending','in_progress','checkpoint','uncertain') "
-                "AND issue_number IS NOT NULL"
-            ),
             sqlite_where=text(
                 "delivery_kind = 'issue' "
                 "AND status IN ('pending','in_progress','checkpoint','uncertain') "
@@ -609,10 +597,6 @@ class MessageQueueORM(Base):
             "session_name",
             "dedup_key",
             unique=True,
-            postgresql_where=text(
-                "delivery_kind != 'issue' "
-                "AND status IN ('pending','in_progress','checkpoint','uncertain')"
-            ),
             sqlite_where=text(
                 "delivery_kind != 'issue' "
                 "AND status IN ('pending','in_progress','checkpoint','uncertain')"
@@ -706,6 +690,18 @@ class UsageEventORM(Base):
 # --- Signed senders (docs/owner-confirmed-messages.md) ---
 
 
+class ProfileIdentityORM(Base):
+    """One provider-local identity, reserved explicitly before registry reconciliation."""
+
+    __tablename__ = "profile_identity"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    profile_id: Mapped[str] = mapped_column(Text, nullable=False)
+    installation_id: Mapped[str] = mapped_column(Text, nullable=False)
+    lifecycle_id: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (CheckConstraint("id = 1", name="ck_profile_identity_singleton"),)
+
+
 class SigningInstallORM(Base):
     """This install's audience id, created once (one row, id 1)."""
 
@@ -773,7 +769,6 @@ class SigningTransitionORM(Base):
             "uq_signing_transitions_pending",
             "sender_key",
             unique=True,
-            postgresql_where=text("status = 'pending'"),
             sqlite_where=text("status = 'pending'"),
         ),
     )
@@ -983,3 +978,93 @@ class CurrentPlanRequestORM(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     receipt: Mapped[str] = mapped_column(Text, nullable=False)
     __table_args__ = (Index("idx_current_plan_requests_created", "created_at"),)
+
+
+class InteractionORM(Base):
+    """Immutable accepted message; body pruning never changes its identity."""
+
+    __tablename__ = "interactions"
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    operation_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    accepted_at: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    sender: Mapped[str] = mapped_column(Text, nullable=False)
+    recipient: Mapped[str] = mapped_column(Text, nullable=False)
+    sender_id: Mapped[str | None] = mapped_column(Text)
+    recipient_id: Mapped[str | None] = mapped_column(Text)
+    original_target: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str | None] = mapped_column(Text)
+    body_format: Mapped[str] = mapped_column(Text, nullable=False, server_default="text")
+    preview: Mapped[str] = mapped_column(Text, nullable=False)
+    relations: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    __table_args__ = (
+        Index("idx_interactions_sender", "sender_id", "accepted_at"),
+        Index("idx_interactions_recipient", "recipient_id", "accepted_at"),
+    )
+
+
+class InteractionEventORM(Base):
+    """Append-only transport observations; never evidence of task completion."""
+
+    __tablename__ = "interaction_events"
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    interaction_id: Mapped[str] = mapped_column(Text, nullable=False)
+    operation_id: Mapped[str] = mapped_column(Text, nullable=False)
+    event_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    time: Mapped[str] = mapped_column(Text, nullable=False)
+    time_basis: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    delivery_id: Mapped[int | None] = mapped_column(BigInteger)
+    queue_id: Mapped[int | None] = mapped_column(BigInteger)
+    __table_args__ = (
+        Index("idx_interaction_events_time", "interaction_id", "time", "id"),
+        Index("idx_interaction_events_operation", "operation_id"),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class InteractionCoverageORM(Base):
+    __tablename__ = "interaction_coverage"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    capture_started_at: Mapped[str] = mapped_column(Text, nullable=False)
+    retained_from: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class RegisteredStateObservationORM(Base):
+    """Prospective state samples, bound to the registration observed by the feed."""
+
+    __tablename__ = "registered_state_observations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent_id: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    at: Mapped[str] = mapped_column(Text, nullable=False)
+    recorder_id: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        Index("idx_registered_state_agent_time", "agent_id", "at", "id"),
+        # Finds a sample's previous recording by the same recorder (state spans).
+        Index("idx_registered_state_recorder", "agent_id", "recorder_id", "id"),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class InteractionCaptureCheckpointORM(Base):
+    """Finite evidence of one capture-enabled provider's recording availability."""
+
+    __tablename__ = "interaction_capture_checkpoints"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    recorder_id: Mapped[str] = mapped_column(Text, nullable=False)
+    at: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    __table_args__ = (
+        Index("idx_interaction_checkpoints_time", "at", "id"),
+        # Finds a checkpoint's previous recording by the same recorder (coverage).
+        Index("idx_interaction_checkpoints_recorder", "recorder_id", "id"),
+        {"sqlite_autoincrement": True},
+    )

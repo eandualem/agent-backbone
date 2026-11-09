@@ -16,6 +16,7 @@ from agent_backbone.models import (
     SUBSCRIPTION_KIND,
 )
 from agent_backbone.services.database._diagnostics_repo import DiagnosticRepo
+from agent_backbone.services.database._interaction_capture import capture, event
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 
@@ -134,6 +135,17 @@ class QueueRepo(Repo):
             )
             return {row[0] for row in result}
 
+    async def pending_operation(self, session_name, message, sender, source_key):
+        async with self._tx() as conn:
+            return await conn.scalar(
+                text(
+                    "SELECT operation_id FROM message_queue WHERE session_name=:session "
+                    "AND dedup_key=:key AND delivery_kind!='issue' "
+                    "AND status IN ('pending','in_progress','checkpoint','uncertain')"
+                ),
+                {"session": session_name, "key": dedup_key_for(message, sender, source_key)},
+            )
+
     async def enqueue(
         self,
         *,
@@ -150,6 +162,7 @@ class QueueRepo(Repo):
         uncertain: bool = False,
         held_for_inbox: bool = False,
         priority: int = 0,
+        interaction: dict | None = None,
     ) -> EnqueueResult:
         """Store a message for later delivery.
 
@@ -197,6 +210,26 @@ class QueueRepo(Repo):
                 result = await conn.execute(text(sql), params)
                 row = result.fetchone()
                 if row is not None:
+                    await capture(
+                        conn,
+                        operation_id=params["operation_id"],
+                        message=message,
+                        sender=sender,
+                        recipient=session_name,
+                        kind=delivery_kind,
+                        source=source,
+                        metadata=interaction,
+                    )
+                    await event(
+                        conn,
+                        params["operation_id"],
+                        "queued",
+                        outcome=params["initial_status"],
+                        source=source,
+                        at=params["enqueued_at"],
+                        time_basis="recorded",
+                        queue_id=row._mapping["id"],
+                    )
                     return EnqueueResult("inserted", row._mapping["id"], params["operation_id"])
 
                 # Resolve the exact conflict key, including a row leased by a
@@ -237,12 +270,11 @@ class QueueRepo(Repo):
         one notice per party that grows, not a stream. A notice already out for
         delivery is left alone and a new one opens behind it, with its own
         identity so identical text cannot fold into the one being delivered."""
-        lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
         found = await conn.execute(
             text(
                 "SELECT id, message FROM message_queue WHERE session_name = :session "
                 "AND source = :source AND target_entity = :target "
-                "AND status = 'pending' ORDER BY id DESC LIMIT 1" + lock
+                "AND status = 'pending' ORDER BY id DESC LIMIT 1"
             ),
             {"session": session_name, "source": source, "target": target_entity},
         )
@@ -303,7 +335,6 @@ class QueueRepo(Repo):
         ``already_queued`` (every line is already in a batch).
         """
         async with self._tx() as conn:
-            lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
             # A poll replayed before its events were marked processed must not
             # list an event twice: drop lines a batch of this session already
             # holds, recently delivered ones included.
@@ -374,7 +405,7 @@ class QueueRepo(Repo):
                     text(
                         "SELECT id, operation_id, message FROM message_queue "
                         "WHERE session_name = :session AND delivery_kind = :kind "
-                        "AND priority = 0 AND status = 'pending' ORDER BY id DESC LIMIT 1" + lock
+                        "AND priority = 0 AND status = 'pending' ORDER BY id DESC LIMIT 1"
                     ),
                     {"session": session_name, "kind": SUBSCRIPTION_KIND},
                 )
@@ -483,14 +514,12 @@ class QueueRepo(Repo):
         first, then high-priority subscription batches, then oldest first."""
         async with self._tx() as conn:
             now = now_iso()
-            lock = "FOR UPDATE SKIP LOCKED" if conn.dialect.name == "postgresql" else ""
-            sql = f"""UPDATE message_queue SET status='in_progress', leased_at=:now
+            sql = """UPDATE message_queue SET status='in_progress', leased_at=:now
                      WHERE id IN (
                          SELECT id FROM message_queue
                          WHERE session_name=:session AND status='pending'
                          ORDER BY source = :brief DESC, priority DESC, enqueued_at ASC
                          LIMIT :lim
-                         {lock}
                      ) RETURNING *"""
             result = await conn.execute(
                 text(sql),
@@ -581,6 +610,19 @@ class QueueRepo(Repo):
                         ),
                         {"operation": row["operation_id"]},
                     )
+                await event(
+                    conn,
+                    row["operation_id"],
+                    "completed",
+                    outcome=(
+                        "registration_retired" if reason == "registration_changed" else "cancelled"
+                    )
+                    if reason and reason != "already_delivered"
+                    else "delivered",
+                    source=row["source"],
+                    at=row["delivered_at"],
+                    queue_id=message_id,
+                )
         if row is not None and reason is not None:
             await self._record_lifecycle(row, f"retired_{reason}", reason=reason)
 
@@ -597,6 +639,29 @@ class QueueRepo(Repo):
         self, row, code: str, *, reason: str | None = None, delivery_id: int | None = None
     ) -> None:
         """Persist metadata after completion; diagnostics cannot roll back the queue."""
+        try:
+            async with self._tx() as conn:
+                await event(
+                    conn,
+                    row.get("operation_id"),
+                    code,
+                    outcome=(
+                        "expired"
+                        if code == "queue_expired"
+                        else "delivered"
+                        if reason == "already_delivered"
+                        else "registration_retired"
+                        if reason == "registration_changed"
+                        else "cancelled"
+                    ),
+                    source=row["source"],
+                    at=row.get("delivered_at") or now_iso(),
+                    queue_id=row["id"],
+                    delivery_id=delivery_id,
+                )
+        except Exception:
+            # A fixed, rate-limited warning: the exception can carry SQL bound values.
+            DiagnosticRepo(self._engine)._capture_failed()
         await DiagnosticRepo(self._engine).record(
             category="queue",
             code=code,
@@ -823,7 +888,6 @@ class QueueRepo(Repo):
             )
             rows = [dict(r) for r in held.mappings()]
             params["limit"] = max(0, limit - len(rows))
-            lock = "FOR UPDATE SKIP LOCKED" if conn.dialect.name == "postgresql" else ""
             claimed = await conn.execute(
                 text(
                     "UPDATE message_queue SET status='checkpoint', leased_at=NULL "
@@ -831,8 +895,7 @@ class QueueRepo(Repo):
                     "WHERE session_name=:session AND status='pending' "
                     "AND delivery_kind IN "
                     + kinds
-                    + " ORDER BY enqueued_at,id LIMIT :limit "
-                    + lock
+                    + " ORDER BY enqueued_at,id LIMIT :limit"
                     + ") RETURNING *"
                 ),
                 params,
@@ -888,6 +951,16 @@ class QueueRepo(Repo):
             rows = [dict(r) for r in result.mappings()]
             for row in rows:
                 await self._ensure_operation_id(conn, row)
+                await event(
+                    conn,
+                    row["operation_id"],
+                    "acknowledged",
+                    outcome="acknowledged",
+                    source="agent-checkpoint",
+                    at=params["now"],
+                    time_basis="recorded",
+                    queue_id=row["id"],
+                )
                 await conn.execute(
                     text(
                         "INSERT INTO deliveries (operation_id,kind,repo,issue_number,target_entity,"

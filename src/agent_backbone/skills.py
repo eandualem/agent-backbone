@@ -38,6 +38,7 @@ import re
 import shutil
 import stat
 import tempfile
+from collections.abc import Callable
 from contextlib import ExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -54,6 +55,9 @@ AGENT_TAG_PREFIX = "agent:"
 """``agent:NAME`` reaches exactly that agent, whatever its tags."""
 
 NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9]|-(?!-)){0,62}$")
+_COPY_MAX_ENTRIES = 2_000
+_COPY_MAX_BYTES = 50 * 1024 * 1024
+_COPY_MAX_DEPTH = 16
 """Spec skill names: lowercase, digits, single hyphens, no leading/trailing hyphen."""
 TAG_RE = re.compile(r"^[a-z0-9][a-z0-9:._-]{0,99}$")
 
@@ -329,6 +333,92 @@ def add_skill(
             parent_fd=parent_fd,
             source_fd=source_fd,
         )
+
+
+def copy_skill(
+    store: Path,
+    source: str,
+    *,
+    work_dir: Path,
+    name: str | None = None,
+    tags: tuple[str, ...] = (),
+    replace: bool = False,
+) -> Skill:
+    """Copy a skill from any absolute folder into the store; the source stays as it is.
+
+    Never follows a symbolic link: a link at the folder or anywhere inside it refuses
+    the copy, because following one could pull in files from outside the folder. Only
+    directories and regular files come across, without their special mode bits. A
+    `.git` directory is left behind, so the store's history stays its own.
+    """
+    origin = Path(source)
+    if not origin.is_absolute() or ".." in origin.parts or not origin.name:
+        raise ValueError("the skill folder must be an absolute path")
+    origin = origin.parent.resolve() / origin.name
+    store_root = Path(store).resolve()
+    if origin == store_root or store_root in origin.parents or origin in store_root.parents:
+        raise ValueError(f"{origin} overlaps the skills store")
+    with tempfile.TemporaryDirectory(prefix=".skill-copy-", dir=work_dir) as staging:
+        copied = Path(staging) / origin.name
+        try:
+            source_fd = os.open(origin, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError as exc:
+            raise ValueError(f"{origin} is not a folder (a link is not followed)") from exc
+        try:
+            _copy_tree(source_fd, copied, Path(), [0, 0])
+        finally:
+            os.close(source_fd)
+        if not (copied / "SKILL.md").is_file():
+            raise ValueError(f"{origin} is not a skill directory (no SKILL.md)")
+        return _add_skill(store, copied, name=name, tags=tags, replace=replace)
+
+
+def _copy_tree(directory_fd: int, target: Path, relative: Path, totals: list[int]) -> None:
+    if len(relative.parts) >= _COPY_MAX_DEPTH:
+        raise ValueError(f"the skill folder is nested too deeply at {relative}")
+    target.mkdir(mode=0o700)
+    with os.scandir(directory_fd) as entries:
+        items = sorted(entries, key=lambda entry: entry.name)
+    for entry in items:
+        if entry.name == ".git":
+            continue
+        path = relative / entry.name
+        totals[0] += 1
+        if totals[0] > _COPY_MAX_ENTRIES:
+            raise ValueError(f"the skill folder has more than {_COPY_MAX_ENTRIES} entries")
+        if entry.is_symlink():
+            raise ValueError(f"the skill folder contains a symbolic link: {path}")
+        if entry.is_dir(follow_symlinks=False):
+            child = os.open(
+                entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd
+            )
+            try:
+                _copy_tree(child, target / entry.name, path, totals)
+            finally:
+                os.close(child)
+        elif entry.is_file(follow_symlinks=False):
+            _copy_file(directory_fd, entry.name, target / entry.name, path, totals)
+        else:
+            raise ValueError(f"the skill folder contains a special file: {path}")
+    # The owner keeps full access so the store can later replace or remove it.
+    target.chmod(stat.S_IMODE(os.fstat(directory_fd).st_mode) & 0o777 | 0o700)
+
+
+def _copy_file(directory_fd: int, name: str, target: Path, path: Path, totals: list[int]) -> None:
+    # O_NONBLOCK: a file swapped for a FIFO after the scan must not hang the request.
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+    with os.fdopen(descriptor, "rb") as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"the skill folder contains a special file: {path}")
+        mode = stat.S_IMODE(info.st_mode) & 0o777 | 0o600
+        with open(target, "xb") as copy:
+            while chunk := source.read(1 << 20):
+                totals[1] += len(chunk)
+                if totals[1] > _COPY_MAX_BYTES:
+                    raise ValueError(f"the skill folder exceeds {_COPY_MAX_BYTES} bytes")
+                copy.write(chunk)
+    target.chmod(mode)
 
 
 def _add_skill(
@@ -645,6 +735,48 @@ def repository_skills(
     return owned
 
 
+def project_resources(
+    directories: tuple[Path, ...], *, for_worktree: bool = False
+) -> tuple[Path, ...]:
+    """Checkouts, canonical main checkouts and shared Git state claimed together.
+
+    Starting in a subdirectory still consumes its containing checkout's native
+    configuration. Linked worktrees can also consume main-checkout configuration.
+    Check Git excludes before callers can update them; no files are written here.
+    """
+    resources: list[Path] = []
+    for directory in directories:
+        directory = directory.resolve()
+        resources.append(directory)
+        root = next(
+            (p for p in (directory, *directory.parents) if os.path.lexists(p / ".git")),
+            directory,
+        )
+        resources.append(root)
+        git_dir = _common_git_dir(root, strict=True)
+        if for_worktree and (
+            git_dir is None or git_dir.name != ".git" or directory.is_relative_to(git_dir)
+        ):
+            raise ValueError("Cannot identify the main checkout for a new worktree")
+        if git_dir is not None:
+            resources.append(git_dir)
+            # Linked worktrees consume Git's canonical main-checkout config.
+            # Reserve that root before creating one too, including when a
+            # separate Git directory named .git makes its parent Git's main.
+            # Standalone agents need no inferred parent reservation.
+            private = _git_dir(root)
+            if for_worktree or (private is not None and (private / "commondir").is_file()):
+                if git_dir.name != ".git":
+                    raise ValueError("Cannot identify the main checkout for separate Git metadata")
+                resources.append(git_dir.parent)
+            exclude = contained_path(git_dir, "info/exclude")
+            if os.path.lexists(exclude):
+                info = exclude.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise ValueError("Git exclude must be a regular file without hard links")
+    return tuple(dict.fromkeys(resources))
+
+
 def materialize(
     store: Path,
     repo_dir: Path,
@@ -654,6 +786,7 @@ def materialize(
     *,
     read: tuple[str, ...] = (),
     sources: tuple[str, ...] = (),
+    claim_projects: Callable[[tuple[Path, ...]], None] | None = None,
 ) -> Materialization:
     """Bring ``<repo>/<dir>/<name>`` links in line with ``selected``.
 
@@ -670,6 +803,10 @@ def materialize(
     a source the CLI does not read is linked into ``dirs`` by a relative
     link, so it reaches whichever CLI runs the agent, and it wins over a
     store skill of the same name.
+
+    A future isolated provider supplies ``claim_projects`` bound to its captured
+    registry identity. It claims both checkouts and their common Git directories
+    before cleanup or writes. Legacy callers keep their existing behavior.
     """
     store = Path(store).expanduser()
     repo_dir = Path(repo_dir)
@@ -694,7 +831,9 @@ def materialize(
         for directory in dirs:
             for skill in selected:
                 contained_path(repo_dir, Path(directory) / skill.name, follow_leaf=False)
-    except ValueError as exc:
+        if claim_projects is not None:
+            claim_projects(project_resources((repo_dir, old_repo or repo_dir)))
+    except (ValueError, OSError) as exc:
         result.broken.append(str(exc))
         return result
     old_git: Path | None = None
@@ -783,21 +922,32 @@ def _git_dir(repo_dir: Path) -> Path | None:
     return None
 
 
-def _common_git_dir(repo_dir: Path) -> Path | None:
+def _common_git_dir(repo_dir: Path, *, strict: bool = False) -> Path | None:
     """The git directory whose ``info/exclude`` governs ``repo_dir`` — a
     worktree's is its parent checkout's."""
     git_dir = _git_dir(repo_dir)
     if git_dir is None:
+        if strict and os.path.lexists(repo_dir / ".git"):
+            raise ValueError("Project Git directory is unavailable")
         return None
     common = git_dir / "commondir"
-    if common.is_file():
+    if common.is_file() or (strict and os.path.lexists(common)):
         try:
+            if strict and not stat.S_ISREG(common.lstat().st_mode):
+                raise ValueError("Project common Git pointer must be a regular file")
             rel = common.read_text(encoding="utf-8").strip()
+            if strict and not rel:
+                raise ValueError("Project common Git directory is unavailable")
             git_dir = Path(os.path.normpath(git_dir / rel)) if rel else git_dir
         except OSError:
+            if strict:
+                raise
             pass
     try:
-        return git_dir.resolve()
+        resolved = git_dir.resolve()
+        if strict and not resolved.is_dir():
+            raise ValueError("Project common Git directory is unavailable")
+        return resolved
     except OSError:
         return git_dir
 

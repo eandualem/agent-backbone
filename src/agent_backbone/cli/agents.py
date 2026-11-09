@@ -898,6 +898,7 @@ async def _agent(args: argparse.Namespace) -> int:
 
 
 def cmd_agent(args: argparse.Namespace) -> int:
+    _common.pin_default_terminal()
     attach = args.agent_command == "attach" or getattr(args, "attach", False)
     if attach and not sys.stdin.isatty():
         print("attachment needs an interactive terminal; use `backbone agent inspect NAME`")
@@ -933,6 +934,8 @@ async def _tell(args: argparse.Namespace) -> int:
         "message": text,
         "priority": args.priority,
     }
+    if _owner_origin(boot):
+        payload["interaction"] = {"actor": "owner"}
     result = await _common.api(boot, "POST", "/api/messages", json_body=payload, timeout=30.0)
     if result is None:
         print(_common.unreachable())
@@ -957,8 +960,19 @@ async def _tell(args: argparse.Namespace) -> int:
     return 2 if data.get("queued") else 1
 
 
+def _owner_origin(boot) -> bool:
+    """Only an operator credential with no agent identity speaks for the owner."""
+    return not (
+        boot.client_agent
+        or os.environ.get("BACKBONE_AGENT")
+        or _common.is_agent_client(boot.api_key)
+    )
+
+
 async def _steer(boot, agent: str, text: str, sender: str) -> int:
     payload = {"target_session": agent, "from_entity": sender, "message": text}
+    if _owner_origin(boot):
+        payload["interaction"] = {"actor": "owner"}
     result = await _common.api(boot, "POST", "/api/steer", json_body=payload, timeout=30.0)
     if result is None:
         print(_common.unreachable())

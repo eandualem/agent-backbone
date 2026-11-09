@@ -12,6 +12,7 @@ from pathlib import Path
 
 import httpx
 
+from agent_backbone.base import owned_process
 from agent_backbone.config import TelegramConfig, validate_setting
 from agent_backbone.models import AgentResponse, ProgressReport
 
@@ -78,29 +79,25 @@ async def generate_voice(record: dict, config: TelegramConfig) -> bytes:
             output.setsampwidth(parameters[1])
             output.setframerate(parameters[2])
             output.writeframes(b"".join(frames))
-        process = await asyncio.create_subprocess_exec(
-            encoder,
-            "-nostdin",
-            "-v",
-            "error",
-            "-i",
-            str(wav_path),
-            "-c:a",
-            "libopus",
-            "-b:a",
-            "32k",
-            "-y",
-            str(ogg_path),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        try:
+        async with owned_process(
+            asyncio.create_subprocess_exec(
+                encoder,
+                "-nostdin",
+                "-v",
+                "error",
+                "-i",
+                str(wav_path),
+                "-c:a",
+                "libopus",
+                "-b:a",
+                "32k",
+                "-y",
+                str(ogg_path),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        ) as process:
             await asyncio.wait_for(process.wait(), timeout=30)
-        except BaseException:
-            if process.returncode is None:
-                process.kill()
-            await process.wait()
-            raise
         if (
             process.returncode
             or not ogg_path.is_file()

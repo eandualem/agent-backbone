@@ -142,10 +142,8 @@ def setup_service_path() -> Path | None:
     return _plist_path() if system == "Darwin" else _unit_path() if system == "Linux" else None
 
 
-def setup_service_definition(binary: Path, data_dir: Path) -> tuple[Path, str]:
-    path = setup_service_path()
-    if path is None:
-        raise ValueError("No supported user service manager is available.")
+def service_search_path(binary: Path) -> str:
+    """The launcher first, then this process's absolute entries, then any bundled tmux."""
     search_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     if len(search_path) > 16_384 or any(ord(c) < 32 or ord(c) == 127 for c in search_path):
         raise ValueError("The executable search path is invalid.")
@@ -158,7 +156,14 @@ def setup_service_definition(binary: Path, data_dir: Path) -> tuple[Path, str]:
         and fallback.resolve().is_relative_to(binary.parent.parent.resolve())
     ):
         entries.append(str(fallback.parent))
-    search_path = os.pathsep.join(dict.fromkeys([str(binary.parent), *entries]))
+    return os.pathsep.join(dict.fromkeys([str(binary.parent), *entries]))
+
+
+def setup_service_definition(binary: Path, data_dir: Path) -> tuple[Path, str]:
+    path = setup_service_path()
+    if path is None:
+        raise ValueError("No supported user service manager is available.")
+    search_path = service_search_path(binary)
     content = (
         _plist(str(binary), data_dir, data_dir / "backbone.log", search_path=search_path)
         if platform.system() == "Darwin"

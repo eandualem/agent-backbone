@@ -72,7 +72,10 @@ coverage boundaries: [Token usage](token-usage.md).
 
 Known agents plus any other live tmux session (except the backbone's own),
 with live state. Cached for 5 s, including an empty result. Offline agents keep
-saved issue metadata without attempting a terminal capture.
+saved issue metadata without attempting a terminal capture. Each row includes
+`registration_id`, the durable lowercase UUID hex identity of its registration,
+or null for an unregistered session. It is distinct from a runtime session ID.
+Bound list reads reject a cached row whose registration has changed.
 
 ```json
 {"items": [{
@@ -218,7 +221,11 @@ lists every case, and `resume_selection` in the start's diagnostic records
 
 ### `POST /api/agents/{name}/stop`
 
-Stops a registered agent. An unregistered tmux session returns 404.
+Stops a registered agent. An unregistered tmux session returns 404. Pass the
+`registration_id` you selected as `expected_registration_id` to stop only that
+registration: it is checked under the agent's lifecycle lock, malformed values
+return 422, and a changed registration returns 409 `registration_changed`
+without stopping anything. Without it, stop works by name as before.
 
 ### `POST /api/agents/{name}/restart`
 
@@ -302,7 +309,11 @@ rather than allow); `deny` is the answer that keeps things as they are.
 
 ### `GET /api/agents/{name}/inspect`
 
-Everything the backbone knows about one agent, with the evidence:
+Everything the backbone knows about one agent, with the evidence. The response
+includes `registration_id`. After selecting an agent, pass that value as
+`expected_registration_id` on refreshes. Malformed values return 422; a changed
+registration returns 409 `registration_changed` before replacement data is returned.
+Bound inspection also rechecks registration after deferred reads.
 
 ```json
 {"name": "app", "known": true, "online": true, "dir": "…", "runtime": "claude",
@@ -372,6 +383,8 @@ returns 409. External GitHub labels and scripts are not changed. See the
 ### `POST /api/agents/{name}/watch` · `/unwatch` `{"repo": "acme/web"}` · `DELETE /api/agents/{name}`
 
 Watch / stop watching a repository; forget a stopped agent (409 if running).
+`DELETE` takes the same optional `expected_registration_id` as stop: a changed
+registration returns 409 `registration_changed` and nothing is removed.
 
 ### `POST /api/agents/{name}/subscribe` `{"source": "gmail", "filter": "from:alerts@example.com", "priority": "high"}` · `/unsubscribe` `{"id": 3}`
 
@@ -450,6 +463,13 @@ not fit the envelope.
 Supported runtimes with availability; raw tmux session names; a one-shot
 capture of a **registered agent's** screen (404 for any other tmux session —
 the API never reads or types into sessions that are not backbone agents).
+
+`GET /api/runtimes?schema_version=2&check_setup=true` is the operator-only,
+profile-bound runtime catalog. It requires the complete binding headers and an
+internally reconciled provider. It returns the schema-2 identity envelope and
+runtime observations from provider-owned native contexts. Missing context never
+falls back to host discovery. Schema 1 and the omitted-version response retain
+the existing list shape. See the [profile contract](profiles-contract.md).
 
 ## Fleet snapshots
 
@@ -614,7 +634,9 @@ store entry with its tags, validity, the agents it reaches and the
 their snapshots at `/api/{skills|policies}/{artifact_id}/versions`.
 `POST /api/skills` `{path, name?, tags, replace?, actor}` **moves** a skill
 directory into the store and tags it (422 when the directory is not a skill or
-the name is taken without `replace`; 400 when `skills.store` is empty).
+the name is taken without `replace`; 400 when `skills.store` is empty). With
+`mode: "copy"` it copies from any absolute folder instead and leaves that folder
+in place (see [skills](skills.md)).
 `PUT /api/skills/{name}/tags` `{tags, actor}` replaces its tags (404 for an
 unknown skill). Both relink every running agent at once and return the skill
 with `relinked`, one evidence line per running agent whose links were brought
@@ -839,7 +861,17 @@ be read are skipped. The portable process check uses second-resolution start
 times; it is not an atomic process handle across the check and signal.
 Attachments use exact session names; an offline `app` never resolves to
 `app-2`. Replacing or removing the same viewer attachment waits for its
-previous PTY cleanup to finish.
+previous PTY cleanup to finish. A disconnected viewer cannot finish a pending
+attach. Room membership and failed-join cleanup use the same attachment lock,
+so a failed join cannot retire a later successful join. Cancellation or output EOF does not establish process exit: cleanup
+retains the attachment until its process exits and its reader worker finishes.
+Failed cleanup remains tracked for retry. Internally bound providers retain their
+lifecycle fence across creation and cleanup, independently of the requesting
+handler or output forwarder.
+Shutdown closes socket admission, stops producers, then drains handlers, terminal
+resources and emissions before closing services and the database. Bulk PTY cleanup
+reports failure and retains resources for retry; a failed component stop preserves
+its dependencies and prevents automatic in-process upgrade restart.
 
 ```js
 const sio = io("http://127.0.0.1:7120/sessions", { auth: { api_key: KEY } });
@@ -885,15 +917,11 @@ for the response fields, signed publication, byte limits, retries and retention.
 
 ### Private local transport
 
-For a local client that must authenticate the provider before sending its API
-key, configure `backbone.socket_path` to an absolute socket path inside the
-Backbone data directory. Its parent must belong to the service account and have
-mode 0700. On the next explicitly requested server start, Backbone binds a 0600
-Unix socket alongside its existing TCP listener. `--reload` is not supported
-with this optional listener. No socket is enabled by default.
+Every profile also listens on a 0600 Unix socket at `run/api.sock` in its data directory,
+alongside its TCP port, so a local client can authenticate the provider before sending its
+API key. Find the path in the profile's binding (`backbone profiles show ID --json`).
 
-Give the same absolute path to the client as `BACKBONE_SOCKET_PATH`. Before
-sending HTTP or bearer credentials, the client must verify the private parent,
+Before sending HTTP or bearer credentials, the client must verify the private parent,
 socket type, 0600 mode and ownership, then check the connected peer UID against
 its effective UID. The provider similarly rejects Unix peers with a different
 UID before HTTP parsing. HTTP routes, request bodies, response framing and API

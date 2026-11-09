@@ -142,7 +142,7 @@ async def test_cancellation_accepts_largest_original_request(
 
 @pytest.mark.parametrize("probe_fails", [False, True])
 async def test_compatibility_batch_survives_client_cancellation_and_drains_workers(
-    monkeypatch, probe_fails
+    monkeypatch, probe_fails, api_app
 ):
     import asyncio
     import threading
@@ -184,7 +184,7 @@ async def test_compatibility_batch_survives_client_cancellation_and_drains_worke
         {"slow": runtime("slow", slow_probe), "other": runtime("other", other_probe)},
     )
     monkeypatch.setattr(agents, "require_operator", AsyncMock())
-    request = SimpleNamespace(app=SimpleNamespace(state=State()))
+    request = SimpleNamespace(app=api_app, state=State())
     first = asyncio.create_task(agents.list_runtimes(request, check_setup=True))
     followers = []
     try:

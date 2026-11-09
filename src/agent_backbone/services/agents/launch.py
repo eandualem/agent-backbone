@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from agent_backbone.base import check_before_effect
 from agent_backbone.config import session_secret_keys
 from agent_backbone.fs import atomic_write_text
 from agent_backbone.git import git_write_paths
@@ -34,6 +35,7 @@ from agent_backbone.services.runtimes import (
     RUNTIME_ENV_KEY,
     RUNTIMES,
     STATE_DIR_ENV_KEY,
+    NativeEnvironment,
     Runtime,
     get_runtime,
     project_skill_dirs,
@@ -153,6 +155,7 @@ async def start_agent(
     db: BackboneDB | None = None,
     wait: bool = True,
     operation_id: str | None = None,
+    check_effect=None,
 ) -> StartResult:
     """Start an agent and retain a bounded record of the attempt and its outcome.
 
@@ -167,6 +170,7 @@ async def start_agent(
     may include terminal evidence, paths or a session id; none of those are
     copied into the diagnostic history.
     """
+    await check_before_effect(check_effect)
     operation_id = operation_id or uuid.uuid4().hex
     started = time.monotonic()
     resume = resume or session_id is not None
@@ -233,6 +237,7 @@ async def start_agent(
             details=details,
             operation_id=operation_id,
             observe=observe,
+            **({"check_effect": check_effect} if check_effect is not None else {}),
         )
     except Exception as exc:
         details.update(reason="exception", error_type=type(exc).__name__)
@@ -274,6 +279,7 @@ async def _start_agent(
     details: dict,
     observe: Callable[[str], Awaitable[None]],
     operation_id: str | None = None,
+    check_effect=None,
 ) -> StartResult:
     """Start an agent in its tmux session.
 
@@ -288,15 +294,20 @@ async def _start_agent(
     there (``brief_refresh``); a plain shell has nobody to brief (pasting it
     would run it as commands).
     """
+    await check_before_effect(check_effect)
     if await session_exists(spec.name):
         log.info("Agent '%s' already running", spec.name)
         return StartResult(ok=True, already_running=True)
 
+    await check_before_effect(check_effect)
     if not spec.path.is_dir():
         details["reason"] = "directory_missing"
         log.error("Directory '%s' does not exist for agent '%s'", spec.path, spec.name)
         return StartResult(ok=False, evidence=(f"directory does not exist: {spec.path}",))
 
+    from agent_backbone.services.agents._project_ownership import claim_project_directories
+
+    claim_project_directories(config.data_dir, (spec.path,))
     runtime_id = runtime or spec.runtime
     if runtime_id not in RUNTIMES:
         details["reason"] = "unknown_runtime"
@@ -307,10 +318,13 @@ async def _start_agent(
         details["reason"] = "exact_resume_unsupported"
         return StartResult(ok=False, evidence=(f"{rt.id} cannot open a session by id",))
     effective_model = model if model is not None else spec.model
+    extra_env = rt.environment(
+        {**rt.default_env, **spec.env, **rt.launch_env(*rt.split_model(effective_model))}
+    )
     section = config.launch
     details["stage"] = "preparation"
     if section.pre_trust:
-        rt.pre_trust(spec.path)
+        rt.pre_trust(spec.path, env=extra_env)
 
     # The owner's explicit choice, or the swarm rule decided at this launch:
     # a member whose runtime confines it to the worktree never asks. Decided
@@ -394,7 +408,7 @@ async def _start_agent(
             unattended=unattended,
             writable_dirs=_writable_dirs(spec.path, section.writable_dirs),
             auto_review=section.auto_review,
-            env={**rt.default_env, **spec.env},
+            env=extra_env,
         )
     except RuntimeError as exc:
         details.update(reason="command_failed", error_type=type(exc).__name__)
@@ -402,7 +416,6 @@ async def _start_agent(
         return StartResult(ok=False, evidence=(str(exc),))
 
     details["stage"] = "preparation"
-    extra_env = {**rt.default_env, **spec.env, **rt.launch_env(*rt.split_model(effective_model))}
     resume_evidence.extend(
         f"user-level instructions: {path}" for path in rt.user_instructions(extra_env, spec.path)
     )
@@ -434,8 +447,10 @@ async def _start_agent(
     # Direct CLI processes have separate lifecycle locks. Recheck under the
     # shared profile guard before touching the live launch's state or identity.
     async with profile_lock(config.data_dir):
+        await check_before_effect(check_effect)
         if await session_exists(spec.name):
             return StartResult(ok=True, already_running=True)
+        await check_before_effect(check_effect)
         registration = (
             next((row for row in await db.agents.list() if row["name"] == spec.name), None)
             if db is not None
@@ -450,6 +465,7 @@ async def _start_agent(
                 ok=False,
                 evidence=("agent registration changed during startup; retry the start",),
             )
+        await check_before_effect(check_effect)
         launched_at = time.time()
         # Hook-context offers belong to the session they were written for: the
         # new session must not have the old one's guidance injected on its
@@ -459,6 +475,7 @@ async def _start_agent(
         # Likewise a brief queued for an earlier launch that never received it:
         # this launch brings its own, and the old one must not reach it (#290).
         retired = await _retire_stale_briefs(db, spec.name)
+        await check_before_effect(check_effect)
         if retired is None:
             details["reason"] = "brief_retirement_failed"
             return StartResult(
@@ -476,6 +493,7 @@ async def _start_agent(
         ):
             details["reason"] = "brief_queue_failed"
             return StartResult(ok=False, evidence=("could not queue the agent's brief",))
+        await check_before_effect(check_effect)
         # A resumed session keeps the brief it started with: a runtime whose hook
         # can add session context is handed the current one there. A chat message
         # is never used for that, because a peer's message can imitate it (#294).
@@ -508,6 +526,7 @@ async def _start_agent(
                     ok=False,
                     evidence=("agent registration changed during startup; retry the start",),
                 )
+        await check_before_effect(check_effect)
         write_starting_marker(
             config.state_dir, spec.name, launched_at, launch_id=environment["BACKBONE_LAUNCH_ID"]
         )
@@ -522,6 +541,8 @@ async def _start_agent(
             environment=environment,
             scrub=session_secret_keys(config.data_dir),
             mouse=rt.mouse_scroll,
+            **({"check_effect": check_effect} if check_effect is not None else {}),
+            **({"inherit_environment": False} if isinstance(extra_env, NativeEnvironment) else {}),
         )
         if not ok:
             details["reason"] = "session_failed"
@@ -570,6 +591,7 @@ async def _start_agent(
             since=launched_at,
             details=details,
             observe=observe,
+            **({"check_effect": check_effect} if check_effect is not None else {}),
         )
 
     return StartResult(ok=True, ready=ready, evidence=tuple(resume_evidence + evidence))
@@ -587,6 +609,8 @@ def _materialize_skills(
     own skills in a directory this runtime does not read are linked where
     it does, so they reach whichever CLI runs the agent.
     """
+    from agent_backbone.services.agents._project_ownership import project_claims
+
     store = config.skills.store_path
     if store is None or not rt.skill_dirs:
         return [], None
@@ -600,6 +624,7 @@ def _materialize_skills(
             manifest_path(config.data_dir, spec.name),
             read=rt.skill_read_dirs,
             sources=project_skill_dirs(),
+            claim_projects=project_claims(config.data_dir),
         )
     except OSError as exc:
         return [], f"skills: could not link into {spec.path}: {exc}"
@@ -704,6 +729,7 @@ async def wait_until_ready(
     since: float | None = None,
     details: dict | None = None,
     observe: Callable[[str], Awaitable[None]] | None = None,
+    check_effect=None,
 ) -> tuple[str, list[str]]:
     """Wait until the agent is at its prompt.
 
@@ -721,7 +747,9 @@ async def wait_until_ready(
     last_pane = ""
     details = details if details is not None else {}
     while True:
+        await check_before_effect(check_effect)
         if not await session_exists(name):
+            await check_before_effect(check_effect)
             details.update(state="offline", state_source="terminal", reason="session_exited")
             clear_starting_marker(state_path, name)
             snapshot = await get_agent_state(
@@ -732,11 +760,14 @@ async def wait_until_ready(
                 *([snapshot.detail] if snapshot.source == "launch" and snapshot.detail else []),
             ]
 
+        await check_before_effect(check_effect)
         pane = await capture_pane(name, lines=60)
+        await check_before_effect(check_effect)
         if pane:
             last_pane = pane
             if observe is not None:
                 await observe(pane)
+        await check_before_effect(check_effect)
         snapshot = await get_agent_state(
             state_path,
             name,
@@ -745,6 +776,7 @@ async def wait_until_ready(
             pane_content=pane,
             since=wall_started,
         )
+        await check_before_effect(check_effect)
         details.update(
             state=snapshot.state.value,
             state_source=snapshot.source,

@@ -21,6 +21,7 @@ import shlex
 import signal
 import struct
 import subprocess
+import sys
 import termios
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -29,6 +30,7 @@ from pathlib import Path
 from weakref import WeakValueDictionary
 
 from agent_backbone.services.terminal._core import exact_target
+from agent_backbone.services.terminal._server import tmux_command, tmux_server_socket
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +47,7 @@ class PtySession:
         self.master_fd: int | None = None
         self._process: subprocess.Popen | None = None
         self._reader_task: asyncio.Task | None = None
+        self._cleanup_task: asyncio.Task | None = None
         # Single output queue for the 1:1 connection
         self._output_queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=_MAX_QUEUE_SIZE)
         # Cleared while the viewer asks for backpressure; the read loop waits on it
@@ -78,7 +81,7 @@ class PtySession:
             env = {**os.environ, "TERM": "xterm-256color", "COLORTERM": "truecolor"}
             env.pop("TMUX", None)  # the backbone itself may run inside tmux
             self._process = subprocess.Popen(
-                ["tmux", "attach-session", "-t", exact_target(self.session_name)],
+                tmux_command("attach-session", "-t", exact_target(self.session_name)),
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
@@ -186,6 +189,25 @@ class PtySession:
         self._resume_event.set()
 
     async def cleanup(self) -> None:
+        """Finish resource cleanup before propagating caller cancellation.
+
+        Concurrent callers share one cleanup task. Shielding alone would let a
+        cancelled owner release its lock while executor work still runs.
+        """
+        task = self._cleanup_task
+        if task is None or (task.done() and not task.cancelled() and task.exception() is not None):
+            task = self._cleanup_task = asyncio.create_task(self._cleanup())
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+        task.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _cleanup(self) -> None:
         """Close PTY and terminate tmux attach process.
 
         Ordering matters to avoid FD races:
@@ -196,15 +218,16 @@ class PtySession:
         """
         if self._reader_task and not self._reader_task.done():
             self._reader_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._reader_task
 
         # Kill process first — this unblocks the os.read thread
         if self._process is not None:
             pid = self._process.pid
             proc = self._process
-            self._process = None
-
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._terminate_process, proc)
+            self._process = None
             _unrecord_pid(self._pid_file, pid)
 
         # Now safe to wait for the executor — the read thread should have exited
@@ -233,7 +256,8 @@ class PtySession:
                 proc.kill()
                 proc.wait(timeout=1)
             except (OSError, subprocess.TimeoutExpired):
-                pass
+                if proc.poll() is None:
+                    raise
 
 
 class PtyManager:
@@ -265,9 +289,16 @@ class PtyManager:
             if not content:
                 return
             killed = 0
+            retained = []
             for line in content.splitlines():
                 saved = _parse_pid_record(line)
                 if saved is None:
+                    continue
+                if (
+                    saved["command"][1:]
+                    != tmux_command("attach-session", "-t", saved["command"][-1])[1:]
+                ):
+                    retained.append(line)
                     continue
                 pid = saved["pid"]
                 if _process_identity(pid) != saved:
@@ -280,7 +311,7 @@ class PtyManager:
                     pass  # Already dead
             if killed:
                 log.info("Cleaned up %d orphaned PTY process(es)", killed)
-            pid_file.write_text("")
+            pid_file.write_text("\n".join(retained) + "\n" if retained else "")
         except Exception:
             log.warning("Failed to clean up orphaned PTY processes", exc_info=True)
 
@@ -299,26 +330,45 @@ class PtyManager:
         key = (sid, session_name)
         async with self._lock(key):
             # Replacement and removal must wait for the old process to exit.
-            existing = self._sessions.pop(key, None)
+            existing = self._sessions.get(key)
             if existing:
-                await existing.cleanup()
+                try:
+                    await existing.cleanup()
+                except asyncio.CancelledError:
+                    # Confirm shared cleanup succeeded before forgetting it.
+                    await existing.cleanup()
+                    del self._sessions[key]
+                    raise
+                del self._sessions[key]
 
             pty_session = PtySession(session_name, self._pid_file)
-            pty_session.start(cols, rows)
             self._sessions[key] = pty_session
+            try:
+                pty_session.start(cols, rows)
+            except BaseException:
+                await pty_session.cleanup()
+                del self._sessions[key]
+                raise
             return pty_session
 
     def get(self, sid: str, session_name: str) -> PtySession | None:
-        """Get existing PTY session or None."""
-        return self._sessions.get((sid, session_name))
+        """Get an active PTY; retiring sessions remain tracked only for cleanup."""
+        session = self._sessions.get((sid, session_name))
+        return session if session is not None and session._cleanup_task is None else None
 
     async def remove(self, sid: str, session_name: str) -> None:
         """Remove and clean up a PTY session immediately."""
         key = (sid, session_name)
         async with self._lock(key):
-            session = self._sessions.pop(key, None)
+            session = self._sessions.get(key)
             if session:
-                await session.cleanup()
+                try:
+                    await session.cleanup()
+                except asyncio.CancelledError:
+                    await session.cleanup()
+                    del self._sessions[key]
+                    raise
+                del self._sessions[key]
 
     async def cleanup_all(self) -> None:
         """Clean up all PTY sessions concurrently. Called from app lifespan shutdown.
@@ -328,10 +378,14 @@ class PtyManager:
         """
         keys = set(self._sessions) | set(self._locks)
         if keys:
-            await asyncio.gather(
+            results = await asyncio.gather(
                 *(self.remove(*key) for key in keys),
                 return_exceptions=True,
             )
+            failures = [result for result in results if isinstance(result, BaseException)]
+            if failures:
+                log.error("Failed to clean up %d PTY session(s)", len(failures))
+                raise BaseExceptionGroup("PTY cleanup failed", failures)
         log.info("All PTY sessions cleaned up")
 
 
@@ -348,11 +402,13 @@ def _parse_pid_record(line: str) -> dict | None:
         return None
     if (
         not isinstance(command, list)
-        or len(command) != 4
+        or len(command) not in {4, 6}
         or not all(isinstance(arg, str) and arg for arg in command)
         or Path(command[0]).name != "tmux"
-        or command[1:3] != ["attach-session", "-t"]
+        or command[-3:-1] != ["attach-session", "-t"]
     ):
+        return None
+    if len(command) == 6 and (command[1] != "-S" or not Path(command[2]).is_absolute()):
         return None
     try:
         datetime.strptime(birth, "%a %b %d %H:%M:%S %Y")
@@ -369,23 +425,39 @@ def _process_identity(pid: int) -> dict | None:
     check, not an atomic process handle spanning the later signal.
     """
     try:
+        # Keep English birth timestamps while ps preserves UTF-8 socket paths.
+        # The C locale renders non-ASCII argv bytes as escapes/replacements.
+        process_locale = "C"
+        if tmux_server_socket() is not None:
+            process_locale = "en_US.UTF-8" if sys.platform == "darwin" else "C.UTF-8"
         result = subprocess.run(
             ["ps", "-ww", "-p", str(pid), "-o", "lstart=", "-o", "args="],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=2,
             check=False,
-            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
+            env={**os.environ, "LC_ALL": process_locale, "TZ": "UTC"},
         )
         if result.returncode != 0:
             return None
         fields = result.stdout.strip().split(maxsplit=5)
         if len(fields) != 6:
             return None
+        # ps flattens argv without shell quoting. The pinned form has fixed
+        # delimiters, so keep the socket's spaces, quotes and backslashes intact.
+        executable, pinned, remainder = fields[5].partition(" -S ")
+        if pinned and Path(executable).name == "tmux":
+            socket, separator, target = remainder.rpartition(" attach-session -t ")
+            if not separator:
+                return None
+            command = [executable, "-S", socket, "attach-session", "-t", target]
+        else:
+            command = shlex.split(fields[5])
         record = {
             "pid": pid,
             "birth": " ".join(fields[:5]),
-            "command": shlex.split(fields[5]),
+            "command": command,
         }
         return _parse_pid_record(json.dumps(record))
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -396,7 +468,11 @@ def _record_pid(pid_file: Path | None, pid: int, session_name: str) -> None:
     if pid_file is None:
         return
     record = _process_identity(pid)
-    if record is None or record["command"][3] != exact_target(session_name):
+    if (
+        record is None
+        or record["command"][1:]
+        != tmux_command("attach-session", "-t", exact_target(session_name))[1:]
+    ):
         return
     try:
         pid_file.parent.mkdir(parents=True, exist_ok=True)

@@ -11,8 +11,14 @@ from __future__ import annotations
 
 from importlib import import_module
 
+from agent_backbone.base import check_before_effect
 from agent_backbone.config import RUNTIME_METADATA
 from agent_backbone.services.runtimes import shell
+from agent_backbone.services.runtimes._environment import (
+    NativeEnvironment,
+    install_native_environments,
+)
+from agent_backbone.services.runtimes._keychain import prepare_profile_keychain
 from agent_backbone.services.runtimes._pane import GENERIC_BUSY_FRAGMENTS, sanitize_pane_content
 from agent_backbone.services.runtimes._usage import read_jsonl as read_usage_jsonl
 from agent_backbone.services.runtimes.base import (
@@ -118,14 +124,19 @@ def install_hint() -> str:
 
 
 async def send_message(
-    session_name: str, message: str, *, runtime_hint: str | None = None
+    session_name: str, message: str, *, runtime_hint: str | None = None, check_effect=None
 ) -> bool | None:
     """Submit to an identified runtime; None means keep this notification as data."""
     pane_content = await capture_pane(session_name, lines=80)
     runtime = await resolve_runtime(session_name, hint=runtime_hint, pane_content=pane_content)
     if not await runtime.accepts_notifications(session_name):
         return None
-    return await runtime.deliver_message(session_name, message)
+    await check_before_effect(check_effect)
+    return await runtime.deliver_message(
+        session_name,
+        message,
+        **({"check_effect": check_effect} if check_effect is not None else {}),
+    )
 
 
 __all__ = [
@@ -136,6 +147,7 @@ __all__ = [
     "RUNTIME_ENV_KEY",
     "STATE_DIR_ENV_KEY",
     "UNKNOWN",
+    "NativeEnvironment",
     "Runtime",
     "RuntimeDiagnostic",
     "SubmissionUnconfirmed",
@@ -144,6 +156,8 @@ __all__ = [
     "detect_runtime",
     "get_runtime",
     "install_hint",
+    "install_native_environments",
+    "prepare_profile_keychain",
     "project_skill_dirs",
     "read_brief",
     "read_usage_jsonl",

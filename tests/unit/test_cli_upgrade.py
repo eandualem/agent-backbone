@@ -276,6 +276,21 @@ class TestRunServerRestart:
             ["python", *(["-I"] if isolated else []), "-B", "-m", "agent_backbone.cli", "up"],
         )
 
+    def test_an_isolated_provider_starts_over_with_only_its_search_path(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from agent_backbone.cli import server
+
+        monkeypatch.setenv("HOME", "/private/home")
+        monkeypatch.setenv("BACKBONE_DATA_DIR", "/private")
+        monkeypatch.setenv("PATH", "/usr/bin")
+        provider = SimpleNamespace(reservation=SimpleNamespace(kind="isolated"))
+        with patch.object(server.os, "execve") as execve:
+            server._reexec(provider)
+        env = execve.call_args.args[2]
+        assert env["PATH"] == "/usr/bin"
+        assert set(env) <= {"PATH", "LANG", "LC_ALL"}
+
     def test_no_flag_no_exec(self, tmp_path):
         from types import SimpleNamespace
 
@@ -381,5 +396,39 @@ def test_server_startup_failure_is_not_reported_as_success(tmp_path):
         uvicorn_server.return_value.started = False
         with pytest.raises(SystemExit) as exc:
             server._run_server(bootstrap_config(tmp_path))
+    assert exc.value.code == 3
+    execv.assert_not_called()
+
+
+def test_failed_shutdown_does_not_exec_a_replacement(tmp_path):
+    from contextlib import asynccontextmanager
+
+    from fastapi import FastAPI
+
+    from agent_backbone.cli import server
+    from agent_backbone.config import AgentsConfig, build_config
+
+    @asynccontextmanager
+    async def failing_lifespan(app):
+        yield
+        raise RuntimeError("shutdown cleanup failed")
+
+    app = FastAPI(lifespan=failing_lifespan)
+    app.state.restart_requested = True
+    config = build_config(
+        tmp_path,
+        settings={"backbone.host": "127.0.0.1", "backbone.port": 0},
+        agents=AgentsConfig(),
+        env={},
+    )
+    with (
+        patch("agent_backbone.api.app.create_app", return_value=app),
+        # Finish serving immediately; startup, lifespan failure and shutdown
+        # run through the real Uvicorn server on a private ephemeral port.
+        patch("uvicorn.Server.main_loop", new_callable=AsyncMock),
+        patch.object(server.os, "execv") as execv,
+    ):
+        with pytest.raises(SystemExit) as exc:
+            server._run_server(config)
     assert exc.value.code == 3
     execv.assert_not_called()

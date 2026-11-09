@@ -26,6 +26,7 @@ from functools import wraps
 from typing import TYPE_CHECKING, TypeVar
 from weakref import WeakValueDictionary
 
+from agent_backbone.base import check_before_effect, run_thread
 from agent_backbone.hooks.backbone_state import (
     claim_context,
     clear_context,
@@ -58,6 +59,18 @@ _BYPASSABLE = frozenset({SessionIntelligence.HUMAN_TYPING, SessionIntelligence.S
 """Blocking conditions ``priority`` may push through. Busy and waiting never are:
 a high-priority subscription batch reaches a *working* agent only as hook
 context (``offer_context``), never as a paste."""
+
+
+class DeliveryRefused(Exception):
+    """An effect guard refused before a paste or queue admission was attempted.
+
+    Runtime guards after a paste become SubmissionUnconfirmed instead. Callers
+    may retry this refusal; they must retain every other ambiguous attempt.
+    """
+
+    def __init__(self, cause: Exception):
+        super().__init__("Delivery refused before submission")
+        self.cause = cause
 
 
 @dataclass(frozen=True)
@@ -337,6 +350,7 @@ async def _enqueue(
     priority: bool = False,
     held_for_inbox: bool = False,
     withdraw_context: Callable[[int], str] | None = None,
+    interaction: dict | None = None,
 ) -> _QueueReceipt:
     """Store the message; say what happened (``stored`` / ``already_queued`` /
     ``failed``), or None when there is nothing to store it in."""
@@ -373,6 +387,7 @@ async def _enqueue(
                 **({"uncertain": True} if uncertain else {}),
                 **({"held_for_inbox": True} if held_for_inbox else {}),
                 **({"priority": 1} if priority else {}),
+                **({"interaction": interaction} if interaction else {}),
             )
     except Exception as exc:
         log.error(
@@ -426,6 +441,8 @@ async def safe_deliver(
     queue_id: int | None = None,
     event_id: int | None = None,
     once: bool = False,
+    check_effect=None,
+    interaction: dict | None = None,
 ) -> DeliveryReport:
     """Deliver ``message`` to ``session_name`` if the agent can take it, else queue it.
 
@@ -438,6 +455,16 @@ async def safe_deliver(
     ``once``: a success already recorded under ``operation_id`` in the agent's
     current conversation (a queued copy's included) answers ``already_delivered``.
     """
+
+    async def check_unsubmitted():
+        try:
+            await check_before_effect(check_effect)
+        except Exception as exc:
+            raise DeliveryRefused(exc) from exc
+
+    guard = check_unsubmitted if check_effect is not None else None
+    await check_before_effect(guard)
+    paste_attempted = False
     kind = delivery_kind
     operation_id = operation_id or uuid.uuid4().hex
     trackable_issue = db is not None and issue_number is not None and target_entity is not None
@@ -475,6 +502,12 @@ async def safe_deliver(
                     held_for_inbox=held["status"] == "checkpoint",
                 )
 
+    if db is not None and requeue and kind != "issue":
+        # Reuse a real pending queue operation, never correlate by preview/time.
+        pending = await db.queue.pending_operation(session_name, message, sender, source_key)
+        if pending:
+            operation_id = pending
+
     # 1. Issue queue gate
     if kind == "issue" and trackable_issue:
         since = await db.agents.started_at(session_name)
@@ -500,6 +533,7 @@ async def safe_deliver(
     # 2. Claim
     claim_id: int | None = None
     if kind == "issue" and trackable_issue:
+        await check_before_effect(guard)
         claim = await db.deliveries.claim(
             issue_number=issue_number,
             target_entity=target_entity,
@@ -552,7 +586,7 @@ async def safe_deliver(
         # The receipt is the only proof the hook delivered it: settle the
         # row first, so a failure or restart in between never pastes it.
         await db.queue.mark_delivered(batch_id)
-        await asyncio.to_thread(clear_context, config.state_dir, session_name, str(batch_id))
+        await run_thread(clear_context, config.state_dir, session_name, str(batch_id))
         return DeliveryReport(
             DeliveryOutcome.DELIVERED,
             operation_id=batch_operation,
@@ -565,6 +599,10 @@ async def safe_deliver(
     ) -> DeliveryReport:
         receipt = _QueueReceipt()
         if queue and requeue:
+            # An uncertain paste already belongs to this operation: preserve its
+            # recovery record even if authority changed after the paste.
+            if not uncertain:
+                await check_before_effect(check_effect if paste_attempted else guard)
             receipt = await _enqueue(
                 db,
                 session_name=session_name,
@@ -580,6 +618,7 @@ async def safe_deliver(
                 uncertain=uncertain,
                 priority=priority,
                 held_for_inbox=held_for_inbox,
+                interaction=interaction,
                 withdraw_context=lambda row_id: claim_context(
                     config.state_dir, session_name, str(row_id)
                 ),
@@ -674,7 +713,7 @@ async def safe_deliver(
             # several batches, and each receipt must cover only its own text.
             for batch_id, batch_text in receipt.context_offers:
                 try:
-                    await asyncio.to_thread(
+                    await run_thread(
                         offer_context, config.state_dir, session_name, str(batch_id), batch_text
                     )
                 except OSError as exc:
@@ -709,24 +748,46 @@ async def safe_deliver(
     uncertain = False
 
     async def submit() -> bool | None:
-        nonlocal uncertain
+        nonlocal uncertain, paste_attempted
         confirmed = (
             db is not None
             and queue_id is not None
             and not requeue
             and await db.signing.is_confirmation(operation_id)
         )
+        await check_before_effect(guard)
         if confirmed:
             # Recorded before the paste: an attempt interrupted after it is
             # held as uncertain, never pasted again (``_serialized``).
             await db.signing.attempt(operation_id, begun=True)
+        await check_before_effect(guard)
+        if db is not None and requeue:
+            await db.interactions.capture(
+                operation_id=operation_id,
+                message=message,
+                sender=sender,
+                recipient=session_name,
+                kind=kind,
+                source=source,
+                metadata=interaction,
+            )
         pasted_at = time.time()
         note_submission(config.state_dir, session_name)
         try:
-            sent = await send_message(session_name, message, runtime_hint=profile.runtime)
+            paste_attempted = True
+            sent = await send_message(
+                session_name,
+                message,
+                runtime_hint=profile.runtime,
+                **({"check_effect": guard} if guard is not None else {}),
+            )
+            if sent is None:
+                paste_attempted = False  # Runtime refused notification before pasting.
             if not sent and confirmed:
                 await db.signing.attempt(operation_id, begun=False)
             return sent
+        except DeliveryRefused:
+            raise  # A known pre-effect refusal is not an uncertain submission.
         except SubmissionUnconfirmed as exc:
             # Only a runtime whose hook sees UserPromptSubmit can send a receipt. One
             # not identified before the paste may be (send_message looks again): it waits.
@@ -783,9 +844,7 @@ async def safe_deliver(
         # hook context. Settle that right before pasting, under the session
         # lock that also serializes the offer, so the same text is never
         # pasted as well — and an offer outlives a drain that could not paste.
-        claim = await asyncio.to_thread(
-            claim_context, config.state_dir, session_name, str(queue_id)
-        )
+        claim = await run_thread(claim_context, config.state_dir, session_name, str(queue_id))
         if claim == "taken":
             return await record_hook_delivery(queue_id, message, operation_id)
 
@@ -831,9 +890,7 @@ async def prompt_hook_after(state_dir, session_name: str, since: float, message:
     digest = prompt_digest(message)
     deadline = time.monotonic() + PROMPT_HOOK_WAIT_SECONDS
     while True:
-        snapshot = await asyncio.to_thread(
-            read_state_file, state_dir, session_name, current_launch=True
-        )
+        snapshot = await run_thread(read_state_file, state_dir, session_name, current_launch=True)
         if (
             snapshot is not None
             and snapshot.source == "push"

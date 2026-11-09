@@ -24,6 +24,7 @@ without an instance, such as scheduler jobs; see ``_notify.py``.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager, nullcontext
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import BackboneConfig
@@ -42,10 +43,14 @@ class Integration:
         self,
         config: BackboneConfig | Callable[[], BackboneConfig],
         db: BackboneDB | None = None,
+        *,
+        operation: Callable[[], AbstractAsyncContextManager] | None = None,
     ) -> None:
         self._config_provider = config if callable(config) else (lambda: config)
         self._db = db
         self._running = False
+        self._operation = operation or nullcontext
+        self._stopping = False
 
     @property
     def config(self) -> BackboneConfig:
@@ -72,6 +77,10 @@ class Integration:
         return self._running
 
     # -- lifecycle -------------------------------------------------------
+
+    def close_admission(self) -> None:
+        """Retire new external work without guarding resource cleanup."""
+        self._stopping = True
 
     async def start(self) -> None:  # pragma: no cover - trivial default
         return None

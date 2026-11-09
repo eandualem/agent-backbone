@@ -7,7 +7,9 @@ import json
 import sys
 import tempfile
 from asyncio.subprocess import create_subprocess_exec
+from contextlib import AsyncExitStack
 
+from agent_backbone.base import complete_before_cancel, owned_process
 from agent_backbone.sheets._errors import SheetError
 from agent_backbone.sheets._models import canonical_json
 
@@ -29,21 +31,29 @@ class SheetCalculator:
         if len(body) > 2 * WORKER_BYTES:
             raise SheetError("calculation_limit", "calculation input exceeds byte limit")
         self._busy = True
-        process = None
+        processes = AsyncExitStack()
         scratch = None
         try:
             scratch = tempfile.TemporaryDirectory(prefix="backbone-sheet-worker-")
-            process = await create_subprocess_exec(
-                sys.executable,
-                "-I" if sys.flags.isolated else "-P",
-                "-B",
-                "-m",
-                "agent_backbone.sheets._worker",
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-                # Do not inherit agent credentials or live installation settings.
-                env={"LANG": "C.UTF-8", "PYTHONIOENCODING": "utf-8", "TMPDIR": scratch.name},
+            process = await processes.enter_async_context(
+                owned_process(
+                    create_subprocess_exec(
+                        sys.executable,
+                        "-I" if sys.flags.isolated else "-P",
+                        "-B",
+                        "-m",
+                        "agent_backbone.sheets._worker",
+                        stdin=asyncio.subprocess.PIPE,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.DEVNULL,
+                        # Do not inherit agent credentials or live installation settings.
+                        env={
+                            "LANG": "C.UTF-8",
+                            "PYTHONIOENCODING": "utf-8",
+                            "TMPDIR": scratch.name,
+                        },
+                    )
+                )
             )
 
             async def monitor_memory():
@@ -89,7 +99,7 @@ class SheetCalculator:
                 finally:
                     if not sender.done():
                         sender.cancel()
-                    await asyncio.gather(sender, return_exceptions=True)
+                    await complete_before_cancel(asyncio.gather(sender, return_exceptions=True))
 
             worker = asyncio.create_task(exchange())
             monitor = asyncio.create_task(monitor_memory())
@@ -105,7 +115,9 @@ class SheetCalculator:
                 for task in (worker, monitor):
                     if not task.done():
                         task.cancel()
-                await asyncio.gather(worker, monitor, return_exceptions=True)
+                await complete_before_cancel(
+                    asyncio.gather(worker, monitor, return_exceptions=True)
+                )
             if process.returncode:
                 raise SheetError(
                     "calculation_failed", "spreadsheet engine stopped without a result"
@@ -127,9 +139,9 @@ class SheetCalculator:
                 "calculation_failed", "spreadsheet engine stopped without a result"
             ) from exc
         finally:
-            if process is not None and process.returncode is None:
-                process.kill()
-                await process.wait()
-            self._busy = False
-            if scratch is not None:
-                scratch.cleanup()
+            try:
+                await processes.aclose()
+            finally:
+                self._busy = False
+                if scratch is not None:
+                    scratch.cleanup()

@@ -23,9 +23,9 @@ class OutboxRepo(Repo):
                 source_key = delivery.get("source_key") or ""
                 status = "pending"
                 if source_key.startswith("review-start:"):
-                    # Materialize and write-lock the lifecycle row. Completion
-                    # and plan creation serialize on this row on PostgreSQL;
-                    # SQLite serializes the transaction's writes.
+                    # Materialize and write-lock the lifecycle row: SQLite
+                    # serializes the transaction's writes with completion and
+                    # plan creation.
                     await conn.execute(
                         text(
                             "INSERT INTO review_lifecycle (source_key, finished_at) "

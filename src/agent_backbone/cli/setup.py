@@ -42,10 +42,21 @@ BACKBONE_API_KEY={api_key}
 
 
 def cmd_init(args: argparse.Namespace) -> int:
+    from agent_backbone.config import PROFILE_REGISTRY_PATH
+    from agent_backbone.services.database import check_new_default, create_default_profile
     from agent_backbone.services.database.engine import redact_url
 
-    config = bootstrap_config(args.data_dir)
+    try:
+        config = bootstrap_config(args.data_dir)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 1
     data_dir = config.data_dir
+    try:
+        check_new_default(data_dir)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 1
     data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     data_dir.chmod(0o700)
     (data_dir / "state").mkdir(exist_ok=True)
@@ -63,11 +74,19 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"{env_path} exists (kept; use --force to regenerate)")
 
     async def _migrate() -> None:
-        async with _common.Direct(config):
-            pass
+        async with _common.Direct(config, bootstrap=True) as direct:
+            await direct.db.signing.audience()
 
     asyncio.run(_migrate())
     print(f"database ready: {redact_url(config.database_url)}")
+    try:
+        profile = create_default_profile(
+            Path(PROFILE_REGISTRY_PATH).expanduser(), data_dir, "manual"
+        )
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 1
+    print(f"profile ready: {profile.display_name} ({profile.identity.profile_id})")
 
     print("\nNext steps:")
     print("  Choose starting practices: backbone docs team")
@@ -210,6 +229,13 @@ def cmd_secrets(args: argparse.Namespace) -> int:
 
 def cmd_runtimes(args: argparse.Namespace) -> int:
     """Every runtime, whether its binary is installed, and example model ids."""
+    if any(
+        getattr(args, field, None) is not None
+        for field in ("profile", "expected_installation_id", "expected_lifecycle_id")
+    ):
+        from agent_backbone.cli._profile_catalog import cmd_bound_runtimes
+
+        return cmd_bound_runtimes(args)
     from agent_backbone.services.runtimes import RUNTIMES as REGISTRY
 
     checks = (

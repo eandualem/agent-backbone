@@ -7,12 +7,15 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING
 
+from agent_backbone.api.profile_binding import provider_context_current
 from agent_backbone.config import BackboneConfig
 from agent_backbone.services.agents import EnrichedAgent, build_session_snapshot
-from agent_backbone.services.database import BackboneDB
+from agent_backbone.services.database import BackboneDB, ProfileProvider
 
 if TYPE_CHECKING:
     import socketio
@@ -40,11 +43,14 @@ class SessionFeed:
         *,
         ttl_seconds: float = SNAPSHOT_TTL_SECONDS,
         db: BackboneDB | None = None,
+        profile_provider: ProfileProvider | None = None,
     ) -> None:
         self._config = config
         self._sio = sio
         self._ttl = ttl_seconds
         self._db = db
+        self._profile_provider = profile_provider
+        self._recorder_id = uuid.uuid4().hex
         self._history_task: asyncio.Task[None] | None = None
         self._closed = False
         self._cache: list[EnrichedAgent] = []
@@ -71,7 +77,9 @@ class SessionFeed:
         async with self._lock:
             if not force_refresh and self._fresh():
                 return self._cache
-            self._cache = await build_session_snapshot(self._config())
+            config = self._config()
+            registrations = {spec.name: spec.registration_id for spec in config.agents}
+            self._cache = await build_session_snapshot(config)
             if (
                 not self._closed
                 and self._config().settings.get("diagnostics.mode", "standard") != "off"
@@ -80,7 +88,9 @@ class SessionFeed:
             ):
                 self._history_task = asyncio.create_task(
                     self._record_history(
-                        [(a.name, a.state, a.reason) for a in self._cache if a.configured]
+                        [(a.name, a.state, a.reason) for a in self._cache if a.configured],
+                        registrations,
+                        {a.name: a.evidence for a in self._cache if a.configured},
                     )
                 )
                 try:
@@ -109,9 +119,27 @@ class SessionFeed:
                     self._history_task.cancel()
                 await asyncio.gather(self._history_task, return_exceptions=True)
 
-    async def _record_history(self, states: list[tuple[str, str, str | None]]) -> None:
+    async def _record_history(
+        self, states: list[tuple[str, str, str | None]], registrations, evidence
+    ) -> None:
         try:
-            await self._db.state_history.observe(states)
+            async with AsyncExitStack() as operations:
+                # This task can outlive the request while its cancelled database
+                # transaction rolls back. Retain its own captured reservation.
+                if self._profile_provider is not None:
+                    await operations.enter_async_context(self._profile_provider.operation())
+                    if not await provider_context_current(
+                        self._profile_provider, self._config(), self._db
+                    ):
+                        raise ValueError("State history provider context does not match")
+                await self._db.state_history.observe(states)
+                await self._db.state_history.observe_registered(
+                    states,
+                    registrations=registrations,
+                    evidence=evidence,
+                    recorder_id=self._recorder_id,
+                )
+                await self._db.interactions.checkpoint(self._recorder_id)
         except Exception:
             log.exception("Failed to record state history (non-fatal)")
 

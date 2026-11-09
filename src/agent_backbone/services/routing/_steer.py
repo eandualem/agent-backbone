@@ -13,13 +13,13 @@ is not incorporation.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from agent_backbone.base import run_thread
 from agent_backbone.hooks.backbone_state import (
     clear_steer,
     expire_steer,
@@ -79,6 +79,7 @@ async def steer_agent(
     relay: bool = False,
     operation_id: str | None = None,
     claim_token: str | None = None,
+    interaction: dict | None = None,
 ) -> SteerReport:
     """Offer ``text`` to the agent's current turn, or refuse with the reason.
 
@@ -88,7 +89,7 @@ async def steer_agent(
     the request's claim on its one offer: it publishes only while it holds it."""
     # The turn this steer is for, read before the checks: a turn that ends
     # (or ends and another starts) while the offer is written is caught below.
-    turn = await asyncio.to_thread(_hook_record, config, session_name)
+    turn = await run_thread(_hook_record, config, session_name)
     profile = await get_session_intelligence(session_name, config)
     evidence = list(profile.evidence)
     if profile.intelligence == SessionIntelligence.OFFLINE:
@@ -156,6 +157,15 @@ async def steer_agent(
                 "claim_lost",
                 evidence=[*evidence, "another request took over this confirmation's offer"],
             )
+        await db.interactions.capture(
+            operation_id=operation_id,
+            message=text,
+            sender=sender,
+            recipient=session_name,
+            kind="steer",
+            source=STEER_SOURCE,
+            metadata=interaction,
+        )
         delivery_id = await db.deliveries.record(
             issue_number=None,
             target_entity=session_name,
@@ -168,7 +178,7 @@ async def steer_agent(
         )
         try:
             key = steer_key(delivery_id)
-            placed = await asyncio.to_thread(
+            placed = await run_thread(
                 offer_steer,
                 config.state_dir,
                 session_name,
@@ -197,13 +207,11 @@ async def steer_agent(
     # the write, the offer is already missed. The hook may have taken it
     # within the turn already, which is a handoff.
     if await _turn_ended(config, session_name, turn) and (
-        await asyncio.to_thread(
-            expire_steer, config.state_dir, session_name, launch_id, delivery_id
-        )
-        or await asyncio.to_thread(_missed, config, session_name, launch_id, delivery_id)
+        await run_thread(expire_steer, config.state_dir, session_name, launch_id, delivery_id)
+        or await run_thread(_missed, config, session_name, launch_id, delivery_id)
     ):
         await db.deliveries.settle(delivery_id, "not_taken", expected="offered")
-        await asyncio.to_thread(clear_steer, config.state_dir, session_name, launch_id, delivery_id)
+        await run_thread(clear_steer, config.state_dir, session_name, launch_id, delivery_id)
         return SteerReport(
             "refused",
             session_name,
@@ -265,7 +273,7 @@ async def _turn_ended(config: BackboneConfig, session_name: str, turn: _HookReco
     within the turn (waiting for a person) is not its end, whatever the
     screen shows; a record older than the check, such as one left from an
     earlier session, says nothing about this turn."""
-    snapshot = await asyncio.to_thread(read_state_file, config.state_dir, session_name)
+    snapshot = await run_thread(read_state_file, config.state_dir, session_name)
     if snapshot is None or snapshot.source != "push":
         return False  # no hook evidence: the hook's own retirement and the TTL apply
     if turn is not None and snapshot.timestamp == turn[0]:
@@ -285,14 +293,14 @@ async def settle_steers(
     provider leaves them ``not_taken``. A caller that only needs a handoff
     recorded passes ``read_states=False``."""
     summary: dict[str, int] = {}
-    offers = await asyncio.to_thread(steer_offers, config.state_dir)
+    offers = await run_thread(steer_offers, config.state_dir)
     on_disk: set[int] = set()
     waiting: dict[str, list[tuple[str, int]]] = {}
     for agent, launch_id, delivery_id, state, age in offers:
         on_disk.add(delivery_id)
         if state == "taken":
             await db.deliveries.settle(delivery_id, "handed_off", expected="offered")
-            await asyncio.to_thread(clear_steer, config.state_dir, agent, launch_id, delivery_id)
+            await run_thread(clear_steer, config.state_dir, agent, launch_id, delivery_id)
             summary["handed_off"] = summary.get("handed_off", 0) + 1
         elif state == "missed" or age > STEER_TTL_SECONDS:
             await _not_taken(config, db, agent, launch_id, delivery_id, state, summary)
@@ -324,12 +332,12 @@ async def _not_taken(
     state: str,
     summary: dict[str, int],
 ) -> None:
-    if state == "offered" and not await asyncio.to_thread(
+    if state == "offered" and not await run_thread(
         expire_steer, config.state_dir, agent, launch_id, delivery_id
     ):
         return  # the hook took it meanwhile: handed_off next tick
     await db.deliveries.settle(delivery_id, "not_taken", expected="offered")
-    await asyncio.to_thread(clear_steer, config.state_dir, agent, launch_id, delivery_id)
+    await run_thread(clear_steer, config.state_dir, agent, launch_id, delivery_id)
     summary["not_taken"] = summary.get("not_taken", 0) + 1
 
 

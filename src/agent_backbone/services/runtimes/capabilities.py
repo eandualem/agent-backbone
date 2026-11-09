@@ -175,6 +175,7 @@ _USER_FILES = "tests/unit/services/runtimes/test_user_instructions.py"
 _MEMORY = "tests/unit/services/runtimes/test_native_memory.py"
 _VERSION = "tests/unit/services/runtimes/test_installed_version.py"
 _SIGNED = "tests/unit/api/routes/test_api_signing.py"
+_ISOLATED_LAUNCH = "Launch in a real tmux profile: tests/smoke_profiles.py; no model calls"
 _API_BOUNDARY = "checked at the API, the same for every runtime"
 _CONFIRMED = "tests/unit/api/routes/test_api_confirmations.py"
 _VALIDATE = "tests/unit/services/terminal/test_callers.py"
@@ -200,6 +201,51 @@ _RESPONSE_DELIVERY = (
 
 CAPABILITIES: tuple[Capability, ...] = (
     _row(
+        "interaction-history",
+        "Captured interaction history and message-anchored owner discussion",
+        "src/agent_backbone/api/routes/interactions.py",
+        fallback=(
+            "Use Activity for partial delivery observations; "
+            "original missing bodies cannot be recovered."
+        ),
+        implemented=lambda rt: True,
+        claude=_ok(
+            "tests/unit/api/routes/test_interaction_observations.py",
+            "API capture/read checked; delivery retains its separate runtime coverage; "
+            "no live model call.",
+        ),
+        codex=_ok(
+            "tests/unit/api/routes/test_interaction_observations.py",
+            "API capture/read checked; delivery retains its separate runtime coverage; "
+            "no live model call.",
+        ),
+        opencode=_ok(
+            "tests/unit/api/routes/test_interaction_observations.py",
+            "API capture/read checked; delivery retains its separate runtime coverage; "
+            "no live model call.",
+        ),
+        gemini=_ok(
+            "tests/unit/api/routes/test_interaction_observations.py",
+            "API capture/read checked; delivery retains its separate runtime coverage; "
+            "no live model call.",
+        ),
+        deepcode=_ok(
+            "tests/unit/api/routes/test_interaction_observations.py",
+            "API capture/read checked; delivery retains its separate runtime coverage; "
+            "no live model call.",
+        ),
+        aider=_ok(
+            "tests/unit/api/routes/test_interaction_observations.py",
+            "API capture/read checked; delivery retains its separate runtime coverage; "
+            "no live model call.",
+        ),
+        shell=_ok(
+            "tests/unit/api/routes/test_interaction_observations.py",
+            "API capture/read checked; delivery retains its separate runtime coverage; "
+            "no live model call.",
+        ),
+    ),
+    _row(
         "bundle-bytecode",
         "Owned Python launch helpers preserve the engine inventory",
         "services/terminal/_sessions.py; services/runtimes/opencode.py; hooks/install.py",
@@ -218,7 +264,9 @@ CAPABILITIES: tuple[Capability, ...] = (
     _row(
         "installer-first-agent",
         "Explicit first-agent setup with durable retry and preflight cancellation receipts",
-        "services/routing/onboarding.py; cli/onboarding.py; Runtime.prepare_setup_hooks",
+        "services/routing/onboarding.py; api/routes/onboarding.py; "
+        "cli/onboarding.py; cli/_profile_setup.py; cli/_profile_client.py; "
+        "Runtime.prepare_setup_hooks",
         fallback=(
             "Use the documented agent-start flow; do not retry an uncertain launch "
             "or greeting as a new request."
@@ -226,15 +274,22 @@ CAPABILITIES: tuple[Capability, ...] = (
         implemented=lambda rt: rt.setup_hooks,
         claude=_ok(
             "tests/unit/services/routing/test_onboarding.py",
-            "working-installation live check pending",
+            "Bound CLI: tests/unit/test_cli_profile_setup.py; "
+            "HTTP guards: tests/unit/api/test_profile_binding.py; "
+            "live, 6 Nov 2026: started and greeted on the working installation; "
+            "the reply stopped at an account usage limit",
         ),
         codex=_ok(
             "tests/unit/services/routing/test_onboarding.py",
-            "working-installation live check pending",
+            "Bound CLI: tests/unit/test_cli_profile_setup.py; "
+            "HTTP guards: tests/unit/api/test_profile_binding.py; "
+            "live, 6 Nov 2026: started, greeted and replied on the working installation",
         ),
         opencode=_ok(
             "tests/unit/services/routing/test_onboarding.py",
-            "working-installation live check pending",
+            "Bound CLI: tests/unit/test_cli_profile_setup.py; "
+            "HTTP guards: tests/unit/api/test_profile_binding.py; "
+            "live start on the final build not yet seen (#579)",
         ),
         gemini=_gap(note="installer hook preparation is not implemented"),
         deepcode=_gap(note="installer hook preparation is not implemented"),
@@ -244,16 +299,154 @@ CAPABILITIES: tuple[Capability, ...] = (
     _row(
         "runtime-discovery",
         "Read-only runtime discovery for setup",
-        "services/runtimes/base.py Runtime.discovery; cli/setup.py cmd_runtimes",
+        "services/runtimes/base.py Runtime.discovery; cli/setup.py cmd_runtimes; "
+        "cli/_profile_catalog.py; api/runtime_catalog.py",
         fallback="Binary presence is not login; use the runtime's visible sign-in flow.",
         implemented=lambda rt: callable(rt.discovery),
-        claude=_ok("tests/unit/services/runtimes/test_discovery.py"),
-        codex=_ok("tests/unit/services/runtimes/test_discovery.py"),
-        opencode=_ok("tests/unit/services/runtimes/test_discovery.py"),
-        gemini=_ok("tests/unit/services/runtimes/test_discovery.py"),
-        deepcode=_ok("tests/unit/services/runtimes/test_discovery.py"),
-        aider=_ok("tests/unit/services/runtimes/test_discovery.py"),
-        shell=_ok("tests/unit/services/runtimes/test_discovery.py"),
+        claude=_ok(
+            "tests/unit/services/runtimes/test_discovery.py",
+            "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
+            "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
+            "no activation or account verification",
+        ),
+        codex=_ok(
+            "tests/unit/services/runtimes/test_discovery.py",
+            "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
+            "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
+            "no activation or account verification",
+        ),
+        opencode=_ok(
+            "tests/unit/services/runtimes/test_discovery.py",
+            "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
+            "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
+            "no activation or account verification",
+        ),
+        gemini=_ok(
+            "tests/unit/services/runtimes/test_discovery.py",
+            "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
+            "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
+            "no activation or account verification",
+        ),
+        deepcode=_ok(
+            "tests/unit/services/runtimes/test_discovery.py",
+            "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
+            "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
+            "no activation or account verification",
+        ),
+        aider=_ok(
+            "tests/unit/services/runtimes/test_discovery.py",
+            "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
+            "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
+            "no activation or account verification",
+        ),
+        shell=_ok(
+            "tests/unit/services/runtimes/test_discovery.py",
+            "Bound catalog: tests/unit/test_cli_profile_catalog.py and "
+            "tests/unit/api/test_profile_binding.py; missing native context is unavailable; "
+            "no activation or account verification",
+        ),
+    ),
+    _row(
+        "legacy-profile-binding-rejection",
+        "Reject profile-bound traffic on unadopted providers",
+        "api/profile_binding.py; api/socketio_server.py",
+        fallback="Keep bound work pinned; do not retry without its profile identity.",
+        implemented=lambda rt: True,
+        claude=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        codex=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        opencode=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        gemini=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        deepcode=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        aider=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        shell=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+    ),
+    _row(
+        "registration-aware-inspection",
+        "Agent registration IDs and stale-registration refusal on inspection",
+        "api/routes/agents.py; services/agents/queries.py",
+        fallback="Select the agent again after its registration changes.",
+        implemented=lambda rt: True,
+        claude=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        codex=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        opencode=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        gemini=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        deepcode=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        aider=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+        shell=_ok("tests/unit/api/test_profile_binding.py", _API_BOUNDARY),
+    ),
+    _row(
+        "profile-isolated-agents",
+        "Agents run inside an isolated profile with their own native environment",
+        "cli/server.py; services/runtimes/_environment.py",
+        fallback="Use Default for this runtime.",
+        implemented=lambda rt: rt.runs_in_profiles,
+        claude=_ok("tests/unit/services/agents/test_launch.py", _ISOLATED_LAUNCH),
+        codex=_ok("tests/unit/services/agents/test_launch.py", _ISOLATED_LAUNCH),
+        opencode=_ok("tests/unit/services/agents/test_launch.py", _ISOLATED_LAUNCH),
+        gemini=_gap(note="Refused in isolated profiles until someone needs it."),
+        deepcode=_gap(note="Refused in isolated profiles until someone needs it."),
+        aider=_gap(note="Refused in isolated profiles until someone needs it."),
+        shell=_ok("tests/unit/test_cli_profile_services.py", "Shared boundary; no model calls"),
+    ),
+    _row(
+        "profile-cli-sign-in",
+        "Sign a CLI account in inside an isolated profile",
+        "api/profile_sessions.py; cli/profiles.py",
+        fallback="Use Default for this runtime.",
+        implemented=lambda rt: rt.profile_sign_in,
+        claude=_ok(
+            "tests/unit/api/test_profile_sessions.py",
+            "Sign-in itself is checked on a real account; status route reads the CLI's own status",
+        ),
+        codex=_ok(
+            "tests/unit/api/test_profile_sessions.py",
+            "Sign-in itself is checked on a real account; status route reads the CLI's own status",
+        ),
+        opencode=_ok(
+            "tests/unit/api/test_profile_sessions.py",
+            "Sign-in itself is checked on a real account; status route reads the CLI's own status; "
+            "a real signed-in OpenCode result is not yet seen",
+        ),
+        gemini=_gap(note="Refused in isolated profiles until someone needs it."),
+        deepcode=_gap(note="Refused in isolated profiles until someone needs it."),
+        aider=_gap(note="Refused in isolated profiles until someone needs it."),
+        shell=_na("A plain shell has no account to sign in."),
+    ),
+    _row(
+        "profile-reservation-boundary",
+        "Operator-only profile discovery, lifecycle refusal receipts and reserved startup refusal",
+        "cli/profiles.py; services/database/_profile_startup.py; api/app.py; "
+        "cli/_common.py; cli/setup.py; cli/onboarding.py",
+        fallback="A provider whose profile is not ready refuses to start.",
+        implemented=lambda rt: True,
+        claude=_ok(
+            "tests/unit/test_cli_profiles.py",
+            "Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls",
+        ),
+        codex=_ok(
+            "tests/unit/test_cli_profiles.py",
+            "Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls",
+        ),
+        opencode=_ok(
+            "tests/unit/test_cli_profiles.py",
+            "Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls",
+        ),
+        gemini=_ok(
+            "tests/unit/test_cli_profiles.py",
+            "Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls",
+        ),
+        deepcode=_ok(
+            "tests/unit/test_cli_profiles.py",
+            "Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls",
+        ),
+        aider=_ok(
+            "tests/unit/test_cli_profiles.py",
+            "Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls",
+        ),
+        shell=_ok(
+            "tests/unit/test_cli_profiles.py",
+            "Startup: tests/unit/api/test_profile_startup.py; shared boundary; no model calls",
+        ),
     ),
     _row(
         "current-plan",

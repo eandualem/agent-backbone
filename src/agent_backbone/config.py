@@ -10,9 +10,8 @@ The **data directory** is the configuration. Inside it:
   inherited by every agent session it starts.
 - ``state/``, ``hooks/``, ``pids/`` — runtime files.
 
-The only knobs that live outside the directory are environment variables:
-``BACKBONE_DATA_DIR`` (where the directory is) and ``BACKBONE_DATABASE_URL``
-(to use PostgreSQL instead of the SQLite file).
+The only knob that lives outside the directory is the ``BACKBONE_DATA_DIR``
+environment variable (where the directory is).
 
 Code reads a frozen ``BackboneConfig`` snapshot built from the database by
 ``build_config``; ``backbone config set`` changes a setting and the running
@@ -41,8 +40,13 @@ from agent_backbone.templates import TemplateDirs
 from agent_backbone.usage import DEFAULT_PRICES, Price
 
 DEFAULT_DATA_DIR = "~/.local/share/agent-backbone"
+PROFILE_REGISTRY_PATH = "~/.local/share/agent-backbone-profiles/registry.db"
 DEFAULT_PORT = 7120
 SQLITE_FILENAME = "backbone.db"
+
+
+class UnsupportedDatabase(ValueError):
+    """``BACKBONE_DATABASE_URL`` is set: PostgreSQL is no longer supported."""
 
 
 def sqlite_url(data_dir: Path) -> str:
@@ -71,7 +75,6 @@ SECRET_ENV_KEYS: tuple[str, ...] = (
     "TELEGRAM_TOKEN",
     "GMAIL_ADDRESS",
     "GMAIL_APP_PASSWORD",
-    "BACKBONE_DATABASE_URL",  # a PostgreSQL URL carries the database password
 )
 """Secrets the backbone reads. Listed in `backbone secrets list`, and stripped
 from every agent session's environment (see ``session_secret_keys``)."""
@@ -89,7 +92,6 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "usage.context_note_step_tokens": 100_000,
     "backbone.host": "127.0.0.1",
     "backbone.port": DEFAULT_PORT,
-    "backbone.socket_path": "",
     "backbone.session_name": "backbone",
     "backbone.cors_origins": [],
     "backbone.restart_on_upgrade": True,
@@ -166,9 +168,6 @@ SETTINGS_HELP: dict[str, str] = {
         "the CLI reaches a non-loopback host over https)"
     ),
     "backbone.port": "API port",
-    "backbone.socket_path": (
-        "Optional absolute Unix socket under the data directory; empty disables it"
-    ),
     "backbone.log_max_mb": (
         "Rotate the service log (`backbone up --log-file`) at this size in MB (0: never)"
     ),
@@ -650,7 +649,6 @@ class BackboneSection:
     data_dir: str = DEFAULT_DATA_DIR
     host: str = "127.0.0.1"
     port: int = DEFAULT_PORT
-    socket_path: str = ""
     session_name: str = "backbone"
     cors_origins: tuple[str, ...] = ()
     restart_on_upgrade: bool = True
@@ -838,8 +836,6 @@ class BackboneConfig:
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     swarm: SwarmConfig = field(default_factory=SwarmConfig)
-    database_url_override: str = ""
-    """``BACKBONE_DATABASE_URL`` when set (PostgreSQL); empty means SQLite in the data dir."""
     settings: dict[str, Any] = field(default_factory=dict)
     """Raw effective settings (defaults overlaid with stored values)."""
 
@@ -874,7 +870,7 @@ class BackboneConfig:
 
     @property
     def database_url(self) -> str:
-        return self.database_url_override or sqlite_url(self.data_dir)
+        return sqlite_url(self.data_dir)
 
     # --- Derived flags -----------------------------------------------------
 
@@ -916,11 +912,14 @@ class BackboneConfig:
 
 
 def resolve_data_dir(explicit: str | Path | None = None) -> Path:
-    """Data directory from an explicit value, ``BACKBONE_DATA_DIR``, or the default."""
+    """Data directory from an explicit value, ``BACKBONE_DATA_DIR``, or the default.
+
+    Always canonical: a profile records the resolved path and compares against it.
+    """
     raw = explicit or os.environ.get("BACKBONE_DATA_DIR")
     if not raw and os.environ.get("BACKBONE_AGENT") and os.environ.get("BACKBONE_STATE_DIR"):
         raw = Path(os.environ["BACKBONE_STATE_DIR"]).expanduser().parent
-    return Path(raw or DEFAULT_DATA_DIR).expanduser()
+    return Path(raw or DEFAULT_DATA_DIR).expanduser().resolve()
 
 
 def env_file_keys(env_path: Path | str) -> tuple[str, ...]:
@@ -1083,7 +1082,9 @@ def session_secret_keys(data_dir: Path | str | None) -> tuple[str, ...]:
     agent sessions, with no blocklist to keep in sync. Names only; the
     values are never read here.
     """
-    keys = dict.fromkeys(SECRET_ENV_KEYS)
+    # No longer a setting, but a tmux server started while it was set still
+    # holds the old PostgreSQL URL and its password: keep stripping it.
+    keys = dict.fromkeys((*SECRET_ENV_KEYS, "BACKBONE_DATABASE_URL"))
     if data_dir is not None:
         keys.update(dict.fromkeys(env_file_keys(Path(data_dir) / ".env")))
     return tuple(keys)
@@ -1140,6 +1141,12 @@ def build_config(
     overlaid on ``<data_dir>/.env``, without touching ``os.environ``.
     """
     env = load_secrets(data_dir) if env is None else env
+    if env.get("BACKBONE_DATABASE_URL"):
+        raise UnsupportedDatabase(
+            "PostgreSQL is no longer supported: remove BACKBONE_DATABASE_URL from the "
+            f"environment and from {data_dir / '.env'}. The backbone keeps its data in "
+            f"{data_dir / SQLITE_FILENAME}."
+        )
     s = effective_settings(settings)
 
     def _opt_int(value: Any) -> int | None:
@@ -1167,7 +1174,6 @@ def build_config(
             if env.get("BACKBONE_CLIENT_REGISTRATION")
             else s["backbone.host"],
             port=_opt_int(env.get("BACKBONE_PORT")) or s["backbone.port"],
-            socket_path=s["backbone.socket_path"],
             session_name=s["backbone.session_name"],
             cors_origins=tuple(s["backbone.cors_origins"]),
             restart_on_upgrade=bool(s["backbone.restart_on_upgrade"]),
@@ -1210,7 +1216,6 @@ def build_config(
             start_timeout_seconds=s["timing.start_timeout_seconds"],
             delivery_retention_days=s["timing.delivery_retention_days"],
         ),
-        database_url_override=env.get("BACKBONE_DATABASE_URL", ""),
         telegram=TelegramConfig(
             allowed_chat_ids=tuple(int(x) for x in s["telegram.allowed_chat_ids"]),
             allowed_user_ids=tuple(int(x) for x in s["telegram.allowed_user_ids"]),

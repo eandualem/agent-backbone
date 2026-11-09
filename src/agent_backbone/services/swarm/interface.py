@@ -19,7 +19,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_backbone.config import AgentSpec
-from agent_backbone.services.agents import agent_state, lifecycle_lock, start_agent
+from agent_backbone.services.agents import (
+    agent_state,
+    claim_project_directories,
+    lifecycle_lock,
+    start_agent,
+)
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.services.swarm._roster import (
@@ -224,6 +229,7 @@ async def create_swarm(
         base_branch = await current_branch(repo_dir)
     except RuntimeError as exc:
         raise SwarmError(str(exc)) from exc
+    claim_project_directories(config.data_dir, (repo_dir,), for_worktree=True)
     worktree, branch = await create_worktree(repo_dir, name)
 
     try:
@@ -240,6 +246,7 @@ async def create_swarm(
         # Lost a race past the pre-checks (another swarm took the issue or
         # the name meanwhile): don't leave an unregistered worktree behind,
         # it would block the next attempt under this name.
+        claim_project_directories(config.data_dir, (repo_dir, worktree))
         await remove_worktree(repo_dir, worktree)
         raise SwarmError(f"could not register swarm '{name}': {exc}") from exc
 
@@ -359,6 +366,7 @@ async def create_swarm(
                 )
             else:
                 try:
+                    claim_project_directories(config.data_dir, (repo_dir, worktree))
                     removed = await remove_worktree(repo_dir, worktree)
                     cleaned = cleaned and removed
                     if not removed:
@@ -416,6 +424,10 @@ async def teardown_swarm(
             await stack.enter_async_context(lifecycle_lock(member.name))
         if any(store.agents.get(member.name) != member for member in members):
             raise SwarmError("swarm membership changed before teardown; retry disband")
+        worktree = Path(swarm["worktree_dir"])
+        # The worktree lives at <repo_dir>/.backbone/swarms/<name>.
+        repo_dir = worktree.parent.parent.parent
+        claim_project_directories(config.data_dir, (repo_dir,))
         failed_stops: list[str] = []
         for member in members:
             if await session_exists(member.name) and not await stop_session(member.name):
@@ -425,9 +437,8 @@ async def teardown_swarm(
                 "could not stop swarm member session(s): "
                 f"{', '.join(failed_stops)} — the worktree was left in place"
             )
-        worktree = Path(swarm["worktree_dir"])
-        # The worktree lives at <repo_dir>/.backbone/swarms/<name>.
-        repo_dir = worktree.parent.parent.parent
+        if worktree.exists():
+            claim_project_directories(config.data_dir, (repo_dir, worktree))
         # A missing directory is still registered with git until removed; a
         # repository that is gone entirely has nothing left to remove.
         if repo_dir.is_dir() and not await remove_worktree(repo_dir, worktree):

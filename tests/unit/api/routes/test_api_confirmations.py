@@ -94,6 +94,8 @@ async def test_a_confirmed_message_is_admitted_once_with_its_marker(
         f"[via:backbone from:{SENDER} owner-confirmed:{confirmation['confirmation_id']}] {TEXT}"
     )
     assert row.operation_id == data["operation_id"] and row.status == "pending"
+    (interaction,) = await _rows(db, "SELECT sender FROM interactions")
+    assert json.loads(interaction.sender)["attribution"] == "signed"
 
 
 @pytest.mark.parametrize(
@@ -197,6 +199,55 @@ async def test_a_confirmed_steer_is_offered_with_its_marker(api_client, auth_hea
     assert kwargs["operation_id"] == resp.json()["operation_id"] and kwargs["claim_token"]
 
 
+async def test_a_refused_steer_attribution_never_holds_the_offer(
+    api_client, auth_headers, api_app, key
+):
+    db = api_app.state.db
+    confirmation = _confirmation()
+    absent = {"type": "reply_to", "target": {"kind": "interaction", "id": "missing"}}
+    bad = {**_body(confirmation), "interaction": {"relations": [absent]}}
+    resp, _ = await _send(api_client, auth_headers, db, key, bad, path="/api/steer")
+    assert resp.status_code == 422, resp.text
+    assert await db.signing.receipt(confirmation["confirmation_id"]) is None  # nothing admitted
+    assert await _rows(db, "SELECT id FROM interactions") == []
+    offered = AsyncMock(return_value=SteerReport("offered", "ike", delivery_id=1))
+    with patch("agent_backbone.api.routes.messages.steer_agent", offered):
+        resp, _ = await _send(
+            api_client, auth_headers, db, key, _body(confirmation), path="/api/steer"
+        )
+    assert resp.json()["outcome"] == "offered", resp.text
+
+
+async def test_a_refused_steer_keeps_its_settled_failure(api_client, auth_headers, api_app, key):
+    db = api_app.state.db
+
+    async def failed_offer(*args, operation_id, **kwargs):
+        await db.interactions.observe(operation_id, "attempt", outcome="failed", source="steer")
+        return SteerReport("refused", "ike", "offer_not_written")
+
+    with patch("agent_backbone.api.routes.messages.steer_agent", side_effect=failed_offer):
+        await _send(api_client, auth_headers, db, key, _body(_confirmation()), path="/api/steer")
+    (interaction,) = await _rows(db, "SELECT id FROM interactions")
+    assert (await db.interactions.detail(interaction.id))["status"]["value"] == "failed"
+
+
+async def test_a_confirmed_steer_keeps_its_validated_relations(
+    api_client, auth_headers, api_app, key
+):
+    db = api_app.state.db
+    earlier = await db.interactions.capture(
+        operation_id="earlier", message="question", sender="ike", recipient=SENDER
+    )
+    link = {"type": "reply_to", "target": {"kind": "interaction", "id": earlier}}
+    body = {**_body(_confirmation()), "interaction": {"relations": [link]}}
+    offered = AsyncMock(return_value=SteerReport("offered", "ike", delivery_id=1))
+    with patch("agent_backbone.api.routes.messages.steer_agent", offered):
+        resp, _ = await _send(api_client, auth_headers, db, key, body, path="/api/steer")
+    assert resp.status_code == 200, resp.text
+    (row,) = await _rows(db, "SELECT relations FROM interactions WHERE operation_id != 'earlier'")
+    assert [r["target"]["id"] for r in json.loads(row.relations)] == [earlier]
+
+
 async def test_a_refused_steer_commits_no_receipt(api_client, auth_headers, api_app, key):
     db = api_app.state.db
     confirmation = _confirmation()
@@ -207,6 +258,8 @@ async def test_a_refused_steer_commits_no_receipt(api_client, auth_headers, api_
         )
     assert resp.json()["outcome"] == "refused" and resp.json()["receipt"] is None
     assert await db.signing.receipt(confirmation["confirmation_id"]) is None
+    (interaction,) = await _rows(db, "SELECT id FROM interactions")
+    assert (await db.interactions.detail(interaction.id))["status"]["value"] == "cancelled"
 
 
 async def test_delivered_at_comes_from_the_delivery_record(
@@ -315,6 +368,8 @@ async def test_a_reset_revokes_what_the_old_key_confirmed(
     assert receipt["status"] == "revoked"
     (row,) = await _rows(db, "SELECT status, delivered_at FROM message_queue")
     assert row.status == "expired" and row.delivered_at is not None  # retention removes it
+    (interaction,) = await _rows(db, "SELECT id FROM interactions")
+    assert (await db.interactions.detail(interaction.id))["status"]["value"] == "expired"
     assert not await db.queue.still_leased(queue_id)  # the drain won't deliver its copy
     # The sender reconciles it with the new key: the feed says it was revoked.
     signed = await _signed_query(db, replacement, [], epoch=epoch + 1)
@@ -371,6 +426,59 @@ async def test_a_null_confirmation_is_an_ordinary_signed_request(
     assert first.status_code == 200
     assert again.status_code == 409 and again.json()["detail"]["reason"] == "nonce_reused"
     assert deliver.await_count == 1
+    assert deliver.await_args.kwargs["interaction"]["sender"]["attribution"] == "signed"
+
+
+async def test_a_case_variant_sender_is_never_recorded_as_signed(
+    api_client, auth_headers, api_app, key
+):
+    """Case-twin registrations can exist: only the signer's exact name is signed."""
+    deliver = AsyncMock(return_value=DeliveryReport(DeliveryOutcome.DELIVERED))
+    variant = {**MESSAGE, "from_entity": SENDER.upper(), "owner_confirmation": None}
+    with patch("agent_backbone.api.routes.messages.safe_deliver", deliver):
+        # Header and body both carry the variant: only the enrolled name is signed.
+        raw, signed = await _signed(
+            api_app.state.db, key, "POST", "/api/messages", variant, sender=SENDER.upper()
+        )
+        resp = await api_client.post(
+            "/api/messages", headers={**auth_headers, **signed}, content=raw
+        )
+    assert resp.status_code == 200, resp.text
+    assert deliver.await_args.kwargs["interaction"]["sender"]["attribution"] == "unverified"
+
+
+async def test_signed_plan_feedback_from_a_case_twin_is_not_signed(
+    api_client, auth_headers, api_app, key
+):
+    """Both spellings registered, the key enrolled for one: feedback signed as the
+    other, in header and body, is never recorded as signed."""
+    from tests.report_support import author
+    from tests.unit.api.routes.test_api_current_plans import discover, publication
+
+    db = api_app.state.db
+    plan = (await discover(api_client, auth_headers))["author_id"]
+    body = publication(plan)
+    first = (await api_client.post("/api/current-plans", headers=auth_headers, json=body)).json()[
+        "receipt"
+    ]
+    await author(db, SENDER)
+    await author(db, SENDER.upper())  # an older registry can hold both spellings
+    feedback = {
+        "author": SENDER.upper(),
+        "request_id": uuid.uuid4().hex,
+        "observed_plan_id": first["plan_id"],
+        "observed_revision_id": first["revision_id"],
+        "item_ids": [body["plan"]["items"][0]["item_id"]],
+        "kind": "question",
+        "text": "Which step is next?",
+    }
+    path = f"/api/current-plans/{plan}/feedback"
+    raw, signed = await _signed(db, key, "POST", path, feedback, sender=SENDER.upper())
+    with patch("agent_backbone.api.routes.current_plans.deliver_now", AsyncMock()):
+        resp = await api_client.post(path, headers={**auth_headers, **signed}, content=raw)
+    assert resp.status_code == 200, resp.text
+    (row,) = await _rows(db, "SELECT sender FROM interactions")
+    assert json.loads(row.sender)["attribution"] == "unverified"
 
 
 async def test_an_old_confirmation_still_recovers_its_receipt(

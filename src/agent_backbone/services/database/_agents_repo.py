@@ -7,6 +7,7 @@ import uuid
 
 from sqlalchemy import text
 
+from agent_backbone.services.database._interaction_capture import event
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import now_iso
 
@@ -201,13 +202,8 @@ class AgentRepo(Repo):
 
     async def delete(self, name: str) -> bool:
         async with self._tx() as conn:
-            if conn.dialect.name == "postgresql":
-                # Serialize retirement with bound acknowledgment writes.
-                await conn.execute(
-                    text("SELECT 1 FROM agents WHERE name=:name FOR UPDATE"), {"name": name}
-                )
             # Retain bodies and history, but never hand them to a reused name.
-            await conn.execute(
+            inserted = await conn.execute(
                 text(
                     "INSERT INTO deliveries (operation_id,kind,repo,issue_number,target_entity,"
                     "session_name,outcome,source,preview,created_at,registration_id) "
@@ -215,10 +211,32 @@ class AgentRepo(Repo):
                     "COALESCE(target_entity,session_name),session_name,'expired',"
                     "'registration-retired',substr(message,1,120),:now,registration_id "
                     "FROM message_queue WHERE session_name=:name "
-                    "AND status IN ('pending','in_progress','checkpoint','uncertain')"
+                    "AND status IN ('pending','in_progress','checkpoint','uncertain') "
+                    "RETURNING id, operation_id"
                 ),
                 {"name": name, "now": now_iso()},
             )
+            delivery_of = {row.operation_id: row.id for row in inserted.fetchall()}
+            retired = (
+                await conn.execute(
+                    text(
+                        "SELECT id, operation_id FROM message_queue WHERE session_name=:name "
+                        "AND status IN ('pending','in_progress','checkpoint','uncertain')"
+                    ),
+                    {"name": name},
+                )
+            ).fetchall()
+            for row in retired:  # their captured interactions end here too
+                await event(
+                    conn,
+                    row.operation_id,
+                    "completed",
+                    outcome="registration_retired",
+                    source="registration-retired",
+                    at=now_iso(),
+                    queue_id=row.id,
+                    delivery_id=delivery_of.get(row.operation_id),
+                )
             await conn.execute(
                 text(
                     "UPDATE message_queue SET status='expired', delivered_at=:now, leased_at=NULL "
@@ -282,10 +300,7 @@ class AgentRepo(Repo):
         )
         values = {"old": name, "new": new_name}
         async with self._tx() as conn:
-            lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
-            exists = await conn.execute(
-                text("SELECT 1 FROM agents WHERE name = :old" + lock), values
-            )
+            exists = await conn.execute(text("SELECT 1 FROM agents WHERE name = :old"), values)
             if not exists.first():
                 raise KeyError(name)
             for table, column in (*references, ("swarms", "initiator"), ("swarms", "coordinator")):

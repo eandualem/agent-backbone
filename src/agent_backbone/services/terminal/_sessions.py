@@ -8,12 +8,15 @@ import hashlib
 import json
 import logging
 import os
+import shlex
 import signal
 import sys
 import tempfile
 from collections.abc import Sequence
 
+from agent_backbone.base import check_before_effect
 from agent_backbone.services.terminal._core import _run_tmux, exact_target, session_exists
+from agent_backbone.services.terminal._server import tmux_server_socket
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +70,18 @@ Python rather than a shell: a shell refuses read-only names (``UID``), and a
 configured ``PATH`` would decide which ``rm`` removes the file."""
 
 
+# These values describe the pane tmux just created, not an inherited account.
+_PANE_ENV = ("TMUX", "TMUX_PANE", "TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "COLORTERM")
+_ISOLATED_LOAD_AND_EXEC = _LOAD_AND_EXEC.replace(
+    "os.environ.update(json.loads(payload))",
+    f"pane = {{key: os.environ[key] for key in {_PANE_ENV!r} if key in os.environ}}\n"
+    "os.environ.clear()\n"
+    "os.environ.update(pane)\n"
+    "os.environ.update(json.loads(payload))\n"
+    "os.environ.update({key: pane[key] for key in ('TMUX', 'TMUX_PANE') if key in pane})",
+)
+
+
 SESSION_FORMAT_STR = "pane_in_mode=#{pane_in_mode}"
 """Format variables ``agent inspect`` shows for a session."""
 
@@ -92,6 +107,8 @@ async def start_session(
     environment: dict[str, str] | None = None,
     scrub: Sequence[str] | None = None,
     mouse: bool = False,
+    inherit_environment: bool = True,
+    check_effect=None,
 ) -> bool:
     """Start a detached tmux session running ``command`` (or a shell).
 
@@ -114,18 +131,69 @@ async def start_session(
     name that ``environment`` sets explicitly is left alone: an agent's own
     configured ``env`` wins over the scrub.
 
+    ``inherit_environment=False`` requires a complete environment and command.
+    It clears inherited process values, removes server-only session values, and
+    disables environment import on attach. Only tmux-generated pane identity and
+    terminal metadata survive the clear; explicit presentation settings win.
+    Its private launch file uses the captured temporary directory. Profile
+    activation owns the isolated server and its global environment; arbitrary
+    external writes to that server are outside this launch boundary.
+
     Returns True when the session exists afterwards.
     ``mouse`` enables mouse handling only for this session; False preserves
     the user's setting. Inline programs then scroll through tmux history.
     """
+    await check_before_effect(check_effect)
     if await session_exists(session_name):
         log.info("Session '%s' already exists", session_name)
         return True
 
+    await check_before_effect(check_effect)
+    effect_options = {"check_effect": check_effect} if check_effect is not None else {}
     environment = environment or {}
+    if not inherit_environment:
+        if not environment or not command or tmux_server_socket() is None:
+            raise ValueError(
+                "A complete environment, command and pinned terminal server are required"
+            )
+        # A pinned provider must also clear server-only variables that were never
+        # present in the daemon. Later panes receive these removals as well.
+        rc, raw, _ = await _run_tmux(
+            "start-server",
+            ";",
+            "show-environment",
+            "-g",
+            "-s",
+            capture_stdout=True,
+            **effect_options,
+        )
+        if rc != 0:
+            return False
+        # Shell formatting keeps multiline values in a single quoted token.
+        # Splitting raw lines could mistake a secret's continuation for a name.
+        lexer = shlex.shlex(raw.decode(), posix=True, punctuation_chars=";")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        statement = []
+        inherited = []
+        for token in lexer:
+            if token != ";":
+                statement.append(token)
+                continue
+            if len(statement) == 2 and statement[0] in {"export", "unset"}:
+                inherited.append(statement[1])
+            elif len(statement) != 1 or "=" not in statement[0]:
+                raise ValueError("Unsupported terminal environment representation")
+            statement = []
+        if statement:
+            raise ValueError("Incomplete terminal environment representation")
+        scrub = [*(scrub or ()), *inherited]
+    await check_before_effect(check_effect)
     removals = [key for key in dict.fromkeys(scrub or ()) if key not in environment]
 
     args = ["new-session", "-d", "-s", session_name]
+    if not inherit_environment:
+        args.append("-E")  # Never import client update-environment values at creation.
     if working_dir:
         # tmux expands -c as a format after parsing command quoting.
         args.extend(["-c", working_dir.replace("#", "#{l:##}")])
@@ -137,7 +205,11 @@ async def start_session(
     env_file = None
     if environment:
         payload = json.dumps(environment).encode()
-        fd, env_file = tempfile.mkstemp(prefix="backbone-env-", suffix=".json")
+        fd, env_file = tempfile.mkstemp(
+            prefix="backbone-env-",
+            suffix=".json",
+            **({"dir": environment["TMPDIR"]} if not inherit_environment else {}),
+        )
         try:
             with os.fdopen(fd, "wb") as fh:
                 fh.write(payload)
@@ -149,7 +221,7 @@ async def start_session(
             "-I",
             "-B",
             "-c",
-            _LOAD_AND_EXEC,
+            _LOAD_AND_EXEC if inherit_environment else _ISOLATED_LOAD_AND_EXEC,
             env_file,
             hashlib.sha256(payload).hexdigest(),
             str(len(payload)),
@@ -157,14 +229,20 @@ async def start_session(
         ]
     if environment or removals:
         args.append("env")
-        args.extend(f"-u{key}" for key in removals)
+        args.extend(f"-u{key}" for key in removals if inherit_environment or key not in _PANE_ENV)
     args.extend(launch)
 
     # ``source-file`` starts no server of its own, hence ``start-server``.
     line = " ".join(_tmux_quote(arg) for arg in args) + "\n"
     try:
+        await check_before_effect(check_effect)
         rc, _, stderr = await _run_tmux(
-            "start-server", ";", "source-file", "-", stdin_data=line.encode()
+            "start-server",
+            ";",
+            "source-file",
+            "-",
+            stdin_data=line.encode(),
+            **effect_options,
         )
         # tmux can start the session and still not answer in time: a first start
         # that also started the server did, on a Linux host. A refusal stays one.
@@ -193,6 +271,14 @@ async def start_session(
                 session_name,
                 stderr.decode().strip(),
             )
+            await _run_tmux("kill-session", "-t", exact_target(session_name))
+            _remove(env_file)
+            return False
+    if not inherit_environment:
+        rc, _, _ = await _run_tmux(
+            "set-option", "-t", exact_target(session_name), "update-environment", ""
+        )
+        if rc != 0:
             await _run_tmux("kill-session", "-t", exact_target(session_name))
             _remove(env_file)
             return False
@@ -233,10 +319,10 @@ async def list_sessions(*, strict: bool = False) -> list[str]:
         "list-sessions", "-F", "#{session_name}", capture_stdout=True
     )
     if rc != 0:
-        if strict:
-            raise RuntimeError(
-                f"tmux session query failed: {stderr.decode(errors='replace').strip()}"
-            )
+        text = stderr.decode(errors="replace").strip()
+        # No server yet is what a profile without sessions has: empty, not unavailable.
+        if strict and "no server running" not in text and "No such file or directory" not in text:
+            raise RuntimeError(f"tmux session query failed: {text}")
         return []
     return [s.strip() for s in stdout.decode().splitlines() if s.strip()]
 

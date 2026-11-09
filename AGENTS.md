@@ -81,7 +81,7 @@ make check                 # lint + format check + tests — must pass before an
 make test                  # pytest only (SQLite in memory, tmux mocked; ~10 s)
 make fix                   # ruff --fix + format
 uv run pytest tests/unit/services/routing -q     # one area
-BACKBONE_DATA_DIR=/tmp/backbone-dev uv run backbone up   # scratch data dir; see Live testing
+.venv/bin/backbone init && .venv/bin/backbone up   # with a scratch HOME, TMUX_TMPDIR and port; see Live testing
 ```
 
 Python 3.11+, `uv`, `src/` layout. Tests need no services and must stay that way.
@@ -157,7 +157,7 @@ migration (pre-1.0 policy — one squashed migration, no history):
 
 ```bash
 rm src/agent_backbone/services/database/migrations/versions/*_initial_schema.py
-BACKBONE_DATABASE_URL=sqlite+aiosqlite:////tmp/gen.db uv run alembic revision --autogenerate -m "initial schema"
+BACKBONE_DATA_DIR=$(mktemp -d) uv run alembic revision --autogenerate -m "initial schema"
 ```
 
 Update `tests/unit/services/database/test_alembic.py` expectations. An

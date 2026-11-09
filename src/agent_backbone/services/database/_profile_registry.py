@@ -1,0 +1,655 @@
+"""External profile reservations, independent of provider database restoration.
+
+Discovery describes what is recorded; a successful guard check never authorizes
+serving work.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import hashlib
+import json
+import os
+import socket
+import sqlite3
+import stat
+import tempfile
+import unicodedata
+from contextlib import contextmanager, suppress
+from dataclasses import dataclass, replace
+from pathlib import Path
+
+from agent_backbone.services.database._profile_identity_repo import ProfileIdentity
+
+PROFILE_PORTS = range(7121, 8121)
+SCHEMA_VERSION = 4
+"""Loopback ports for isolated providers; the default installation uses 7120."""
+
+
+def _port_is_free(port: int) -> bool:
+    with socket.socket() as probe:
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def _resolve(path: Path) -> Path:
+    try:
+        resolved = path.resolve()
+        try:
+            mode = resolved.lstat().st_mode
+        except FileNotFoundError:
+            return resolved
+        # Python 3.13's non-strict resolve can leave a symlink loop unresolved.
+        if stat.S_ISLNK(mode):
+            raise ValueError("Profile path contains an unresolved symbolic link")
+        return resolved
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("Profile path is unavailable") from exc
+
+
+@dataclass(frozen=True)
+class ProfileBinding:
+    """Provider-owned connection references; a ready record never holds a secret."""
+
+    endpoint: Path
+    credential: Path
+    tmux_socket: Path
+
+
+@dataclass(frozen=True)
+class ProfileReservation:
+    identity: ProfileIdentity
+    data_dir: Path
+    display_name: str
+    baseline_version: str
+    state: str = "creating"
+    binding: ProfileBinding | None = None
+    kind: str = "isolated"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.identity, ProfileIdentity):
+            raise ValueError("Invalid profile identity")
+        if (
+            not self.data_dir.is_absolute()
+            or ".." in self.data_dir.parts
+            or "\x00" in str(self.data_dir)
+        ):
+            raise ValueError("Profile directory must be normalized and absolute")
+        for value in (self.display_name, self.baseline_version):
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or any(ord(c) < 0x20 or ord(c) == 0x7F for c in value)
+            ):
+                raise ValueError("Invalid profile reservation metadata")
+        if self.state not in {"creating", "ready", "failed"}:
+            raise ValueError("Unsupported profile reservation state")
+        if (self.state == "ready") != (self.binding is not None):
+            raise ValueError("Only a ready profile has a connection binding")
+
+    def summary(self) -> dict:
+        return {
+            "profile_id": self.identity.profile_id,
+            "display_name": self.display_name,
+            "kind": self.kind,
+            "state": self.state,
+        }
+
+    def discovery_binding(self) -> dict | None:
+        if self.binding is None:
+            return None
+        return {
+            "installation_id": self.identity.installation_id,
+            "lifecycle_id": self.identity.lifecycle_id,
+            "endpoint": {"kind": "unix", "path": str(self.binding.endpoint)},
+            "credential_reference": {
+                "kind": "dotenv",
+                "path": str(self.binding.credential),
+                "key": "BACKBONE_API_KEY",
+            },
+            "tmux": {"socket_path": str(self.binding.tmux_socket)},
+        }
+
+
+class ProfileRegistry:
+    """Private control-plane SQLite store at an explicitly selected external path.
+
+    Opening and reading never create or repair it. The caller owns operator
+    authorization; this is not a provider API or an agent discovery gateway.
+    No environment variables, provider configuration or credentials are read.
+    """
+
+    def __init__(self, path: Path):
+        self.path = _resolve(path)
+
+    @classmethod
+    def create(cls, path: Path) -> ProfileRegistry:
+        """Explicitly initialize a new registry, never replace an existing one."""
+        registry = cls(path)
+        registry.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        registry._check_parent()
+        if registry.path.exists():
+            registry._validate_for_write()
+            return registry
+        fd, temporary = tempfile.mkstemp(prefix=".registry-", dir=registry.path.parent)
+        os.close(fd)
+        try:
+            with cls(Path(temporary))._connection(write=True, initializing=True) as conn:
+                conn.execute(
+                    "CREATE TABLE profiles ("
+                    "profile_id TEXT PRIMARY KEY NOT NULL, "
+                    "installation_id TEXT UNIQUE NOT NULL, lifecycle_id TEXT NOT NULL, "
+                    "data_dir TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, "
+                    "baseline_version TEXT NOT NULL, state TEXT NOT NULL "
+                    "CHECK (state IN ('creating', 'failed')))"
+                )
+                conn.execute(
+                    "CREATE TABLE project_claims ("
+                    "path TEXT PRIMARY KEY NOT NULL, profile_id TEXT NOT NULL, "
+                    "installation_id TEXT NOT NULL, lifecycle_id TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "CREATE TABLE lifecycle_operations ("
+                    "request_id TEXT PRIMARY KEY NOT NULL, request_json TEXT NOT NULL, "
+                    "scope TEXT NOT NULL, installation_id TEXT, status TEXT NOT NULL "
+                    "CHECK(status IN ('pending', 'succeeded', 'failed')), "
+                    "receipt_json TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "CREATE UNIQUE INDEX lifecycle_pending ON lifecycle_operations(scope) "
+                    "WHERE status = 'pending'"
+                )
+                conn.execute(
+                    "CREATE UNIQUE INDEX lifecycle_installation_pending "
+                    "ON lifecycle_operations(installation_id) WHERE status = 'pending'"
+                )
+                conn.execute(
+                    "CREATE TABLE profile_bindings ("
+                    "profile_id TEXT PRIMARY KEY NOT NULL, endpoint TEXT NOT NULL, "
+                    "credential TEXT NOT NULL, tmux_socket TEXT NOT NULL)"
+                )
+                conn.execute("CREATE TABLE default_profiles (profile_id TEXT PRIMARY KEY NOT NULL)")
+                conn.execute(
+                    "CREATE TABLE profile_ports ("
+                    "port INTEGER PRIMARY KEY NOT NULL, profile_id TEXT UNIQUE NOT NULL)"
+                )
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            # Publish only a complete database, without replacing a concurrent
+            # creator's file. A crash before publication leaves no partial target.
+            with suppress(FileExistsError):
+                os.link(temporary, registry.path)
+            parent = os.open(registry.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(parent)
+            finally:
+                os.close(parent)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+        registry._validate_for_write()
+        return registry
+
+    def _validate_for_write(self) -> None:
+        # Explicit initialization/apply may recover an interrupted SQLite write.
+        # A read-only validation first would strand a hot rollback journal.
+        with self._connection(write=True) as conn:
+            self._records(conn)
+
+    def _check_parent(self) -> None:
+        info = self.path.parent.stat()
+        if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            raise ValueError("Profile registry directory allows untrusted file replacement")
+
+    @contextmanager
+    def _connection(self, *, write=False, initializing=False):
+        conn = None
+        try:
+            self._check_parent()
+            if not self.path.is_file() or self.path.stat().st_mode & 0o077:
+                raise ValueError("Profile registry must be an existing private file")
+            mode = "rw" if write else "ro"
+            conn = sqlite3.connect(f"{self.path.as_uri()}?mode={mode}", uri=True)
+            conn.row_factory = sqlite3.Row
+            if write:
+                conn.execute("PRAGMA synchronous = EXTRA")
+                conn.execute("PRAGMA fullfsync = ON")
+            conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if not initializing and version != SCHEMA_VERSION:
+                raise ValueError("Unsupported profile registry schema")
+            yield conn
+            if write:
+                conn.commit()
+        except (sqlite3.Error, OSError) as exc:
+            raise ValueError("Profile registry is unavailable or invalid") from exc
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def _records(self, conn) -> list[ProfileReservation]:
+        records = []
+        default = {row["profile_id"] for row in conn.execute("SELECT * FROM default_profiles")}
+        bindings = {
+            row["profile_id"]: ProfileBinding(
+                Path(row["endpoint"]), Path(row["credential"]), Path(row["tmux_socket"])
+            )
+            for row in conn.execute("SELECT * FROM profile_bindings")
+        }
+        for row in conn.execute("SELECT * FROM profiles ORDER BY profile_id"):
+            try:
+                # A failed tombstone always wins over a previously published binding.
+                binding = bindings.get(row["profile_id"]) if row["state"] == "creating" else None
+                record = ProfileReservation(
+                    ProfileIdentity(row["profile_id"], row["installation_id"], row["lifecycle_id"]),
+                    Path(row["data_dir"]),
+                    row["display_name"],
+                    row["baseline_version"],
+                    "ready" if binding else row["state"],
+                    binding,
+                    "legacy_default" if row["profile_id"] in default else "isolated",
+                )
+            except (IndexError, TypeError) as exc:
+                raise ValueError("Invalid profile registry metadata") from exc
+            self._outside(record.data_dir)
+            for previous in records:
+                if (
+                    previous.identity.profile_id == record.identity.profile_id
+                    or previous.identity.installation_id == record.identity.installation_id
+                    or self._overlap(previous.data_dir, record.data_dir)
+                ):
+                    raise ValueError("Conflicting profile registry metadata")
+            records.append(record)
+        return records
+
+    def _external(self, data_dir: Path) -> None:
+        if not data_dir.is_absolute() or _resolve(data_dir) != data_dir:
+            raise ValueError("Profile directory must be canonical and absolute")
+        self._outside(data_dir)
+
+    def _outside(self, data_dir: Path) -> None:
+        if self._contains(data_dir, self.path):
+            raise ValueError("Profile registry must be outside the provider data directory")
+
+    @property
+    def _operation_directory(self) -> Path:
+        return self.path.with_name(self.path.name + ".operations")
+
+    @staticmethod
+    def _contains(parent: Path, child: Path) -> bool:
+        # Conservatively refuse aliases even before directories exist. Case and
+        # Unicode normalization can alias on macOS but not on every filesystem;
+        # profile roots must remain distinct on either kind of filesystem.
+        def key(path):
+            folded = unicodedata.normalize("NFD", str(path)).casefold()
+            return Path(unicodedata.normalize("NFD", folded))
+
+        return key(child).is_relative_to(key(parent))
+
+    @classmethod
+    def _overlap(cls, first: Path, second: Path) -> bool:
+        return cls._contains(first, second) or cls._contains(second, first)
+
+    def _reserve(self, conn, reservation: ProfileReservation) -> ProfileReservation:
+        if reservation.state != "creating":
+            raise ValueError("New profile reservations must be creating")
+        self._external(reservation.data_dir)
+        if self._overlap(reservation.data_dir, self._operation_directory):
+            raise ValueError("Profile registry fence must be outside the provider data directory")
+        records = self._records(conn)
+        for stored in records:
+            if (
+                stored.identity.profile_id == reservation.identity.profile_id
+                or stored.identity.installation_id == reservation.identity.installation_id
+                or self._overlap(stored.data_dir, reservation.data_dir)
+            ):
+                raise ValueError("Profile reservation conflicts with an existing reservation")
+        if any(
+            self._project_overlap(reservation.data_dir, path)
+            for path, _ in self._project_claims(conn, records)
+        ):
+            raise ValueError("Profile directory conflicts with an existing project claim")
+        conn.execute(
+            "INSERT INTO profiles VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                reservation.identity.profile_id,
+                reservation.identity.installation_id,
+                reservation.identity.lifecycle_id,
+                str(reservation.data_dir),
+                reservation.display_name,
+                reservation.baseline_version,
+                reservation.state,
+            ),
+        )
+        return reservation
+
+    def list(self) -> dict:
+        """Read an atomic snapshot without accessing provider paths or credentials."""
+        with self._connection() as conn:
+            return {"schema_version": 1, "items": [r.summary() for r in self._records(conn)]}
+
+    def show(self, profile_id: str) -> dict:
+        with self._connection() as conn:
+            for record in self._records(conn):
+                if record.identity.profile_id == profile_id:
+                    return {
+                        "schema_version": 1,
+                        **record.summary(),
+                        "binding": record.discovery_binding(),
+                        "git_identity": self._git_identity(conn, record.identity),
+                    }
+        raise ValueError("Profile reservation was not found")
+
+    @staticmethod
+    def _git_identity(conn, identity: ProfileIdentity) -> str:
+        """What creation copied, from its retained request; Default copies nothing."""
+        for (body,) in conn.execute(
+            "SELECT request_json FROM lifecycle_operations "
+            "WHERE installation_id = ? AND status = 'succeeded'",
+            (identity.installation_id,),
+        ):
+            request = json.loads(body)
+            if request.get("action") == "create":
+                return "copied" if request.get("git_identity") == "copy" else "none"
+        return "none"
+
+    def setup_connection_receipt(self, request: dict, connection: dict):
+        """Locate operator setup continuity outside every reserved provider tree."""
+        from agent_backbone.services.database._setup_receipts import ProfileSetupConnectionReceipt
+
+        root = self._operation_directory
+        with self._connection() as conn:
+            records = self._records(conn)
+            if any(self._overlap(record.data_dir, root) for record in records):
+                raise ValueError("Profile setup continuity overlaps provider storage")
+            if not any(
+                record.identity
+                == ProfileIdentity(
+                    request["profile_id"],
+                    request["expected_installation_id"],
+                    request["expected_lifecycle_id"],
+                )
+                and record.state != "failed"
+                for record in records
+            ):
+                raise ValueError("Profile setup identity does not match")
+        connections = root / "setup-connections"
+        profile = connections / hashlib.sha256(request["profile_id"].encode()).hexdigest()
+        for directory in (root, connections, profile):
+            if directory.resolve() != directory:
+                raise ValueError("Profile setup continuity path is not canonical")
+            directory.mkdir(mode=0o700, exist_ok=True)
+            info = directory.lstat()
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) & 0o077
+            ):
+                raise ValueError("Profile setup continuity must be private")
+        return ProfileSetupConnectionReceipt(profile, request, connection)
+
+    def check_reservation(self, identity: ProfileIdentity, data_dir: Path) -> ProfileReservation:
+        """Compare external identity/path ownership; does not establish readiness.
+
+        Call again for each reconciliation attempt. Do not cache this result as
+        serving authority: activation and live service/job fencing are separate.
+        """
+        self._external(data_dir)
+        with self._connection() as conn:
+            record = self._matching(conn, identity, data_dir)
+            if record.state == "failed":
+                raise ValueError("Profile lifecycle has been invalidated")
+            return record
+
+    def _allocate_port(self, conn, profile_id: str) -> int:
+        """Keep one loopback port per profile; a tombstone retains its port."""
+        used = {row["port"] for row in conn.execute("SELECT port FROM profile_ports")}
+        for port in PROFILE_PORTS:
+            if port not in used and _port_is_free(port):
+                conn.execute("INSERT INTO profile_ports VALUES (?, ?)", (port, profile_id))
+                return port
+        raise ValueError("No loopback port is available for a new profile")
+
+    def default_reservation(self) -> ProfileReservation | None:
+        """The ready Default profile, if there is one."""
+        try:
+            self.path.lstat()
+        except FileNotFoundError:
+            return None
+        with self._connection() as conn:
+            for record in self._records(conn):
+                if record.kind == "legacy_default" and record.state == "ready":
+                    return record
+        return None
+
+    def _publish(self, conn, identity, data_dir, binding, *, own_tmux=False) -> ProfileReservation:
+        self._external(data_dir)
+        # The Default profile uses the person's own tmux server.
+        owned = (binding.endpoint, binding.credential)
+        for path in owned if own_tmux else (*owned, binding.tmux_socket):
+            if not path.is_absolute() or path == data_dir or not path.is_relative_to(data_dir):
+                raise ValueError("Profile binding is outside its reserved directory")
+        record = self._matching(conn, identity, data_dir)
+        if record.state == "failed":
+            raise ValueError("Profile lifecycle has been invalidated")
+        if record.state == "ready":
+            raise ValueError("Profile is already ready")
+        conn.execute(
+            "INSERT INTO profile_bindings VALUES (?, ?, ?, ?)",
+            (
+                identity.profile_id,
+                str(binding.endpoint),
+                str(binding.credential),
+                str(binding.tmux_socket),
+            ),
+        )
+        return replace(record, state="ready", binding=binding)
+
+    def ready_reservation(self, profile_id: str) -> ProfileReservation:
+        with self._connection() as conn:
+            for record in self._records(conn):
+                if record.identity.profile_id == profile_id and record.state == "ready":
+                    return record
+        raise ValueError("Profile is not ready")
+
+    def check_unreserved(self, data_dir: Path) -> None:
+        """Refuse a directory inside any reserved profile. No registry reserves nothing."""
+        try:
+            self.path.lstat()
+        except FileNotFoundError:
+            return
+        self._external(data_dir)
+        if self._overlap(data_dir, self._operation_directory):
+            raise ValueError("Profile registry fence must be outside the provider data directory")
+        with self._connection() as conn:
+            if any(self._overlap(r.data_dir, data_dir) for r in self._records(conn)):
+                raise ValueError("Provider directory belongs to a reserved profile")
+
+    def claim_projects(
+        self, identity: ProfileIdentity, data_dir: Path, paths: tuple[Path, ...]
+    ) -> None:
+        """Reserve mutable project resources together, before any materialization.
+
+        Claims survive cleanup, invalidation and provider database restores. They
+        are not leases: releasing or transferring them needs explicit lifecycle
+        reconciliation, which is not implemented here. This is not an in-flight
+        service fence or permission to activate a provider.
+        """
+        self._external(data_dir)
+        resources = tuple(dict.fromkeys(_resolve(path) for path in paths))
+        if not resources:
+            raise ValueError("Project resources must be existing directories")
+        with self._connection(write=True) as conn:
+            records = self._records(conn)
+            owner = self._matching(conn, identity, data_dir)
+            if owner.state == "failed":
+                raise ValueError("Profile lifecycle has been invalidated")
+            claims = self._project_claims(conn, records)
+            owned = {path for path, claimant in claims if claimant == identity}
+            for path in resources:
+                try:
+                    info = path.stat()
+                except FileNotFoundError:
+                    # A removed checkout has nothing to clean up, but its
+                    # existing claim must survive relocation or release.
+                    if path not in owned:
+                        raise ValueError("Project resources must be existing directories") from None
+                else:
+                    if not stat.S_ISDIR(info.st_mode):
+                        raise ValueError("Project resources must be directories")
+                if (
+                    self._contains(path, self.path)
+                    or self._overlap(path, self._operation_directory)
+                    or any(
+                        record.identity != identity and self._overlap(path, record.data_dir)
+                        for record in records
+                    )
+                ):
+                    raise ValueError("Project resource conflicts with profile storage")
+            for claimed, claimant in claims:
+                if claimant != identity and any(
+                    self._project_overlap(path, claimed) for path in resources
+                ):
+                    raise ValueError("Project belongs to another profile; use a separate checkout")
+            conn.executemany(
+                "INSERT OR IGNORE INTO project_claims VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        str(path),
+                        identity.profile_id,
+                        identity.installation_id,
+                        identity.lifecycle_id,
+                    )
+                    for path in resources
+                ],
+            )
+
+    def _project_claims(self, conn, records) -> list[tuple[Path, ProfileIdentity]]:
+        claims = []
+        for row in conn.execute("SELECT * FROM project_claims"):
+            try:
+                path = Path(row["path"])
+                identity = ProfileIdentity(
+                    row["profile_id"], row["installation_id"], row["lifecycle_id"]
+                )
+            except (TypeError, IndexError) as exc:
+                raise ValueError("Invalid project ownership metadata") from exc
+            if (
+                not path.is_absolute()
+                or ".." in path.parts
+                or "\x00" in str(path)
+                or not any(record.identity == identity for record in records)
+            ):
+                raise ValueError("Invalid project ownership metadata")
+            claims.append((path, identity))
+        return claims
+
+    @classmethod
+    def _project_overlap(cls, requested: Path, claimed: Path) -> bool:
+        # Retain the original reservation even if its checkout is moved. A live
+        # alias must not let another profile acquire the same resource, but an
+        # unavailable old path must not invalidate every unrelated reservation.
+        if cls._overlap(requested, claimed):
+            return True
+        try:
+            return cls._overlap(requested, _resolve(claimed))
+        except ValueError:
+            return False
+
+    def _matching(self, conn, identity, data_dir):
+        for record in self._records(conn):
+            if record.identity == identity and record.data_dir == data_dir:
+                return record
+        raise ValueError("Profile reservation does not match")
+
+    @contextmanager
+    def _operation_fence(self, identity: ProfileIdentity, data_dir: Path, *, exclusive: bool):
+        # Keep the fence outside the provider tree so restoring its database
+        # cannot replace a lock held by an admitted operation. Never delete locks.
+        if self.path.stat().st_nlink != 1:
+            raise ValueError("Profile operation fence requires an unaliased registry")
+        with self._connection(write=exclusive) as conn:
+            self._matching(conn, identity, data_dir)
+            records = self._records(conn)
+            if any(self._overlap(self._operation_directory, r.data_dir) for r in records):
+                raise ValueError("Profile operation fence conflicts with provider storage")
+            if any(
+                self._project_overlap(self._operation_directory, path)
+                for path, _ in self._project_claims(conn, records)
+            ):
+                raise ValueError("Profile operation fence conflicts with project storage")
+        directory = self._operation_directory
+        fd = None
+        try:
+            directory.mkdir(mode=0o700, exist_ok=True)
+            info = directory.lstat()
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or info.st_mode & 0o077
+            ):
+                raise ValueError("Profile operation fence must be private")
+            name = hashlib.sha256(identity.profile_id.encode()).hexdigest()
+            path = directory / name
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError("Profile operation fence must be a regular file")
+            fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+            info = os.fstat(fd)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or info.st_uid != os.geteuid()
+                or info.st_mode & 0o077
+            ):
+                raise ValueError("Profile operation fence must be a private regular file")
+            try:
+                fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ValueError("Profile operation fence is busy") from None
+        except OSError as exc:
+            if fd is not None:
+                os.close(fd)
+                fd = None
+            raise ValueError("Profile operation fence is unavailable") from exc
+        except BaseException:
+            if fd is not None:
+                os.close(fd)
+            raise
+        try:
+            yield
+        finally:
+            os.close(fd)
+
+    @contextmanager
+    def operation(self, identity: ProfileIdentity, data_dir: Path):
+        """Hold admission through completion; invalidation refuses while busy.
+
+        This creates only private control-plane lock files, never provider data.
+        Each operation rechecks its reservation after acquiring the shared lock.
+        Callers must retain this context through all effects, including streaming.
+        """
+        with self._operation_fence(identity, data_dir, exclusive=False):
+            self.check_reservation(identity, data_dir)
+            yield
+
+    def invalidate(self, identity: ProfileIdentity, data_dir: Path) -> None:
+        """Permanently fail this reservation, including across provider DB restore.
+
+        Refuse while an admitted guarded operation is in progress. This does not
+        stop services or unguarded jobs, or implement generation replacement.
+        """
+        with (
+            self._operation_fence(identity, data_dir, exclusive=True),
+            self._connection(write=True) as conn,
+        ):
+            self._matching(conn, identity, data_dir)
+            conn.execute(
+                "UPDATE profiles SET state = 'failed' WHERE profile_id = ?",
+                (identity.profile_id,),
+            )

@@ -7,6 +7,8 @@ import asyncio
 import json
 import logging
 import os
+import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -17,11 +19,17 @@ from agent_backbone.cli.presentation import note, print_table
 from agent_backbone.config import (
     SETTINGS_DEFAULTS,
     SETTINGS_HELP,
+    SQLITE_FILENAME,
     BackboneConfig,
+    resolve_data_dir,
     validate_setting,
 )
 
 log = logging.getLogger(__name__)
+
+SHUTDOWN_DRAIN_SECONDS = 10
+"""An in-flight request, such as an agent start waiting for readiness, must not hold a
+stop or upgrade open. Sessions in tmux are unaffected."""
 
 
 class UTCFormatter(DiagnosticFormatter):
@@ -33,7 +41,7 @@ class UTCFormatter(DiagnosticFormatter):
 
 
 def _diagnostic_filter(mode: str = "off", verbose: bool = False) -> logging.Filter:
-    """Restore explicit policy in Uvicorn's fresh reload child."""
+    """The shared log policy, set to the mode this log configuration carries."""
     set_log_mode(mode)
     log_policy.verbose = verbose
     return log_policy
@@ -99,54 +107,87 @@ def log_config(config: BackboneConfig, log_file: Path | None) -> dict:
     }
 
 
-def _reload_app():
-    """Build the reload child with the endpoint pinned by its parent listener."""
-    from dataclasses import replace
+def _native_environments(root: Path) -> dict:
+    """Capture each required runtime in the profile's one home, where each keeps its own
+    store. Every other adapter is refused, and so is a runtime that is not installed:
+    nothing falls back to the host's."""
+    from agent_backbone.services.runtimes import RUNTIMES
 
-    from agent_backbone.api.app import create_app
-    from agent_backbone.config import bootstrap_config
+    captured = {}
+    for runtime in (rid for rid, rt in RUNTIMES.items() if rt.runs_in_profiles):
+        try:
+            environment = RUNTIMES[runtime].capture_environment(root)
+        except ValueError:
+            continue
+        environment.create_directories()
+        captured[runtime] = environment
+    return captured
 
-    config = bootstrap_config()
-    host = os.environ.get("BACKBONE_HOST", config.backbone.host)
-    return create_app(replace(config, backbone=replace(config.backbone, host=host)))
+
+def _clear_inherited_signal_mask() -> None:
+    """Blocked signals survive exec. A caller with SIGTERM blocked would leave a service
+    that can never be stopped, and hand the same mask to everything it starts."""
+    signal.pthread_sigmask(signal.SIG_SETMASK, ())
 
 
-def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | None = None) -> None:
+def serve_profile(registry_path: Path, profile_id: str) -> None:
+    """Run one ready profile's provider with nothing ambient."""
+    _clear_inherited_signal_mask()
+    from agent_backbone.config import AgentsConfig, build_config, sqlite_url
+    from agent_backbone.services.agents import install_project_ownership
+    from agent_backbone.services.database import (
+        BackboneDB,
+        ProfileRegistry,
+        reconcile_profile_provider,
+    )
+    from agent_backbone.services.runtimes import (
+        RUNTIMES,
+        install_native_environments,
+        prepare_profile_keychain,
+    )
+    from agent_backbone.services.terminal import pin_tmux_server
+
+    registry = ProfileRegistry(registry_path)
+    reservation = registry.ready_reservation(profile_id)
+    if reservation.kind != "isolated":
+        raise ValueError("The Default profile starts with `backbone up`")
+    root = reservation.data_dir
+    # Replacing the process environment keeps host tokens out of load_secrets and
+    # the tmux server, and the user's tmux.conf unread.
+    process_environment = RUNTIMES["shell"].capture_environment(root)
+    native = _native_environments(root)
+    try:
+        prepare_profile_keychain(root, [Path(process_environment["HOME"])])
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        log.warning("Sign-ins that use the macOS keychain will fail in this profile: %s", exc)
+    os.environ.clear()
+    os.environ.update(process_environment, BACKBONE_DATA_DIR=str(root))
+
+    async def reconcile():
+        provider = await reconcile_profile_provider(
+            registry, reservation, root / SQLITE_FILENAME, reservation.binding.tmux_socket
+        )
+        pin_tmux_server(provider.socket_path)
+        install_native_environments(native)
+        await install_project_ownership(provider)
+        async with BackboneDB.connect(sqlite_url(root)) as db:
+            return provider, await db.settings.all()
+
+    provider, settings = asyncio.run(reconcile())
+    config = build_config(root, settings=settings, agents=AgentsConfig())
+    _run_server(config, provider=provider)
+
+
+def _run_server(
+    config: BackboneConfig,
+    log_file: Path | None = None,
+    provider=None,
+) -> None:
     import uvicorn
 
     from agent_backbone.api.local_transport import LocalPeerProtocol, private_listener
 
     logging_config = log_config(config, log_file)
-    if reload and config.backbone.socket_path:
-        raise ValueError("the private socket requires backbone up without --reload")
-    if reload:
-        # The reloader imports the factory in a child instead of passing config.
-        # Give that factory the same fixed endpoint as the listener it serves.
-        endpoint = {
-            "BACKBONE_HOST": config.backbone.host,
-            "BACKBONE_PORT": str(config.backbone.port),
-        }
-        previous = {key: os.environ.get(key) for key in endpoint}
-        os.environ.update(endpoint)
-        try:
-            uvicorn.run(
-                "agent_backbone.cli.server:_reload_app",
-                factory=True,
-                host=config.backbone.host,
-                port=config.backbone.port,
-                reload=True,
-                reload_dirs=["src"],
-                log_level="info",
-                log_config=logging_config,
-            )
-        finally:
-            for key, value in previous.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
-        return
-
     from agent_backbone.api.app import create_app
 
     app = create_app(config)
@@ -158,16 +199,20 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
             log_level="info",
             log_config=logging_config,
             workers=1,
-            http=LocalPeerProtocol if config.backbone.socket_path else "auto",
+            timeout_graceful_shutdown=SHUTDOWN_DRAIN_SECONDS,
+            http=LocalPeerProtocol if provider else "auto",
         )
     )
     inner = getattr(app, "other_asgi_app", app)
     # An internal upgrade must not send SIGTERM: Uvicorn replays captured
     # signals after shutdown, which would kill us before the exec below.
     inner.state.request_shutdown = lambda: setattr(server, "should_exit", True)
+    if provider is not None:
+        inner.state.profile_provider = provider
+    endpoint = provider.reservation.binding.endpoint if provider else None
     try:
-        if config.backbone.socket_path:
-            with private_listener(config.data_dir, config.backbone.socket_path) as local:
+        if endpoint:
+            with private_listener(config.data_dir, str(endpoint)) as local:
                 tcp = server.config.bind_socket()
                 try:
                     # Uvicorn marks prebound sockets inheritable for worker
@@ -183,21 +228,31 @@ def _run_server(config: BackboneConfig, reload: bool = False, log_file: Path | N
         return
     if not server.started:
         raise SystemExit(3)  # preserve uvicorn.run's startup-failure exit status
+    if getattr(getattr(server, "lifespan", None), "shutdown_failed", False) is True:
+        raise SystemExit(3)  # never re-exec over unfinished resource cleanup
     if restart_requested(app):
         # The upgrade watch asked for new code: become a fresh `backbone up`
         # in place, so the login service or tmux session is unchanged.
         log.warning("restarting onto the new code")
-        os.execv(
-            sys.executable,
-            [
-                sys.executable,
-                *(["-I"] if sys.flags.isolated else []),
-                "-B",
-                "-m",
-                "agent_backbone.cli",
-                *sys.argv[1:],
-            ],
-        )
+        _reexec(provider)
+
+
+def _reexec(provider) -> None:
+    command = [
+        sys.executable,
+        *(["-I"] if sys.flags.isolated else []),
+        "-B",
+        "-m",
+        "agent_backbone.cli",
+        *sys.argv[1:],
+    ]
+    if provider is not None and provider.reservation.kind == "isolated":
+        # Start over as ProviderServices.start did: CLI lookup must not move into
+        # the private HOME this process installed for itself.
+        kept = {k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL") if k in os.environ}
+        os.execve(sys.executable, command, kept)
+    else:
+        os.execv(sys.executable, command)
 
 
 def restart_requested(app) -> bool:
@@ -226,7 +281,15 @@ async def _up_detached(config: BackboneConfig, log_file: Path | None = None) -> 
     if log_file is not None:
         command += ["--log-file", str(log_file)]
     env = {"BACKBONE_DATA_DIR": str(config.data_dir)}
-    ok = await start_session(session, working_dir=str(Path.cwd()), command=command, environment=env)
+    # A tmux server started while BACKBONE_DATABASE_URL was set still holds it,
+    # and the backbone now refuses to start with it: never hand it on.
+    ok = await start_session(
+        session,
+        working_dir=str(Path.cwd()),
+        command=command,
+        environment=env,
+        scrub=("BACKBONE_DATABASE_URL",),
+    )
     if ok:
         print(f"backbone started in tmux session '{session}' (attach: tmux attach -t {session})")
         from agent_backbone.cli.service import state as service_state
@@ -238,18 +301,77 @@ async def _up_detached(config: BackboneConfig, log_file: Path | None = None) -> 
     return 1
 
 
+async def _default_provider(registry, reservation):
+    """`up` serves the Default profile on the tmux server recorded when it was created."""
+    from agent_backbone.services.database import reconcile_profile_provider
+    from agent_backbone.services.terminal import pin_tmux_server
+
+    socket = reservation.binding.tmux_socket
+    provider = await reconcile_profile_provider(
+        registry, reservation, reservation.data_dir / SQLITE_FILENAME, socket
+    )
+    # tmux makes this directory itself unless a socket is named, and a restart clears /tmp.
+    socket.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    pin_tmux_server(socket)
+    return provider
+
+
+PROFILE_WAIT_SECONDS = 10
+"""How often a refused ``up`` under a service manager looks for its profile again."""
+
+
+def _under_service_manager() -> bool:
+    """Started by the login service itself, not merely beneath it: every process under
+    the service inherits its variables, so the parent must be the manager. launchd
+    (pid 1) names the job in XPC_SERVICE_NAME; systemd sets MANAGERPID on what it starts."""
+    from agent_backbone.cli.service import LABEL
+
+    parent = os.getppid()
+    if os.environ.get("XPC_SERVICE_NAME") == LABEL and parent == 1:
+        return True
+    return bool(os.environ.get("INVOCATION_ID")) and os.environ.get("MANAGERPID") == str(parent)
+
+
+def _default_profile(data_dir: Path, *, wait: bool = True):
+    """The Default profile, or a refusal. Under a service manager the refusal is
+    logged once and ``up`` waits for ``backbone init`` instead of exiting, which
+    the service would restart every few seconds."""
+    from agent_backbone.services.database import default_profile_at
+
+    shown = None
+    while True:
+        try:
+            return default_profile_at(data_dir)
+        except ValueError as exc:
+            if shown is None and (not wait or not _under_service_manager()):
+                raise
+            if str(exc) != shown:  # once per distinct refusal, not every check
+                shown = str(exc)
+                print(
+                    f"error: {exc}; waiting for it, checking every {PROFILE_WAIT_SECONDS} s",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        time.sleep(PROFILE_WAIT_SECONDS)
+
+
 def cmd_up(args: argparse.Namespace) -> int:
-    config = asyncio.run(_common.load_config())
+    _clear_inherited_signal_mask()
     # A quoted `~/…` reaches us unexpanded; a detached run starts elsewhere.
     log_file = args.log_file.expanduser().resolve() if args.log_file else None
-    if log_file is not None and args.reload:
-        # The reloader and its server would each rotate the same file.
-        print("error: --log-file can't be combined with --reload")
-        return 2
-    if args.detach:
-        return asyncio.run(_up_detached(config, log_file))
     try:
-        _run_server(config, reload=args.reload, log_file=log_file)
+        # Before anything can create a database or report a detached start.
+        # The service never runs --detach: a detached start always answers at once.
+        registry, reservation = _default_profile(resolve_data_dir(), wait=not args.detach)
+        config = asyncio.run(_common.load_config())
+        if args.detach:
+            _common.pin_default_terminal()
+            return asyncio.run(_up_detached(config, log_file))
+        provider = asyncio.run(_default_provider(registry, reservation))
+        _run_server(config, log_file=log_file, provider=provider)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     except SystemExit as exc:
         if exc.code and log_policy.mode == "off":
             print(
@@ -275,6 +397,7 @@ async def _down(config: BackboneConfig) -> int:
 
 
 def cmd_down(args: argparse.Namespace) -> int:
+    _common.pin_default_terminal()
     return asyncio.run(_down(asyncio.run(_common.load_config())))
 
 

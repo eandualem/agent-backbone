@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from agent_backbone.base import run_thread
 from agent_backbone.models import (
     DeliveryOutcome,
     EventType,
@@ -54,7 +54,7 @@ async def _resolve_commenter_entity(
     """Attribute only the exact comment recorded by a successful local publication."""
     if event.comment is None:
         return None
-    return await asyncio.to_thread(
+    return await run_thread(
         find_outgoing_comment,
         event.issue.number,
         action_log=config.action_log_path,

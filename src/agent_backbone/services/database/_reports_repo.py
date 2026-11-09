@@ -15,6 +15,7 @@ from sqlalchemy import and_, func, insert, or_, select, update
 
 from agent_backbone.models import REPORTS_PER_HOUR, PublishReport, PublishResponse, ReportQuery
 from agent_backbone.services.database._conversation_events import append_revision
+from agent_backbone.services.database._interaction_capture import actor, capture, event, owner
 from agent_backbone.services.database._repo import Repo
 from agent_backbone.services.database._time import cutoff_iso, now_iso
 from agent_backbone.services.database.models import AgentORM, ReportORM
@@ -164,7 +165,12 @@ class ReportRepo(Repo):
         # Restarting the service expires cursors and asks readers to refresh.
         self._cursor_key = secrets.token_bytes(32)
 
-    async def publish(self, publication: PublishReport | PublishResponse) -> tuple[dict, bool]:
+    async def publish(
+        self,
+        publication: PublishReport | PublishResponse,
+        *,
+        interaction_registration: str | None = None,
+    ) -> tuple[dict, bool]:
         # Revalidate even typed values: model_construct/copy must not bypass the
         # database boundary. All callers get the same character and link limits.
         response = isinstance(publication, PublishResponse)
@@ -175,9 +181,8 @@ class ReportRepo(Repo):
         supersedes = publication.supersedes_id if response else None
         content = json.dumps(payload.model_dump(), sort_keys=True, ensure_ascii=False)
         async with self._tx() as conn:
-            # This acquires the author row lock on PostgreSQL, and the writer lock
-            # on SQLite. Concurrent publications/forget cannot race the identity,
-            # idempotency check, or per-author rate bound.
+            # This acquires SQLite's writer lock. Concurrent publications/forget
+            # cannot race the identity, idempotency check, or per-author rate bound.
             author = (
                 (
                     await conn.execute(
@@ -307,6 +312,65 @@ class ReportRepo(Repo):
                     label=f"rev {versions.index(row['id']) + 1}",
                     author_id=identity,
                     name=publication.agent,
+                )
+            if response or report.blockers.kind == "owner":
+                operation = uuid4().hex
+                await capture(
+                    conn,
+                    operation_id=operation,
+                    message=content,
+                    sender=publication.agent,
+                    recipient="owner",
+                    kind="owner_question",
+                    source="report",
+                    metadata={
+                        "sender": await actor(
+                            conn,
+                            publication.agent,
+                            registration=identity,
+                            attribution="credential_bound"
+                            if interaction_registration == identity
+                            else "unverified",
+                        ),
+                        "recipient": owner(),
+                        "format": "json",
+                        "relations": [
+                            {
+                                "type": "from_report",
+                                "target": {
+                                    "kind": "report",
+                                    "id": str(row["id"]),
+                                    "artifact_kind": kind,
+                                },
+                                "recorded_at": row["created_at"],
+                                "provenance": "report_publication",
+                            }
+                        ]
+                        + (
+                            [
+                                {
+                                    "type": "corrects",
+                                    "target": {
+                                        "kind": "report",
+                                        "id": str(supersedes),
+                                        "artifact_kind": "response",
+                                    },
+                                    "recorded_at": row["created_at"],
+                                    "provenance": "response_supersedes",
+                                }
+                            ]
+                            if supersedes is not None
+                            else []
+                        ),
+                    },
+                )
+                await event(
+                    conn,
+                    operation,
+                    "published",
+                    outcome="delivered",
+                    source="report",
+                    time_basis="recorded",
                 )
             record = dict(row) | {"agent_name": publication.agent, "conversation_id": root}
             return _record(record), True

@@ -49,9 +49,9 @@ async def scenario(request, db, tmp_path, monkeypatch):
     state = {"live": False, "env": {}, "state": AgentState.IDLE}
 
     async def launch(spec, config, **kwargs):
-        assert config.launch.pre_trust is False
+        assert config.launch.pre_trust is True
         assert spec.unattended is False
-        assert kwargs["wait"] is True
+        assert kwargs["wait"] is False
         assert (
             Path(kwargs["brief_file"]).read_text()
             == (data / "templates/onboarding/orchestrator-v1.md").read_text()
@@ -86,6 +86,8 @@ async def scenario(request, db, tmp_path, monkeypatch):
         "safe_deliver",
         AsyncMock(return_value=DeliveryReport(DeliveryOutcome.DELIVERED, delivery_id=123)),
     )
+    monkeypatch.setattr(onboarding, "STARTED_SECONDS", 0)
+    monkeypatch.setattr(onboarding, "wait_until_ready", AsyncMock(return_value=("ready", [])))
     return body, store, state
 
 
@@ -151,16 +153,68 @@ async def test_new_runtime_install_reaches_first_agent_launch_with_old_daemon_pa
     assert len(commands) == 1 and onboarding.safe_deliver.await_count == 1
 
 
-async def test_permission_wait_is_visible_and_retry_does_not_restart(scenario, db):
-    scenario[2]["state"] = AgentState.WAITING_FOR_HUMAN
-    first = await run(scenario, db)
-    assert first["code"] == "runtime_permission"
-    assert first["data"]["ready"] == "waiting_for_human"
+@pytest.mark.parametrize("state", [AgentState.BUSY, AgentState.WAITING_FOR_HUMAN])
+async def test_setup_is_complete_once_the_cli_runs_whatever_it_shows(scenario, db, state):
+    scenario[2]["state"] = state
+    result = await run(scenario, db)
+    assert result["code"] == "agent_ready" and result["status"] == "completed"
+    assert result["data"]["evidence"] == [f"state={state.value}; source=push"]
+
+
+async def test_a_cli_that_exits_right_away_is_a_failed_launch(scenario, db, monkeypatch):
+    async def exits(*args, **kwargs):
+        scenario[2]["live"] = False
+        return "exited", []
+
+    monkeypatch.setattr(onboarding, "wait_until_ready", exits)
+    monkeypatch.setattr(onboarding, "STARTED_SECONDS", 0.05)
+    result = await run(scenario, db)
+    assert result["code"] == "launch_failed" and result["data"]["ready"] == "exited"
+    assert "exited right after starting" in result["message"]
+    assert "start the agent again" in result["message"]
     onboarding.safe_deliver.assert_not_awaited()
-    scenario[2]["state"] = AgentState.IDLE
-    assert (await run(scenario, db))["code"] == "agent_ready"
-    assert onboarding.start_agent.await_count == 1
-    assert onboarding.safe_deliver.await_count == 1
+
+
+async def test_the_launch_window_holds_when_the_watch_ends_early(scenario, db, monkeypatch):
+    async def exits_after_the_watch(*args, **kwargs):
+        # The watch ends after this second hand-over; the CLI exits just after it.
+        if settled.call_count == 2:
+            loop = asyncio.get_running_loop()
+            loop.call_later(0.1, scenario[2].__setitem__, "live", False)
+
+    monkeypatch.setattr(onboarding, "STARTED_SECONDS", 1.3)
+    settled = AsyncMock(side_effect=exits_after_the_watch)
+    body, store, _ = scenario
+    await store.set_setting("timing.grace_period_seconds", 0)
+    result = await onboarding.first_agent(body, store.config, store, db, settled=settled)
+    assert result["code"] == "launch_failed" and result["data"]["ready"] == "exited"
+
+
+async def test_setup_returns_while_the_first_run_is_still_watched(scenario, db, monkeypatch):
+    at_prompt = asyncio.Event()
+    settled = AsyncMock()
+
+    async def watch(*args, **kwargs):
+        await at_prompt.wait()
+        return "exited", []
+
+    monkeypatch.setattr(onboarding, "wait_until_ready", watch)
+    body, store, _ = scenario
+    result = await onboarding.first_agent(body, store.config, store, db, settled=settled)
+    assert result["code"] == "agent_ready" and len(onboarding._watches) == 1
+    at_prompt.set()
+    await asyncio.gather(*onboarding._watches)
+    settled.assert_not_awaited()
+
+
+async def test_first_run_watch_hands_over_the_greeting_past_a_screen(scenario, monkeypatch):
+    onboarding.wait_until_ready.side_effect = [("waiting_for_human", []), ("ready", [])]
+    monkeypatch.setattr(onboarding.asyncio, "sleep", AsyncMock())
+    settled = AsyncMock()
+    await onboarding._watch_first_run("guide", scenario[1].config, "codex", 1.0, settled)
+    assert onboarding.wait_until_ready.await_count == 2
+    assert onboarding.wait_until_ready.await_args.kwargs["since"] == 1.0
+    assert settled.await_count == 2
 
 
 async def test_no_greeting_without_explicit_request(scenario, db):
@@ -201,11 +255,11 @@ async def test_lost_launch_with_no_session_is_not_repeated(scenario, db):
 
 
 async def test_replaced_launch_is_never_used_for_greeting(scenario, db):
-    scenario[2]["state"] = AgentState.WAITING_FOR_HUMAN
-    assert (await run(scenario, db))["code"] == "runtime_permission"
+    onboarding.safe_deliver.side_effect = OSError("send response lost")
+    assert (await run(scenario, db))["code"] == "outcome_unknown"
     scenario[2]["env"]["BACKBONE_LAUNCH_ID"] = "other-launch"
     assert (await run(scenario, db))["code"] == "agent_conflict"
-    onboarding.safe_deliver.assert_not_awaited()
+    assert onboarding.safe_deliver.await_count == 1
 
 
 async def test_uncertain_greeting_is_not_repeated(scenario, db):
@@ -258,9 +312,7 @@ async def test_original_core_can_start_and_retry_but_selected_swarms_must_be_rea
         assert (await run(scenario, db))["code"] == "starter_conflict"
         onboarding.start_agent.assert_not_awaited()
     else:
-        state["state"] = AgentState.WAITING_FOR_HUMAN
-        assert (await run(scenario, db))["code"] == "runtime_permission"
-        state["state"] = AgentState.IDLE
+        assert (await run(scenario, db))["code"] == "agent_ready"
         assert (await run(scenario, db))["code"] == "agent_ready"
         assert onboarding.start_agent.await_count == 1
         assert onboarding.safe_deliver.await_count == 1
@@ -439,16 +491,15 @@ async def test_setup_failure_log_is_classified_without_exception_content(scenari
 async def test_registered_retry_does_not_repeat_runtime_version_preflight(
     scenario, db, monkeypatch
 ):
-    scenario[2]["state"] = AgentState.WAITING_FOR_HUMAN
-    assert (await run(scenario, db))["code"] == "runtime_permission"
+    onboarding.safe_deliver.side_effect = OSError("send response lost")
+    assert (await run(scenario, db))["code"] == "outcome_unknown"
     runtime = RUNTIMES[scenario[0].agent.runtime]
 
     def unavailable(self):
         raise AssertionError("version probe must not block an already registered launch")
 
     monkeypatch.setattr(type(runtime), "setup_error", unavailable)
-    scenario[2]["state"] = AgentState.IDLE
-    assert (await run(scenario, db))["code"] == "agent_ready"
+    assert (await run(scenario, db))["code"] == "outcome_unknown"
     assert onboarding.start_agent.await_count == 1
 
 
@@ -735,3 +786,115 @@ async def test_cancellation_refuses_wrong_installation_without_receipt(scenario)
         "code"
     ] == "installation_conflict"
     assert not (store.config.data_dir / "setup-receipts").exists()
+
+
+async def test_bound_setup_replays_and_cannot_retarget_after_probe(scenario, db, monkeypatch):
+    from agent_backbone.models import BoundSetupFirstAgent
+    from agent_backbone.services.database import BoundSetupReceipt, SetupReceiptError
+
+    legacy, store, state = scenario
+    data = legacy.model_dump(exclude={"data_dir"}) | {
+        "schema_version": 2,
+        "profile_id": "profile-a",
+        "expected_installation_id": "installation-a",
+        "expected_lifecycle_id": "lifecycle-a",
+    }
+    body = BoundSetupFirstAgent.model_validate(data)
+    valid = True
+
+    async def check():
+        if not valid:
+            raise SetupReceiptError("binding_mismatch", "Profile binding does not match.")
+
+    def delayed_probe():
+        nonlocal valid
+        valid = False
+
+    monkeypatch.setattr(
+        type(RUNTIMES[body.agent.runtime]), "setup_error", lambda self: delayed_probe()
+    )
+    refused = await onboarding.first_agent(body, store.config, store, db, check_effect=check)
+    assert refused["code"] == "binding_mismatch"
+    assert not Path(body.agent.directory).exists() and not state["live"]
+    assert store.agents.get(body.agent.name) is None
+    with BoundSetupReceipt(store.config.data_dir, data) as receipt:
+        assert receipt.record["completed_steps"] == []
+    valid = True
+    monkeypatch.setattr(type(RUNTIMES[body.agent.runtime]), "setup_error", lambda self: None)
+    first = await onboarding.first_agent(body, store.config, store, db, check_effect=check)
+    assert first["code"] == "agent_ready"
+    replay = await onboarding.first_agent(body, store.config, store, db, check_effect=check)
+    assert replay["code"] == "agent_ready"
+    onboarding.start_agent.assert_awaited_once()
+    onboarding.safe_deliver.assert_awaited_once()
+
+
+async def test_bound_cancellation_blocks_delayed_original_before_native_checks(scenario, db):
+    from agent_backbone.models import BoundSetupCancelFirstAgent
+    from agent_backbone.services.database import SetupReceiptError
+
+    legacy, store, state = scenario
+    data = legacy.model_dump(exclude={"data_dir"}) | {
+        "schema_version": 2,
+        "action": "cancel_first_agent",
+        "profile_id": "profile-a",
+        "expected_installation_id": "installation-a",
+        "expected_lifecycle_id": "lifecycle-a",
+    }
+    body = BoundSetupCancelFirstAgent.model_validate(data)
+    check = AsyncMock()
+    cancelled = await onboarding.cancel_first_agent(body, store.config, check_effect=check)
+    assert cancelled["code"] == "request_cancelled"
+    original = await onboarding.first_agent(
+        body.original(),
+        store.config,
+        store,
+        db,
+        check_admission=check,
+        check_effect=AsyncMock(side_effect=SetupReceiptError("runtime_permission", "Unavailable")),
+    )
+    assert original["code"] == "request_cancelled"
+    assert not Path(body.agent.directory).exists() and not state["live"]
+
+
+async def test_bound_setup_records_registration_before_next_effect_check(scenario, db, monkeypatch):
+    from agent_backbone.models import BoundSetupFirstAgent
+    from agent_backbone.services.database import BoundSetupReceipt, SetupReceiptError
+
+    legacy, store, state = scenario
+    data = legacy.model_dump(exclude={"data_dir"}) | {
+        "schema_version": 2,
+        "profile_id": "profile-a",
+        "expected_installation_id": "installation-a",
+        "expected_lifecycle_id": "lifecycle-a",
+    }
+    body = BoundSetupFirstAgent.model_validate(data)
+    valid = True
+    original = store.register
+
+    async def register(*args, **kwargs):
+        nonlocal valid
+        result = await original(*args, **kwargs)
+        valid = False
+        return result
+
+    async def check():
+        if not valid:
+            raise SetupReceiptError("binding_mismatch", "Profile binding does not match.")
+
+    monkeypatch.setattr(store, "register", register)
+    refused = await onboarding.first_agent(body, store.config, store, db, check_effect=check)
+    assert refused["code"] == "binding_mismatch"
+    registration = store.agents.get(body.agent.name).registration_id
+    with BoundSetupReceipt(store.config.data_dir, data) as receipt:
+        assert receipt.record["registration_id"] == registration
+        assert not receipt.record["registration_pending"]
+        assert "agent" in receipt.record["completed_steps"]
+    assert not state["live"]
+    onboarding.start_agent.assert_not_awaited()
+    valid = True
+    resumed = await onboarding.first_agent(body, store.config, store, db, check_effect=check)
+    assert resumed["code"] == "agent_ready"
+    assert store.agents.get(body.agent.name).registration_id == registration
+    onboarding.start_agent.assert_awaited_once()
+    onboarding.safe_deliver.assert_awaited_once()

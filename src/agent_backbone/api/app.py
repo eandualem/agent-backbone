@@ -9,10 +9,10 @@ wires the remaining services against that snapshot.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
+from contextvars import ContextVar
 
 import httpx
 import socketio
@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from agent_backbone import __version__
-from agent_backbone.base import LifecycleManager
+from agent_backbone.base import LifecycleManager, run_thread
 from agent_backbone.config import BackboneConfig, agent_credential, bootstrap_config
 from agent_backbone.hooks.backbone_state import batch_receipts, prune_context_receipts
 
@@ -32,13 +32,45 @@ STARTED_AT = time.time()
 """When this process started: /health reports it so a restart is observable."""
 
 
-async def hint_inboxes(state) -> None:
+def _integration_context(app):
+    """Pin provider/storage ownership while authorization remains live."""
+    from agent_backbone.api.profile_binding import provider_context_current
+
+    state = app.state
+    provider = getattr(state, "profile_provider", None)
+    db = state.db
+    data_dir, database_url = state.config.data_dir, state.config.database_url
+
+    def config():
+        current = state.config
+        if (
+            getattr(state, "profile_provider", None) is not provider
+            or state.db is not db
+            or current.data_dir != data_dir
+            or current.database_url != database_url
+        ):
+            raise ValueError("Integration provider context does not match")
+        return current
+
+    @asynccontextmanager
+    async def operation():
+        async with AsyncExitStack() as operations:
+            config()
+            if provider is not None:
+                await operations.enter_async_context(provider.operation())
+                if not await provider_context_current(provider, config(), db):
+                    raise ValueError("Integration provider context does not match")
+            config()
+            yield
+
+    return config, operation
+
+
+async def hint_inboxes(config, db, feed) -> None:
     """The monitor tick's inbox hints: rows written outside a tell (expiry
     notices, escalations to an inbox-only agent) reach their hint here."""
-    inbox = tuple(spec.name for spec in state.config.agents if spec.inbox_only)
-    await state.feed.hint_inbox(
-        lambda: state.db.queue.inbox_rows(inbox_sessions=inbox), complete=True
-    )
+    inbox = tuple(spec.name for spec in config.agents if spec.inbox_only)
+    await feed.hint_inbox(lambda: db.queue.inbox_rows(inbox_sessions=inbox), complete=True)
 
 
 def _register_jobs(app: FastAPI):
@@ -67,104 +99,151 @@ def _register_jobs(app: FastAPI):
     from agent_backbone.services.scheduler import PeriodicScheduler
 
     state = app.state
+    from agent_backbone.api.profile_binding import provider_context_current
+
+    provider = getattr(state, "profile_provider", None)
+    db = state.db
+    github = state.github
+    store = getattr(state, "agent_store", None)
+    captured_config = ContextVar("job_config")
+
+    def current_config():
+        return captured_config.get(state.config)
+
+    def guarded(fn):
+        async def run(*args):
+            config = state.config
+            token = captured_config.set(config)
+            try:
+                async with AsyncExitStack() as operations:
+                    if (
+                        getattr(state, "profile_provider", None) is not provider
+                        or state.db is not db
+                    ):
+                        raise ValueError("Job provider context does not match")
+                    if provider is not None:
+                        await operations.enter_async_context(provider.operation())
+                        if not await provider_context_current(provider, config, db):
+                            raise ValueError("Job provider context does not match")
+                    return await fn(*args)
+            finally:
+                captured_config.reset(token)
+
+        return run
 
     async def _job_result(name: str, error_type: str | None, duration_ms: int):
         await observe_job(
-            state.db, source=name, stage="run", error_type=error_type, duration_ms=duration_ms
+            db, source=name, stage="run", error_type=error_type, duration_ms=duration_ms
         )
-        slow = state.config.settings.get("diagnostics.slow_job_seconds", 30)
+        slow = current_config().settings.get("diagnostics.slow_job_seconds", 30)
         await observe_duration(
-            state.db,
+            db,
             source=name,
             duration_ms=duration_ms,
             threshold_ms=int(slow * 1000),
             steps=take_pass_steps() if name == "agent-monitor" else None,
         )
 
-    scheduler = PeriodicScheduler(on_result=_job_result)
-    config: BackboneConfig = state.config
+    scheduler = PeriodicScheduler(on_result=guarded(_job_result))
+
+    def add_job(name, interval, fn, **kwargs):
+        scheduler.add(name, interval, guarded(fn), **kwargs)
+
+    def configure_job(name, interval, fn, **kwargs):
+        scheduler.configure(name, interval, guarded(fn), **kwargs)
+
+    config: BackboneConfig = current_config()
 
     async def _broadcast():
         # Reconcile out-of-band session churn to live Socket.IO subscribers.
         await state.feed.emit(only_if_changed=True)
         try:
-            await hint_inboxes(state)
+            await hint_inboxes(current_config(), db, state.feed)
         except Exception:
             log.exception("Inbox hint failed (non-fatal)")
 
     async def _monitor():
-        await state.agent_store.refresh()
-        return await monitor_agents(state.config, state.db, state.github, on_change=_broadcast)
+        await store.refresh()
+        refreshed = state.config
+        if (
+            refreshed.data_dir != current_config().data_dir
+            or refreshed.database_url != current_config().database_url
+        ):
+            raise ValueError("Job provider context does not match")
+        # Refresh is the monitor's admission read. Keep its latest roster and
+        # settings, then retain that snapshot for the actual monitoring work.
+        captured_config.set(refreshed)
+        return await monitor_agents(current_config(), db, github, on_change=_broadcast)
 
     async def _retry():
-        result = await delivery_retry(state.config, state.db, state.github)
-        if state.config.github_intake == "webhook" and state.config.github.backfill_on_start:
+        result = await delivery_retry(current_config(), db, github)
+        if (
+            current_config().github_intake == "webhook"
+            and current_config().github.backfill_on_start
+        ):
             await scheduler.retry_failed_once("github-backfill")
         return result
 
     async def _prune_receipts() -> int:
-        receipts = await asyncio.to_thread(batch_receipts, state.config.state_dir)
+        receipts = await run_thread(batch_receipts, current_config().state_dir)
         if not receipts:
             return 0
-        active = {str(id_) for id_ in await state.db.queue.active_ids()}
-        return await asyncio.to_thread(prune_context_receipts, receipts, active)
+        active = {str(id_) for id_ in await db.queue.active_ids()}
+        return await run_thread(prune_context_receipts, receipts, active)
 
     async def _prune():
-        days = state.config.timing.delivery_retention_days
+        days = current_config().timing.delivery_retention_days
         # Receipts first: they take their delivery times from the records pruned next.
-        receipts = await state.db.signing.prune_receipts()
+        receipts = await db.signing.prune_receipts()
         return {
-            "deliveries": await state.db.deliveries.prune(days),
-            "events": await state.db.events.prune(days),
-            "state_history": await state.db.state_history.prune(),
+            "deliveries": await db.deliveries.prune(days),
+            "interactions": await db.interactions.prune(days),
+            "events": await db.events.prune(days),
+            "state_history": await db.state_history.prune(),
             # A settled batch's hook receipt must not outlive its row: queue ids
             # can be used again once old rows are gone, so receipts go before
             # the rows that free them. Receipts are listed before the active
             # rows are read, so one taken since stays.
             "context_receipts": await _prune_receipts(),
-            "queue": await state.db.queue.prune(days),
-            "diagnostics": await state.db.diagnostics.prune(days),
-            "current_plans": await state.db.current_plans.prune(days),
-            "signing_audit": await state.db.signing.prune(days),
+            "queue": await db.queue.prune(days),
+            "diagnostics": await db.diagnostics.prune(days),
+            "current_plans": await db.current_plans.prune(days),
+            "signing_audit": await db.signing.prune(days),
             "signing_receipts": receipts,
-            "action_log_lines": await asyncio.to_thread(
-                rotate_action_log, state.config.action_log_path, receipt_retention_days=days
+            "action_log_lines": await run_thread(
+                rotate_action_log, current_config().action_log_path, receipt_retention_days=days
             ),
         }
 
     # Immediately at startup: this is what syncs agent state after a restart.
-    scheduler.add(
-        "agent-monitor", config.timing.monitor_interval_seconds, _monitor, run_immediately=True
-    )
-    scheduler.add("delivery-retry", config.timing.retry_interval_seconds, _retry)
+    add_job("agent-monitor", config.timing.monitor_interval_seconds, _monitor, run_immediately=True)
+    add_job("delivery-retry", config.timing.retry_interval_seconds, _retry)
 
     async def _transitions():
-        return await run_transitions(lambda: state.config, state.agent_store, state.db)
+        return await run_transitions(lambda: current_config(), store, db)
 
     # Explicit one-time stop/restart requests (`backbone agent restart`).
-    scheduler.add("agent-transitions", _TRANSITION_TICK, _transitions)
+    add_job("agent-transitions", _TRANSITION_TICK, _transitions)
 
     async def _steers():
-        return await settle_steers(state.config, state.db)
+        return await settle_steers(current_config(), db)
 
     # What became of each steer offer (`backbone tell --steer`).
-    scheduler.add("steer-settle", 15, _steers)
-    scheduler.add("prune", 6 * 3600, _prune)
+    add_job("steer-settle", 15, _steers)
+    add_job("prune", 6 * 3600, _prune)
 
     async def _resources():
-        return await sample_resources(state.config, state.db)
+        return await sample_resources(current_config(), db)
 
     # Memory and swap, recorded only under pressure (`backbone diagnostics`).
     if (sample_every := config.settings.get("diagnostics.resource_sample_seconds", 300)) > 0:
-        scheduler.add("resource-sample", sample_every, _resources)
-    scheduler.add("report-audio", 30, state.integrations.flush_report_audio, run_immediately=True)
+        add_job("resource-sample", sample_every, _resources)
+    add_job("report-audio", 30, state.integrations.flush_report_audio, run_immediately=True)
     # Integrations re-provision their per-agent surfaces (Telegram topics):
     # a config publish triggers it immediately, this catches everything else
     # (a group discovered from a message, a transient Telegram error).
-    scheduler.add("integrations-sync", 300, state.integrations.reconcile)
-    scheduler.add(
-        "report-notifications", 30, state.integrations.flush_reports, run_immediately=True
-    )
+    add_job("integrations-sync", 300, state.integrations.reconcile)
+    add_job("report-notifications", 30, state.integrations.flush_reports, run_immediately=True)
 
     async def _restart() -> None:
         # Ask uvicorn for a graceful shutdown; `backbone up` re-executes
@@ -179,41 +258,41 @@ def _register_jobs(app: FastAPI):
 
     watch = UpgradeWatch(
         enabled=lambda: (
-            state.config.backbone.restart_on_upgrade
+            current_config().backbone.restart_on_upgrade
             and getattr(state, "request_shutdown", None) is not None
         ),
         restart=_restart,
         in_flight=routing_in_flight,
     )
     state.upgrade_watch = watch
-    scheduler.add("upgrade-watch", 60, watch.run)
+    add_job("upgrade-watch", 60, watch.run)
 
     poller = None
-    if state.github is not None:
+    if github is not None:
         poller = GitHubPoller(
-            lambda: state.config,
-            state.db,
-            state.github,
+            lambda: current_config(),
+            db,
+            github,
             issue_closed_hooks=state.issue_closed_hooks,
         )
         if config.github_intake == "poll":
-            scheduler.add(
+            add_job(
                 "github-poll", config.github.poll_interval_seconds, poller.run, run_immediately=True
             )
         elif config.github_intake == "webhook" and config.github.backfill_on_start:
-            scheduler.add("github-backfill", 0, poller.backfill, run_immediately=True, once=True)
+            add_job("github-backfill", 0, poller.backfill, run_immediately=True, once=True)
 
         async def _dependencies():
-            await sync_dependencies(state.config, state.db, QueueSnapshot(state.github))
+            await sync_dependencies(current_config(), db, QueueSnapshot(github))
 
         # Sub-issue links change rarely, and a close asks GitHub for its own
         # parent. Their own job: a monitor pass never waits on these listings.
-        scheduler.add("dependency-sync", 600, _dependencies, run_immediately=True)
+        add_job("dependency-sync", 600, _dependencies, run_immediately=True)
 
     sources = getattr(state, "sources", None)
-    sources_poller = SourcesPoller(lambda: state.config, state.db, sources) if sources else None
+    sources_poller = SourcesPoller(lambda: current_config(), db, sources) if sources else None
     if sources_poller is not None and sources.enabled:
-        scheduler.add(
+        add_job(
             "sources-poll",
             config.sources.poll_interval_seconds,
             sources_poller.run,
@@ -222,10 +301,10 @@ def _register_jobs(app: FastAPI):
 
     def reconcile_jobs():
         current = state.config
-        scheduler.configure("agent-monitor", current.timing.monitor_interval_seconds, _monitor)
-        scheduler.configure("delivery-retry", current.timing.retry_interval_seconds, _retry)
+        configure_job("agent-monitor", current.timing.monitor_interval_seconds, _monitor)
+        configure_job("delivery-retry", current.timing.retry_interval_seconds, _retry)
         if sources_poller is not None:
-            scheduler.configure(
+            configure_job(
                 "sources-poll",
                 current.sources.poll_interval_seconds,
                 sources_poller.run,
@@ -233,7 +312,7 @@ def _register_jobs(app: FastAPI):
                 run_immediately=True,
             )
         if poller is not None:
-            scheduler.configure(
+            configure_job(
                 "github-poll",
                 current.github.poll_interval_seconds,
                 poller.run,
@@ -243,6 +322,25 @@ def _register_jobs(app: FastAPI):
 
     state.reconcile_jobs = reconcile_jobs
     return scheduler
+
+
+class _SocketStreams:
+    """Drain socket consumers after producers stop, before their dependencies."""
+
+    def __init__(self, sio, feed, manager):
+        self.sio, self.feed, self.manager = sio, feed, manager
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        if self.sio is not None:
+            await self.sio.shutdown()
+        await self.feed.close()
+        await self.manager.cleanup_all()
+
+    async def health_check(self) -> dict:
+        return {"healthy": self.sio is None or not self.sio._closing}
 
 
 @asynccontextmanager
@@ -259,10 +357,12 @@ async def lifespan(app: FastAPI):
 
     boot: BackboneConfig = getattr(app.state, "config", None) or bootstrap_config()
     data_dir = boot.data_dir
+    provider = getattr(app.state, "profile_provider", None)
+    if provider is not None:
+        await provider.check()
     data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     data_dir.chmod(0o700)
     app.state.config = boot
-    configure_pty_manager(data_dir)
 
     lifecycle = LifecycleManager()
     app.state.lifecycle = lifecycle
@@ -271,6 +371,8 @@ async def lifespan(app: FastAPI):
     app.state.db = BackboneDB(boot.database_url)
     lifecycle.register("database", app.state.db)
     await lifecycle.start_all()
+
+    configure_pty_manager(data_dir)
 
     def _publish(new_config: BackboneConfig) -> None:
         from agent_backbone.base import set_log_mode
@@ -300,7 +402,7 @@ async def lifespan(app: FastAPI):
     from agent_backbone.hooks.install import install_hook_files
 
     try:
-        await asyncio.to_thread(install_hook_files, config.data_dir)
+        await run_thread(install_hook_files, config.data_dir)
     except OSError:
         log.warning("Could not refresh Backbone hook files", exc_info=True)
 
@@ -315,11 +417,26 @@ async def lifespan(app: FastAPI):
     if app.state.github is not None:
         lifecycle.register("github", app.state.github)
     app.state.feed = SessionFeed(
-        lambda: app.state.config, getattr(app.state, "sio", None), db=app.state.db
+        lambda: app.state.config,
+        getattr(app.state, "sio", None),
+        db=app.state.db,
+        profile_provider=getattr(app.state, "profile_provider", None),
     )
-    app.state.integrations = build_integrations(lambda: app.state.config, db=app.state.db)
+    lifecycle.register(
+        "socket-streams",
+        _SocketStreams(getattr(app.state, "sio", None), app.state.feed, get_pty_manager()),
+    )
+    # Persistent polling tasks must keep reading live authorization settings;
+    # they can outlive the scheduler callback that starts them.
+    integration_config, integration_operation = _integration_context(app)
+    app.state.integrations = build_integrations(
+        integration_config, db=app.state.db, operation=integration_operation
+    )
     lifecycle.register("integrations", app.state.integrations)
+    lifecycle.register("api-tasks", app.state.api_tasks)
     app.state.sources = build_sources(lambda: app.state.config)
+
+    provider_db, provider_store = app.state.db, app.state.agent_store
 
     # A closed issue ends the swarm that was working it (PR merged -> issue
     # closed via "Closes #N" -> teardown). Handed to ingest as a hook so
@@ -327,7 +444,7 @@ async def lifespan(app: FastAPI):
     async def _swarm_teardown(repo: str, issue_number: int) -> None:
         try:
             name = await teardown_for_issue(
-                app.state.config, app.state.db, app.state.agent_store, repo, issue_number
+                app.state.config, provider_db, provider_store, repo, issue_number
             )
         except SwarmError as exc:
             # A member that would not stop keeps its worktree; the swarm stays
@@ -357,9 +474,12 @@ async def lifespan(app: FastAPI):
         )
         yield
     finally:
-        await app.state.feed.close()
+        app.state.integrations.close_admission()
+        app.state.api_tasks.close_admission()
+        sio = getattr(app.state, "sio", None)
+        if sio is not None:
+            sio.close_admission()
         await lifecycle.stop_all()
-        await get_pty_manager().cleanup_all()
         log.info("agent-backbone shutting down")
 
 
@@ -376,12 +496,33 @@ def create_app(config: BackboneConfig | None = None):
     )
     app.state.config = config
 
+    from agent_backbone.api.background import ApiTasks
+    from agent_backbone.api.profile_binding import ProfileBindingMiddleware, profile_identity
     from agent_backbone.api.signed import SignedSenderMiddleware
     from agent_backbone.api.validation import Validations
 
-    app.state.validations = Validations()
+    app.state.api_tasks = ApiTasks()
+    app.state.validations = Validations(app.state.api_tasks)
 
     app.add_middleware(SignedSenderMiddleware)
+    app.add_middleware(ProfileBindingMiddleware)
+    app.add_api_route("/api/profile", profile_identity, methods=["GET"])
+    from agent_backbone.api.auth import require_operator
+    from agent_backbone.api.profile_sessions import account_status, ensure_shell, sign_in
+
+    for path, handler in (("shells", ensure_shell), ("accounts/sign-in", sign_in)):
+        app.add_api_route(
+            f"/api/profile/{path}",
+            handler,
+            methods=["POST"],
+            dependencies=[Depends(require_operator)],
+        )
+    app.add_api_route(
+        "/api/profile/accounts/status",
+        account_status,
+        methods=["GET"],
+        dependencies=[Depends(require_operator)],
+    )
 
     cors_origins = list(config.backbone.cors_origins)
     if cors_origins:
@@ -444,6 +585,7 @@ def create_app(config: BackboneConfig | None = None):
     from agent_backbone.api.routes.fleet import router as fleet_router
     from agent_backbone.api.routes.help import router as help_router
     from agent_backbone.api.routes.integrations import router as integrations_router
+    from agent_backbone.api.routes.interactions import router as interactions_router
     from agent_backbone.api.routes.issues import router as issues_router
     from agent_backbone.api.routes.messages import router as messages_router
     from agent_backbone.api.routes.onboarding import router as onboarding_router
@@ -471,6 +613,7 @@ def create_app(config: BackboneConfig | None = None):
         fleet_router,
         help_router,
         integrations_router,
+        interactions_router,
         issues_router,
         messages_router,
         plans_router,

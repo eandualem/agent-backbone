@@ -67,6 +67,7 @@ async def _wait_for_api(
 
 async def restart_backbone(config: BackboneConfig) -> int:
     """Restart whatever runs the backbone: the login service, else the tmux session."""
+    _common.pin_default_terminal()
     from agent_backbone.cli import server, service
     from agent_backbone.services.terminal import session_exists
 
