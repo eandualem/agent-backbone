@@ -636,7 +636,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.command in {"runtimes", "setup", "profiles"}:
         sys.exit(args.func(args))
     try:
-        client_key = bootstrap_config().api_key
+        # `init --data-dir` checks the directory it initializes, not the default one.
+        client_key = bootstrap_config(getattr(args, "data_dir", None)).api_key
     except ValueError as exc:
         parser.exit(1, f"{exc}\n")
     if is_agent_client(client_key):

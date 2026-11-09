@@ -46,7 +46,11 @@ def cmd_init(args: argparse.Namespace) -> int:
     from agent_backbone.services.database import check_new_default, create_default_profile
     from agent_backbone.services.database.engine import redact_url
 
-    config = bootstrap_config(args.data_dir)
+    try:
+        config = bootstrap_config(args.data_dir)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 1
     data_dir = config.data_dir
     try:
         check_new_default(data_dir)
