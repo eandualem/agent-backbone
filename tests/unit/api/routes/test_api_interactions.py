@@ -778,3 +778,22 @@ async def test_an_out_of_range_report_relation_is_an_absent_target(
         asked = {"type": "asked_in_conversation", "target": entry}
         resp = await send(api_client, auth_headers, interaction={"relations": [asked]})
         assert resp.status_code == 422, resp.text
+
+
+async def test_a_name_moved_before_a_reply_never_saves_it_as_another_registration(
+    api_app, api_client, transport, monkeypatch
+):
+    from agent_backbone.services.database import _conversations_repo
+
+    db = api_app.state.db
+    bell, ike = await identity(db, "bell"), await identity(db, "ike")
+    headers = {"Authorization": "Bearer " + agent_api_key(TEST_API_KEY, bell)}
+    assert (await send(api_client, headers)).status_code == 200
+    path = "/api/conversations/interaction/" + (await records(db))[0]["id"] + "/messages"
+    # Between authentication and the write, the name resolves to another participant.
+    monkeypatch.setattr(_conversations_repo, "_identity", AsyncMock(return_value=ike))
+    reply = await api_client.post(
+        path, headers=headers, json={"author": "bell", "request_id": "moved", "text": "Hi"}
+    )
+    assert reply.status_code == 403
+    assert reply.json()["error"] == "registration_changed"

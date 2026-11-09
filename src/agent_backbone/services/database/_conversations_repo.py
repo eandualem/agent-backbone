@@ -766,6 +766,13 @@ class ConversationRepo(Repo):
             author_id = "" if author is None else await _identity(conn, author)
             if author_id is None:
                 raise KeyError(author)
+            if interaction_registration is not None and interaction_registration != author_id:
+                # The name moved to another registration after authentication.
+                raise ConversationRefused(
+                    403,
+                    "registration_changed",
+                    f"This credential no longer belongs to {author}.",
+                )
             # A named recipient's row lock too comes before the conversation's,
             # in the same order as a reply; its refusal waits for the retry check.
             target = refused = None
