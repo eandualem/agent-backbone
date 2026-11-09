@@ -15,6 +15,12 @@ from agent_backbone.services.runtimes import RUNTIMES
 from agent_backbone.templates import core_starter_content
 
 
+@pytest.fixture(autouse=True)
+def watches_open(monkeypatch):
+    # An app stopped in another test closes watch admission for the process.
+    monkeypatch.setattr(onboarding, "_watches_closed", False)
+
+
 @pytest.fixture(params=["claude", "codex", "opencode"])
 async def scenario(request, db, tmp_path, monkeypatch):
     data = tmp_path / "data"
@@ -220,6 +226,13 @@ async def test_shutdown_cancels_a_first_run_watch_still_waiting(scenario, db, mo
     await onboarding.FirstRunWatches().stop()
     assert running.cancelled() and not onboarding._watches
     settled.assert_not_awaited()
+
+
+async def test_a_setup_finishing_after_shutdown_starts_no_watch(scenario, db, monkeypatch):
+    await onboarding.FirstRunWatches().stop()
+    body, store, _ = scenario
+    result = await onboarding.first_agent(body, store.config, store, db, settled=AsyncMock())
+    assert result["code"] == "agent_ready" and not onboarding._watches
 
 
 async def test_first_run_watch_hands_over_the_greeting_past_a_screen(scenario, monkeypatch):

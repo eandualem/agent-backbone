@@ -216,7 +216,7 @@ def test_a_failed_handshake_after_spawn_ends_and_reaps_the_process(created, monk
     popen.return_value.wait.assert_called_once()
 
 
-def test_the_default_profile_starts_with_the_bound_credential(tmp_path, monkeypatch):
+def test_the_default_profile_reads_its_own_credential(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
     monkeypatch.setenv("BACKBONE_API_KEY", "exported-key")
@@ -230,4 +230,5 @@ def test_the_default_profile_starts_with_the_bound_credential(tmp_path, monkeypa
     monkeypatch.setattr(subprocess, "Popen", popen)
     reservation = SimpleNamespace(kind="legacy_default", data_dir=tmp_path)
     ProviderServices(MagicMock()).start(reservation)
-    assert popen.call_args.kwargs["env"]["BACKBONE_API_KEY"] == "dotenv-key"
+    # Not the exported key, and no key a tmux server it starts could inherit.
+    assert "BACKBONE_API_KEY" not in popen.call_args.kwargs["env"]

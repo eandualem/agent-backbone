@@ -84,12 +84,12 @@ class ProviderServices:
                         ]
                     ),
                 ],
-                # The Default profile uses the person's own environment, with the
-                # credential the handshake presents, not a different exported key.
+                # The Default profile uses the person's own environment, without an
+                # exported key: it reads the one the handshake presents from its
+                # .env, and never passes it on to a tmux server it starts.
                 env={
-                    **os.environ,
+                    **{k: v for k, v in os.environ.items() if k != "BACKBONE_API_KEY"},
                     "BACKBONE_DATA_DIR": str(root),
-                    "BACKBONE_API_KEY": binding.credential,
                 }
                 if default
                 else {
