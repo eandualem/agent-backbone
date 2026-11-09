@@ -784,7 +784,7 @@ def validate_source_lock(source, lock):
     optional native feature. Forked package versions need an explicit lock update.
     """
     packages = tomllib.loads((source / "uv.lock").read_text(encoding="utf-8"))["package"]
-    pending = [{"name": "agent-backbone", "extra": ["postgres"]}]
+    pending = [{"name": "agent-backbone"}]
     visited = set()
     expected = set()
     while pending:

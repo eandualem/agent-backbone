@@ -103,7 +103,6 @@ def upgrade() -> None:
             "uq_transitions_open",
             ["agent_name"],
             unique=True,
-            postgresql_where=sa.text("status = 'pending'"),
             sqlite_where=sa.text("status = 'pending'"),
         )
 
@@ -249,9 +248,6 @@ def upgrade() -> None:
             "uq_deliveries_active_owner",
             ["repo", "issue_number", "session_name"],
             unique=True,
-            postgresql_where=sa.text(
-                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
-            ),
             sqlite_where=sa.text(
                 "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
@@ -483,7 +479,6 @@ def upgrade() -> None:
             "idx_mq_leased",
             ["leased_at"],
             unique=False,
-            postgresql_where=sa.text("status = 'in_progress'"),
             sqlite_where=sa.text("status = 'in_progress'"),
         )
         batch_op.create_index("idx_mq_session", ["session_name"], unique=False)
@@ -492,9 +487,6 @@ def upgrade() -> None:
             "uq_mq_issue_dedup",
             ["session_name", "repo", "issue_number"],
             unique=True,
-            postgresql_where=sa.text(
-                "delivery_kind = 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain') AND issue_number IS NOT NULL"
-            ),
             sqlite_where=sa.text(
                 "delivery_kind = 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain') AND issue_number IS NOT NULL"
             ),
@@ -503,9 +495,6 @@ def upgrade() -> None:
             "uq_mq_message_dedup",
             ["session_name", "dedup_key"],
             unique=True,
-            postgresql_where=sa.text(
-                "delivery_kind != 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain')"
-            ),
             sqlite_where=sa.text(
                 "delivery_kind != 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain')"
             ),
@@ -859,7 +848,6 @@ def upgrade() -> None:
             "uq_signing_transitions_pending",
             ["sender_key"],
             unique=True,
-            postgresql_where=sa.text("status = 'pending'"),
             sqlite_where=sa.text("status = 'pending'"),
         )
 
@@ -882,7 +870,6 @@ def upgrade() -> None:
             "uq_swarms_active_issue",
             ["repo", "issue_number"],
             unique=True,
-            postgresql_where=sa.text("status = 'active'"),
             sqlite_where=sa.text("status = 'active'"),
         )
 
@@ -936,7 +923,6 @@ def downgrade() -> None:
     with op.batch_alter_table("swarms", schema=None) as batch_op:
         batch_op.drop_index(
             "uq_swarms_active_issue",
-            postgresql_where=sa.text("status = 'active'"),
             sqlite_where=sa.text("status = 'active'"),
         )
 
@@ -944,7 +930,6 @@ def downgrade() -> None:
     with op.batch_alter_table("signing_transitions", schema=None) as batch_op:
         batch_op.drop_index(
             "uq_signing_transitions_pending",
-            postgresql_where=sa.text("status = 'pending'"),
             sqlite_where=sa.text("status = 'pending'"),
         )
         batch_op.drop_index("idx_signing_transitions_sender")
@@ -1008,18 +993,12 @@ def downgrade() -> None:
     with op.batch_alter_table("message_queue", schema=None) as batch_op:
         batch_op.drop_index(
             "uq_mq_message_dedup",
-            postgresql_where=sa.text(
-                "delivery_kind != 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain')"
-            ),
             sqlite_where=sa.text(
                 "delivery_kind != 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain')"
             ),
         )
         batch_op.drop_index(
             "uq_mq_issue_dedup",
-            postgresql_where=sa.text(
-                "delivery_kind = 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain') AND issue_number IS NOT NULL"
-            ),
             sqlite_where=sa.text(
                 "delivery_kind = 'issue' AND status IN ('pending','in_progress','checkpoint','uncertain') AND issue_number IS NOT NULL"
             ),
@@ -1028,7 +1007,6 @@ def downgrade() -> None:
         batch_op.drop_index("idx_mq_session")
         batch_op.drop_index(
             "idx_mq_leased",
-            postgresql_where=sa.text("status = 'in_progress'"),
             sqlite_where=sa.text("status = 'in_progress'"),
         )
 
@@ -1082,9 +1060,6 @@ def downgrade() -> None:
     with op.batch_alter_table("deliveries", schema=None) as batch_op:
         batch_op.drop_index(
             "uq_deliveries_active_owner",
-            postgresql_where=sa.text(
-                "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
-            ),
             sqlite_where=sa.text(
                 "kind = 'issue' AND issue_number IS NOT NULL AND outcome IN ('attempting','delivered','retried') AND superseded_at IS NULL"
             ),
@@ -1117,7 +1092,6 @@ def downgrade() -> None:
     with op.batch_alter_table("agent_transitions", schema=None) as batch_op:
         batch_op.drop_index(
             "uq_transitions_open",
-            postgresql_where=sa.text("status = 'pending'"),
             sqlite_where=sa.text("status = 'pending'"),
         )
         batch_op.drop_index("idx_transitions_agent")

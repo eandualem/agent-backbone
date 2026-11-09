@@ -43,7 +43,7 @@ every later CLI version or account.
   alerts, live configuration.
 - REST API + Socket.IO snapshots + read-only terminal streaming; events
   feed; per-repository status.
-- SQLite by default; Postgres optional; single Alembic migration.
+- SQLite in the data directory; single Alembic migration.
 - Swarms: a coordinator plus members (per-member runtime and model) in one
   shared worktree and branch, initiated on an existing issue, with
   injected role briefs, automatic teardown when the issue closes, and

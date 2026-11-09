@@ -124,14 +124,6 @@
       "version": "4.12.1"
     },
     {
-      "filename": "asyncpg-0.31.0-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
-      "name": "asyncpg",
-      "sha256": "c0e0822b1038dc7253b337b0f3f676cadc4ac31b126c5d42691c39691962e403",
-      "size": 3424067,
-      "url": "https://files.pythonhosted.org/packages/2e/fc/9e3486fb2bbe69d4a867c0b76d68542650a7ff1574ca40e84c3111bb0c6e/asyncpg-0.31.0-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
-      "version": "0.31.0"
-    },
-    {
       "filename": "bidict-0.23.1-py3-none-any.whl",
       "name": "bidict",
       "sha256": "5dae8d4d79b552a71cbabc7deb25dfe8ce710b17ff41711e13010ead2abfc3e5",

@@ -100,8 +100,8 @@ class CurrentPlanRepo(Repo):
         actor = "agent:" + body.author_id
         try:
             async with self._tx() as conn:
-                # Lock the registration before reading state: serializes writes, rename and forget
-                # on PostgreSQL and acquires SQLite's writer lock before any read.
+                # Lock the registration before reading state: acquires SQLite's writer
+                # lock before any read, serializing writes, rename and forget.
                 name = await conn.scalar(
                     update(_A)
                     .where(_A.c.name == body.author, _A.c.report_identity == body.author_id)

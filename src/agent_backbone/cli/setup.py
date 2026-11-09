@@ -42,15 +42,16 @@ BACKBONE_API_KEY={api_key}
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    from agent_backbone.config import PROFILE_REGISTRY_PATH, sqlite_url
+    from agent_backbone.config import PROFILE_REGISTRY_PATH
     from agent_backbone.services.database import check_new_default, create_default_profile
     from agent_backbone.services.database.engine import redact_url
 
-    config = bootstrap_config(args.data_dir)
-    data_dir = config.data_dir
-    if config.database_url != sqlite_url(data_dir):
-        print("error: a profile uses its own SQLite database; unset BACKBONE_DATABASE_URL")
+    try:
+        config = bootstrap_config(args.data_dir)
+    except ValueError as exc:
+        print(f"error: {exc}")
         return 1
+    data_dir = config.data_dir
     try:
         check_new_default(data_dir)
     except ValueError as exc:

@@ -6,7 +6,9 @@ integration configuration. Multiple workspaces can share that profile. Selecting
 another profile affects new work; it cannot retarget an existing request.
 
 **Implementation status:** every installation runs as a profile. `backbone init` and
-`backbone setup` create Default, and `backbone up` refuses to run without one. Isolated
+`backbone setup` create Default, and `backbone up` refuses to run without one. Started
+by the login service, it logs the refusal once and waits, starting by itself after
+`backbone init`, instead of exiting into a restart loop. Isolated
 profiles can be created, started and stopped, and agents run inside them on Claude Code,
 Codex and OpenCode. Bound discovery, identity, sessions, CLI sign-in and setup schema 2
 are implemented. Not done yet: recovery of interrupted operations, replacement and

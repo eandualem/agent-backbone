@@ -53,7 +53,6 @@ class UsageRepo(Repo):
     ) -> str:
         identity = usage_id(runtime, session_id)
         async with self._tx() as conn:
-            # Portable upsert for the SQLite/PostgreSQL engines we support.
             from sqlalchemy import text
 
             await conn.execute(

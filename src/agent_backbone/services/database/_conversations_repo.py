@@ -665,14 +665,6 @@ class ConversationRepo(Repo):
         # Read markers that move while this runs are reported again on the next poll.
         polled = int((datetime.now(UTC) - timedelta(seconds=2)).timestamp() * 1e6)
         async with self._tx() as conn:
-            if conn.dialect.name == "postgresql":
-                # Sequence allocation is not commit order. Drain active writers
-                # before capturing a watermark, or a lower ID that commits later
-                # would be skipped forever. Match post's marker -> entry order.
-                # The bounded read holds SHARE locks; writers resume at commit.
-                await conn.execute(
-                    text("LOCK TABLE conversation_reads, conversation_entries IN SHARE MODE")
-                )
             cursor = await conn.scalar(select(func.max(_E.c.id))) or 0
             if reader is not None:
                 agent_id = await _registration(conn, reader)
@@ -716,8 +708,8 @@ class ConversationRepo(Repo):
                 )
                 query = query.having(or_(func.sum(case((mine, 1), else_=0)) > 0, responsible))
             rows = (await conn.execute(query.order_by(last.desc()).limit(limit + 1))).all()
-        # Counts and the cursor are now captured. Release the writer barrier
-        # before resolving metadata, which may traverse retained response history.
+        # Counts and the cursor are now captured. Resolve metadata, which may
+        # traverse retained response history, in its own transaction.
         items = []
         async with self._tx() as conn:
             for row in rows[:limit]:

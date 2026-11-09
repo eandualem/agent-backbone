@@ -30,8 +30,11 @@ instructions in Markdown files. The default **data directory** contains:
   environment, which wins. Only that one file is read — a `.env` in the current
   working directory is ignored.
 
-Use environment variables to select storage: `BACKBONE_DATA_DIR` (where it
-is) and `BACKBONE_DATABASE_URL` (PostgreSQL instead of the SQLite file).
+Use the `BACKBONE_DATA_DIR` environment variable to select storage (where it
+is). The database is always the SQLite file `backbone.db` in that directory.
+PostgreSQL is no longer supported: when `BACKBONE_DATABASE_URL` is set, in the
+environment or in `.env`, the backbone does not start and commands that read the
+installation stop with an error that says so. Remove the variable to continue.
 
 Persistent database startup checks that required tables and columns exist,
 even when the migration revision is current. Missing structures trigger
@@ -252,7 +255,6 @@ runtimes draft no such reports.
 | `TELEGRAM_TOKEN` | Bot token |
 | `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD` | The mailbox and its app password for the read-only Gmail [source](sources.md); both unset means no mailbox |
 | `BACKBONE_DATA_DIR` | Data directory (default `~/.local/share/agent-backbone`) |
-| `BACKBONE_DATABASE_URL` | Any SQLAlchemy async URL, e.g. `postgresql+asyncpg://user:pw@host/db` (install the `postgres` extra) |
 
 `backbone init` writes `.env` with mode 0600 and a fresh 32-byte API key;
 `backbone secrets set KEY` adds to it (prompted, or `set KEY VALUE`),
@@ -303,14 +305,6 @@ See `backbone docs report-audio` for the model, service, voice and FFmpeg setup.
 
 See [message checkpoints](cli.md#cooperative-message-checkpoints) for safe mid-turn
 coordination, acknowledgement and retention.
-
-For the optional source-checkout PostgreSQL service, keep
-`BACKBONE_POSTGRES_PASSWORD` available to every `docker compose` command, including
-`make db-up` and `make db-down`. Set it in the source checkout’s `.env` file or
-export it in each shell. The port binds to `127.0.0.1:5435`. Configure
-`BACKBONE_DATABASE_URL` separately with that password, URL-encoded when needed.
-Changing the variable does not rotate credentials in an existing database volume;
-use PostgreSQL's password-change procedure for an existing installation.
 
 Agent launches also export `BACKBONE_AGENT_CREDENTIAL`, an alias for the scoped
 collaboration credential that survives runtime filtering of `*KEY*`, `*TOKEN*`

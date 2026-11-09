@@ -39,8 +39,7 @@ async def test_client_address_matches_server_and_keeps_database_unchanged(
 ):
     monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("BACKBONE_PORT", raising=False)
-    db_path = tmp_path / "existing.db"
-    monkeypatch.setenv("BACKBONE_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    db_path = tmp_path / "backbone.db"
     if process_port:
         monkeypatch.setenv("BACKBONE_PORT", process_port)
     if file_port:
@@ -71,7 +70,6 @@ async def test_api_commands_do_not_initialize_or_repair_database(
 
     monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path))
     database = tmp_path / "backbone.db"
-    monkeypatch.setenv("BACKBONE_DATABASE_URL", f"sqlite+aiosqlite:///{database}")
     if existing:
         with sqlite3.connect(database) as conn:
             conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
@@ -101,7 +99,6 @@ async def test_offline_status_uses_registered_agents_and_settings(tmp_path, monk
     from agent_backbone.config import AgentSpec
 
     monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("BACKBONE_DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'backbone.db'}")
     async with _common.Direct(await read_client_config()) as direct:
         await direct.store.register(AgentSpec(name="saved", dir=str(tmp_path), runtime="shell"))
         await direct.db.settings.set("backbone.session_name", "custom-backbone")
@@ -126,7 +123,6 @@ async def test_status_without_api_or_tmux_access_is_unknown_not_offline(tmp_path
     from agent_backbone.cli.status import snapshot
 
     monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("BACKBONE_DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'backbone.db'}")
     denied = "error connecting to /private/tmp/tmux-501/default (Operation not permitted)"
     with (
         patch("agent_backbone.cli._common.api", AsyncMock(return_value=None)),
@@ -141,7 +137,6 @@ async def test_offline_stop_protects_configured_backbone_session(tmp_path, monke
     from agent_backbone.cli.agents import _agent
 
     monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("BACKBONE_DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'backbone.db'}")
     async with _common.Direct(await read_client_config()) as direct:
         await direct.db.settings.set("backbone.session_name", "custom-backbone")
     with (
@@ -159,7 +154,6 @@ def test_unreadable_roster_reports_error_without_repair(tmp_path, monkeypatch, c
 
     monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path))
     database = tmp_path / "backbone.db"
-    monkeypatch.setenv("BACKBONE_DATABASE_URL", f"sqlite+aiosqlite:///{database}")
     with sqlite3.connect(database) as conn:
         conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
     before = database.read_bytes()
@@ -246,8 +240,7 @@ async def test_invalid_diagnostic_policy_does_not_discard_stored_address(
 ):
     monkeypatch.setenv("BACKBONE_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("BACKBONE_PORT", raising=False)
-    db_path = tmp_path / "existing.db"
-    monkeypatch.setenv("BACKBONE_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    db_path = tmp_path / "backbone.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
         conn.executemany(

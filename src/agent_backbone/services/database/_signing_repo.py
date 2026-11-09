@@ -666,10 +666,9 @@ class SigningRepo(Repo):
                 text("DELETE FROM signing_nonces WHERE seen_at < :cutoff"),
                 {"cutoff": now - NONCE_RETENTION_SECONDS},
             )
-            lock = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
             current = (
                 await conn.execute(
-                    text(f"SELECT epoch FROM signing_enrollments WHERE sender_key = :k{lock}"),
+                    text("SELECT epoch FROM signing_enrollments WHERE sender_key = :k"),
                     {"k": key},
                 )
             ).scalar()
