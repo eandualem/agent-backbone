@@ -71,8 +71,9 @@ class DeliveryRepo(Repo):
                 source=source,
                 at=row["created_at"],
                 delivery_id=delivery_id,
-                # SQLite may reuse a pruned delivery id; the operation keeps the key unique.
-                key=f"delivery:{row['operation_id']}:{delivery_id}",
+                # SQLite may reuse a pruned delivery id, even for the same operation:
+                # the row's creation time keeps each attempt's key unique.
+                key=f"delivery:{row['operation_id']}:{delivery_id}:{row['created_at']}",
             )
             return delivery_id
 
@@ -125,7 +126,7 @@ class DeliveryRepo(Repo):
                          AND outcome IN ('attempting','delivered','retried')
                          AND superseded_at IS NULL
                        DO NOTHING
-                       RETURNING id"""
+                       RETURNING id, created_at"""
                 ),
                 {
                     "operation_id": operation_id or uuid.uuid4().hex,
@@ -147,7 +148,7 @@ class DeliveryRepo(Repo):
                     outcome="attempting",
                     source=source,
                     delivery_id=row._mapping["id"],
-                    key=f"delivery:{operation_id}:{row._mapping['id']}",
+                    key=f"delivery:{operation_id}:{row.id}:{row.created_at}",
                 )
             return row._mapping["id"] if row else None
 
@@ -185,7 +186,7 @@ class DeliveryRepo(Repo):
                     outcome=outcome,
                     source=row["source"],
                     delivery_id=delivery_id,
-                    key=f"finalize:{row['operation_id']}:{delivery_id}:{outcome}",
+                    key=f"finalize:{row['operation_id']}:{delivery_id}:{row['created_at']}:{outcome}",
                 )
 
     async def settle(self, delivery_id: int, outcome: str, *, expected: str) -> bool:
@@ -218,7 +219,7 @@ class DeliveryRepo(Repo):
                     source=row["source"],
                     at=row["settled_at"],
                     delivery_id=delivery_id,
-                    key=f"settle:{row['operation_id']}:{delivery_id}:{outcome}",
+                    key=f"settle:{row['operation_id']}:{delivery_id}:{row['created_at']}:{outcome}",
                 )
             return result.rowcount > 0
 
@@ -343,7 +344,7 @@ class DeliveryRepo(Repo):
                     outcome=outcome,
                     source=row["source"],
                     delivery_id=delivery_id,
-                    key=f"retire:{row['operation_id']}:{delivery_id}:{outcome}",
+                    key=f"retire:{row['operation_id']}:{delivery_id}:{row['created_at']}:{outcome}",
                 )
         if row is not None:
             await DiagnosticRepo(self._engine).record(

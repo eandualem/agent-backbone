@@ -102,6 +102,14 @@ class TestSecretsStayOutOfTheEnvironment:
         (tmp_path / ".env").write_text("GITHUB_TOKEN=from-file\n")
         assert load_secrets(tmp_path)["GITHUB_TOKEN"] == "from-file"
 
+    def test_the_operator_key_is_read_literally(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("BACKBONE_API_KEY", raising=False)
+        monkeypatch.setenv("TOKEN", "expanded")
+        (tmp_path / ".env").write_text("BACKBONE_API_KEY=literal-${TOKEN}\nOTHER=${TOKEN}\n")
+        secrets = load_secrets(tmp_path)
+        assert secrets["BACKBONE_API_KEY"] == "literal-${TOKEN}"  # as a profile binding reads it
+        assert secrets["OTHER"] == "expanded"
+
     def test_process_environment_wins_over_the_file(self, monkeypatch, tmp_path):
         (tmp_path / ".env").write_text("GITHUB_TOKEN=from-file\n")
         monkeypatch.setenv("GITHUB_TOKEN", "from-shell")

@@ -276,7 +276,7 @@ async def read_client_config(
     boot = bootstrap_config(data_dir) if data_dir is not None else bootstrap_config()
     file_key = None
     if operator_file:
-        file_key = dotenv_values(boot.env_path).get("BACKBONE_API_KEY")
+        file_key = dotenv_values(boot.env_path, interpolate=False).get("BACKBONE_API_KEY")
         if not file_key or agent_credential(file_key) or any(ord(c) < 32 for c in file_key):
             raise OperatorFileUnavailable(
                 "Existing installation operator credentials are unavailable"

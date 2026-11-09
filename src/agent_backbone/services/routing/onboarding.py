@@ -56,6 +56,9 @@ STARTED_SECONDS = 3.0
 FIRST_RUN_SECONDS = 600.0
 
 _watches: set[asyncio.Task] = set()
+# Closed at shutdown: a setup still finishing then leaves its greeting queued
+# for the delivery-retry job instead of starting a watch nothing will stop.
+_watches_closed = False
 
 # Keep the original core-v1 prerequisites valid when new defaults are added.
 # Existing installations retain their assignments and may have a pending request.
@@ -294,6 +297,26 @@ async def _watch_first_run(name, config, runtime, since, settled):
         await settled(name)
 
 
+class FirstRunWatches:
+    """Cancel first-run watches at shutdown, before the work they hand over stops."""
+
+    async def start(self):
+        global _watches_closed
+        _watches_closed = False
+
+    async def stop(self):
+        global _watches_closed
+        _watches_closed = True
+        while _watches:
+            for task in tuple(_watches):
+                task.cancel()
+            await asyncio.wait(tuple(_watches))
+            await asyncio.sleep(0)
+
+    async def health_check(self):
+        return {"healthy": True}
+
+
 def _watch_ended(task):
     _watches.discard(task)
     if not task.cancelled() and (error := task.exception()) is not None:
@@ -475,11 +498,12 @@ async def _first(request, receipt, store, db, *, check_effect=None, settled=None
             )
         await _check(check_effect)
         await store.touch_started(spec.name)
-        watch = asyncio.create_task(
-            _watch_first_run(spec.name, config, spec.runtime, launched_at, settled)
-        )
-        _watches.add(watch)
-        watch.add_done_callback(_watch_ended)
+        if not _watches_closed:
+            watch = asyncio.create_task(
+                _watch_first_run(spec.name, config, spec.runtime, launched_at, settled)
+            )
+            _watches.add(watch)
+            watch.add_done_callback(_watch_ended)
         await asyncio.sleep(STARTED_SECONDS)
         await _check(check_effect)
     # A lost launch response is reconciled from the exact operation and registration,

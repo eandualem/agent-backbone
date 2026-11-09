@@ -283,23 +283,38 @@ class InteractionRepo(Repo):
             "last_entry_at": last,
         }
 
-    def _event_view(self, e):
+    @staticmethod
+    def _attempt_ids(events):
+        """Each event's attempt. A delivery id SQLite reused after pruning starts a
+        new attempt, named by its first event's permanent id."""
+        current, ids = {}, {}
+        for e in events:
+            delivery = e["delivery_id"]
+            if delivery is None:
+                continue
+            if e["kind"] == "attempt" and delivery in current:
+                current[delivery] = f"delivery:{delivery}:{e['id']}"
+            ids[e["id"]] = current.setdefault(delivery, f"delivery:{delivery}")
+        return ids
+
+    def _event_view(self, e, attempt_ids):
         return {
             "id": str(e["id"]),
             "kind": e["kind"],
             "time": e["time"],
             "time_basis": e["time_basis"],
             "outcome": e["outcome"],
-            "attempt_id": f"delivery:{e['delivery_id']}" if e["delivery_id"] else None,
+            "attempt_id": attempt_ids.get(e["id"]),
             "source": e["source"],
         }
 
     def _attempts(self, events):
         result = {}
+        attempt_ids = self._attempt_ids(events)
         for e in events:
             if e["delivery_id"] is None:
                 continue
-            key = f"delivery:{e['delivery_id']}"
+            key = attempt_ids[e["id"]]
             if key not in result:
                 result[key] = {
                     "id": key,
@@ -388,6 +403,7 @@ class InteractionRepo(Repo):
     async def _record(self, conn, row, high, actors):
         events = await self._events(conn, row["id"], high)
         attempts = self._attempts(events)
+        attempt_ids = self._attempt_ids(events)
         relations = [r | {"source_interaction_id": row["id"]} for r in json.loads(row["relations"])]
         # A reverse link is a projection of an explicitly recorded relation,
         # never an inference from content or timing. Its source remains explicit.
@@ -429,7 +445,7 @@ class InteractionRepo(Repo):
             "attempt_count": len(attempts),
             "attempts": self._subpage(attempts, row["id"], "attempts", high),
             "lifecycle": self._subpage(
-                [self._event_view(e) for e in events], row["id"], "events", high
+                [self._event_view(e, attempt_ids) for e in events], row["id"], "events", high
             ),
             "relations": relations,
             "relations_truncated": len(referring) > 200,
@@ -542,11 +558,11 @@ class InteractionRepo(Repo):
             else:
                 high = await conn.scalar(select(func.max(_E.c.id))) or 0
             events = await self._events(conn, interaction_id, high)
-            items = (
-                self._attempts(events)
-                if kind == "attempts"
-                else [self._event_view(e) for e in events]
-            )
+            if kind == "attempts":
+                items = self._attempts(events)
+            else:
+                attempt_ids = self._attempt_ids(events)
+                items = [self._event_view(e, attempt_ids) for e in events]
             return self._subpage(items, interaction_id, kind, high, cursor, limit)
 
     async def summary(self, *, since, until, agent_id=None, snapshot=None):
