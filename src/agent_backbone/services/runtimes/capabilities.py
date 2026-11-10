@@ -124,9 +124,9 @@ def _declared(capability: str) -> Callable[[Runtime], bool]:
 
 def _antigravity_default(aider: Cell) -> Cell:
     """Antigravity CLI's cell where its row names none: what holds for every
-    terminal-only adapter (Aider's supported or n/a cells, checked at the API
-    or in shared code) carries over; anything else is not established on it."""
-    if aider.status in ("supported", "n/a"):
+    terminal-only adapter (Aider's supported cells, checked at the API or in
+    shared code) carries over; anything else is not established on it."""
+    if aider.status == "supported":
         return aider
     return _unverified(note="not verified on Antigravity CLI")
 

@@ -1,14 +1,14 @@
 # Runtime capabilities
 
-Which Backbone capabilities work on which agent CLI. Backbone ships seven
-adapters: `claude` (Claude Code), `codex`, `gemini` (Gemini CLI), `opencode`,
-`deepcode` (Deep Code), `aider`, and `shell`, a plain shell for testing the
-terminal plumbing. Shell notifications stay in the inbox as data.
+Which Backbone capabilities work on which agent CLI. Backbone ships eight
+adapters: `claude` (Claude Code), `codex`, `gemini` (Gemini CLI),
+`antigravity` (Antigravity CLI), `opencode`, `deepcode` (Deep Code), `aider`,
+and `shell`, a plain shell for testing the terminal plumbing. Shell notifications stay in the inbox as data.
 
 Claude Code, Codex and OpenCode are the required set: a capability counts as
 working only when it gives the same result in all three, and a gap on one of
-them names the open issue that tracks it. Gemini CLI, Deep Code and Aider are
-supported on demand: their cells record what works there today, and a gap
+them names the open issue that tracks it. Gemini CLI, Antigravity CLI, Deep Code
+and Aider are supported on demand: their cells record what works there today, and a gap
 names no issue until someone needs that capability on that CLI and opens one
 issue for it. Wherever a capability is missing, the second table says what to
 do instead.
@@ -89,7 +89,7 @@ version differs.
 | Every skill an agent's CLI loads, listed by source | ✅ (2.1.294) live-checked against its /skills list | ✅ (0.160.0) live-checked against its skill list | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ? not verified on Antigravity CLI | ✅ (1.18.32) live-checked: `opencode debug skill` | ❌ which skill folders it reads beyond `.agents/skills` is not measured | ❌ | n/a |
 | Token usage recorded | ✅ | ✅ | ✅ live-checked with a subagent (0.46) | ? not verified on Antigravity CLI | ✅ | ❌ | ❌ | n/a |
 | Context-size note recommending a fresh session | ✅ (2.1.284) the hook-context path is live-checked with steers on this version; the note's own live check follows deployment | ✅ (0.157.1) the hook-context path is live-checked with steers on this version; the note's own live check follows deployment | ❌ usage is recorded, but its hook takes no offered context | ? not verified on Antigravity CLI | ✅ (1.18.32) the hook-context path is live-checked with steers on this version; the note's own live check follows deployment | ❌ | ❌ | n/a |
-| Drafted feedback to the CLI's vendor off unless the agent opts in | ✅ (2.1.296) `--disallowedTools SendFeedback` and CLAUDE_CODE_SEND_FEEDBACK=0 at launch; set the variable to 1 in the agent's env to opt in | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Drafted feedback to the CLI's vendor off unless the agent opts in | ✅ (2.1.296) `--disallowedTools SendFeedback` and CLAUDE_CODE_SEND_FEEDBACK=0 at launch; set the variable to 1 in the agent's env to opt in | n/a | n/a | ? not verified on Antigravity CLI | n/a | n/a | n/a | n/a |
 | agent output from the runtime's own record | ✅ | ✅ | ✅ | ? not verified on Antigravity CLI | ✅ | ❌ | ❌ | n/a |
 | Provider capacity or rate-limit failure detected (blocked) | ✅ (2.1.284) reported by its StopFailure hook | ✅ (0.160.0) from the terminal: Codex runs no hook for a failed turn | ❌ | ? not verified on Antigravity CLI | ✅ (1.18.32) | ✅ (0.3.1) | ❌ | n/a |
 | Running model observed (status) | ✅ (2.1.267) | ✅ (0.156.1) | ✅ (0.46.0) | ? not verified on Antigravity CLI | ✅ (1.18.32) | ❌ no hook state | ❌ no hook state | n/a |
