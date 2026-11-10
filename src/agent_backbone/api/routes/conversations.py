@@ -70,7 +70,7 @@ class Anchor(BaseModel):
 class MessageBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     request_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
-    text: str = Field(min_length=1, max_length=64_000)
+    text: str = Field(min_length=1)
     author: ReportAgentName | None = None
     recipient: str | None = Field(default=None, min_length=1, max_length=128)
     anchor: Anchor | None = None

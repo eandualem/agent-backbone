@@ -153,6 +153,15 @@ async def test_ask_reply_and_revise_round_trip(api_app, api_client, auth_headers
     assert kept["entries"][0]["delivery"] == "delivered"
 
 
+async def test_a_long_owner_message_is_accepted(api_client, auth_headers, deliver):
+    doc = await _document(api_client, auth_headers)
+    path = f"/api/conversations/document/{doc['document_id']}/messages"
+    result = await api_client.post(
+        path, headers=auth_headers, json={"request_id": "long", "text": "x" * 64_000}
+    )
+    assert result.status_code < 300, result.text
+
+
 async def test_refusals_are_typed(api_app, api_client, auth_headers, deliver):
     db = api_app.state.db
     doc = await _document(api_client, auth_headers)
@@ -164,7 +173,7 @@ async def test_refusals_are_typed(api_app, api_client, auth_headers, deliver):
         assert result.status_code == status, result.text
         assert result.json()["error"] == error, result.text
 
-    await refused({"request_id": "a", "text": "x" * 4001}, 422, "too_long")
+    await refused({"request_id": "a", "text": "x" * 64_001}, 422, "too_long")
     await refused(
         {"request_id": "a", "text": "hi", "recipient": "nobody"}, 422, "unknown_recipient"
     )

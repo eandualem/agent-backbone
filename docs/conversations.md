@@ -223,7 +223,7 @@ A refused send returns `{"result": "refused", "error": CODE, "message": …}`:
 
 | Code | Meaning |
 |---|---|
-| `too_long` | Text over 4,000 characters |
+| `too_long` | Text over 64,000 characters |
 | `rate_limited` | Over `conversations.owner_messages_per_hour` |
 | `conversation_full` | At `conversations.max_messages`; old messages are never dropped |
 | `recipient_required` | No active responsible agent (retired, or unassigned for a skill or policy); name a recipient |
@@ -238,7 +238,7 @@ conversations returns a plain 404.
 
 ## Limits and retention
 
-Messages are at most 4,000 characters. The message and rate limits are
+Messages are at most 64,000 characters. The message and rate limits are
 [settings](configuration.md#conversations--artifact-conversations). Revision
 events are never refused, so publishing is never blocked by a full
 conversation. Conversations, Documents, Responses and reports are never pruned.

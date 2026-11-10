@@ -73,7 +73,7 @@ KINDS = ("document", "response", "report", "skill", "policy", "plan", "sheet", "
 OBSERVED = ("skill", "policy")
 """Kinds whose versions are snapshots Backbone takes when it reads their source."""
 
-TEXT_CHARACTERS = 4000
+TEXT_CHARACTERS = 64_000
 PAGE_BYTES = 1_048_576
 _TITLE_CHARACTERS = 120
 
