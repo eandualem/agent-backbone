@@ -66,7 +66,9 @@ class Antigravity(Runtime):
     status_fragments = ("? for shortcuts",)
     # "⣾  Generating..." above the input, "esc to cancel" in the status line.
     busy_markers = ("esc to cancel", "generating...")
-    prompt_markers = ("requesting permission for:", "run this command?")
+    # The heading, and the footer under the options, which stays on screen
+    # when a long command pushes the heading up.
+    prompt_markers = ("requesting permission for:", "run this command?", "· tab amend ·")
     # "> 1. Yes, run command": "1" runs it wherever the cursor is (live).
     approve_keys = ("1",)
     # "--dangerously-skip-permissions  Auto-approve all tool permission

@@ -265,6 +265,12 @@ class TestAntigravityAdapter:
     def test_answered_dialog_is_idle(self):
         assert infer_state_from_pane(AGY_ANSWERED, "antigravity").state == AgentState.IDLE
 
+    def test_dialog_without_its_heading_is_still_waiting(self):
+        clipped = "\n".join(AGY_PERMISSION_DIALOG.splitlines()[-6:]) + "\n"
+        snapshot = infer_state_from_pane(clipped, "antigravity")
+        assert snapshot.state == AgentState.WAITING_FOR_HUMAN
+        assert self.adapter.detect_active_dialog(clipped)
+
 
 class TestGeminiAdapter:
     adapter = RUNTIMES["gemini"]
