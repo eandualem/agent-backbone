@@ -5,6 +5,22 @@ instruction file; every runtime reads it directly. A local control plane for
 terminal AI agents. Read `docs/concepts.md` for the model;
 `docs/how-it-works.md` for the flows.
 
+## Maintenance mode: migration to Rust
+
+Agent Backbone is being reimplemented in Rust, in a repository that is not
+public yet. Until that implementation replaces this one, this repository takes no feature work, design
+changes or contract changes, so the two implementations do not diverge.
+
+- Answer questions about current behaviour, and state its limitations plainly.
+  A consumer adapts to the existing functionality; a missing capability is
+  recorded as a limitation, not built here.
+- New capabilities and contract changes belong to the Rust implementation.
+  Record the request as a limitation and pass it to the Rust implementation's
+  agent instead of implementing it in this repository.
+- Small fixes the owner explicitly asks for still go through the usual review
+  and merge process. Tell the Rust implementation's agent about any behaviour
+  change that lands, so both stay consistent.
+
 ## Product philosophy — apply before proposing or implementing features
 
 Backbone's differentiator is **specialist agents collaborating toward a shared
