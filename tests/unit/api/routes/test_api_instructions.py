@@ -27,7 +27,8 @@ def instructions(api_app):
 
 
 @pytest.mark.parametrize(
-    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    "runtime",
+    ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"],
 )
 async def test_instruction_sources_across_runtimes(
     api_client, api_app, auth_headers, instructions, runtime

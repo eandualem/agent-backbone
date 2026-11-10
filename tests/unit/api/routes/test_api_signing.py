@@ -476,7 +476,7 @@ def test_every_sender_route_is_a_real_route(api_app):
 
 
 # Every shipped adapter, by name: the capability contract cites this test.
-RUNTIME_IDS = ("claude", "codex", "gemini", "opencode", "deepcode", "aider", "shell")
+RUNTIME_IDS = ("claude", "codex", "gemini", "opencode", "deepcode", "aider", "antigravity", "shell")
 
 
 def test_the_runtime_list_is_every_shipped_adapter():

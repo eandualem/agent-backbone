@@ -15,6 +15,11 @@
     "hook_script": "gemini_hook.py"
   },
   {
+    "id": "antigravity",
+    "detection_order": 15,
+    "hook_script": ""
+  },
+  {
     "id": "opencode",
     "detection_order": 30,
     "hook_script": "opencode_hook.js"

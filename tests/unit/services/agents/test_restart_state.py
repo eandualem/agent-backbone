@@ -28,6 +28,10 @@ PROMPTS = {
         "status: completed · 14/1M · deepseek-v4-flash max\n>   Type your message...\n"
         "enter send · shift+enter newline · / commands · ctrl+d exit\n"
     ),
+    "antigravity": "─" * 40
+    + "\n>\n"
+    + "─" * 40
+    + "\n? for shortcuts      Gemini 4 Carbon · medium\n",
     "aider": "> ",
     "shell": "$ ",
 }

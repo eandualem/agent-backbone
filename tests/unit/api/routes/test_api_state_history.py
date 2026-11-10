@@ -16,7 +16,8 @@ _CLOCK = "agent_backbone.services.database._state_history_repo.now_iso"
 
 
 @pytest.mark.parametrize(
-    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    "runtime",
+    ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"],
 )
 async def test_history_across_runtimes(api_app, api_client, auth_headers, runtime):
     config = replace(

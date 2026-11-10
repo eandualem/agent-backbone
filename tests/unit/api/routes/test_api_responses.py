@@ -20,7 +20,8 @@ def body(agent="ike", key="first", supersedes_id=None):
 
 
 @pytest.mark.parametrize(
-    "runtime", ("claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell")
+    "runtime",
+    ("claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"),
 )
 async def test_response_publication_retrieval_and_correction(
     api_app, api_client, auth_headers, runtime

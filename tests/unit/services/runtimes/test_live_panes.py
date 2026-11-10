@@ -199,6 +199,79 @@ class TestOpenCodeAdapter:
         assert not self.adapter.detect_busy(OPENCODE_IDLE_AFTER_RESPONSE)
 
 
+AGY_RULE = "─" * 60 + "\n"
+AGY_IDLE = (
+    "      ▄▀▀▄        Antigravity CLI 1.5.5\n"
+    "    ▀▀▀▀▀▀▀▀      Gemini 4 Carbon (Medium)\n"
+    + AGY_RULE
+    + ">\n"
+    + AGY_RULE
+    + "? for shortcuts                                Gemini 4 Carbon · medium\n"
+)
+AGY_TYPED_INPUT = AGY_IDLE.replace(">\n", "> half typed comman\n")
+AGY_BUSY = (
+    "> Run the shell command ls -la in this folder.\n"
+    "⣾  Generating...\n"
+    + AGY_RULE
+    + ">\n"
+    + AGY_RULE
+    + "esc to cancel                                  Gemini 4 Carbon · medium\n"
+)
+AGY_PERMISSION_DIALOG = (
+    "> Run the shell command ls -la in this folder.\n"
+    "● Ran (ls -la) (ctrl+o to expand)\n"
+    "Command\n" + AGY_RULE + "Requesting permission for:\n"
+    "   ls -la\n"
+    "Run this command?\n"
+    "> 1. Yes, run command\n"
+    "  2. Yes, and always allow in this conversation for commands that start with 'ls'\n"
+    "  3. Yes, and always allow for commands that start with 'ls' (Persist to settings.json)\n"
+    "  4. No, cancel\n"
+    "  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command\n"
+    "esc to cancel                                  Gemini 4 Carbon · medium\n"
+)
+AGY_ANSWERED = (
+    "> Run the shell command ls -la in this folder.\n"
+    "● Ran (ls -la) (ctrl+o to expand)\n"
+    "  It shows 2 directory entries (. and ..).\n"
+    + AGY_RULE
+    + ">\n"
+    + AGY_RULE
+    + "? for shortcuts                                Gemini 4 Carbon · medium\n"
+)
+
+
+class TestAntigravityAdapter:
+    """Antigravity CLI 1.5.5, captured live under tmux."""
+
+    adapter = RUNTIMES["antigravity"]
+
+    def test_idle_prompt_detected(self):
+        assert infer_state_from_pane(AGY_IDLE, "antigravity").state == AgentState.IDLE
+        assert not self.adapter.prompt_has_pending_input(AGY_IDLE)
+
+    def test_typed_text_is_pending_input(self):
+        assert self.adapter.prompt_has_pending_input(AGY_TYPED_INPUT)
+
+    def test_busy_detected(self):
+        assert infer_state_from_pane(AGY_BUSY, "antigravity").state == AgentState.BUSY
+
+    def test_permission_dialog_detected(self):
+        snapshot = infer_state_from_pane(AGY_PERMISSION_DIALOG, "antigravity")
+        assert snapshot.state == AgentState.WAITING_FOR_HUMAN
+        assert self.adapter.detect_active_dialog(AGY_PERMISSION_DIALOG)
+        assert self.adapter.detect_permission_prompt(AGY_PERMISSION_DIALOG)
+
+    def test_answered_dialog_is_idle(self):
+        assert infer_state_from_pane(AGY_ANSWERED, "antigravity").state == AgentState.IDLE
+
+    def test_dialog_without_its_heading_is_still_waiting(self):
+        clipped = "\n".join(AGY_PERMISSION_DIALOG.splitlines()[-6:]) + "\n"
+        snapshot = infer_state_from_pane(clipped, "antigravity")
+        assert snapshot.state == AgentState.WAITING_FOR_HUMAN
+        assert self.adapter.detect_active_dialog(clipped)
+
+
 class TestGeminiAdapter:
     adapter = RUNTIMES["gemini"]
 

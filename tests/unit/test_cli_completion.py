@@ -99,6 +99,7 @@ def test_empty_word_offers_flags_and_names_and_omits_used_flags(catalog):
     assert "--watch" in candidates(build_parser(), ["agent", "start", "--watch", "acme/app", ""])
     assert candidates(build_parser(), ["agent", "start", "--runtime", ""]) == [
         "aider",
+        "antigravity",
         "claude",
         "codex",
         "deepcode",

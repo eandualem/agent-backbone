@@ -1,4 +1,5 @@
-"""Same discovery contract for claude, codex, opencode, gemini, deepcode, aider and shell."""
+"""Same discovery contract for claude, codex, opencode, gemini, antigravity, deepcode,
+aider and shell."""
 
 import json
 from unittest.mock import patch

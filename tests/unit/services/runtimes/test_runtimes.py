@@ -33,6 +33,7 @@ class TestRegistry:
             "claude": "system_prompt",
             "codex": "hook_context",
             "gemini": "initial_prompt",
+            "antigravity": "initial_prompt",
             "opencode": "system_prompt",
             "deepcode": "initial_prompt",
             "aider": "message",

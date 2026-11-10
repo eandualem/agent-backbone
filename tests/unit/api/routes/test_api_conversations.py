@@ -52,7 +52,9 @@ async def _queued(db, operation):
         )
 
 
-@pytest.mark.parametrize("runtime", ("claude", "codex", "opencode", "gemini", "deepcode"))
+@pytest.mark.parametrize(
+    "runtime", ("claude", "codex", "opencode", "gemini", "antigravity", "deepcode")
+)
 async def test_ask_reply_and_revise_round_trip(api_app, api_client, auth_headers, deliver, runtime):
     db = api_app.state.db
     await db.agents.update_fields("ike", {"runtime": runtime})

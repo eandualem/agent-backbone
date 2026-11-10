@@ -203,7 +203,8 @@ def test_a_negative_log_size_is_refused_and_zero_is_kept():
 
 
 @pytest.mark.parametrize(
-    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    "runtime",
+    ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"],
 )
 def test_modes_control_actual_emission_and_keep_developer_detail(
     tmp_path, restore_logging, runtime

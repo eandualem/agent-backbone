@@ -1,7 +1,7 @@
 """Real local sockets, without a running Backbone service or model.
 
 This API boundary is runtime-independent: claude, codex, opencode, gemini,
-deepcode, aider and shell use the same listener and kernel peer check.
+deepcode, aider, antigravity and shell use the same listener and kernel peer check.
 """
 
 import asyncio

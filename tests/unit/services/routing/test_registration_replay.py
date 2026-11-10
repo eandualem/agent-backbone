@@ -17,7 +17,8 @@ from tests.support import queue_row
 
 
 @pytest.mark.parametrize(
-    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    "runtime",
+    ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"],
 )
 async def test_delayed_receipt_cannot_acknowledge_a_replacement_registration(
     db, tmp_path, runtime, monkeypatch
@@ -61,7 +62,8 @@ async def test_delayed_receipt_cannot_acknowledge_a_replacement_registration(
 
 
 @pytest.mark.parametrize(
-    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    "runtime",
+    ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"],
 )
 async def test_forget_retires_pending_data_and_stale_copies_cannot_reach_reused_name(
     db, tmp_path, runtime
