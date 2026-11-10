@@ -9,7 +9,8 @@ from tests.sheet_support import edit, set_cell, tracker
 
 
 @pytest.mark.parametrize(
-    "runtime", ("claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell")
+    "runtime",
+    ("claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"),
 )
 async def test_sheets_contract(api_app, api_client, auth_headers, runtime, monkeypatch):
     await api_app.state.db.agents.update_fields("ike", {"runtime": runtime})

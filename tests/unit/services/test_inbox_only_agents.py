@@ -39,7 +39,7 @@ _DELIVERY = "agent_backbone.services.routing._delivery"
 
 # Every shipped adapter by name, for the capability contract (kept equal to the
 # shipped list by test_api_signing.test_the_runtime_list_is_every_shipped_adapter).
-RUNTIME_IDS = ("claude", "codex", "gemini", "opencode", "deepcode", "aider", "shell")
+RUNTIME_IDS = ("claude", "codex", "gemini", "opencode", "deepcode", "aider", "antigravity", "shell")
 
 
 def _inbox_only(config, name: str = "ike", runtime: str = "claude"):

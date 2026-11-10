@@ -81,7 +81,8 @@ async def test_agent_can_read_and_start_saved_peer_but_cannot_widen_it(api_clien
 
 
 @pytest.mark.parametrize(
-    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    "runtime",
+    ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"],
 )
 async def test_registration_credential_can_select_own_runtime_and_model(
     api_client, api_app, runtime

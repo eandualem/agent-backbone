@@ -202,7 +202,7 @@ agents names, safe messages and evidence, and leaves the work to them.
 | CLI | Support |
 |---|---|
 | Claude Code, Codex, OpenCode | Required set: a capability ships only when it works on all three, and any open gap is tracked as a defect |
-| Gemini CLI, Deep Code, Aider | Supported on demand; each gap is listed in the [capability table](docs/runtime-capabilities.md) |
+| Gemini CLI, Antigravity CLI, Deep Code, Aider | Supported on demand; each gap is listed in the [capability table](docs/runtime-capabilities.md) |
 
 ## Going further
 

@@ -39,7 +39,8 @@ async def test_http_authentication_precedes_binding(api_client):
 
 
 @pytest.mark.parametrize(
-    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    "runtime",
+    ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"],
 )
 async def test_registered_runtime_clients_cannot_downgrade(api_client, api_app, runtime):
     spec = await api_app.state.agent_store.update("ike", runtime=runtime)
@@ -264,7 +265,8 @@ async def test_bound_requests_fail_before_content(
 
 
 @pytest.mark.parametrize(
-    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    "runtime",
+    ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"],
 )
 async def test_bound_registered_clients_keep_registration_checks(
     api_client, api_app, bound_provider, runtime
@@ -754,7 +756,8 @@ async def test_terminal_packet_timeout_can_finish_disconnect_cleanup(
 
 
 @pytest.mark.parametrize(
-    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    "runtime",
+    ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"],
 )
 @pytest.mark.parametrize("stage", ["registration", "snapshot"])
 async def test_socket_admission_holds_original_fence(
@@ -975,7 +978,8 @@ async def test_failed_admission_fence_exit_retires_captured_state(
 
 
 @pytest.mark.parametrize(
-    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    "runtime",
+    ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"],
 )
 @pytest.mark.parametrize(
     "ending",
@@ -1188,7 +1192,8 @@ async def test_validation_notice_retains_original_provider_until_shutdown_drains
 
 
 @pytest.mark.parametrize(
-    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    "runtime",
+    ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"],
 )
 async def test_setup_workers_retain_provider_after_client_and_shutdown_cancellation(
     api_app, api_client, auth_headers, bound_provider, monkeypatch, runtime
@@ -1546,7 +1551,8 @@ async def test_bound_list_rejects_a_cached_replaced_registration(
 
 
 @pytest.mark.parametrize(
-    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    "runtime",
+    ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"],
 )
 async def test_bound_inspect_rechecks_registration_after_deferred_reads(
     api_app, api_client, auth_headers, bound_provider, monkeypatch, runtime
@@ -1967,7 +1973,7 @@ async def test_bound_catalog_missing_native_context_never_probes_host(
     assert body["profile_id"] == provider.reservation.identity.profile_id
     assert body["installation_id"] == provider.reservation.identity.installation_id
     assert body["lifecycle_id"] == provider.reservation.identity.lifecycle_id
-    assert len(body["items"]) == 7
+    assert len(body["items"]) == 8
     assert all(
         not item["available"] and not item["setup_compatibility"]["compatible"]
         for item in body["items"]

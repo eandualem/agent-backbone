@@ -335,7 +335,7 @@ class TestSteer:
 
 # Every shipped adapter by name, for the capability contract (kept equal to the
 # shipped list by test_api_signing.test_the_runtime_list_is_every_shipped_adapter).
-RUNTIME_IDS = ("claude", "codex", "gemini", "opencode", "deepcode", "aider", "shell")
+RUNTIME_IDS = ("claude", "codex", "gemini", "opencode", "deepcode", "aider", "antigravity", "shell")
 
 
 @pytest.mark.parametrize("runtime", RUNTIME_IDS)

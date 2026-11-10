@@ -44,7 +44,8 @@ def test_discovery_is_local_atomic_and_read_only(tmp_path, capsys):
 
 
 @pytest.mark.parametrize(
-    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    "runtime",
+    ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"],
 )
 def test_every_runtime_agent_is_denied_before_registry_access(runtime, monkeypatch, capsys):
     monkeypatch.setenv("BACKBONE_RUNTIME", runtime)

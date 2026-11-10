@@ -44,7 +44,8 @@ async def checkpoint(db, minute, recorder="one"):
 
 
 @pytest.mark.parametrize(
-    "runtime", ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell"]
+    "runtime",
+    ["claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"],
 )
 async def test_registered_samples_bound_spans_gaps_and_snapshot(
     api_app, api_client, auth_headers, runtime

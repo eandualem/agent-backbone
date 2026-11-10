@@ -122,6 +122,15 @@ def _declared(capability: str) -> Callable[[Runtime], bool]:
     return lambda rt: capability in rt.declared_capabilities
 
 
+def _antigravity_default(aider: Cell) -> Cell:
+    """Antigravity CLI's cell where its row names none: what holds for every
+    terminal-only adapter (Aider's supported or n/a cells, checked at the API
+    or in shared code) carries over; anything else is not established on it."""
+    if aider.status in ("supported", "n/a"):
+        return aider
+    return _unverified(note="not verified on Antigravity CLI")
+
+
 def _row(
     id: str,
     title: str,
@@ -137,11 +146,13 @@ def _row(
     deepcode: Cell,
     aider: Cell,
     shell: Cell,
+    antigravity: Cell | None = None,
 ) -> Capability:
     cells = {
         "claude": claude,
         "codex": codex,
         "gemini": gemini,
+        "antigravity": antigravity or _antigravity_default(aider),
         "opencode": opencode,
         "deepcode": deepcode,
         "aider": aider,
@@ -530,6 +541,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
         codex=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
         gemini=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
+        antigravity=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
         opencode=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
         deepcode=_ok(_CONVERSATIONS, _CONVERSATION_DELIVERY),
         aider=_unverified(note="message delivery into Aider is not verified live"),
@@ -617,6 +629,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok(_B3, verified_on="2.1.284"),
         codex=_ok(_B3, verified_on="0.157.1"),
         gemini=_ok(_GEMINI_STUB, verified_on="0.46.0"),
+        antigravity=_ok(
+            "live: scratch tmux probe of Antigravity CLI 1.5.5" + " (bracketed paste, then Enter)",
+            verified_on="1.5.5",
+        ),
         opencode=_ok(_B3, verified_on="1.18.32"),
         deepcode=_ok("live: checked during development (Deep Code 0.3.1)", verified_on="0.3.1"),
         aider=_unverified(note="not verified live"),
@@ -632,6 +648,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok(_LAUNCH, verified_on="2.1.284"),
         codex=_ok(_LAUNCH, verified_on="0.157.1"),
         gemini=_ok(_LAUNCH, "`--skip-trust`"),
+        antigravity=_ok(_LAUNCH, "`trustedWorkspaces` in its settings", verified_on="1.5.5"),
         opencode=_na("shows no trust dialog"),
         deepcode=_na("shows no trust dialog"),
         aider=_unverified(note="not checked"),
@@ -649,6 +666,9 @@ CAPABILITIES: tuple[Capability, ...] = (
             "SessionStart developer context; new transport awaits a working-session live check",
         ),
         gemini=_ok(_GEMINI_STUB),
+        antigravity=_unverified(
+            note="passed with `--prompt-interactive`; live check after deployment"
+        ),
         opencode=_ok(
             "tests/unit/services/agents/test_launch.py",
             "native instructions file; new transport awaits a working-session live check",
@@ -843,6 +863,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok("tests/unit/services/agents/test_permission_state.py", verified_on="2.1.296"),
         codex=_ok("tests/unit/services/agents/test_permission_state.py", verified_on="0.157.1"),
         gemini=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.46.0"),
+        antigravity=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="1.5.5"),
         opencode=_ok("tests/unit/services/agents/test_permission_state.py", verified_on="1.18.32"),
         deepcode=_ok("tests/unit/services/runtimes/test_live_panes.py", verified_on="0.3.1"),
         aider=_unverified(note="markers not verified live"),
@@ -858,6 +879,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok("tests/unit/services/agents/test_plan_approval.py", verified_on="2.1.284"),
         codex=_ok("tests/unit/services/agents/test_plan_approval.py", verified_on="0.157.1"),
         gemini=_ok("tests/unit/services/agents/test_launch.py", verified_on="0.46.0"),
+        antigravity=_ok(
+            "live: scratch tmux probe of Antigravity CLI 1.5.5" + ' ("1" ran the command)',
+            verified_on="1.5.5",
+        ),
         opencode=_ok("tests/unit/services/agents/test_plan_approval.py", verified_on="1.18.32"),
         deepcode=_ok("tests/unit/services/agents/test_launch.py", verified_on="0.3.1"),
         aider=_gap(),
@@ -978,6 +1003,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok(_LAUNCH),
         codex=_ok(_LAUNCH),
         gemini=_unverified(note="whether the CLI has an effort setting is not checked"),
+        antigravity=_ok(_LAUNCH, note="low, medium, high, xhigh or max, through `--effort`"),
         opencode=_ok(_LAUNCH, note="requires current @opencode/cli (2.1.4+); model::effort"),
         deepcode=_ok(_LAUNCH, note="low, high or max, through DEEPCODE_REASONING_EFFORT"),
         aider=_unverified(note="whether the CLI has an effort setting is not checked"),
@@ -992,6 +1018,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok(_LAUNCH),
         codex=_ok(_LAUNCH),
         gemini=_ok(_LAUNCH),
+        antigravity=_ok(_LAUNCH),
         opencode=_ok(_LAUNCH),
         deepcode=_gap(),
         aider=_gap(),

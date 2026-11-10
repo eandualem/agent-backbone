@@ -45,7 +45,8 @@ def child_python(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "runtime_id", ["claude", "codex", "gemini", "opencode", "deepcode", "aider", "shell"]
+    "runtime_id",
+    ["claude", "codex", "gemini", "opencode", "deepcode", "aider", "antigravity", "shell"],
 )
 async def test_runtime_launch_children_leave_interpreter_uncached(
     runtime_id, child_python, tmp_path, monkeypatch

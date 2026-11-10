@@ -11,6 +11,7 @@ import pytest
 
 from agent_backbone.hooks.install import save_settings
 from agent_backbone.services.runtimes import RUNTIMES, split_model_effort
+from agent_backbone.services.runtimes.antigravity import pre_trust_workspace
 from agent_backbone.services.runtimes.claude import pre_trust_directory
 from agent_backbone.services.runtimes.codex import pre_trust_codex_directory
 
@@ -441,6 +442,45 @@ class TestDeepCode:
             "DEEPCODE_REASONING_EFFORT": "high",
             "DEEPCODE_THINKING_ENABLED": "true",
         }
+
+
+class TestAntigravity:
+    def test_brief_model_effort_and_unattended(self, tmp_path):
+        brief = tmp_path / "brief.md"
+        brief.write_text("You are agent a.")
+        with _resolve("/bin/agy"):
+            command = RUNTIMES["antigravity"].build_command(
+                model="gemini-4-carbon-medium:high", brief_file=brief, unattended=True
+            )
+            resumed = RUNTIMES["antigravity"].build_command(brief_file=brief, resume=True)
+        assert command == [
+            "/bin/agy",
+            "--effort",
+            "high",
+            "--dangerously-skip-permissions",
+            "--model",
+            "gemini-4-carbon-medium",
+            "--prompt-interactive",
+            "You are agent a.",
+        ]
+        assert resumed == ["/bin/agy", "--continue"]
+
+    def test_pre_trust_adds_the_exact_directory(self, tmp_path):
+        settings = tmp_path / "settings.json"
+        settings.write_text(json.dumps({"model": "m", "trustedWorkspaces": ["/existing"]}))
+        project = tmp_path / "proj"
+        project.mkdir()
+        assert pre_trust_workspace(project, settings) is True
+        assert pre_trust_workspace(project, settings) is True
+        saved = json.loads(settings.read_text())
+        assert saved == {"model": "m", "trustedWorkspaces": ["/existing", str(project.resolve())]}
+
+    def test_pre_trust_writes_the_agents_home(self, tmp_path):
+        RUNTIMES["antigravity"].pre_trust(tmp_path / "p", env={"HOME": str(tmp_path)})
+        settings = tmp_path / ".gemini" / "antigravity-cli" / "settings.json"
+        assert json.loads(settings.read_text())["trustedWorkspaces"] == [
+            str((tmp_path / "p").resolve())
+        ]
 
 
 class TestEffort:

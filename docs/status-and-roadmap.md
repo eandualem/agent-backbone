@@ -59,15 +59,15 @@ every later CLI version or account.
 
 ## Runtimes
 
-Seven adapters are shipped: `claude`, `codex`, `gemini`, `opencode`,
-`deepcode`, `aider` and `shell`. Which capabilities work on each, and the issue
+Eight adapters are shipped: `claude`, `codex`, `gemini`, `antigravity`,
+`opencode`, `deepcode`, `aider` and `shell`. Which capabilities work on each, and the issue
 tracking each gap where one exists, is in [runtime capabilities](runtime-capabilities.md),
 generated from the capability contract; `backbone doctor` reports from the
 same source. Use `backbone runtimes` to see which CLIs are installed locally.
 
 ## Current limits
 
-- Deep Code and Aider use terminal detection; no lifecycle hooks are shipped.
+- Antigravity CLI, Deep Code and Aider use terminal detection; no lifecycle hooks are shipped.
 - Issue routing supports GitHub. Other trackers are not integrated.
 - Token-based webhook setup is per repository; a GitHub App can cover all
   repositories in its installation.

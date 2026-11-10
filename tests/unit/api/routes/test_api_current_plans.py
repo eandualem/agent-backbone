@@ -44,7 +44,8 @@ async def discover(client, headers, name="ike"):
 
 
 @pytest.mark.parametrize(
-    "runtime", ("claude", "codex", "opencode", "gemini", "deepcode", "aider", "shell")
+    "runtime",
+    ("claude", "codex", "opencode", "gemini", "deepcode", "aider", "antigravity", "shell"),
 )
 async def test_current_plan_same_runtime_contract(api_app, api_client, auth_headers, runtime):
     await api_app.state.db.agents.update_fields("ike", {"runtime": runtime})
