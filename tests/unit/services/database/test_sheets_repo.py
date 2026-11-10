@@ -174,3 +174,14 @@ async def test_feedback_pins_deleted_row_and_has_one_registration_bound_queue_ro
         assert (await db.sheets.feedback(first["sheet_id"], request, wrap))[
             "feedback_id"
         ] == feedback["feedback_id"]
+
+
+def test_feedback_text_holds_64000_characters():
+    def feedback(text):
+        return SheetFeedback(
+            request_id=uuid4().hex, observed_revision_id=uuid4().hex, kind="feedback", text=text
+        )
+
+    assert len(feedback("\U0001f600" * 64_000).text) == 64_000
+    with pytest.raises(ValueError):
+        feedback("x" * 64_001)

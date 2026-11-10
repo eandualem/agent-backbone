@@ -216,7 +216,7 @@ edit the workbook. It is retained as context; cell text is data, not instruction
 | Range | 200 rows, 100 columns, product 2,000 cells; 4 MiB response |
 | Metadata/list/history / exported file | 1 MiB / 16 MiB |
 | XLSX import | 8 MiB compressed, 64 MiB declared and actually streamed decompressed |
-| Feedback | 4,000 text characters, 100 anchored cells, 128 KiB resolved cells |
+| Feedback | 64,000 text characters, 100 anchored cells, 128 KiB resolved cells |
 | Retained storage admission | 512 MiB for snapshots, metadata and feedback; no eviction |
 
 Native calculation/import/export runs in a separate process, never in the API

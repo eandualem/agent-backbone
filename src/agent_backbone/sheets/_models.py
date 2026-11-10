@@ -343,13 +343,13 @@ class SheetFeedback(WireModel):
     request_id: Identity
     observed_revision_id: Identity
     kind: Literal["question", "feedback"]
-    text: str = Field(min_length=1, max_length=4000)
+    text: str = Field(min_length=1, max_length=64_000)
     anchor: SheetAnchor | None = None
 
     @field_validator("text")
     @classmethod
     def nonblank(cls, value):
-        utf8_size(value, 16_000)
+        utf8_size(value, 256_000)
         if not value.strip():
             raise ValueError("feedback text is blank")
         return value
