@@ -270,9 +270,21 @@ class TestAntigravityAdapter:
         ],
     )
     def test_mode_placeholder_is_an_empty_prompt(self, placeholder):
-        pane = AGY_IDLE.replace(">\n", placeholder + "\n")
-        assert infer_state_from_pane(pane, "antigravity").state == AgentState.IDLE
+        pane = AGY_IDLE.replace("Antigravity CLI 1.5.5", "").replace(">\n", placeholder + "\n")
+        assert detect_runtime(pane).id == "antigravity"
+        assert infer_state_from_pane(pane).state == AgentState.IDLE
         assert not self.adapter.prompt_has_pending_input(pane)
+
+    def test_any_grey_tail_is_a_placeholder_even_cut_short(self):
+        pane = AGY_IDLE.replace(">\n", "\x1b[94m>\x1b[39m \x1b[90mBest-of-N mode: fork\x1b[39m\n")
+        assert not self.adapter.prompt_has_pending_input(pane)
+
+    def test_typed_text_quoting_a_placeholder_is_still_typed(self):
+        quoted = '> why does "Auto mode: edits & safe commands" show up'
+        assert self.adapter.prompt_has_pending_input(AGY_IDLE.replace(">\n", quoted + "\n"))
+        # Placeholder words in the output above do not make a prompt.
+        output = "  Auto mode: edits & safe commands auto-approved (shift+tab to cycle)\n"
+        assert self.adapter.detect_prompt(output + AGY_BUSY.split(AGY_RULE)[0]) is None
 
     def test_busy_detected(self):
         assert infer_state_from_pane(AGY_BUSY, "antigravity").state == AgentState.BUSY

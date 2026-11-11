@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
+from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes.base import Runtime, agent_home, read_brief
 
 log = logging.getLogger(__name__)
@@ -44,6 +46,18 @@ def pre_trust_workspace(directory: Path | str, settings_file: Path) -> bool:
         return False
 
 
+_MODE_PLACEHOLDERS = (
+    "auto mode: edits & safe commands",
+    "accept-edits mode: file edits",
+    "plan mode: research & plan only",
+    "best-of-n mode: fork into parallel",
+)
+"""The empty input names the mode shift+tab cycles through (1.5.5, live)."""
+
+_GREY_TAIL = re.compile(r"^(?:\x1b\[[0-9;]*m)*>(?:\x1b\[[0-9;]*m)*\s*\x1b\[90m[^\x1b]*(?:\x1b\[[0-9;]*m)*\s*$")
+"""A prompt line whose whole text after ">" is grey (SGR 90): a placeholder."""
+
+
 class Antigravity(Runtime):
     id = "antigravity"
     display_name = "Antigravity CLI"
@@ -62,16 +76,8 @@ class Antigravity(Runtime):
     efforts = ("low", "medium", "high", "xhigh", "max")
 
     prompt_prefixes = (">",)
-    runtime_markers = ("antigravity cli",)
+    runtime_markers = ("antigravity cli", *_MODE_PLACEHOLDERS)
     status_fragments = ("? for shortcuts",)
-    # The empty input's grey placeholder names the mode shift+tab cycles
-    # through; narrow panes cut it short with "..." (1.5.5, live).
-    placeholder_fragments = (
-        "auto mode: edits & safe commands",
-        "accept-edits mode: file edits",
-        "plan mode: research & plan only",
-        "best-of-n mode: fork into parallel",
-    )
     # "⣾  Generating..." above the input, "esc to cancel" in the status line.
     busy_markers = ("esc to cancel", "generating...")
     # The heading, and the footer under the options, which stays on screen
@@ -87,6 +93,17 @@ class Antigravity(Runtime):
         # A permission dialog keeps "esc to cancel" in the status line (live):
         # the agent is waiting for a person there, not working.
         return super().detect_busy(pane_content) and not self.detect_active_dialog(pane_content)
+
+    def prompt_has_pending_input(self, pane_content, *, include_envelope=False):
+        # The mode placeholder is grey, not dim, so the shared check reads it
+        # as typed text. Only the prompt line itself counts: its whole text
+        # grey, or (without colours) starting with a mode's own words.
+        line = self.detect_prompt(pane_content)
+        if line is not None:
+            text = sanitize_pane_content(line).strip().lower().removeprefix(">").lstrip()
+            if _GREY_TAIL.match(line) or text.startswith(_MODE_PLACEHOLDERS):
+                return False
+        return super().prompt_has_pending_input(pane_content, include_envelope=include_envelope)
 
     def effort_args(self, effort: str | None) -> list[str]:
         return ["--effort", effort] if effort else []
