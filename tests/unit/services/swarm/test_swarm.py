@@ -106,6 +106,10 @@ class TestRoster:
             role="coordinator", runtime="codex", model="gpt-6-astra:high"
         )
 
+    def test_a_model_that_reads_as_a_flag_is_rejected(self):
+        with pytest.raises(ValueError):
+            parse_member_spec("coder@gemini/--yolo")
+
     def test_invalid_spec_rejected(self):
         with pytest.raises(ValueError):
             parse_member_spec("Scout One")

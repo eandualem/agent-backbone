@@ -195,3 +195,10 @@ def test_profile_session_names_cannot_be_agents(name, reserved):
             validate_agent_spec(spec)
     else:
         validate_agent_spec(spec)
+
+
+def test_a_model_that_reads_as_a_flag_is_refused():
+    from agent_backbone.services.agents import validate_agent_spec
+
+    with pytest.raises(ValueError, match="model must be a model ID"):
+        validate_agent_spec(AgentSpec(name="worker", dir="/tmp", runtime="gemini", model="--yolo"))
