@@ -8,6 +8,7 @@ repository modules, which receive connections from it.
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -71,6 +72,10 @@ def _concurrent_access(dbapi_connection, _record) -> None:
     try:
         cursor.execute("PRAGMA busy_timeout = 15000")
         cursor.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.Error:
+        # The switch needs the file to itself for a moment. A connection that
+        # cannot get it keeps the file's current mode instead of failing.
+        pass
     finally:
         cursor.close()
 
