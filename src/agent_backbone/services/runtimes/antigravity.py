@@ -68,9 +68,11 @@ def _grey_after_prompt(raw_line: str) -> bool | None:
     while i < len(raw_line):
         if raw_line[i] == "\x1b":
             if sgr := _ANSI_SGR_RE.match(raw_line, i):
-                coloured = True
                 for code, *_ in sgr_attributes(sgr.group(1)):
-                    if code in (0, 38, 39) or 30 <= code <= 37 or 90 <= code <= 97:
+                    if code in (0, 39):  # a reset is no colour evidence
+                        grey = False
+                    elif code == 38 or 30 <= code <= 37 or 90 <= code <= 97:
+                        coloured = True
                         grey = code == 90
                 i = sgr.end()
                 continue
@@ -134,7 +136,7 @@ class Antigravity(Runtime):
             if placeholder is None:
                 text = sanitize_pane_content(line).strip().lower().removeprefix(">").strip()
                 text = text.removesuffix("...").removesuffix("…").rstrip()
-                placeholder = " mode: " in text and any(
+                placeholder = " mode:" in text and any(
                     full.startswith(text) for full in _MODE_PLACEHOLDERS
                 )
             if placeholder:

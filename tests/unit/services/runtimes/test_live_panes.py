@@ -280,6 +280,8 @@ class TestAntigravityAdapter:
             "\x1b[94m>\x1b[39m \x1b[90mBest-of-N mode: fork\x1b[39m",  # grey, cut short
             "\x1b[0m> \x1b[0;90mPlan mode: \x1b[39m\x1b[90mresearch & plan only\x1b[0m",
             "> Best-of-N mode: fork...",  # no colours, cut short
+            "> Plan mode: ...",  # cut right after the colon
+            "\x1b[0m> Plan mode: research & plan only (shift+tab to cycle)",  # a reset only
             "> Plan mode: research & plan only (shift+tab to cycle)\x1b[K",
         ],
     )
