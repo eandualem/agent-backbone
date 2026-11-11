@@ -127,6 +127,12 @@ def test_google_clis_keep_their_store_under_the_profiles_home(tmp_path, monkeypa
         assert json.loads(settings.read_text())["trustedWorkspaces"] == [str(project.resolve())]
     with pytest.raises(ValueError, match="overrides"):
         rt.environment({"HOME": str(tmp_path / "b")})
+    store = captured.root / rt.native_files[-1]
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.unlink(missing_ok=True)
+    store.symlink_to(tmp_path / "other-profile-store")
+    with pytest.raises(ValueError, match="escapes"):
+        rt.environment()
 
 
 @pytest.mark.parametrize("runtime", ["deepcode", "aider"])

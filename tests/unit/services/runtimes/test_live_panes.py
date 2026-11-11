@@ -326,6 +326,9 @@ class TestAntigravityAdapter:
         assert self.adapter.detect_choice_dialog(pane)
         assert not self.adapter.detect_permission_prompt(pane)
         assert not self.adapter.detect_choice_dialog(AGY_PERMISSION_DIALOG)
+        padded = AGY_PERMISSION_DIALOG + "\n" * 20
+        assert self.adapter.detect_permission_prompt(padded)
+        assert not self.adapter.detect_choice_dialog(padded)
 
     def test_dialog_without_its_heading_is_still_waiting(self):
         clipped = "\n".join(AGY_PERMISSION_DIALOG.splitlines()[-6:]) + "\n"

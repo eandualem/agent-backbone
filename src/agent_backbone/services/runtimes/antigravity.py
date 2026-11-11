@@ -161,7 +161,7 @@ class Antigravity(Runtime):
         return super().prompt_has_pending_input(pane_content, include_envelope=include_envelope)
 
     def detect_permission_prompt(self, pane_content: str) -> bool:
-        lines = sanitize_pane_content(pane_content).lower().splitlines()[-15:]
+        lines = sanitize_pane_content(pane_content).strip().lower().splitlines()[-15:]
         return self.detect_active_dialog(pane_content) and any(
             marker in line for line in lines for marker in _PERMISSION_MARKERS
         )

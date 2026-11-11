@@ -108,6 +108,7 @@ class Gemini(Runtime):
     native_files = (
         "home/.gemini/settings.json",
         "home/.gemini/oauth_creds.json",
+        "home/.gemini/gemini-credentials.json",  # its file keychain, where there is none
         "home/.gemini/google_accounts.json",
         "home/.gemini/trustedFolders.json",
     )
