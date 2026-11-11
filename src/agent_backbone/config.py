@@ -289,7 +289,8 @@ SETTINGS_HELP: dict[str, str] = {
     "security.allow_unauthenticated": "Serve the API without an API key (dev only)",
     "swarm.unattended_members": (
         "Register members on a sandboxed runtime (Codex) as unattended: free inside "
-        "their worktree, never a permission dialog; members without a sandbox keep asking"
+        "their worktree, never a permission dialog; members without a sandbox keep asking "
+        "unless swarm.unattended_unsandboxed_members is on"
     ),
     "swarm.unattended_unsandboxed_members": (
         "Also start members on a runtime without a sandbox (Claude Code, OpenCode, "
@@ -541,9 +542,11 @@ class AgentSpec:
     on a permission dialog. Behind a sandbox (Codex: ``-a never``, the
     workspace-write sandbox kept) that is freedom inside its directory;
     without one (OpenCode ``--auto``, Claude Code
-    ``--dangerously-skip-permissions``, Gemini ``--approval-mode yolo``) it
-    is trust on the machine. Off by default; sandboxed swarm members get it
-    from ``swarm.unattended_members``."""
+    ``--dangerously-skip-permissions``, Gemini ``--approval-mode yolo``,
+    Antigravity CLI ``--dangerously-skip-permissions``) it is trust on the
+    machine. Off by default; sandboxed swarm members get it from
+    ``swarm.unattended_members``, members without a sandbox from
+    ``swarm.unattended_unsandboxed_members``."""
     inbox_only: bool = False
     """A client without a terminal (a service reading the API): never launched
     and never typed into. Its messages wait for ``backbone inbox`` without
@@ -803,7 +806,8 @@ class SwarmConfig:
     """``swarm.*`` — how swarm members are registered."""
 
     unattended_members: bool = True
-    """Members on a sandboxed runtime never ask; the rest keep their dialogs."""
+    """Members on a sandboxed runtime never ask; the rest keep their dialogs
+    unless ``unattended_unsandboxed_members`` is on."""
     unattended_unsandboxed_members: bool = False
     """Members on a runtime without a sandbox never ask either: trust on the
     machine, not freedom inside a wall. Off by default."""

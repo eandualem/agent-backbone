@@ -77,7 +77,8 @@ This page follows real requests through the system. Read
    selection cursor are recognized generically; Claude also recognizes its
    unnumbered option block with the Enter/Esc footer. Startup always ends as
    `ready`, `waiting_for_human`, `exited` or `timeout`.
-   Only an explicitly unattended Claude launch carries the bypass consent, in
+   Only an unattended Claude launch (the agent's own `unattended`, or a swarm
+   member under `swarm.unattended_unsandboxed_members`) carries the bypass consent, in
    its own settings file (step 4). The runtime's bypass flag still controls its
    mode. Folder trust remains controlled by `agents.pre_trust`. Trust preparation
    uses the same native environment as the launched process: explicit

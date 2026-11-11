@@ -34,8 +34,8 @@ To report a vulnerability, see the [reporting policy](https://github.com/eandual
   peer messages arrive labelled with where they came from, but they are still
   untrusted text. See [Prompt injection](#prompt-injection).
 - **Your machine from an unattended agent without a sandbox.** Claude Code,
-  OpenCode and Gemini CLI run without an OS sandbox when you make them
-  unattended. See [Unattended agents](#unattended-agents-and-writable-directories).
+  OpenCode, Gemini CLI and Antigravity CLI run without an OS sandbox when you
+  make them unattended. See [Unattended agents](#unattended-agents-and-writable-directories).
 - **Sender names.** Apart from signed senders, a name is what the caller says.
 - **The owner signing key from unrestricted same-user access.** It is an
   ordinary private file for now (#323).
@@ -158,11 +158,11 @@ for automatic review of permission requests in attended sessions.
 supplied by these launch modes. Their unattended switches (`--auto`,
 `--dangerously-skip-permissions`, `--approval-mode yolo` and
 `--dangerously-skip-permissions`) trust the agent with the machine and its
-credentials. This remains an explicit per-agent choice; a swarm leaves these
-members asking for approval unless `swarm.unattended_unsandboxed_members` is
-on. Claude Code also
-requires its one-time bypass acceptance. An explicitly unattended launch
-carries that consent in its own settings file,
+credentials. This is an explicit choice: per agent with `unattended`, or for
+every swarm member with `swarm.unattended_unsandboxed_members`; without
+either, a swarm leaves these members asking for approval. Claude Code also
+requires its one-time bypass acceptance. A launch made unattended by either
+choice carries that consent in its own settings file,
 `<data_dir>/hooks/claude-settings-unattended.json`
 (`skipDangerousModePermissionPrompt`), so it applies to that launch only.
 Ordinary launches never get it, and Backbone writes it to neither
@@ -284,7 +284,7 @@ review and permission checks, without removing existing functionality.
 | Telegram | Bot requires allowed chats; instructions, lifecycle commands and approval buttons additionally require a numeric ID in `telegram.allowed_user_ids` | Empty user lists refuse control; group membership is insufficient |
 | Remote plan approve/reject | Off (they act on a waiting agent) — bounded: the runtime's own plan keys, sent only while its plan dialog is on screen, refused for runtimes without a plan mode; a rejection's feedback goes through `safe_deliver` as a recorded message | `security.allow_remote_plan_control = true` |
 | Remote permission approval (`agent approve`, the Telegram **Allow** / **Deny** buttons) | On — bounded: the runtime's affirmative or refusing key only (Deny: Escape, verified for Claude Code, Codex, Gemini CLI, OpenCode and Deep Code, refused elsewhere), only while its dialog is on screen, only to a registered agent, every answer recorded as an `approval` / `denial` event with who asked (a Telegram button records `telegram:<user id>`, and checks the prompt fingerprint before answering; see the [request-binding limitation](#known-limitation-remote-approval-request-binding)) | `security.allow_remote_approval = false` |
-| Unattended swarm members | On for members on a sandboxed runtime only (Codex, `-a never` inside its workspace-write sandbox: worktree, temp, network); members without a sandbox keep asking unless `swarm.unattended_unsandboxed_members` is on (then they run unconfined) | `swarm.unattended_members = false` |
+| Unattended swarm members | On for members on a sandboxed runtime only (Codex, `-a never` inside its workspace-write sandbox: worktree, temp, network); members without a sandbox keep asking unless `swarm.unattended_unsandboxed_members` is on (then they run unconfined) | `swarm.unattended_members = false` (sandboxed members), `swarm.unattended_unsandboxed_members = true` (members without a sandbox); each setting is independent |
 | Terminal streaming | Read-only, registered agents only; the Socket.IO `/terminal` namespace has no input event | — |
 | Agent output (`agent output`, `GET /api/sessions/{name}/output`) | Read-only, registered agents only; reads the agent's user-facing messages, complete, from the runtime's own transcript for Claude Code, Codex, Gemini CLI and OpenCode (including messages that scrolled off or never showed on screen), a bounded page at a time with explicit offsets to read further; tool activity and thinking are not exposed; else the visible screen | — |
 | Steering (`tell --steer`, `POST /api/steer`) | Text reaches a working agent mid-turn as hook context on Claude Code and Codex, or as a user message in the running turn on OpenCode, with a provenance envelope; no keystrokes, so it cannot overwrite a draft or answer a dialog; refused (nothing queued) when the agent is not working or the runtime has no hook context. Same collaboration or operator credential as `tell` | — |

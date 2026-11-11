@@ -1009,27 +1009,32 @@ class TestStartAgentBrief:
         assert "--auto" not in command  # OpenCode's switch is never the swarm's call
 
     @pytest.mark.parametrize(
-        ("runtime", "setting", "switch"),
+        ("runtime", "setting", "member", "switch"),
         [
-            ("antigravity", True, "--dangerously-skip-permissions"),
-            ("claude", True, "--dangerously-skip-permissions"),
-            ("opencode", True, "--auto"),
-            ("antigravity", False, None),
-            ("aider", True, None),  # no switch: it starts and keeps asking
+            ("antigravity", True, True, "--dangerously-skip-permissions"),
+            ("claude", True, True, "--dangerously-skip-permissions"),
+            ("opencode", True, True, "--auto"),
+            ("gemini", True, True, "yolo"),
+            ("antigravity", False, True, None),
+            ("claude", False, True, None),
+            ("aider", True, True, None),  # no switch: it starts and keeps asking
+            ("claude", True, False, None),  # an ordinary agent is not a member
         ],
     )
     async def test_a_swarm_member_without_a_sandbox_never_asks_when_the_owner_opts_in(
-        self, tmp_path, runtime, setting, switch
+        self, tmp_path, runtime, setting, member, switch
     ):
         from agent_backbone.config import SwarmConfig
         from agent_backbone.services.runtimes import get_runtime
 
         config = bootstrap_config(tmp_path / "data")
         config = replace(config, swarm=SwarmConfig(unattended_unsandboxed_members=setting))
-        spec = replace(self._spec(tmp_path, runtime), tags=("swarm:audit", "role:scout"))
-        role_brief = config.data_dir / "swarms" / "audit" / f"{spec.name}.md"
-        role_brief.parent.mkdir(parents=True)
-        role_brief.write_text("Scout role instructions")
+        spec = self._spec(tmp_path, runtime)
+        if member:
+            spec = replace(spec, tags=("swarm:audit", "role:scout"))
+            role_brief = config.data_dir / "swarms" / "audit" / f"{spec.name}.md"
+            role_brief.parent.mkdir(parents=True)
+            role_brief.write_text("Scout role instructions")
         exists, start, _cmd, _trust, _wait = self._launch()
         with exists, start as started, _cmd, _trust, _wait:
             assert (await start_agent(spec, config, db=_registered_db())).ok
