@@ -89,7 +89,22 @@ def _grey_after_prompt(raw_line: str) -> bool | None:
     return text and all_grey if coloured else None
 
 
+_PERMISSION_MARKERS = ("requesting permission for:", "run this command?", "· tab amend ·")
+"""A tool-permission dialog: its heading and its footer (1.5.5, live)."""
+
+
 class Antigravity(Runtime):
+    def native_environment_values(self, root):
+        return {}  # Everything it keeps is under HOME (~/.gemini), the profile's own.
+
+    native_files = ("home/.gemini/antigravity-cli/settings.json",)
+
+    setup_hooks = True
+    runs_in_profiles = True
+
+    def prepare_setup_hooks(self, data_dir: Path, state_dir: Path) -> None:
+        """Nothing to prepare: its state is read from the terminal only."""
+
     id = "antigravity"
     display_name = "Antigravity CLI"
     aliases = ("agy", "antigravity-cli")
@@ -111,9 +126,11 @@ class Antigravity(Runtime):
     status_fragments = ("? for shortcuts",)
     # "⣾  Generating..." above the input, "esc to cancel" in the status line.
     busy_markers = ("esc to cancel", "generating...")
-    # The heading, and the footer under the options, which stays on screen
-    # when a long command pushes the heading up.
-    prompt_markers = ("requesting permission for:", "run this command?", "· tab amend ·")
+    # A permission dialog's heading and footer, which stays on screen when a
+    # long command pushes the heading up; and the footer every dialog draws,
+    # including the sign-in and folder-trust choices, whose cursor is a plain
+    # ">" (1.5.5, live).
+    prompt_markers = (*_PERMISSION_MARKERS, "↑/↓ navigate")
     # "> 1. Yes, run command": "1" runs it wherever the cursor is (live).
     approve_keys = ("1",)
     # "--dangerously-skip-permissions  Auto-approve all tool permission
@@ -142,6 +159,19 @@ class Antigravity(Runtime):
             if placeholder:
                 return False
         return super().prompt_has_pending_input(pane_content, include_envelope=include_envelope)
+
+    def detect_permission_prompt(self, pane_content: str) -> bool:
+        lines = sanitize_pane_content(pane_content).lower().splitlines()[-15:]
+        return self.detect_active_dialog(pane_content) and any(
+            marker in line for line in lines for marker in _PERMISSION_MARKERS
+        )
+
+    def detect_choice_dialog(self, pane_content: str) -> bool:
+        # "1" runs a command only in a permission dialog. Anywhere else it
+        # would pick an answer: the sign-in method, or folder trust.
+        return self.detect_active_dialog(pane_content) and not self.detect_permission_prompt(
+            pane_content
+        )
 
     def effort_args(self, effort: str | None) -> list[str]:
         return ["--effort", effort] if effort else []

@@ -246,6 +246,23 @@ AGY_ANSWERED = (
     + "? for shortcuts                                Gemini 4 Carbon · medium\n"
 )
 
+# A fresh HOME, as in a new profile (1.5.5, live, 11 Nov 2026).
+AGY_SIGN_IN = (
+    "     ▄▀▀▄\n"
+    " Welcome to the Antigravity CLI. You are currently not signed in.\n\n"
+    " Select login method:\n"
+    " > 1. Google OAuth\n"
+    "   2. Use a Google Cloud project\n\n"
+    "   ↑/↓ Navigate · enter Select\n"
+)
+# As captured by another agent on 1.5.5: the options carry no numbers.
+AGY_TRUST = (
+    " Do you trust the contents of this project?\n"
+    " > Yes, I trust this folder\n"
+    "   No, exit\n\n"
+    "   ↑/↓ Navigate · enter Confirm\n"
+)
+
 
 class TestAntigravityAdapter:
     """Antigravity CLI 1.5.5, captured live under tmux."""
@@ -301,6 +318,14 @@ class TestAntigravityAdapter:
 
     def test_answered_dialog_is_idle(self):
         assert infer_state_from_pane(AGY_ANSWERED, "antigravity").state == AgentState.IDLE
+
+    @pytest.mark.parametrize("pane", [AGY_SIGN_IN, AGY_TRUST])
+    def test_sign_in_and_trust_are_questions_never_approved(self, pane):
+        snapshot = infer_state_from_pane(pane, "antigravity")
+        assert snapshot.state == AgentState.WAITING_FOR_HUMAN
+        assert self.adapter.detect_choice_dialog(pane)
+        assert not self.adapter.detect_permission_prompt(pane)
+        assert not self.adapter.detect_choice_dialog(AGY_PERMISSION_DIALOG)
 
     def test_dialog_without_its_heading_is_still_waiting(self):
         clipped = "\n".join(AGY_PERMISSION_DIALOG.splitlines()[-6:]) + "\n"

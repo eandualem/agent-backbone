@@ -194,7 +194,7 @@ def test_other_adapters_and_missing_binaries_get_no_environment(tmp_path, monkey
     monkeypatch.setattr(type(RUNTIMES["codex"]), "resolve_binary", lambda self: None)
     captured = _native_environments(tmp_path.resolve())
     assert "codex" not in captured
-    assert not {"gemini", "deepcode", "aider"} & captured.keys()
+    assert not {"deepcode", "aider"} & captured.keys()
 
 
 def test_a_failed_handshake_after_spawn_ends_and_reaps_the_process(created, monkeypatch):

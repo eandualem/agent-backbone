@@ -102,6 +102,24 @@ def _context_file_names(settings: Path) -> list[str] | None:
 
 
 class Gemini(Runtime):
+    def native_environment_values(self, root):
+        return {}  # Everything it keeps is under HOME (~/.gemini), the profile's own.
+
+    native_files = (
+        "home/.gemini/settings.json",
+        "home/.gemini/oauth_creds.json",
+        "home/.gemini/google_accounts.json",
+        "home/.gemini/trustedFolders.json",
+    )
+
+    setup_hooks = True
+    runs_in_profiles = True
+
+    def prepare_setup_hooks(self, data_dir: Path, state_dir: Path) -> None:
+        """Write the backbone-owned settings file its launches point to."""
+        if not self.hook_launch_env(data_dir, state_dir):
+            raise RuntimeError("Installer launch hooks could not be prepared for Gemini CLI.")
+
     supports_exact_resume = True
     id = "gemini"
     skill_dirs = (".agents/skills",)

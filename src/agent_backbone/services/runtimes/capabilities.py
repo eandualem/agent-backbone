@@ -302,7 +302,14 @@ CAPABILITIES: tuple[Capability, ...] = (
             "HTTP guards: tests/unit/api/test_profile_binding.py; "
             "live start on the final build not yet seen (#579)",
         ),
-        gemini=_gap(note="installer hook preparation is not implemented"),
+        gemini=_ok(
+            "tests/unit/services/routing/test_onboarding.py",
+            "hooks through its system-settings file; live first-agent start not yet seen",
+        ),
+        antigravity=_ok(
+            "tests/unit/services/routing/test_onboarding.py",
+            "terminal-only: no hooks to prepare; live first-agent start not yet seen",
+        ),
         deepcode=_gap(note="installer hook preparation is not implemented"),
         aider=_gap(note="installer hook preparation is not implemented"),
         shell=_na("a plain shell has no first-agent conversation"),
@@ -394,7 +401,14 @@ CAPABILITIES: tuple[Capability, ...] = (
         claude=_ok("tests/unit/services/agents/test_launch.py", _ISOLATED_LAUNCH),
         codex=_ok("tests/unit/services/agents/test_launch.py", _ISOLATED_LAUNCH),
         opencode=_ok("tests/unit/services/agents/test_launch.py", _ISOLATED_LAUNCH),
-        gemini=_gap(note="Refused in isolated profiles until someone needs it."),
+        gemini=_ok(
+            "tests/unit/services/runtimes/test_native_environment.py",
+            "its store is ~/.gemini under the profile's own HOME",
+        ),
+        antigravity=_ok(
+            "tests/unit/services/runtimes/test_native_environment.py",
+            "its store is ~/.gemini/antigravity-cli under the profile's own HOME",
+        ),
         deepcode=_gap(note="Refused in isolated profiles until someone needs it."),
         aider=_gap(note="Refused in isolated profiles until someone needs it."),
         shell=_ok("tests/unit/test_cli_profile_services.py", "Shared boundary; no model calls"),
@@ -418,7 +432,12 @@ CAPABILITIES: tuple[Capability, ...] = (
             "Sign-in itself is checked on a real account; status route reads the CLI's own status; "
             "a real signed-in OpenCode result is not yet seen",
         ),
-        gemini=_gap(note="Refused in isolated profiles until someone needs it."),
+        gemini=_gap(
+            note="No sign-in or status command; it signs in from the agent's own terminal."
+        ),
+        antigravity=_gap(
+            note="No sign-in or status command; it signs in from the agent's own terminal."
+        ),
         deepcode=_gap(note="Refused in isolated profiles until someone needs it."),
         aider=_gap(note="Refused in isolated profiles until someone needs it."),
         shell=_na("A plain shell has no account to sign in."),

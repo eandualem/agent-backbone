@@ -143,7 +143,8 @@ must never submit it automatically.
 Use exactly one brief shape: `{"template":"orchestrator-v1"}` or
 `{"text":"Your custom instructions"}` (up to 16,000 characters). The model field
 is required and nullable. Hooks must contain unique canonical runtime IDs and
-include the selected runtime. Claude Code, Codex and OpenCode support this action;
+include the selected runtime. Claude Code, Codex, OpenCode, Gemini CLI and Antigravity
+CLI support this action; Antigravity CLI has no hooks, so nothing is prepared for it.
 OpenCode must be version 2.1.4 or newer before registration. Other adapters report an unavailable installer path with their normal agent-start
 flow as fallback. See the generated [capability contract](runtime-capabilities.md).
 

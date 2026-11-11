@@ -649,8 +649,10 @@ existing environment and launch behavior. Native path checks reject observed
 redirects outside captured roots; they are not a sandbox against a same-user
 process concurrently replacing files or path components.
 
-Claude Code, Codex and OpenCode have internal preparation tests; other model adapters
-refuse this preparation. Codex requests file credential storage, subject to native
+Claude Code, Codex, OpenCode, Gemini CLI and Antigravity CLI have internal preparation
+tests; other model adapters refuse this preparation. Gemini CLI and Antigravity CLI keep
+everything under the profile's own `HOME` (`~/.gemini`). They have no sign-in or status
+command, so they sign in from the agent's own terminal on its first start. Codex requests file credential storage, subject to native
 managed policy. OpenCode uses a private native server. Claude Code and Codex
 sign-ins were checked on the working installation, and a signed-in OpenCode result is
 not yet seen (#579); the adversarial acceptance list and lifecycle
