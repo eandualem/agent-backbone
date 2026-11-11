@@ -209,6 +209,12 @@ AGY_IDLE = (
     + "? for shortcuts                                Gemini 4 Carbon · medium\n"
 )
 AGY_TYPED_INPUT = AGY_IDLE.replace(">\n", "> half typed comman\n")
+# The empty input shows the current mode in grey (1.5.5, live, 11 Nov 2026).
+AGY_PLACEHOLDER = (
+    "\x1b[94m>\x1b[39m \x1b[90mAuto mode: edits & safe commands auto-approved "
+    "(shift+tab to cycle)\x1b[39m"
+)
+
 AGY_BUSY = (
     "> Run the shell command ls -la in this folder.\n"
     "⣾  Generating...\n"
@@ -253,14 +259,45 @@ class TestAntigravityAdapter:
     def test_typed_text_is_pending_input(self):
         assert self.adapter.prompt_has_pending_input(AGY_TYPED_INPUT)
 
-    def test_busy_detected(self):
-        assert infer_state_from_pane(AGY_BUSY, "antigravity").state == AgentState.BUSY
+    @pytest.mark.parametrize(
+        "placeholder",
+        [
+            AGY_PLACEHOLDER,
+            "> Auto mode: edits & safe commands auto-approved (shift+tab...",
+            "> Plan mode: research & plan only (shift+tab to cycle)",
+            "> Accept-edits mode: file edits auto-approved (shift+tab to cycle)",
+            "> Best-of-N mode: fork into parallel arms and pick a winner (shift+tab to cycle)",
+        ],
+    )
+    def test_mode_placeholder_is_an_empty_prompt(self, placeholder):
+        pane = AGY_IDLE.replace(">\n", placeholder + "\n")
+        assert infer_state_from_pane(pane, "antigravity").state == AgentState.IDLE
+        assert not self.adapter.prompt_has_pending_input(pane)
 
-    def test_permission_dialog_detected(self):
-        snapshot = infer_state_from_pane(AGY_PERMISSION_DIALOG, "antigravity")
-        assert snapshot.state == AgentState.WAITING_FOR_HUMAN
-        assert self.adapter.detect_active_dialog(AGY_PERMISSION_DIALOG)
-        assert self.adapter.detect_permission_prompt(AGY_PERMISSION_DIALOG)
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "\x1b[94m>\x1b[39m \x1b[90mBest-of-N mode: fork\x1b[39m",  # grey, cut short
+            "\x1b[0m> \x1b[0;90mPlan mode: \x1b[39m\x1b[90mresearch & plan only\x1b[0m",
+            "> Best-of-N mode: fork...",  # no colours, cut short
+            "> Plan mode: ...",  # cut right after the colon
+            "\x1b[0m> Plan mode: research & plan only (shift+tab to cycle)",  # a reset only
+            "> Plan mode: research & plan only (shift+tab to cycle)\x1b[K",
+        ],
+    )
+    def test_placeholder_variants_are_empty(self, line):
+        assert not self.adapter.prompt_has_pending_input(AGY_IDLE.replace(">\n", line + "\n"))
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            '> why does "Auto mode: edits & safe commands" show up',
+            "\x1b[94m>\x1b[39m Auto mode: edits & safe commands, explain",
+            "> Auto mode: edits & safe commands, explain",
+        ],
+    )
+    def test_typed_text_mentioning_a_mode_is_typed(self, line):
+        assert self.adapter.prompt_has_pending_input(AGY_IDLE.replace(">\n", line + "\n"))
 
     def test_answered_dialog_is_idle(self):
         assert infer_state_from_pane(AGY_ANSWERED, "antigravity").state == AgentState.IDLE

@@ -12,6 +12,12 @@ import logging
 from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
+from agent_backbone.services.runtimes._pane import (
+    _ANSI_ESCAPE_RE,
+    _ANSI_SGR_RE,
+    sanitize_pane_content,
+    sgr_attributes,
+)
 from agent_backbone.services.runtimes.base import Runtime, agent_home, read_brief
 
 log = logging.getLogger(__name__)
@@ -42,6 +48,45 @@ def pre_trust_workspace(directory: Path | str, settings_file: Path) -> bool:
     except (OSError, ValueError):
         log.warning("Could not pre-trust %s (the trust dialog will appear)", path)
         return False
+
+
+_MODE_PLACEHOLDERS = (
+    "auto mode: edits & safe commands auto-approved (shift+tab to cycle)",
+    "accept-edits mode: file edits auto-approved (shift+tab to cycle)",
+    "plan mode: research & plan only (shift+tab to cycle)",
+    "best-of-n mode: fork into parallel arms and pick a winner (shift+tab to cycle)",
+)
+"""The empty input names the mode shift+tab cycles through, in grey (1.5.5, live)."""
+
+
+def _grey_after_prompt(raw_line: str) -> bool | None:
+    """Whether all text after the prompt's ">" is grey (SGR 90); ``None`` when
+    the line carries no colours to tell."""
+    coloured = grey = prompt = text = False
+    all_grey = True
+    i = 0
+    while i < len(raw_line):
+        if raw_line[i] == "\x1b":
+            if sgr := _ANSI_SGR_RE.match(raw_line, i):
+                for code, *_ in sgr_attributes(sgr.group(1)):
+                    if code in (0, 39):  # a reset is no colour evidence
+                        grey = False
+                    elif code == 38 or 30 <= code <= 37 or 90 <= code <= 97:
+                        coloured = True
+                        grey = code == 90
+                i = sgr.end()
+                continue
+            if other := _ANSI_ESCAPE_RE.match(raw_line, i):
+                i = other.end()
+                continue
+        char = raw_line[i]
+        i += 1
+        if not prompt:
+            prompt = char == ">"
+        elif not char.isspace():
+            text = True
+            all_grey = all_grey and grey
+    return text and all_grey if coloured else None
 
 
 class Antigravity(Runtime):
@@ -79,6 +124,24 @@ class Antigravity(Runtime):
         # A permission dialog keeps "esc to cancel" in the status line (live):
         # the agent is waiting for a person there, not working.
         return super().detect_busy(pane_content) and not self.detect_active_dialog(pane_content)
+
+    def prompt_has_pending_input(self, pane_content, *, include_envelope=False):
+        # The mode placeholder is grey, not dim, so the shared check reads it
+        # as typed text. Only the prompt line counts: its whole text grey or,
+        # in a capture without colours, the start of a mode's own placeholder
+        # (narrow panes cut it short with "...").
+        line = self.detect_prompt(pane_content)
+        if line is not None:
+            placeholder = _grey_after_prompt(line)
+            if placeholder is None:
+                text = sanitize_pane_content(line).strip().lower().removeprefix(">").strip()
+                text = text.removesuffix("...").removesuffix("…").rstrip()
+                placeholder = " mode:" in text and any(
+                    full.startswith(text) for full in _MODE_PLACEHOLDERS
+                )
+            if placeholder:
+                return False
+        return super().prompt_has_pending_input(pane_content, include_envelope=include_envelope)
 
     def effort_args(self, effort: str | None) -> list[str]:
         return ["--effort", effort] if effort else []
