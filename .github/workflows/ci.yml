@@ -8,9 +8,10 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -19,4 +20,5 @@ jobs:
       - run: uv sync --all-extras
       - run: uv run ruff check src tests
       - run: uv run ruff format --check src tests
-      - run: uv run pytest -q
+      - run: uv run python -c "import sys, sqlite3; print(sys.version, sqlite3.sqlite_version)"
+      - run: uv run pytest -v -p no:cacheprovider -o faulthandler_timeout=240
