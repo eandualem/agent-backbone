@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from pathlib import Path
 
 from agent_backbone.hooks.install import save_settings
+from agent_backbone.services.runtimes._environment import NativeEnvironment, environment_value
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes._usage import count
 from agent_backbone.services.runtimes.base import (
@@ -102,6 +102,40 @@ def _context_file_names(settings: Path) -> list[str] | None:
 
 
 class Gemini(Runtime):
+    def native_environment_values(self, root):
+        return {}  # Everything it keeps is under HOME (~/.gemini), the profile's own.
+
+    def capture_environment(self, root: Path) -> NativeEnvironment:
+        # A desktop keyring (Linux) is one per user whatever HOME says, and its
+        # API-key entry has a fixed name: profiles would share it. The file
+        # store is ~/.gemini/gemini-credentials.json, the profile's own (0.46).
+        captured = super().capture_environment(root)
+        return NativeEnvironment(
+            captured.root,
+            captured.executable,
+            {**captured, "GEMINI_FORCE_FILE_STORAGE": "true"},
+            captured.path_keys,
+            captured.file_paths,
+        )
+
+    native_files = (
+        "home/.gemini/settings.json",
+        "home/.gemini/oauth_creds.json",
+        "home/.gemini/gemini-credentials.json",  # its file keychain, where there is none
+        "home/.gemini/google_accounts.json",
+        "home/.gemini/mcp-oauth-tokens.json",  # MCP and A2A sign-ins (0.46 Storage)
+        "home/.gemini/a2a-oauth-tokens.json",
+        "home/.gemini/trustedFolders.json",
+    )
+
+    setup_hooks = True
+    runs_in_profiles = True
+
+    def prepare_setup_hooks(self, data_dir: Path, state_dir: Path) -> None:
+        """Write the backbone-owned settings file its launches point to."""
+        if not self.hook_launch_env(data_dir, state_dir):
+            raise RuntimeError("Installer launch hooks could not be prepared for Gemini CLI.")
+
     supports_exact_resume = True
     id = "gemini"
     skill_dirs = (".agents/skills",)
@@ -184,6 +218,8 @@ class Gemini(Runtime):
     def hook_settings_path(self, project_dir: Path | None) -> Path:
         if project_dir is not None:
             return Path(project_dir).expanduser() / ".gemini" / "settings.json"
+        if env := self.environment():
+            return self.check_native_path(agent_home(env) / ".gemini" / "settings.json")
         return Path("~/.gemini/settings.json").expanduser()
 
     def hook_launch_env(
@@ -211,10 +247,13 @@ class Gemini(Runtime):
             return {}
         return {"GEMINI_CLI_SYSTEM_SETTINGS_PATH": str(path)}
 
+    def _home(self, env) -> Path:
+        """Where it keeps ``.gemini``: the profile's own HOME when pinned."""
+        env = self.environment(env)
+        return Path(environment_value(env, "GEMINI_CLI_HOME") or agent_home(env)).expanduser()
+
     def user_instructions(self, env, project=None):
-        home = Path(
-            env.get("GEMINI_CLI_HOME") or os.environ.get("GEMINI_CLI_HOME") or agent_home(env)
-        ).expanduser()
+        home = self._home(env)
         gemini = home / ".gemini"
         # Every context file name is read from ~/.gemini: the configured
         # `context.fileName` (the project's settings over the user's), then
@@ -225,9 +264,12 @@ class Gemini(Runtime):
             else _context_file_names(Path(project) / ".gemini/settings.json")
         )
         if configured is None:  # an empty list in the project still overrides
-            configured = _context_file_names(gemini / "settings.json")
+            configured = _context_file_names(self.check_native_path(gemini / "settings.json"))
         names = dict.fromkeys([*(name.strip() for name in configured or ()), "GEMINI.md"])
-        return [gemini / name for name in names if name and has_text(gemini / name)]
+        # A name is a file in ~/.gemini: one that leaves it (an absolute path,
+        # "..") is not followed, whatever a project's settings say.
+        within = [gemini / n for n in names if n and (gemini / n).parent == gemini]
+        return [path for path in within if has_text(self.check_native_path(path))]
 
     def native_memory(self, env, project=None):
         # 0.46 loads them into every session whatever its prompt settings; its
@@ -245,13 +287,11 @@ class Gemini(Runtime):
         # characters of its id; only its header line carries the whole id.
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session_id):
             return []
-        home = Path(
-            env.get("GEMINI_CLI_HOME") or os.environ.get("GEMINI_CLI_HOME") or agent_home(env)
-        ).expanduser()
+        home = self._home(env)
         found = []
         for path in sorted(home.glob(f".gemini/tmp/*/chats/session-*-{session_id[:8]}.jsonl")):
             try:
-                with path.open("rb") as stream:
+                with self.check_native_path(path).open("rb") as stream:
                     header = json.loads(stream.readline())
             except (OSError, ValueError):
                 continue
@@ -266,8 +306,9 @@ class Gemini(Runtime):
         # directory named after the session's whole id.
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session_id):
             return []
+        self.environment(env)  # refuses a moved or redirected profile store
         return [
-            (session_id + "/" + p.stem, p)
+            (session_id + "/" + p.stem, self.check_native_path(p))
             for p in sorted((path.parent / session_id).glob("*.jsonl"))
         ]
 

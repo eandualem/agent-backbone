@@ -10,7 +10,7 @@ another profile affects new work; it cannot retarget an existing request.
 by the login service, it logs the refusal once and waits, starting by itself after
 `backbone init`, instead of exiting into a restart loop. Isolated
 profiles can be created, started and stopped, and agents run inside them on Claude Code,
-Codex and OpenCode. Bound discovery, identity, sessions, CLI sign-in and setup schema 2
+Codex, OpenCode, Gemini CLI and Antigravity CLI. Bound discovery, identity, sessions, CLI sign-in and setup schema 2
 are implemented. Not done yet: recovery of interrupted operations, replacement and
 restore fencing, integration account proof and permission-context inspection.
 Provider implementation is tracked in
@@ -649,8 +649,12 @@ existing environment and launch behavior. Native path checks reject observed
 redirects outside captured roots; they are not a sandbox against a same-user
 process concurrently replacing files or path components.
 
-Claude Code, Codex and OpenCode have internal preparation tests; other model adapters
-refuse this preparation. Codex requests file credential storage, subject to native
+Claude Code, Codex, OpenCode, Gemini CLI and Antigravity CLI have internal preparation
+tests; other model adapters refuse this preparation. Gemini CLI and Antigravity CLI keep
+everything under the profile's own `HOME` (`~/.gemini`); Gemini CLI is told to keep
+sign-ins in its file store there (`GEMINI_FORCE_FILE_STORAGE`), never a desktop keyring
+every profile would share. They have no sign-in or status
+command, so they sign in from the agent's own terminal on its first start. Codex requests file credential storage, subject to native
 managed policy. OpenCode uses a private native server. Claude Code and Codex
 sign-ins were checked on the working installation, and a signed-in OpenCode result is
 not yet seen (#579); the adversarial acceptance list and lifecycle

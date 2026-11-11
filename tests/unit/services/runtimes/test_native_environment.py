@@ -106,7 +106,69 @@ def test_context_is_immutable_and_rechecks_store_symlinks(tmp_path):
         RUNTIMES["opencode"].environment()
 
 
-@pytest.mark.parametrize("runtime", ["gemini", "deepcode", "aider"])
+@pytest.mark.parametrize("runtime", ["gemini", "antigravity"])
+def test_google_clis_keep_their_store_under_the_profiles_home(tmp_path, monkeypatch, runtime):
+    rt = RUNTIMES[runtime]
+    captured = rt.capture_environment(tmp_path / "a")
+    captured.create_directories()
+    monkeypatch.setenv("GEMINI_CLI_HOME", str(tmp_path / "ambient"))
+    install_native_environments({runtime: captured})
+    assert rt.resolve_binary() == captured.executable
+    assert captured["HOME"] == str(captured.root / "home")
+    assert "GEMINI_CLI_HOME" not in captured
+    home = captured.root / "home"
+    assert all((captured.root / f).is_relative_to(home) for f in rt.native_files)
+    project = tmp_path / "project"
+    project.mkdir()
+    rt.pre_trust(project)
+    assert not (tmp_path / "ambient").exists()
+    if runtime == "antigravity":
+        settings = captured.root / "home/.gemini/antigravity-cli/settings.json"
+        assert json.loads(settings.read_text())["trustedWorkspaces"] == [str(project.resolve())]
+    with pytest.raises(ValueError, match="overrides"):
+        rt.environment({"HOME": str(tmp_path / "b")})
+    for relative in rt.native_files:  # each store, redirected to another profile's
+        store = captured.root / relative
+        store.parent.mkdir(parents=True, exist_ok=True)
+        saved = store.read_bytes() if store.is_file() else None
+        store.unlink(missing_ok=True)
+        store.symlink_to(tmp_path / "other-profile-store")
+        with pytest.raises(ValueError, match="escapes"):
+            rt.environment()
+        store.unlink()
+        if saved is not None:
+            store.write_bytes(saved)
+
+
+def test_gemini_readers_and_hook_settings_stay_in_the_profiles_home(tmp_path, monkeypatch):
+    rt = RUNTIMES["gemini"]
+    captured = rt.capture_environment(tmp_path / "a")
+    captured.create_directories()
+    ambient = tmp_path / "ambient"
+    (ambient / ".gemini").mkdir(parents=True)
+    (ambient / ".gemini/GEMINI.md").write_text("ambient\n")
+    monkeypatch.setenv("GEMINI_CLI_HOME", str(ambient))
+    install_native_environments({"gemini": captured})
+    gemini = captured.root / "home/.gemini"
+    gemini.mkdir(parents=True, exist_ok=True)
+    (gemini / "GEMINI.md").write_text("profile\n")
+    assert rt.user_instructions({}) == [gemini / "GEMINI.md"]
+    assert rt.hook_settings_path(None) == gemini / "settings.json"
+    assert captured["GEMINI_FORCE_FILE_STORAGE"] == "true"  # never the user's keyring
+    with pytest.raises(ValueError, match="overrides"):
+        rt.environment({"GEMINI_FORCE_FILE_STORAGE": "false"})
+    chats = gemini / "tmp/p/chats"
+    chats.mkdir(parents=True)
+    outside = tmp_path / "outside.jsonl"
+    outside.write_text(json.dumps({"sessionId": "abcdef12-x"}) + "\n")
+    (chats / "session-1-abcdef12.jsonl").symlink_to(outside)
+    assert rt.usage_paths("abcdef12-x", {}) == []
+    (chats / "abcdef12-x").symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(ValueError, match="escapes"):
+        rt.usage_children(chats / "session-1-abcdef12.jsonl", "abcdef12-x", {})
+
+
+@pytest.mark.parametrize("runtime", ["deepcode", "aider"])
 def test_unimplemented_native_context_refuses_without_host_writes(tmp_path, runtime):
     with pytest.raises(ValueError, match="unavailable"):
         RUNTIMES[runtime].capture_environment(tmp_path / runtime)

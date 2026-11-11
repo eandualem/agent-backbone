@@ -355,7 +355,7 @@ async def test_registration_interruption_never_adopts_unknown_registration(scena
     onboarding.start_agent.assert_not_awaited()
 
 
-@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode"])
+@pytest.mark.parametrize("runtime", ["claude", "codex", "opencode", "gemini"])
 def test_preparing_installer_hooks_is_private_and_does_not_modify_user_settings(runtime, tmp_path):
     data = tmp_path / "data"
     home = Path.home()
@@ -365,7 +365,14 @@ def test_preparing_installer_hooks_is_private_and_does_not_modify_user_settings(
     assert {str(p): p.read_bytes() for p in home.rglob("*") if p.is_file()} == before
 
 
-@pytest.mark.parametrize("runtime", ["gemini", "deepcode", "aider", "shell"])
+def test_antigravity_has_no_hooks_to_prepare(tmp_path):
+    rt = RUNTIMES["antigravity"]
+    assert rt.setup_hooks
+    rt.prepare_setup_hooks(tmp_path / "data", tmp_path / "state")
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("runtime", ["deepcode", "aider", "shell"])
 def test_other_adapters_do_not_claim_installer_support(runtime, tmp_path):
     assert not RUNTIMES[runtime].setup_hooks
     with pytest.raises(RuntimeError):
