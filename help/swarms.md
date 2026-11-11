@@ -70,7 +70,9 @@ members like any other agent.
 ## Members and permission prompts
 
 `swarm.unattended_members` (on by default) runs sandboxed Codex members
-without permission prompts. Other runtimes keep their approval policy.
+without permission prompts. Other runtimes keep their approval policy,
+unless the operator turns on `swarm.unattended_unsandboxed_members`: members
+without a sandbox then never ask either, and nothing confines them.
 See the full [permission boundaries](https://github.com/eandualem/agent-backbone/blob/develop/docs/security.md#unattended-agents-and-writable-directories).
 
 `agents.writable_dirs` applies to every Codex agent on this machine; use it

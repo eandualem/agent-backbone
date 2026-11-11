@@ -151,6 +151,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "security.allow_remote_approval": True,
     "security.allow_unauthenticated": False,
     "swarm.unattended_members": True,
+    "swarm.unattended_unsandboxed_members": False,
 }
 
 SETTINGS_HELP: dict[str, str] = {
@@ -289,6 +290,11 @@ SETTINGS_HELP: dict[str, str] = {
     "swarm.unattended_members": (
         "Register members on a sandboxed runtime (Codex) as unattended: free inside "
         "their worktree, never a permission dialog; members without a sandbox keep asking"
+    ),
+    "swarm.unattended_unsandboxed_members": (
+        "Also start members on a runtime without a sandbox (Claude Code, OpenCode, "
+        "Gemini CLI, Antigravity CLI) with its no-approval switch: no permission "
+        "dialogs, and nothing confines them to their worktree"
     ),
 }
 
@@ -798,6 +804,9 @@ class SwarmConfig:
 
     unattended_members: bool = True
     """Members on a sandboxed runtime never ask; the rest keep their dialogs."""
+    unattended_unsandboxed_members: bool = False
+    """Members on a runtime without a sandbox never ask either: trust on the
+    machine, not freedom inside a wall. Off by default."""
 
 
 # ---------------------------------------------------------------------------
@@ -1247,7 +1256,10 @@ def build_config(
                 or bool(s["security.allow_unauthenticated"])
             ),
         ),
-        swarm=SwarmConfig(unattended_members=bool(s["swarm.unattended_members"])),
+        swarm=SwarmConfig(
+            unattended_members=bool(s["swarm.unattended_members"]),
+            unattended_unsandboxed_members=bool(s["swarm.unattended_unsandboxed_members"]),
+        ),
         settings=s,
     )
 

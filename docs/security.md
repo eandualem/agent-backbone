@@ -134,6 +134,14 @@ off by default for ordinary agents. With `swarm.unattended_members` enabled
 (the default), sandboxed swarm members run unattended; this is decided at
 each launch from the current setting and runtime, not persisted on the member.
 
+`swarm.unattended_unsandboxed_members` (off by default) extends that to
+members on a runtime without a sandbox: Claude Code, OpenCode, Gemini CLI and
+Antigravity CLI members start with the runtime's no-approval switch. They stop
+asking, and nothing confines them to their worktree, so each member can read,
+write and run anything your account can. Any agent that can create a swarm
+then gets such members. Turn it on only when you accept that for every swarm
+on this machine. A runtime without a no-approval switch keeps asking.
+
 **Codex** uses `-a never -s workspace-write`: its workspace sandbox is pinned,
 and its working directory, temporary directories and network are available.
 Validated Git commit paths (objects, refs, logs, index and bookkeeping files
@@ -274,7 +282,7 @@ review and permission checks, without removing existing functionality.
 | Telegram | Bot requires allowed chats; instructions, lifecycle commands and approval buttons additionally require a numeric ID in `telegram.allowed_user_ids` | Empty user lists refuse control; group membership is insufficient |
 | Remote plan approve/reject | Off (they act on a waiting agent) — bounded: the runtime's own plan keys, sent only while its plan dialog is on screen, refused for runtimes without a plan mode; a rejection's feedback goes through `safe_deliver` as a recorded message | `security.allow_remote_plan_control = true` |
 | Remote permission approval (`agent approve`, the Telegram **Allow** / **Deny** buttons) | On — bounded: the runtime's affirmative or refusing key only (Deny: Escape, verified for Claude Code, Codex, Gemini CLI, OpenCode and Deep Code, refused elsewhere), only while its dialog is on screen, only to a registered agent, every answer recorded as an `approval` / `denial` event with who asked (a Telegram button records `telegram:<user id>`, and checks the prompt fingerprint before answering; see the [request-binding limitation](#known-limitation-remote-approval-request-binding)) | `security.allow_remote_approval = false` |
-| Unattended swarm members | On for members on a sandboxed runtime only (Codex, `-a never` inside its workspace-write sandbox: worktree, temp, network); members without a sandbox keep asking | `swarm.unattended_members = false` |
+| Unattended swarm members | On for members on a sandboxed runtime only (Codex, `-a never` inside its workspace-write sandbox: worktree, temp, network); members without a sandbox keep asking unless `swarm.unattended_unsandboxed_members` is on (then they run unconfined) | `swarm.unattended_members = false` |
 | Terminal streaming | Read-only, registered agents only; the Socket.IO `/terminal` namespace has no input event | — |
 | Agent output (`agent output`, `GET /api/sessions/{name}/output`) | Read-only, registered agents only; reads the agent's user-facing messages, complete, from the runtime's own transcript for Claude Code, Codex, Gemini CLI and OpenCode (including messages that scrolled off or never showed on screen), a bounded page at a time with explicit offsets to read further; tool activity and thinking are not exposed; else the visible screen | — |
 | Steering (`tell --steer`, `POST /api/steer`) | Text reaches a working agent mid-turn as hook context on Claude Code and Codex, or as a user message in the running turn on OpenCode, with a provenance envelope; no keystrokes, so it cannot overwrite a draft or answer a dialog; refused (nothing queued) when the agent is not working or the runtime has no hook context. Same collaboration or operator credential as `tell` | — |
