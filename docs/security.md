@@ -154,11 +154,13 @@ resolution failures. A write outside the allowed paths fails and is reported
 to the model. See [Codex setup](getting-started.md#codex-permissions-and-scrolling)
 for automatic review of permission requests in attended sessions.
 
-**OpenCode, Claude Code and Gemini** have no OS sandbox supplied by these
-launch modes. Their unattended switches (`--auto`,
-`--dangerously-skip-permissions`, and `--approval-mode yolo`) trust the agent
-with the machine and its credentials. This remains an explicit per-agent
-choice; a swarm leaves these members asking for approval. Claude Code also
+**OpenCode, Claude Code, Gemini CLI and Antigravity CLI** have no OS sandbox
+supplied by these launch modes. Their unattended switches (`--auto`,
+`--dangerously-skip-permissions`, `--approval-mode yolo` and
+`--dangerously-skip-permissions`) trust the agent with the machine and its
+credentials. This remains an explicit per-agent choice; a swarm leaves these
+members asking for approval unless `swarm.unattended_unsandboxed_members` is
+on. Claude Code also
 requires its one-time bypass acceptance. An explicitly unattended launch
 carries that consent in its own settings file,
 `<data_dir>/hooks/claude-settings-unattended.json`
