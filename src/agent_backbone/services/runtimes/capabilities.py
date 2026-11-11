@@ -304,11 +304,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         ),
         gemini=_ok(
             "tests/unit/services/routing/test_onboarding.py",
-            "hooks through its system-settings file; live first-agent start not yet seen",
+            "hooks through its system-settings file; the brief is its first turn, a model call "
+            "even without a greeting; live first-agent start not yet seen",
         ),
         antigravity=_ok(
             "tests/unit/services/routing/test_onboarding.py",
-            "terminal-only: no hooks to prepare; live first-agent start not yet seen",
+            "terminal-only: no hooks to prepare; the brief is its first turn, a model call even "
+            "without a greeting; live first-agent start not yet seen",
         ),
         deepcode=_gap(note="installer hook preparation is not implemented"),
         aider=_gap(note="installer hook preparation is not implemented"),

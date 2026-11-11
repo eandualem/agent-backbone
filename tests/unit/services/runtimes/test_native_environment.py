@@ -135,6 +135,31 @@ def test_google_clis_keep_their_store_under_the_profiles_home(tmp_path, monkeypa
         rt.environment()
 
 
+def test_gemini_readers_and_hook_settings_stay_in_the_profiles_home(tmp_path, monkeypatch):
+    rt = RUNTIMES["gemini"]
+    captured = rt.capture_environment(tmp_path / "a")
+    captured.create_directories()
+    ambient = tmp_path / "ambient"
+    (ambient / ".gemini").mkdir(parents=True)
+    (ambient / ".gemini/GEMINI.md").write_text("ambient\n")
+    monkeypatch.setenv("GEMINI_CLI_HOME", str(ambient))
+    install_native_environments({"gemini": captured})
+    gemini = captured.root / "home/.gemini"
+    gemini.mkdir(parents=True, exist_ok=True)
+    (gemini / "GEMINI.md").write_text("profile\n")
+    assert rt.user_instructions({}) == [gemini / "GEMINI.md"]
+    assert rt.hook_settings_path(None) == gemini / "settings.json"
+    chats = gemini / "tmp/p/chats"
+    chats.mkdir(parents=True)
+    outside = tmp_path / "outside.jsonl"
+    outside.write_text(json.dumps({"sessionId": "abcdef12-x"}) + "\n")
+    (chats / "session-1-abcdef12.jsonl").symlink_to(outside)
+    assert rt.usage_paths("abcdef12-x", {}) == []
+    (chats / "abcdef12-x").symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(ValueError, match="escapes"):
+        rt.usage_children(chats / "session-1-abcdef12.jsonl", "abcdef12-x", {})
+
+
 @pytest.mark.parametrize("runtime", ["deepcode", "aider"])
 def test_unimplemented_native_context_refuses_without_host_writes(tmp_path, runtime):
     with pytest.raises(ValueError, match="unavailable"):

@@ -382,7 +382,7 @@ class TestMaterialize:
         ]
         assert manifest.is_file()
 
-    @pytest.mark.parametrize("runtime", ["gemini", "opencode"])
+    @pytest.mark.parametrize("runtime", ["gemini", "antigravity", "opencode"])
     def test_links_into_the_runtimes_own_directory(self, tmp_path, runtime):
         store = tmp_path / "store"
         make_skill(store, "a", tags="all")

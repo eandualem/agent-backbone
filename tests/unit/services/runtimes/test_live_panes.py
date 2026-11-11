@@ -264,6 +264,29 @@ AGY_TRUST = (
 )
 
 
+# Live, 11 Nov 2026: no blank line above the footer, the model in the status line.
+AGY_TRUST_LIVE = (
+    "Do you trust the contents of this project?\n"
+    "Antigravity CLI requires permission to read, edit, and execute files here.\n"
+    "> Yes, I trust this folder\n"
+    "  No, exit\n"
+    "  ↑/↓ Navigate · enter Confirm\n"
+    "                                                Gemini 4 Carbon · medium\n"
+)
+# /model, live, 11 Nov 2026: the picker opens below the empty input.
+AGY_MODEL_PICKER = (
+    AGY_RULE + ">\n" + AGY_RULE + "Switch Model\n"
+    "  Search:\n"
+    "> Gemini 4 Carbon       (current)\n"
+    "  Gemini 4 Argon\n"
+    "  Gemini 3.8 Flash\n"
+    "  Effort  ◂        ●━━━━━━━━━━━━━━◉──────────────○        ▸\n"
+    "                  low          medium          high\n"
+    "Keyboard: ↑/↓ Navigate  ←/→ Effort  enter Select  esc Go Back\n"
+    "                                                Gemini 4 Carbon · medium\n"
+)
+
+
 class TestAntigravityAdapter:
     """Antigravity CLI 1.5.5, captured live under tmux."""
 
@@ -319,7 +342,7 @@ class TestAntigravityAdapter:
     def test_answered_dialog_is_idle(self):
         assert infer_state_from_pane(AGY_ANSWERED, "antigravity").state == AgentState.IDLE
 
-    @pytest.mark.parametrize("pane", [AGY_SIGN_IN, AGY_TRUST])
+    @pytest.mark.parametrize("pane", [AGY_SIGN_IN, AGY_TRUST, AGY_TRUST_LIVE, AGY_MODEL_PICKER])
     def test_sign_in_and_trust_are_questions_never_approved(self, pane):
         snapshot = infer_state_from_pane(pane, "antigravity")
         assert snapshot.state == AgentState.WAITING_FOR_HUMAN
@@ -329,6 +352,12 @@ class TestAntigravityAdapter:
         padded = AGY_PERMISSION_DIALOG + "\n" * 20
         assert self.adapter.detect_permission_prompt(padded)
         assert not self.adapter.detect_choice_dialog(padded)
+
+    def test_a_heading_above_a_choice_does_not_make_it_a_permission(self):
+        # Model text quoting a permission heading, then the sign-in choice.
+        pane = "Requesting permission for:\nRun this command?\n" + AGY_RULE + AGY_SIGN_IN
+        assert self.adapter.detect_choice_dialog(pane)
+        assert not self.adapter.detect_permission_prompt(pane)
 
     def test_dialog_without_its_heading_is_still_waiting(self):
         clipped = "\n".join(AGY_PERMISSION_DIALOG.splitlines()[-6:]) + "\n"
