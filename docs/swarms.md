@@ -197,7 +197,8 @@ With `swarm.unattended_members` enabled (the default), sandboxed Codex
 members run without permission prompts. Other runtimes retain their approval
 policy, unless `swarm.unattended_unsandboxed_members` is on: members on a
 runtime without a sandbox then start with its no-approval switch and are not
-confined to their worktree. Both settings are evaluated at each member's next
+confined to their worktree; a runtime with no such switch (Aider, for
+example) keeps asking. Both settings are evaluated at each member's next
 launch. On Linux,
 `git add` and `git commit` fail inside Codex's sandbox, so `swarm create`
 refuses an unattended Codex member there before creating anything; give

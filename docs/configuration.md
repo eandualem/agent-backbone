@@ -207,7 +207,7 @@ Score = type weight + blocking bonus + dependents bonus + age tie-breaker.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `swarm.unattended_unsandboxed_members` | `false` | Also start swarm members on a runtime without a sandbox (Claude Code, OpenCode, Gemini CLI, Antigravity CLI) with its no-approval switch. They stop asking, and nothing confines them to their worktree: each can act anywhere your account can. Evaluated at every member start; not persisted on the member. A runtime without a no-approval switch keeps asking |
+| `swarm.unattended_unsandboxed_members` | `false` | Also start swarm members on a runtime without a sandbox (Claude Code, OpenCode, Gemini CLI, Antigravity CLI) with its no-approval switch. They stop asking, and nothing confines them to their worktree: each can act anywhere your account can. Evaluated at every member start; not persisted on the member. A swarm being created or a restart already in progress uses the value it read when it began, so turning this off does not reach members those operations are still starting. A runtime without a no-approval switch keeps asking |
 | `swarm.unattended_members` | `true` | Run sandboxed swarm members unattended (currently Codex). Evaluated at every member start from the current setting and runtime; not persisted on the member. Other runtimes retain their approval policy unless `swarm.unattended_unsandboxed_members` is on; turning this setting off does not turn that one off. See [permission boundaries](security.md#unattended-agents-and-writable-directories) |
 
 ## Agents
