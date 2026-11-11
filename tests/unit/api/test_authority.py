@@ -290,7 +290,10 @@ async def test_scoped_peer_restart_binds_target_not_callers_registration(api_cli
 
 
 async def test_agent_can_create_swarm_with_explicit_members_and_disband_it(api_client, api_app):
-    headers = {"Authorization": f"Bearer {agent_api_key(api_app.state.config.api_key)}"}
+    # The credential a running agent holds: bound to its registration.
+    spec = next(iter(api_app.state.agent_store.agents))
+    key = agent_api_key(api_app.state.config.api_key, spec.registration_id)
+    headers = {"Authorization": f"Bearer {key}"}
     members = [
         "coordinator@claude/claude-fable-5-2",
         "coder@codex/gpt-6.1-sol:high",

@@ -28,7 +28,8 @@ Starting from a directory reuses its registered name, even after a rename;
 if several agents share that directory, specify a name.
 
 An agent credential may start an already registered peer with its saved settings.
-New registrations and start-time overrides require an operator credential.
+New registrations and start-time overrides require an operator credential,
+except for the members of a swarm you create (`backbone help swarms`).
 Use `agent restart` below to change your own runtime or model.
 
 `backbone fleet save --stop` saves every running agent with its current
