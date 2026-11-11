@@ -110,6 +110,8 @@ class Gemini(Runtime):
         "home/.gemini/oauth_creds.json",
         "home/.gemini/gemini-credentials.json",  # its file keychain, where there is none
         "home/.gemini/google_accounts.json",
+        "home/.gemini/mcp-oauth-tokens.json",  # MCP and A2A sign-ins (0.46 Storage)
+        "home/.gemini/a2a-oauth-tokens.json",
         "home/.gemini/trustedFolders.json",
     )
 

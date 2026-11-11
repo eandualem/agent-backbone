@@ -127,12 +127,17 @@ def test_google_clis_keep_their_store_under_the_profiles_home(tmp_path, monkeypa
         assert json.loads(settings.read_text())["trustedWorkspaces"] == [str(project.resolve())]
     with pytest.raises(ValueError, match="overrides"):
         rt.environment({"HOME": str(tmp_path / "b")})
-    store = captured.root / rt.native_files[-1]
-    store.parent.mkdir(parents=True, exist_ok=True)
-    store.unlink(missing_ok=True)
-    store.symlink_to(tmp_path / "other-profile-store")
-    with pytest.raises(ValueError, match="escapes"):
-        rt.environment()
+    for relative in rt.native_files:  # each store, redirected to another profile's
+        store = captured.root / relative
+        store.parent.mkdir(parents=True, exist_ok=True)
+        saved = store.read_bytes() if store.is_file() else None
+        store.unlink(missing_ok=True)
+        store.symlink_to(tmp_path / "other-profile-store")
+        with pytest.raises(ValueError, match="escapes"):
+            rt.environment()
+        store.unlink()
+        if saved is not None:
+            store.write_bytes(saved)
 
 
 def test_gemini_readers_and_hook_settings_stay_in_the_profiles_home(tmp_path, monkeypatch):
