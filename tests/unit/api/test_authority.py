@@ -6,12 +6,14 @@ deepcode, aider and shell; required-runtime launch exports are tested separately
 
 import asyncio
 from dataclasses import replace
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from agent_backbone.api.app import create_app
 from agent_backbone.api.auth import credential_role
+from agent_backbone.api.deps import get_db
 from agent_backbone.config import agent_api_key, load_secrets
 from agent_backbone.services.agents import lifecycle_lock
 from agent_backbone.services.agents.launch import StartResult
@@ -285,3 +287,45 @@ async def test_scoped_peer_restart_binds_target_not_callers_registration(api_cli
     row = await api_app.state.db.transitions.get(response.json()["id"])
     assert row["registration_id"] == target.registration_id
     assert row["requested_by"] == caller.name
+
+
+async def test_agent_can_create_swarm_with_explicit_members_and_disband_it(api_client, api_app):
+    headers = {"Authorization": f"Bearer {agent_api_key(api_app.state.config.api_key)}"}
+    members = [
+        "coordinator@claude/claude-fable-5-2",
+        "coder@codex/gpt-6.1-sol:high",
+        "scout@opencode",
+    ]
+    result = SimpleNamespace(
+        name="research",
+        coordinator="research-coordinator",
+        members=["research-coder", "research-scout"],
+        branch="swarm/research",
+        worktree="/tmp/research",
+        repo="owner/repo",
+        issue_number=1,
+    )
+    with patch(
+        "agent_backbone.api.routes.swarms.create_swarm", new_callable=AsyncMock, return_value=result
+    ) as create:
+        response = await api_client.post(
+            "/api/swarms",
+            json={"name": "research", "issue": "owner/repo#1", "members": members},
+            headers=headers,
+        )
+    assert response.status_code == 200
+    assert create.await_args.kwargs["member_specs"] == members
+
+    fake_db = MagicMock()
+    fake_db.swarms.get = AsyncMock(return_value={"name": "research", "status": "active"})
+    api_app.dependency_overrides[get_db] = lambda: fake_db
+    try:
+        with patch(
+            "agent_backbone.api.routes.swarms.teardown_swarm",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            response = await api_client.delete("/api/swarms/research", headers=headers)
+    finally:
+        api_app.dependency_overrides.pop(get_db, None)
+    assert response.status_code == 200
