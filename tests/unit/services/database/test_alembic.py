@@ -944,3 +944,16 @@ async def test_fresh_migration_includes_case_insensitive_event_index(tmp_path):
         assert definition and "lower(delivery_id)" in definition
     finally:
         await db._engine.dispose()
+
+
+async def test_a_database_file_uses_write_ahead_logging(tmp_path):
+    # Readers and the writer do not block each other, and a writer waits.
+    from sqlalchemy import text
+
+    engine = build_engine(f"sqlite+aiosqlite:///{tmp_path / 'backbone.db'}")
+    try:
+        async with engine.connect() as conn:
+            assert (await conn.execute(text("PRAGMA journal_mode"))).scalar() == "wal"
+            assert (await conn.execute(text("PRAGMA busy_timeout"))).scalar() == 15000
+    finally:
+        await engine.dispose()
