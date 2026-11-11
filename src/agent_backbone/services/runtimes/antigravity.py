@@ -64,6 +64,14 @@ class Antigravity(Runtime):
     prompt_prefixes = (">",)
     runtime_markers = ("antigravity cli",)
     status_fragments = ("? for shortcuts",)
+    # The empty input's grey placeholder names the mode shift+tab cycles
+    # through; narrow panes cut it short with "..." (1.5.5, live).
+    placeholder_fragments = (
+        "auto mode: edits & safe commands",
+        "accept-edits mode: file edits",
+        "plan mode: research & plan only",
+        "best-of-n mode: fork into parallel",
+    )
     # "⣾  Generating..." above the input, "esc to cancel" in the status line.
     busy_markers = ("esc to cancel", "generating...")
     # The heading, and the footer under the options, which stays on screen

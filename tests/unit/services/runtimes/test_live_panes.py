@@ -209,6 +209,12 @@ AGY_IDLE = (
     + "? for shortcuts                                Gemini 4 Carbon · medium\n"
 )
 AGY_TYPED_INPUT = AGY_IDLE.replace(">\n", "> half typed comman\n")
+# The empty input shows the current mode in grey (1.5.5, live, 11 Nov 2026).
+AGY_PLACEHOLDER = (
+    "\x1b[94m>\x1b[39m \x1b[90mAuto mode: edits & safe commands auto-approved "
+    "(shift+tab to cycle)\x1b[39m"
+)
+
 AGY_BUSY = (
     "> Run the shell command ls -la in this folder.\n"
     "⣾  Generating...\n"
@@ -252,6 +258,21 @@ class TestAntigravityAdapter:
 
     def test_typed_text_is_pending_input(self):
         assert self.adapter.prompt_has_pending_input(AGY_TYPED_INPUT)
+
+    @pytest.mark.parametrize(
+        "placeholder",
+        [
+            AGY_PLACEHOLDER,
+            "> Auto mode: edits & safe commands auto-approved (shift+tab...",
+            "> Plan mode: research & plan only (shift+tab to cycle)",
+            "> Accept-edits mode: file edits auto-approved (shift+tab to cycle)",
+            "> Best-of-N mode: fork into parallel arms and pick a winner (shift+tab to cycle)",
+        ],
+    )
+    def test_mode_placeholder_is_an_empty_prompt(self, placeholder):
+        pane = AGY_IDLE.replace(">\n", placeholder + "\n")
+        assert infer_state_from_pane(pane, "antigravity").state == AgentState.IDLE
+        assert not self.adapter.prompt_has_pending_input(pane)
 
     def test_busy_detected(self):
         assert infer_state_from_pane(AGY_BUSY, "antigravity").state == AgentState.BUSY
