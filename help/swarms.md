@@ -23,9 +23,8 @@ a swarm costs several times the tokens.
        --member 'scout*2@claude/sonnet' --member coder@claude/opus
    ```
 
-   Explicit runtime/model overrides in these examples require an operator
-   credential. An agent credential may create members using stored defaults
-   by omitting the `@RUNTIME/MODEL` suffix.
+   An agent credential may choose any runtime, model and effort for each
+   member, or omit the `@RUNTIME/MODEL` suffix to use the stored defaults.
 
    Member spec: `ROLE[*N][@RUNTIME[/MODEL[:EFFORT]]]`. Model ids and the
    effort levels each runtime accepts come from `backbone runtimes` (see

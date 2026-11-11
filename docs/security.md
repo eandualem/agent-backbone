@@ -65,8 +65,8 @@ Open security issues and known limitations are listed under
   Settings, new agent
   registrations, other runtime/model changes, directory/environment changes, tags, shared
   skills and policies, owner enrollment and externally pushed state require
-  the operator credential. Swarms may use stored runtime defaults; member
-  runtime/model overrides, forgetting an agent and fleet snapshot restoration require the operator.
+  the operator credential. Agents may create swarms with any member runtime,
+  model and effort; forgetting an agent and fleet snapshot restoration require the operator.
   `backbone doctor` also requires an operator terminal because it opens and checks
   the database directly; an agent can use `backbone status` for API-backed health.
   Agent credentials use the
