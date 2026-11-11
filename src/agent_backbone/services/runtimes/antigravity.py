@@ -13,7 +13,6 @@ import re
 from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
-from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes.base import Runtime, agent_home, read_brief
 
 log = logging.getLogger(__name__)
@@ -54,7 +53,8 @@ _MODE_PLACEHOLDERS = (
 )
 """The empty input names the mode shift+tab cycles through (1.5.5, live)."""
 
-_GREY_TAIL = re.compile(r"^(?:\x1b\[[0-9;]*m)*>(?:\x1b\[[0-9;]*m)*\s*\x1b\[90m[^\x1b]*(?:\x1b\[[0-9;]*m)*\s*$")
+_SGR = r"(?:\x1b\[[0-9;]*m)*"
+_GREY_TAIL = re.compile(rf"^{_SGR}>{_SGR}\s*\x1b\[90m[^\x1b]*{_SGR}\s*$")
 """A prompt line whose whole text after ">" is grey (SGR 90): a placeholder."""
 
 
@@ -97,11 +97,15 @@ class Antigravity(Runtime):
     def prompt_has_pending_input(self, pane_content, *, include_envelope=False):
         # The mode placeholder is grey, not dim, so the shared check reads it
         # as typed text. Only the prompt line itself counts: its whole text
-        # grey, or (without colours) starting with a mode's own words.
+        # grey or, in a capture without colours, starting with a mode's words.
         line = self.detect_prompt(pane_content)
         if line is not None:
-            text = sanitize_pane_content(line).strip().lower().removeprefix(">").lstrip()
-            if _GREY_TAIL.match(line) or text.startswith(_MODE_PLACEHOLDERS):
+            if "\x1b[" in line:
+                placeholder = bool(_GREY_TAIL.match(line))
+            else:
+                text = line.strip().lower().removeprefix(">").lstrip()
+                placeholder = text.startswith(_MODE_PLACEHOLDERS)
+            if placeholder:
                 return False
         return super().prompt_has_pending_input(pane_content, include_envelope=include_envelope)
 

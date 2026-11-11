@@ -282,6 +282,8 @@ class TestAntigravityAdapter:
     def test_typed_text_quoting_a_placeholder_is_still_typed(self):
         quoted = '> why does "Auto mode: edits & safe commands" show up'
         assert self.adapter.prompt_has_pending_input(AGY_IDLE.replace(">\n", quoted + "\n"))
+        typed = "\x1b[94m>\x1b[39m Auto mode: edits & safe commands, explain"
+        assert self.adapter.prompt_has_pending_input(AGY_IDLE.replace(">\n", typed + "\n"))
         # Placeholder words in the output above do not make a prompt.
         output = "  Auto mode: edits & safe commands auto-approved (shift+tab to cycle)\n"
         assert self.adapter.detect_prompt(output + AGY_BUSY.split(AGY_RULE)[0]) is None
