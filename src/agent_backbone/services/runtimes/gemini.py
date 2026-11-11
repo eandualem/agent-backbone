@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 
 from agent_backbone.hooks.install import save_settings
-from agent_backbone.services.runtimes._environment import environment_value
+from agent_backbone.services.runtimes._environment import NativeEnvironment, environment_value
 from agent_backbone.services.runtimes._pane import sanitize_pane_content
 from agent_backbone.services.runtimes._usage import count
 from agent_backbone.services.runtimes.base import (
@@ -104,6 +104,19 @@ def _context_file_names(settings: Path) -> list[str] | None:
 class Gemini(Runtime):
     def native_environment_values(self, root):
         return {}  # Everything it keeps is under HOME (~/.gemini), the profile's own.
+
+    def capture_environment(self, root: Path) -> NativeEnvironment:
+        # A desktop keyring (Linux) is one per user whatever HOME says, and its
+        # API-key entry has a fixed name: profiles would share it. The file
+        # store is ~/.gemini/gemini-credentials.json, the profile's own (0.46).
+        captured = super().capture_environment(root)
+        return NativeEnvironment(
+            captured.root,
+            captured.executable,
+            {**captured, "GEMINI_FORCE_FILE_STORAGE": "true"},
+            captured.path_keys,
+            captured.file_paths,
+        )
 
     native_files = (
         "home/.gemini/settings.json",

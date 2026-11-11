@@ -651,7 +651,9 @@ process concurrently replacing files or path components.
 
 Claude Code, Codex, OpenCode, Gemini CLI and Antigravity CLI have internal preparation
 tests; other model adapters refuse this preparation. Gemini CLI and Antigravity CLI keep
-everything under the profile's own `HOME` (`~/.gemini`). They have no sign-in or status
+everything under the profile's own `HOME` (`~/.gemini`); Gemini CLI is told to keep
+sign-ins in its file store there (`GEMINI_FORCE_FILE_STORAGE`), never a desktop keyring
+every profile would share. They have no sign-in or status
 command, so they sign in from the agent's own terminal on its first start. Codex requests file credential storage, subject to native
 managed policy. OpenCode uses a private native server. Claude Code and Codex
 sign-ins were checked on the working installation, and a signed-in OpenCode result is

@@ -154,6 +154,9 @@ def test_gemini_readers_and_hook_settings_stay_in_the_profiles_home(tmp_path, mo
     (gemini / "GEMINI.md").write_text("profile\n")
     assert rt.user_instructions({}) == [gemini / "GEMINI.md"]
     assert rt.hook_settings_path(None) == gemini / "settings.json"
+    assert captured["GEMINI_FORCE_FILE_STORAGE"] == "true"  # never the user's keyring
+    with pytest.raises(ValueError, match="overrides"):
+        rt.environment({"GEMINI_FORCE_FILE_STORAGE": "false"})
     chats = gemini / "tmp/p/chats"
     chats.mkdir(parents=True)
     outside = tmp_path / "outside.jsonl"
