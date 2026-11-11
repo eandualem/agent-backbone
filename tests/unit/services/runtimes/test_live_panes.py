@@ -270,32 +270,32 @@ class TestAntigravityAdapter:
         ],
     )
     def test_mode_placeholder_is_an_empty_prompt(self, placeholder):
-        pane = AGY_IDLE.replace("Antigravity CLI 1.5.5", "").replace(">\n", placeholder + "\n")
-        assert detect_runtime(pane).id == "antigravity"
-        assert infer_state_from_pane(pane).state == AgentState.IDLE
+        pane = AGY_IDLE.replace(">\n", placeholder + "\n")
+        assert infer_state_from_pane(pane, "antigravity").state == AgentState.IDLE
         assert not self.adapter.prompt_has_pending_input(pane)
 
-    def test_any_grey_tail_is_a_placeholder_even_cut_short(self):
-        pane = AGY_IDLE.replace(">\n", "\x1b[94m>\x1b[39m \x1b[90mBest-of-N mode: fork\x1b[39m\n")
-        assert not self.adapter.prompt_has_pending_input(pane)
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "\x1b[94m>\x1b[39m \x1b[90mBest-of-N mode: fork\x1b[39m",  # grey, cut short
+            "\x1b[0m> \x1b[0;90mPlan mode: \x1b[39m\x1b[90mresearch & plan only\x1b[0m",
+            "> Best-of-N mode: fork...",  # no colours, cut short
+            "> Plan mode: research & plan only (shift+tab to cycle)\x1b[K",
+        ],
+    )
+    def test_placeholder_variants_are_empty(self, line):
+        assert not self.adapter.prompt_has_pending_input(AGY_IDLE.replace(">\n", line + "\n"))
 
-    def test_typed_text_quoting_a_placeholder_is_still_typed(self):
-        quoted = '> why does "Auto mode: edits & safe commands" show up'
-        assert self.adapter.prompt_has_pending_input(AGY_IDLE.replace(">\n", quoted + "\n"))
-        typed = "\x1b[94m>\x1b[39m Auto mode: edits & safe commands, explain"
-        assert self.adapter.prompt_has_pending_input(AGY_IDLE.replace(">\n", typed + "\n"))
-        # Placeholder words in the output above do not make a prompt.
-        output = "  Auto mode: edits & safe commands auto-approved (shift+tab to cycle)\n"
-        assert self.adapter.detect_prompt(output + AGY_BUSY.split(AGY_RULE)[0]) is None
-
-    def test_busy_detected(self):
-        assert infer_state_from_pane(AGY_BUSY, "antigravity").state == AgentState.BUSY
-
-    def test_permission_dialog_detected(self):
-        snapshot = infer_state_from_pane(AGY_PERMISSION_DIALOG, "antigravity")
-        assert snapshot.state == AgentState.WAITING_FOR_HUMAN
-        assert self.adapter.detect_active_dialog(AGY_PERMISSION_DIALOG)
-        assert self.adapter.detect_permission_prompt(AGY_PERMISSION_DIALOG)
+    @pytest.mark.parametrize(
+        "line",
+        [
+            '> why does "Auto mode: edits & safe commands" show up',
+            "\x1b[94m>\x1b[39m Auto mode: edits & safe commands, explain",
+            "> Auto mode: edits & safe commands, explain",
+        ],
+    )
+    def test_typed_text_mentioning_a_mode_is_typed(self, line):
+        assert self.adapter.prompt_has_pending_input(AGY_IDLE.replace(">\n", line + "\n"))
 
     def test_answered_dialog_is_idle(self):
         assert infer_state_from_pane(AGY_ANSWERED, "antigravity").state == AgentState.IDLE

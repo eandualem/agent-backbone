@@ -9,10 +9,15 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from pathlib import Path
 
 from agent_backbone.fs import atomic_write_text
+from agent_backbone.services.runtimes._pane import (
+    _ANSI_ESCAPE_RE,
+    _ANSI_SGR_RE,
+    sanitize_pane_content,
+    sgr_attributes,
+)
 from agent_backbone.services.runtimes.base import Runtime, agent_home, read_brief
 
 log = logging.getLogger(__name__)
@@ -46,16 +51,40 @@ def pre_trust_workspace(directory: Path | str, settings_file: Path) -> bool:
 
 
 _MODE_PLACEHOLDERS = (
-    "auto mode: edits & safe commands",
-    "accept-edits mode: file edits",
-    "plan mode: research & plan only",
-    "best-of-n mode: fork into parallel",
+    "auto mode: edits & safe commands auto-approved (shift+tab to cycle)",
+    "accept-edits mode: file edits auto-approved (shift+tab to cycle)",
+    "plan mode: research & plan only (shift+tab to cycle)",
+    "best-of-n mode: fork into parallel arms and pick a winner (shift+tab to cycle)",
 )
-"""The empty input names the mode shift+tab cycles through (1.5.5, live)."""
+"""The empty input names the mode shift+tab cycles through, in grey (1.5.5, live)."""
 
-_SGR = r"(?:\x1b\[[0-9;]*m)*"
-_GREY_TAIL = re.compile(rf"^{_SGR}>{_SGR}\s*\x1b\[90m[^\x1b]*{_SGR}\s*$")
-"""A prompt line whose whole text after ">" is grey (SGR 90): a placeholder."""
+
+def _grey_after_prompt(raw_line: str) -> bool | None:
+    """Whether all text after the prompt's ">" is grey (SGR 90); ``None`` when
+    the line carries no colours to tell."""
+    coloured = grey = prompt = text = False
+    all_grey = True
+    i = 0
+    while i < len(raw_line):
+        if raw_line[i] == "\x1b":
+            if sgr := _ANSI_SGR_RE.match(raw_line, i):
+                coloured = True
+                for code, *_ in sgr_attributes(sgr.group(1)):
+                    if code in (0, 38, 39) or 30 <= code <= 37 or 90 <= code <= 97:
+                        grey = code == 90
+                i = sgr.end()
+                continue
+            if other := _ANSI_ESCAPE_RE.match(raw_line, i):
+                i = other.end()
+                continue
+        char = raw_line[i]
+        i += 1
+        if not prompt:
+            prompt = char == ">"
+        elif not char.isspace():
+            text = True
+            all_grey = all_grey and grey
+    return text and all_grey if coloured else None
 
 
 class Antigravity(Runtime):
@@ -76,7 +105,7 @@ class Antigravity(Runtime):
     efforts = ("low", "medium", "high", "xhigh", "max")
 
     prompt_prefixes = (">",)
-    runtime_markers = ("antigravity cli", *_MODE_PLACEHOLDERS)
+    runtime_markers = ("antigravity cli",)
     status_fragments = ("? for shortcuts",)
     # "⣾  Generating..." above the input, "esc to cancel" in the status line.
     busy_markers = ("esc to cancel", "generating...")
@@ -96,15 +125,18 @@ class Antigravity(Runtime):
 
     def prompt_has_pending_input(self, pane_content, *, include_envelope=False):
         # The mode placeholder is grey, not dim, so the shared check reads it
-        # as typed text. Only the prompt line itself counts: its whole text
-        # grey or, in a capture without colours, starting with a mode's words.
+        # as typed text. Only the prompt line counts: its whole text grey or,
+        # in a capture without colours, the start of a mode's own placeholder
+        # (narrow panes cut it short with "...").
         line = self.detect_prompt(pane_content)
         if line is not None:
-            if "\x1b[" in line:
-                placeholder = bool(_GREY_TAIL.match(line))
-            else:
-                text = line.strip().lower().removeprefix(">").lstrip()
-                placeholder = text.startswith(_MODE_PLACEHOLDERS)
+            placeholder = _grey_after_prompt(line)
+            if placeholder is None:
+                text = sanitize_pane_content(line).strip().lower().removeprefix(">").strip()
+                text = text.removesuffix("...").removesuffix("…").rstrip()
+                placeholder = " mode: " in text and any(
+                    full.startswith(text) for full in _MODE_PLACEHOLDERS
+                )
             if placeholder:
                 return False
         return super().prompt_has_pending_input(pane_content, include_envelope=include_envelope)
