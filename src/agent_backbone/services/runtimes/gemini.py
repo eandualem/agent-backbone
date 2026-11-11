@@ -253,11 +253,10 @@ class Gemini(Runtime):
         if configured is None:  # an empty list in the project still overrides
             configured = _context_file_names(self.check_native_path(gemini / "settings.json"))
         names = dict.fromkeys([*(name.strip() for name in configured or ()), "GEMINI.md"])
-        return [
-            gemini / name
-            for name in names
-            if name and has_text(self.check_native_path(gemini / name))
-        ]
+        # A name is a file in ~/.gemini: one that leaves it (an absolute path,
+        # "..") is not followed, whatever a project's settings say.
+        within = [gemini / n for n in names if n and (gemini / n).parent == gemini]
+        return [path for path in within if has_text(self.check_native_path(path))]
 
     def native_memory(self, env, project=None):
         # 0.46 loads them into every session whatever its prompt settings; its

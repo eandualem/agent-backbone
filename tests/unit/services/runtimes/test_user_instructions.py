@@ -1,5 +1,6 @@
 """User-level instruction files each CLI adds to every session (#274)."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -93,6 +94,14 @@ def test_gemini_takes_the_projects_context_file_names_over_the_users(home, tmp_p
     assert RUNTIMES["gemini"].user_instructions({}, tmp_path) == [agents, default]
     _write(tmp_path / ".gemini/settings.json", '{"context": {"fileName": []}}')
     _write(home / ".gemini/settings.json", '{"context": {"fileName": "AGENTS.md"}}')
+    assert RUNTIMES["gemini"].user_instructions({}, tmp_path) == [default]
+
+
+def test_gemini_never_follows_a_context_file_name_out_of_its_directory(home, tmp_path):
+    default = _write(home / ".gemini/GEMINI.md")
+    _write(home / "secret.env")
+    names = ["../secret.env", "/etc/hosts", "sub/x.md", ".."]
+    _write(tmp_path / ".gemini/settings.json", json.dumps({"context": {"fileName": names}}))
     assert RUNTIMES["gemini"].user_instructions({}, tmp_path) == [default]
 
 

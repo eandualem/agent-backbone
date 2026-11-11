@@ -10,7 +10,7 @@ another profile affects new work; it cannot retarget an existing request.
 by the login service, it logs the refusal once and waits, starting by itself after
 `backbone init`, instead of exiting into a restart loop. Isolated
 profiles can be created, started and stopped, and agents run inside them on Claude Code,
-Codex and OpenCode. Bound discovery, identity, sessions, CLI sign-in and setup schema 2
+Codex, OpenCode, Gemini CLI and Antigravity CLI. Bound discovery, identity, sessions, CLI sign-in and setup schema 2
 are implemented. Not done yet: recovery of interrupted operations, replacement and
 restore fencing, integration account proof and permission-context inspection.
 Provider implementation is tracked in
