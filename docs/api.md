@@ -9,7 +9,8 @@ collaboration key for reads, messaging and starting/stopping/restarting known
 peers with saved settings. Changes to settings, runtime/model/workspace,
 environment, tags, shared skills or policies require an operator key and return
 403 for an agent key. New registrations, owner enrollment and externally pushed
-state also require an operator key. Fleet snapshot resume also requires an operator key because it restores saved
+state also require an operator key. Creating a swarm is the exception: an agent
+key may create one and choose each member's runtime, model and effort. Fleet snapshot resume also requires an operator key because it restores saved
 models. Upgrade restart holds require the operator. This does not isolate same-user processes;
 see [the trust boundary](security.md).
 

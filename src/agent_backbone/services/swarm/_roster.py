@@ -15,7 +15,9 @@ _SPEC_RE = re.compile(
     # The model may itself contain "/" (OpenCode names models provider/model):
     # the runtime is the letters right after "@", the model everything after
     # the first "/".
-    r"(?:@(?P<runtime>[a-z]+)(?:/(?P<model>[A-Za-z0-9._:/-]+))?)?$"
+    # It starts with a letter or digit: it is passed as the value of the
+    # runtime's --model option, where a leading "-" would read as a flag.
+    r"(?:@(?P<runtime>[a-z]+)(?:/(?P<model>[A-Za-z0-9][A-Za-z0-9._:/-]*))?)?$"
 )
 
 COORDINATOR_ROLE = "coordinator"

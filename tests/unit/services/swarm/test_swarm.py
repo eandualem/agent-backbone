@@ -106,6 +106,10 @@ class TestRoster:
             role="coordinator", runtime="codex", model="gpt-6-astra:high"
         )
 
+    def test_a_model_that_reads_as_a_flag_is_rejected(self):
+        with pytest.raises(ValueError):
+            parse_member_spec("coder@gemini/--yolo")
+
     def test_invalid_spec_rejected(self):
         with pytest.raises(ValueError):
             parse_member_spec("Scout One")
@@ -414,6 +418,35 @@ class TestCreateSwarm:
                 member_specs=[],
                 initiator="simon",
             )
+
+    @patch(f"{_IFACE}.create_worktree", new_callable=AsyncMock)
+    @patch(f"{_IFACE}.is_git_repo", new_callable=AsyncMock, return_value=True)
+    @patch(f"{_IFACE}.session_exists", new_callable=AsyncMock, return_value=False)
+    @pytest.mark.parametrize(
+        "member",
+        ["coder@claude-code", "coder@nosuchcli", "coder@claude/opus:bogus", "coordinator*2"],
+    )
+    async def test_a_bad_member_is_refused_before_anything_is_created(
+        self, _exists, _git, mock_wt, db, tmp_path, member
+    ):
+        config, _ = _swarm_config(tmp_path)
+        gh = AsyncMock()
+        gh.get_issue = AsyncMock(return_value=AsyncMock(state="open", title="t"))
+        store = _FakeStore(config)
+        with pytest.raises(SwarmError):
+            await create_swarm(
+                config,
+                db,
+                store,
+                gh,
+                name="research",
+                issue_ref="acme/app#7",
+                member_specs=[member],
+                initiator=None,
+            )
+        mock_wt.assert_not_awaited()
+        assert not store.registered
+        assert await db.swarms.active_for_issue("acme/app", 7) is None
 
     @patch(f"{_IFACE}.remove_worktree", new_callable=AsyncMock, return_value=True)
     @patch(

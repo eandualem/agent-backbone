@@ -60,13 +60,13 @@ Open security issues and known limitations are listed under
   registration invalidates it. Scoped Socket.IO connections are disconnected before
   further events or data when their registration is retired. Changing runtime clears unattended permission.
   Older shared collaboration credentials keep their previous authority and cannot
-  select runtime/model. Private profiles provide upgraded credentials to existing
+  select runtime/model, except for the members of a swarm they create. Private profiles provide upgraded credentials to existing
   managed CLI launches without a restart; no operator key is exposed.
   Settings, new agent
   registrations, other runtime/model changes, directory/environment changes, tags, shared
   skills and policies, owner enrollment and externally pushed state require
-  the operator credential. Agents may create swarms with any member runtime,
-  model and effort; forgetting an agent and fleet snapshot restoration require the operator.
+  the operator credential. The exception is a swarm: agents may create one
+  with any member runtime, model and effort, which registers its members; forgetting an agent and fleet snapshot restoration require the operator.
   `backbone doctor` also requires an operator terminal because it opens and checks
   the database directly; an agent can use `backbone status` for API-backed health.
   Agent credentials use the

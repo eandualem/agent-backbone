@@ -24,6 +24,7 @@ from agent_backbone.services.agents import (
     claim_project_directories,
     lifecycle_lock,
     start_agent,
+    validate_agent_spec,
 )
 from agent_backbone.services.routing import safe_deliver
 from agent_backbone.services.runtimes import RUNTIMES
@@ -207,8 +208,22 @@ async def create_swarm(
     if not await is_git_repo(repo_dir):
         raise SwarmError(f"{repo_dir} is not a git repository")
 
-    roster = parse_roster(member_specs)
-    named = member_names(name, roster)
+    # Refused before anything is created: a bad spec found at registration
+    # would leave a branch, a worktree and a swarm record behind.
+    try:
+        roster = parse_roster(member_specs)
+        named = member_names(name, roster)
+        for agent_name, spec in named:
+            validate_agent_spec(
+                AgentSpec(
+                    name=agent_name,
+                    dir=str(repo_dir),
+                    runtime=spec.runtime or config.launch.default_runtime,
+                    model=spec.model,
+                )
+            )
+    except ValueError as exc:
+        raise SwarmError(str(exc)) from exc
     coordinator = next(n for n, s in named if s.role == COORDINATOR_ROLE)
     all_names = [n for n, _ in named]
     for agent_name in all_names:

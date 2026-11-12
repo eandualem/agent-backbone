@@ -25,7 +25,9 @@ class SwarmCreateRequest(BaseModel):
     issue: str = Field(description="The pre-existing issue the swarm works, as owner/repo#N")
     members: list[str] = Field(
         default_factory=list,
-        description="Member specs role[*N][@runtime[/model]]; a coordinator is added if absent",
+        description=(
+            "Member specs role[*N][@runtime[/model[:effort]]]; a coordinator is added if absent"
+        ),
     )
     initiator: str = Field(default="", description="Agent that initiates the swarm")
 

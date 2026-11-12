@@ -33,7 +33,10 @@ def validate_agent_spec(spec: AgentSpec) -> None:
     if not isinstance(spec.runtime, str) or spec.runtime not in RUNTIMES:
         raise ValueError(f"Unknown runtime: {spec.runtime}")
     if spec.model is not None and (
-        not isinstance(spec.model, str) or any(c.isspace() or ord(c) < 32 for c in spec.model)
+        not isinstance(spec.model, str)
+        or any(c.isspace() or ord(c) < 32 for c in spec.model)
+        # The value of the runtime's --model option: a leading "-" is a flag.
+        or spec.model.startswith("-")
     ):
         raise ValueError("model must be a model ID, optionally followed by :effort")
     rt = RUNTIMES[spec.runtime]
