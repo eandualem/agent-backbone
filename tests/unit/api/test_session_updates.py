@@ -288,6 +288,8 @@ async def test_slow_history_does_not_block_live_feed(db, caplog):
         record.side_effect = None
         assert await feed.snapshot(force_refresh=True) == [_agent()]
         assert record.await_count == 2
+        await feed.close()  # Nothing is left mid-transaction when the database closes.
+        assert not feed._history_task.cancelled()
     assert "State history write timed out" in caplog.text
 
 
