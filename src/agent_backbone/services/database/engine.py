@@ -8,9 +8,11 @@ repository modules, which receive connections from it.
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from sqlalchemy import event
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.util import asbool
@@ -52,7 +54,30 @@ def build_engine(url: str) -> AsyncEngine:
                 companion = Path(str(path) + suffix)
                 if companion.exists() and not companion.is_symlink():
                     companion.chmod(0o600)
+            engine = create_async_engine(url)
+            event.listen(engine.sync_engine, "connect", _concurrent_access)
+            return engine
     return create_async_engine(url)
+
+
+def _concurrent_access(dbapi_connection, _record) -> None:
+    """Let readers and the writer work at once, and let a writer wait its turn.
+
+    In SQLite's default rollback-journal mode a commit blocks every reader and
+    a reader blocks every commit, so a busy installation answered requests
+    with "database is locked". Write-ahead logging keeps readers and the
+    single writer out of each other's way; the mode is stored in the file.
+    """
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA busy_timeout = 15000")
+        cursor.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.Error:
+        # The switch needs the file to itself for a moment. A connection that
+        # cannot get it keeps the file's current mode instead of failing.
+        pass
+    finally:
+        cursor.close()
 
 
 def redact_url(url: str) -> str:
