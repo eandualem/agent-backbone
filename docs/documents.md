@@ -132,6 +132,13 @@ Documents, author IDs, revision links, permanent retry keys and the admission
 counter live in the SQL database, separate from report pruning. Back up and
 restore the **whole database**, including `documents`, `document_storage` and
 `agents`; a directory of exported HTML is not a database backup. Use SQLite's
-online backup API (or stop all writers before a file copy).
+online backup API. A file copy is safe only while nothing has the database
+open (the service stopped and no `backbone` command running), and must include
+`backbone.db-wal` when it exists: the database uses write-ahead logging, so
+recent changes can be in that file. Include `backbone.db-journal` too if one
+exists (a database that could not switch to write-ahead logging keeps an
+unfinished change there). Before restoring a copy, remove any leftover
+`backbone.db-wal`, `backbone.db-shm` and `backbone.db-journal` that are not
+part of it.
 Preserve the existing installation's authentication/signing configuration when
 restoring it. SQLite backup restoration and retries are tested.
