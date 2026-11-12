@@ -199,9 +199,11 @@ class TestBuildConfig:
                 "timing.queue_expiry_minutes": 15,
                 "github.intake": "poll",
                 "security.allow_remote_plan_control": True,
+                "swarm.unattended_unsandboxed_members": True,
             }
         )
         config = build_config(tmp_path, settings=settings, agents=AgentsConfig())
+        assert config.swarm.unattended_unsandboxed_members is True
         assert config.backbone.port == 7999
         assert config.routing.ignore_targets == frozenset({"human"})
         assert config.telegram.allowed_chat_ids == (1, 2)

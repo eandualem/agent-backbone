@@ -331,8 +331,19 @@ async def _start_agent(
     # here, not at registration, so flipping `swarm.unattended_members` or
     # switching a member to a runtime without a sandbox takes effect at its
     # next start instead of a persisted grant outliving the reason for it.
+    # `swarm.unattended_unsandboxed_members` is the owner's explicit choice to
+    # extend that to members no sandbox confines; a runtime without a
+    # no-approval switch still asks.
     unattended = spec.unattended or (
-        spec.swarm is not None and config.swarm.unattended_members and rt.sandboxed
+        spec.swarm is not None
+        and (
+            (config.swarm.unattended_members and rt.sandboxed)
+            or (
+                config.swarm.unattended_unsandboxed_members
+                and not rt.sandboxed
+                and rt.unattended_args is not None
+            )
+        )
     )
 
     brief = Path(brief_file) if brief_file else None
